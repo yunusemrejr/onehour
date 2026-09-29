@@ -10,7 +10,7 @@ static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
-    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear();
+    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -37,7 +37,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
         spawnUnit(firstUnitOf(pl.faction) + 0, p, g_map.nearestFree(dz));
     }
     for (auto& s : g_map.supplies) spawnResource(s.tx, s.ty, s.amount);
-    for (int p = 0; p < numPlayers; p++) players[p].powerReady = 120.0f; // powers unlock 2 minutes in (and need tech)
+    for (int p = 0; p < numPlayers; p++) { players[p].powerReady = 120.0f; players[p].scanReady = 90.0f; } // powers unlock a couple of minutes in (and need the tech structure)
     rebuildGrid();
     updateVision();
     updatePower();
@@ -122,6 +122,7 @@ void Sim::deathFx(Entity& e) {
         fx.push_back({FX_SPARK, e.pos, e.pos, 0, 0.4f, rgb(200, 40, 40), 5});
         emit(EV_SOUND, -1, SND_HIT, e.pos);
     } else if (e.isUnit()) {
+        if (e.ut().kind == UK_VEH) fx.push_back({FX_WRECK, e.pos, Vec2((float)e.type, (float)std::max(0, e.owner)), 0, 16.0f, rgb(255, 255, 255), e.turret, Vec2(e.angle, 0)});
         fx.push_back({FX_EXPLODE, e.pos, e.pos, 0, 0.6f, rgb(255, 180, 70), r * 1.6f});
         fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 2.0f, rgb(50, 50, 50), r, Vec2(0, -25)});
         for (int k = 0; k < 6; k++)
@@ -209,13 +210,18 @@ bool Sim::hasRole(int player, BuildRole role) const {
 bool Sim::unitAvailable(int player, int unitType) const {
     const UnitType& t = UNITS[unitType];
     if (t.faction != players[player].faction) return false;
+    if (t.program && !players[player].advTech) return false;
     return prereqMet(player, t.requires_);
 }
 bool Sim::buildAvailable(int player, int buildType) const {
     const BuildType& b = BUILDS[buildType];
     if (b.faction != players[player].faction) return false;
     if (b.role == BR_HQ) return false; // command centers are not rebuildable
+    if (atIncomeLimit(player, buildType)) return false;
     return prereqMet(player, b.requires_);
+}
+bool Sim::atIncomeLimit(int player, int buildType) const {
+    return BUILDS[buildType].role == BR_INCOME && countRole(player, BR_INCOME, false) >= INCOME_MAX;
 }
 int Sim::countUnits(int player, int type) const {
     int n = 0;
@@ -237,7 +243,7 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
     const BuildType& b = BUILDS[buildType];
     for (int j = ty; j < ty + b.h; j++) for (int i = tx; i < tx + b.w; i++) {
         if (!g_map.buildable(i, j)) return false;
-        if (!explored(player, i, j)) return false;
+        if (!exploredRaw(player, i, j)) return false;
     }
     // keep a one tile gap around resource piles and other structures' edges so paths stay open
     for (int j = ty - 1; j <= ty + b.h; j++) for (int i = tx - 1; i <= tx + b.w; i++) {
@@ -290,6 +296,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     formationOffsets(ground, dest, offs);
     for (size_t i = 0; i < ground.size(); i++) {
         Entity& e = *ground[i];
+        e.zoneR = 0; e.leashed = false;
         Vec2 d = g_map.nearestFree(Vec2(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE)), 6);
         e.order = attackMove && e.weapon() >= 0 ? O_ATTACKMOVE : O_MOVE;
         e.postOrder = O_IDLE;
@@ -297,6 +304,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         requestPath(e, d);
     }
     for (auto* a : air) {
+        a->zoneR = 0; a->leashed = false;
         if (a->ammo <= 0 && a->ut().ammo > 0) { a->targetEnt = NOREF; a->order = O_REARM; continue; }
         a->order = attackMove ? O_ATTACKMOVE : O_MOVE; a->postOrder = O_IDLE;
         a->target = dest; a->targetEnt = NOREF; a->engaged = NOREF;
@@ -319,8 +327,8 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target) {
             cmdMove({r}, t->pos, false); continue;
         }
         if (ut.weapon < 0 || !canTarget(*e, *t)) { cmdMove({r}, t->pos, false); continue; }
-        if (e->isAir() && e->ammo <= 0) { e->targetEnt = target; e->order = O_REARM; continue; }
-        e->order = O_ATTACK; e->postOrder = O_IDLE; e->targetEnt = target; e->engaged = NOREF;
+        if (e->isAir() && e->ammo <= 0) { e->targetEnt = target; e->order = O_REARM; e->leashed = false; continue; }
+        e->order = O_ATTACK; e->postOrder = e->zoneR > 0 ? O_GUARDAREA : O_IDLE; e->targetEnt = target; e->engaged = NOREF; e->leashed = false;
         e->repathTimer = 0;
     }
 }
@@ -329,6 +337,7 @@ void Sim::cmdStop(const std::vector<Ref>& sel) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit()) continue;
+        e->zoneR = 0; e->leashed = false;
         if (e->isAir() && e->ammo <= 0 && e->ut().ammo > 0) { e->order = O_REARM; e->targetEnt = NOREF; continue; }
         e->order = O_IDLE; e->postOrder = O_IDLE; e->targetEnt = NOREF; e->engaged = NOREF; e->path.clear(); e->guardPos = e->pos;
     }
@@ -340,10 +349,56 @@ void Sim::cmdHarvest(const std::vector<Ref>& sel, Ref pile) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->ut().role != UR_HARVESTER) continue;
+        e->zoneR = 0;
         e->lastPile = pile; e->targetEnt = pile; e->actionTimer = 0;
         e->order = e->cargo > 0 ? O_RETURN : O_HARVEST;
         e->repathTimer = 0;
     }
+}
+
+// Fighters and aircraft protect a circle: they hold spread-out slots inside it, engage what enters it
+// (chasing only while the target stays in the zone) and return to their slot afterwards.
+void Sim::cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
+    radius = clampf(radius, 2.0f * TILE, 14.0f * TILE);
+    center = Vec2(clampf(center.x, TILE, WORLD_W - TILE), clampf(center.y, TILE, WORLD_H - TILE));
+    std::vector<Entity*> us;
+    for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && e->ut().role == UR_COMBAT && e->weapon() >= 0) us.push_back(e); }
+    int n = (int)us.size();
+    for (int k = 0; k < n; k++) {
+        Entity& e = *us[k];
+        e.zone = center; e.zoneR = radius; e.leashed = false;
+        e.engaged = NOREF; e.targetEnt = NOREF; e.postOrder = O_IDLE; e.actionTimer = 0;
+        // sunflower spread so a group fills the circle instead of piling on the centre
+        float a = k * 2.39996f, rr = radius * 0.6f * std::sqrt((k + 0.5f) / n);
+        Vec2 slot = center + Vec2(std::cos(a), std::sin(a)) * (n == 1 ? 0.0f : rr);
+        e.orbit = rng.f(0, 6.283f);
+        if (e.isAir()) {
+            e.guardPos = slot;
+            e.order = (e.ammo <= 0 && e.ut().ammo > 0) ? O_REARM : O_GUARDAREA;
+        } else {
+            slot = g_map.nearestFree(slot, 6);
+            e.guardPos = slot; e.order = O_GUARDAREA;
+            requestPath(e, slot);
+        }
+    }
+}
+
+// Haulers look for supply piles inside the circle (they go to its middle to find them) and work them until it is empty.
+void Sim::cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
+    radius = clampf(radius, 3.0f * TILE, 16.0f * TILE);
+    center = Vec2(clampf(center.x, TILE, WORLD_W - TILE), clampf(center.y, TILE, WORLD_H - TILE));
+    for (auto r : sel) {
+        Entity* e = get(r);
+        if (!e || !e->isUnit() || e->ut().role != UR_HARVESTER) continue;
+        e->zone = center; e->zoneR = radius; e->targetEnt = NOREF; e->lastPile = NOREF; e->actionTimer = 0;
+        e->order = e->cargo > 0 ? O_RETURN : O_HARVEST;
+        e->path.clear(); e->repathTimer = 0;
+    }
+}
+
+void Sim::cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
+    cmdGuardArea(sel, center, radius);
+    cmdGatherArea(sel, center, radius);
 }
 
 bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
@@ -432,6 +487,103 @@ bool Sim::cmdPower(int player, Vec2 pos) {
     return true;
 }
 
+int Sim::nukesReady(int player) const {
+    if (players[player].lowPower()) return 0;
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_NUKE && time >= e.actionTimer && e.disabledUntil <= time) n++;
+    return n;
+}
+float Sim::nukeWait(int player) const {
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_NUKE) {
+        float w = std::max(0.0f, e.actionTimer - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+bool Sim::cmdNuke(int player, Vec2 pos) {
+    Entity* ramp = nullptr;
+    if (players[player].lowPower()) return false;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_NUKE && time >= e.actionTimer && e.disabledUntil <= time) { ramp = &e; break; }
+    if (!ramp) return false;
+    ramp->actionTimer = time + NUKE_COOLDOWN;
+    nukes.push_back({ramp->pos, pos, player, 0});
+    emit(EV_SOUND, -1, SND_ROCKET, ramp->pos);
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) { emit(EV_MSG, p, SND_ATTACKED, pos, "NUCLEAR LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Nuclear missile incoming!"); }
+    return true;
+}
+
+void Sim::updateNukes() {
+    for (auto& n : nukes) n.t += SIM_DT;
+    for (size_t i = 0; i < nukes.size();) {
+        Nuke n = nukes[i];
+        if (n.t < NUKE_FLIGHT) { i++; continue; }
+        nukes.erase(nukes.begin() + i);
+        float R = NUKE_RADIUS * TILE;
+        std::vector<Ref> hit;
+        forEachNear(n.pos, R + 60, [&](Entity& e) { if (e.kind != EK_RESOURCE && enemies(n.owner, e.owner)) hit.push_back(refOf(e)); });
+        for (auto r : hit) {
+            Entity* e = get(r); if (!e) continue;
+            float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
+            if (d > R) continue;
+            float f = 1.0f - 0.65f * (d / R);
+            applyDamage(*e, (e->isBuilding() ? 2600.0f : 2200.0f) * f, n.owner, NOREF, nullptr);
+        }
+        fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 1.6f, rgb(255, 240, 200), R * 1.1f});
+        fx.push_back({FX_RING, n.pos, n.pos, 0, 1.4f, rgb(255, 200, 120), R});
+        fx.push_back({FX_EMP, n.pos, n.pos, 0, 1.6f, rgb(255, 210, 140), R});
+        for (int k = 0; k < 18; k++) {
+            float a = rng.f(0, 6.283f), r = rng.f(0, R * 0.8f); Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
+            fx.push_back({FX_EXPLODE, p, p, -rng.f(0, 0.8f), 0.9f, rgb(255, 150, 50), rng.f(24, 50)});
+            fx.push_back({FX_SMOKE, p, p, -rng.f(0, 1.0f), 4.5f, rgb(70, 62, 56), rng.f(24, 46), Vec2(rng.f(-10, 10), rng.f(-40, -18))});
+        }
+        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+    }
+}
+
+bool Sim::programAvailable(int player) const {
+    const Player& pl = players[player];
+    return !pl.advTech && !pl.researching && hasRole(player, BR_TECH);
+}
+
+bool Sim::cmdResearch(int player) {
+    Player& pl = players[player];
+    if (!programAvailable(player)) return false;
+    const ProgramType& pg = PROGRAMS[pl.faction];
+    if (!canAfford(player, pg.cost)) { emit(EV_NOFUNDS, player, SND_NOFUNDS, pl.basePos, "Insufficient funds"); return false; }
+    pl.money -= pg.cost;
+    pl.researching = true; pl.researchProgress = 0;
+    emit(EV_MSG, player, SND_CLICK, pl.basePos, (std::string(pg.name) + " started").c_str());
+    return true;
+}
+
+bool Sim::cmdScan(int player) {
+    Player& pl = players[player];
+    if (time < pl.scanReady || !hasRole(player, BR_TECH)) return false;
+    const ScanType& sc = SCANS[pl.faction];
+    pl.scanReady = time + sc.cooldown;
+    pl.revealUntil = time + sc.duration;
+    fx.push_back({FX_EMP, pl.basePos, pl.basePos, 0, 1.6f, pl.faction == F_CYBER ? rgb(110, 230, 255) : rgb(222, 178, 60), (float)WORLD_W * 0.6f});
+    emit(EV_SOUND, player, SND_AIR, pl.basePos);
+    emit(EV_MSG, player, SND_NONE, pl.basePos, (std::string(sc.name) + ": the whole map is visible").c_str());
+    return true;
+}
+
+void Sim::updateResearch() {
+    for (int p = 0; p < numPlayers; p++) {
+        Player& pl = players[p];
+        if (!pl.researching) continue;
+        if (!hasRole(p, BR_TECH)) continue;            // paused while the tech structure is down
+        pl.researchProgress += 5 * SIM_DT * (pl.lowPower() ? 0.5f : 1.0f) / PROGRAMS[pl.faction].time;   // called every 5th tick
+        if (pl.researchProgress >= 1.0f) {
+            pl.researching = false; pl.advTech = true; pl.researchProgress = 1;
+            emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(PROGRAMS[pl.faction].name) + " complete: " + PROGRAMS[pl.faction].desc).c_str());
+        }
+    }
+}
+
 // ------------------------------------------------------------ paths & movement
 bool Sim::requestPath(Entity& e, Vec2 dest) {
     e.path.clear(); e.pathIdx = 0;
@@ -500,6 +652,28 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
         if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
+        if (score < bs) { bs = score; best = &t; }
+    });
+    return best;
+}
+
+// Best enemy for a unit guarding a zone: anything inside the circle, or anything it can already shoot from where it stands.
+Entity* Sim::acquireZoneTarget(Entity& e) {
+    int w = e.weapon();
+    if (w < 0 || e.zoneR <= 0) return nullptr;
+    const Weapon& wp = WEAPONS[w];
+    Entity* best = nullptr; float bs = 1e9f;
+    forEachNear(e.zone, e.zoneR + (wp.range + 1.0f) * TILE, [&](Entity& t) {
+        if (&t == &e || !canTarget(e, t)) return;
+        float d = distToEntity(e.pos, t) / TILE;
+        if (d < wp.minRange) return;
+        bool inZone = distToEntity(e.zone, t) <= e.zoneR;
+        if (!inZone && d > wp.range + 0.3f) return;
+        float score = d - 2.5f * wp.mult[t.armor()];
+        if (t.isUnit() && t.weapon() >= 0) score -= 1.5f;
+        if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
+        if (t.isBuilding() && !t.constructed) score += 1.0f;
+        if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;
         if (score < bs) { bs = score; best = &t; }
     });
     return best;
@@ -600,13 +774,11 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     }
     if (tgt.owner >= 0 && attackerOwner >= 0 && attackerOwner != tgt.owner) {
         Player& pl = players[tgt.owner];
-        // "base under attack" style notice, throttled per player
-        static float lastNotice[MAX_PLAYERS] = {-100, -100, -100, -100};
-        if (time - lastNotice[tgt.owner] > 10.0f) {
-            lastNotice[tgt.owner] = time;
+        // "base under attack" style notice, throttled per player (state lives in Player so a new game starts clean)
+        if (time - pl.lastNotice > 10.0f) {
+            pl.lastNotice = time;
             emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack");
         }
-        (void)pl;
     }
     if (tgt.hp <= 0) {
         if (attackerOwner >= 0 && attackerOwner != tgt.owner) {
@@ -686,6 +858,11 @@ void Sim::updateProjectiles() {
 }
 
 void Sim::updateFx() {
+    // burning wrecks smoulder for a while (collected first: pushing while iterating would invalidate the loop)
+    static std::vector<Fx> puffs; puffs.clear();
+    for (auto& f : fx) if (f.type == FX_WRECK && (tick % 6) == ((u32)(f.a.x * 7 + f.a.y * 13) % 6) && f.t < f.life * 0.7f)
+        puffs.push_back({FX_SMOKE, f.a + Vec2((float)((int)(f.a.x + tick) % 9 - 4), (float)((int)(f.a.y + tick * 3) % 7 - 3)), Vec2(), 0, 2.4f, rgb(46, 44, 42), 6.0f + (float)(tick % 3), Vec2((float)((int)tick % 5 - 2), -14)});
+    for (auto& p : puffs) fx.push_back(p);
     for (auto& f : fx) {
         f.t += SIM_DT;
         if (f.type == FX_SMOKE || f.type == FX_DEBRIS) {
@@ -722,6 +899,17 @@ static bool predAirfield(const Entity& e, void* ctx) { int owner = *(int*)ctx; r
 
 Entity* Sim::findSupplyBuilding(Entity& h) { int o = h.owner; return nearestEntity(h.pos, 1e9f, predSupply, &o); }
 Entity* Sim::findPile(Entity& h, float maxDist) { return nearestEntity(h.pos, maxDist, predPile, nullptr); }
+Entity* Sim::findZonePile(Entity& h) {
+    Entity* best = nullptr; float bd = 1e18f;
+    for (auto& e : ents) {
+        if (!e.alive || e.kind != EK_RESOURCE || e.amount <= 0) continue;
+        if (dist(e.pos, h.zone) > h.zoneR + TILE * 0.5f) continue;
+        if (!exploredRaw(h.owner, clampi(e.tx, 0, MAP_W - 1), clampi(e.ty, 0, MAP_H - 1))) continue;   // haulers only work what their side has seen
+        float d = dist2(h.pos, e.pos);
+        if (d < bd) { bd = d; best = &e; }
+    }
+    return best;
+}
 Entity* Sim::findAirfield(Entity& a) {
     int o = a.owner;
     // prefer an airfield with free capacity
@@ -771,9 +959,10 @@ void Sim::updateUnit(Entity& e) {
             if (h) {
                 int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
                 Vec2 pad = h->pos + Vec2((slot - 1.5f) * 30, 0);
+                if (h->hasRally && e.ammo >= ut.ammo) pad = h->rally + Vec2((slot - 1.5f) * 34, 0);   // loaded aircraft wait at the rally point, empty ones return to the pad
                 Vec2 d = pad - e.pos;
                 if (d.len() > 3) { e.pos += d.norm() * std::min(d.len(), ut.speed * 0.6f * SIM_DT); e.angle = std::atan2(d.y, d.x); }
-                if (e.ammo < ut.ammo && d.len() < 8) { e.actionTimer += SIM_DT; if (e.actionTimer >= 1.5f) { e.actionTimer = 0; e.ammo++; } }
+                if (e.ammo < ut.ammo && d.len() < 8) { e.actionTimer += SIM_DT; if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo++; } }
             }
             if (e.ammo > 0) {
                 Entity* t = nullptr;
@@ -806,6 +995,48 @@ void Sim::updateUnit(Entity& e) {
             Entity* t = acquireTarget(e, WEAPONS[ut.weapon].range + 0.3f);
             if (t) { e.order = O_ATTACK; e.postOrder = O_GUARDPOS; e.targetEnt = refOf(*t); e.repathTimer = 0; }
         }
+        break;
+    }
+    case O_GUARDAREA: {
+        if (e.zoneR <= 0) { e.order = O_IDLE; e.guardPos = e.pos; break; }
+        const Weapon& w = WEAPONS[ut.weapon];
+        if (e.isAir()) {
+            // loiter in a slow circle over the zone, strike whatever enters it
+            e.orbit += SIM_DT * ut.speed * 0.4f / std::max(48.0f, e.zoneR * 0.45f);
+            Vec2 wp = e.zone + Vec2(std::cos(e.orbit), std::sin(e.orbit)) * (e.zoneR * 0.45f);
+            Vec2 d = wp - e.pos; float l = d.len();
+            if (l > 2) { e.pos += d.norm() * std::min(l, ut.speed * SIM_DT * (l > 140 ? 1.0f : 0.55f)); e.angle = std::atan2(d.y, d.x); }
+            if ((tick + e.gen) % 4 == 0) {
+                Entity* t = acquireZoneTarget(e);
+                if (t) { e.order = O_ATTACK; e.postOrder = O_GUARDAREA; e.targetEnt = refOf(*t); e.leashed = true; e.repathTimer = 0; }
+            }
+            break;
+        }
+        Entity* t = get(e.engaged);
+        if (t && (!canTarget(e, *t) || (distToEntity(e.zone, *t) > e.zoneR + TILE * 1.5f && distToEntity(e.pos, *t) > (w.range + 0.3f) * TILE))) { t = nullptr; e.engaged = NOREF; }
+        if (!t && (tick + e.gen) % 4 == 0) { t = acquireZoneTarget(e); if (t) e.engaged = refOf(*t); }
+        if (t) {
+            float d = distToEntity(e.pos, *t) / TILE;
+            if (d <= w.range + 0.15f && d >= w.minRange) { e.path.clear(); tryFire(e, *t); break; }   // hold the slot and shoot
+            if (distToEntity(e.zone, *t) <= e.zoneR + TILE * 1.5f) {                                   // inside the zone: go after it
+                e.order = O_ATTACK; e.postOrder = O_GUARDAREA; e.targetEnt = refOf(*t); e.leashed = true; e.engaged = NOREF; e.repathTimer = 0;
+                break;
+            }
+            e.engaged = NOREF;
+        }
+        // nothing to shoot: return to the slot
+        if (dist(e.pos, e.guardPos) > 14) {
+            if (e.pathIdx >= e.path.size()) requestPath(e, e.guardPos);
+            moveAlong(e, ut.speed);
+            e.stuckTimer += SIM_DT;
+            if (e.stuckTimer > 1.5f) {
+                if (dist(e.pos, e.lastPos) < ut.speed * 0.25f) {
+                    if (dist(e.pos, e.guardPos) < TILE * 2.5f) { e.guardPos = e.pos; e.path.clear(); }   // slot is crowded: take this spot
+                    else requestPath(e, e.guardPos);
+                }
+                e.stuckTimer = 0; e.lastPos = e.pos;
+            }
+        } else e.path.clear();
         break;
     }
     case O_MOVE: case O_ATTACKMOVE: {
@@ -844,12 +1075,17 @@ void Sim::updateUnit(Entity& e) {
             e.targetEnt = NOREF;
             if (e.postOrder == O_ATTACKMOVE) { e.order = O_ATTACKMOVE; requestPath(e, e.target); }
             else if (e.postOrder == O_GUARDPOS) { e.order = O_GUARDPOS; e.path.clear(); }
+            else if (e.postOrder == O_GUARDAREA && e.zoneR > 0) { e.order = O_GUARDAREA; e.path.clear(); e.engaged = NOREF; }
             else { e.order = O_IDLE; e.guardPos = e.pos; }
-            e.postOrder = O_IDLE;
+            e.postOrder = O_IDLE; e.leashed = false;
             break;
         }
         const Weapon& w = WEAPONS[ut.weapon];
         float d = distToEntity(e.pos, *t) / TILE;
+        // a zone guard does not chase targets out of its zone (it may still shoot what is already in range)
+        if (e.leashed && e.zoneR > 0 && d > w.range + 0.15f && distToEntity(e.zone, *t) > e.zoneR + TILE * 1.5f) {
+            e.order = O_GUARDAREA; e.targetEnt = NOREF; e.path.clear(); e.postOrder = O_IDLE; e.leashed = false; break;
+        }
         if (e.isAir()) {
             if (e.ammo <= 0 && ut.ammo > 0) { e.order = O_REARM; break; }
             Vec2 dv = t->pos - e.pos;
@@ -874,6 +1110,7 @@ void Sim::updateUnit(Entity& e) {
             moveAlong(e, ut.speed);
             // guard posts don't chase forever
             if (e.postOrder == O_GUARDPOS && dist(e.pos, e.guardPos) > (ut.sight + 4) * TILE) { e.order = O_GUARDPOS; e.targetEnt = NOREF; e.path.clear(); }
+            if (e.leashed && e.zoneR > 0 && dist(e.pos, e.zone) > e.zoneR + (ut.sight + 2) * TILE) { e.order = O_GUARDAREA; e.targetEnt = NOREF; e.path.clear(); e.postOrder = O_IDLE; e.leashed = false; }
         }
         break;
     }
@@ -881,10 +1118,25 @@ void Sim::updateUnit(Entity& e) {
         // haulers are unarmed: when shot at, run home and come back later
         if (time - e.lastDamaged < 1.0f && e.lastDamaged > 0) { Entity* s = findSupplyBuilding(e); if (s && distToEntity(e.pos, *s) > 4 * TILE) { e.order = O_RETURN; e.path.clear(); e.actionTimer = 0; break; } }
         Entity* p = get(e.targetEnt);
-        if (!p || p->kind != EK_RESOURCE || p->amount <= 0) {
-            Entity* np = findPile(e, 60 * TILE);
-            if (!np) { e.order = O_IDLE; e.targetEnt = NOREF; break; }
-            e.targetEnt = refOf(*np); e.lastPile = e.targetEnt; p = np; e.path.clear();
+        if (!p || p->kind != EK_RESOURCE || p->amount <= 0 || (e.zoneR > 0 && dist(p->pos, e.zone) > e.zoneR + TILE)) {
+            Entity* np = e.zoneR > 0 ? findZonePile(e) : findPile(e, 60 * TILE);
+            if (!np) {
+                if (e.zoneR <= 0) { e.order = O_IDLE; e.targetEnt = NOREF; break; }
+                // search the assigned area: drive to its middle (revealing piles as we arrive), give up after a short look around
+                if (dist(e.pos, e.zone) > TILE * 1.5f) {
+                    if (e.pathIdx >= e.path.size()) requestPath(e, g_map.nearestFree(e.zone, 6));
+                    moveAlong(e, ut.speed);
+                    e.stuckTimer += SIM_DT;
+                    if (e.stuckTimer > 2.0f) { if (dist(e.pos, e.lastPos) < 8) { e.actionTimer = 99; } e.stuckTimer = 0; e.lastPos = e.pos; }
+                } else e.actionTimer += SIM_DT;
+                if (e.actionTimer > 2.5f) {
+                    Player& hp = players[e.owner];
+                    if (time - hp.lastMine > 6.0f) { hp.lastMine = time; emit(EV_MSG, e.owner, SND_NONE, e.pos, "No supplies left in the assigned area"); }
+                    e.order = O_IDLE; e.zoneR = 0; e.targetEnt = NOREF; e.actionTimer = 0; e.path.clear();
+                }
+                break;
+            }
+            e.targetEnt = refOf(*np); e.lastPile = e.targetEnt; p = np; e.path.clear(); e.actionTimer = 0;
         }
         float d = distToEntity(e.pos, *p);
         if (d <= HARVEST_REACH) {
@@ -919,8 +1171,9 @@ void Sim::updateUnit(Entity& e) {
                 e.cargo = 0;
                 emit(EV_SOUND, e.owner, SND_SUPPLY, e.pos);
                 Entity* p = get(e.lastPile);
-                if (!p || p->amount <= 0) p = findPile(e, 60 * TILE);
+                if (!p || p->amount <= 0 || (e.zoneR > 0 && dist(p->pos, e.zone) > e.zoneR + TILE)) p = e.zoneR > 0 ? findZonePile(e) : findPile(e, 60 * TILE);
                 if (p) { e.targetEnt = refOf(*p); e.lastPile = e.targetEnt; e.order = O_HARVEST; }
+                else if (e.zoneR > 0) { e.targetEnt = NOREF; e.order = O_HARVEST; e.actionTimer = 0; }   // keep searching the area
                 else e.order = O_IDLE;
             }
         } else {
@@ -967,10 +1220,12 @@ void Sim::updateUnit(Entity& e) {
         if (d.len() > 4) { e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
         else {
             e.actionTimer += SIM_DT;
-            if (e.actionTimer >= 1.5f) { e.actionTimer = 0; e.ammo++; }
+            if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo = std::min(ut.ammo, e.ammo + 1); }
             if (e.ammo >= ut.ammo) {
                 Entity* t = get(e.targetEnt);
-                if (t && canTarget(e, *t)) e.order = O_ATTACK; else { e.order = O_IDLE; e.targetEnt = NOREF; }
+                if (t && canTarget(e, *t)) e.order = O_ATTACK;
+                else if (e.zoneR > 0) { e.order = O_GUARDAREA; e.targetEnt = NOREF; e.postOrder = O_IDLE; e.leashed = false; }
+                else { e.order = O_IDLE; e.targetEnt = NOREF; }
             }
         }
         break;
@@ -982,6 +1237,8 @@ void Sim::updateUnit(Entity& e) {
 void Sim::finishBuilding(Entity& b) {
     b.constructed = true; b.progress = 1; b.hp = std::max(b.hp, b.maxHp);
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
+    b.actionTimer = 0;
+    if (b.bt().role == BR_NUKE) b.actionTimer = time + 60.0f;   // arming time for the first warhead
     updatePower();
 }
 
@@ -991,15 +1248,17 @@ void Sim::spawnFromQueue(Entity& b) {
     b.queueProgress = 0;
     const UnitType& ut = UNITS[type];
     Vec2 at = ut.kind == UK_AIR ? b.pos : unitExit(b);
-    Ref r = spawnUnit(type, b.owner, at);
+    Ref bref = refOf(b);
+    Vec2 rally = b.rally; bool hasRally = b.hasRally; int owner = b.owner;
+    Ref r = spawnUnit(type, owner, at);          // may reallocate ents: b must not be touched afterwards
     Entity& u = ents[r.idx];
-    if (ut.kind == UK_AIR) { u.home = refOf(b); u.order = O_IDLE; }
+    if (ut.kind == UK_AIR) { u.home = bref; u.order = O_IDLE; if (hasRally) cmdMove({r}, rally, false); }
     else if (ut.role == UR_HARVESTER) {
         Entity* p = findPile(u, 60 * TILE);
         if (p) cmdHarvest({r}, refOf(*p));
-    } else if (b.hasRally) cmdMove({r}, b.rally, false);
-    else cmdMove({r}, b.rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
-    emit(EV_UNIT_READY, b.owner, SND_UNIT_READY, u.pos, ut.name);
+    } else if (hasRally) cmdMove({r}, rally, false);
+    else cmdMove({r}, rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
+    emit(EV_UNIT_READY, owner, SND_UNIT_READY, u.pos, ut.name);
 }
 
 void Sim::updateBuilding(Entity& b) {
@@ -1009,6 +1268,15 @@ void Sim::updateBuilding(Entity& b) {
     const BuildType& bt = b.bt();
     Player& pl = players[b.owner];
     bool powered = !(pl.lowPower() && bt.power < 0);
+    if (bt.role == BR_INCOME) {
+        b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
+        if (b.actionTimer >= INCOME_INTERVAL) {
+            b.actionTimer -= INCOME_INTERVAL;
+            int amt = pl.faction == F_CYBER ? 75 : 60;
+            pl.money += amt; pl.mined += amt;
+            fx.push_back({FX_SPARK, b.pos, b.pos, 0, 0.6f, rgb(255, 224, 90), 9});
+        }
+    }
     if (bt.weapon >= 0 && powered) {
         Entity* t = get(b.engaged);
         const Weapon& w = WEAPONS[bt.weapon];
@@ -1087,7 +1355,7 @@ void Sim::separateUnits() {
                 if (l2 >= rr * rr || l2 < 1e-4f) { if (l2 < 1e-4f) push += Vec2(rng.f(-1, 1), rng.f(-1, 1)); continue; }
                 float l = std::sqrt(l2);
                 float overlap = (rr - l) / rr;
-                float wgt = (b.order == O_IDLE && a.order != O_IDLE) ? 0.4f : 0.8f;  // movers push idlers aside
+                float wgt = ((b.order == O_IDLE || b.order == O_GUARDAREA) && a.order != O_IDLE && a.order != O_GUARDAREA) ? 0.4f : 0.8f;  // movers push idlers aside
                 push += d * (overlap * wgt * 9.0f / l);
             }
         }
@@ -1121,23 +1389,26 @@ void Sim::step() {
     for (auto& e : ents) if (e.alive) e.prevPos = e.pos;
     for (auto& p : projs) p.prevPos = p.pos;
     rebuildGrid();
-    for (auto& e : ents) {
+    // index loop: producing a unit can grow (reallocate) the entity array mid-iteration
+    for (size_t i = 0; i < ents.size(); i++) {
+        Entity& e = ents[i];
         if (!e.alive) continue;
         if (e.isUnit()) updateUnit(e);
         else if (e.isBuilding()) updateBuilding(e);
     }
     updateProjectiles();
     updateStorms();
+    updateNukes();
     separateUnits();
     updateFx();
     if (tick % 4 == 0) updateVision();
     if (tick % 10 == 0) updatePower();
+    if (tick % 5 == 0) updateResearch();
     if (tick % 20 == 0) checkVictory();
     // low-power notices
-    static bool wasLow[MAX_PLAYERS] = {false, false, false, false};
     for (int p = 0; p < numPlayers; p++) {
         bool low = players[p].lowPower();
-        if (low && !wasLow[p]) emit(EV_LOWPOWER, p, SND_LOWPOWER, players[p].basePos, "Low power");
-        wasLow[p] = low;
+        if (low && !players[p].wasLowPower) emit(EV_LOWPOWER, p, SND_LOWPOWER, players[p].basePos, "Low power");
+        players[p].wasLowPower = low;
     }
 }

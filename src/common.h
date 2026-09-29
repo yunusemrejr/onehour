@@ -22,11 +22,13 @@ static const int MAP_H = 80;
 static const int WORLD_W = MAP_W * TILE;
 static const int WORLD_H = MAP_H * TILE;
 
-// Screen
-static const int SCREEN_W = 1024;
-static const int SCREEN_H = 640;
+// Screen: logical size is dynamic (window is resizable); these are updated by Gfx on every resize
+static const int MIN_SCREEN_W = 1024, MIN_SCREEN_H = 640;
 static const int HUD_H = 132;        // command bar height at bottom
-static const int VIEW_H = SCREEN_H - HUD_H;
+inline int SCREEN_W = MIN_SCREEN_W;
+inline int SCREEN_H = MIN_SCREEN_H;
+inline int VIEW_H = MIN_SCREEN_H - HUD_H;
+inline void setScreenSize(int w, int h) { SCREEN_W = w; SCREEN_H = h; VIEW_H = h - HUD_H; }
 
 // Simulation
 static const int SIM_HZ = 20;

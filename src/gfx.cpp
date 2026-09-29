@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "art.h"
 
 Gfx g_gfx;
 
@@ -32,20 +33,45 @@ static const u8 FONT5x7[95][5] = {
 };
 
 // ------------------------------------------------------------ init
-bool Gfx::init(int scale, bool software) {
+// Logical size = window size / UI scale. The scale grows in big windows so the HUD stays readable
+// and the visible area never exceeds the map.
+void Gfx::onResize() {
+    if (!win || !ren) return;
+    int w = 0, h = 0;
+    SDL_GetWindowSize(win, &w, &h);
+    if (w <= 0 || h <= 0) return;
+    int s = userScale > 0 ? userScale : 1;
+    while (s < 8 && (w / s > 2200 || h / s > 1400 || (userScale <= 0 && w >= 2560 && h >= 1500 && s < 2))) s++;
+    while (s > 1 && (w / s < MIN_SCREEN_W || h / s < MIN_SCREEN_H)) s--;
+    setScreenSize(std::max(MIN_SCREEN_W, w / s), std::max(MIN_SCREEN_H, h / s));
+    SDL_RenderSetLogicalSize(ren, SCREEN_W, SCREEN_H);
+}
+
+bool Gfx::init(int scale, bool software, int reqW, int reqH) {
     if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "video: %s\n", SDL_GetError()); return false; }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
     SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
-    win = SDL_CreateWindow("One Hour", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_W * scale, SCREEN_H * scale, SDL_WINDOW_SHOWN);
+    userScale = scale;
+    // default window: most of the desktop, capped so the map stays the focus
+    int ww = reqW, wh = reqH;
+    if (ww <= 0 || wh <= 0) {
+        SDL_Rect ub = { 0, 0, 0, 0 };
+        if (SDL_GetDisplayUsableBounds(0, &ub) != 0 || ub.w < 640) { ub.w = 1280; ub.h = 800; }
+        int s = std::max(1, scale);
+        ww = clampi((int)(ub.w * 0.92f), MIN_SCREEN_W * s, 1800 * s);
+        wh = clampi((int)(ub.h * 0.92f), MIN_SCREEN_H * s, 1100 * s);
+    }
+    win = SDL_CreateWindow("One Hour", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, ww, wh, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     if (!win) { fprintf(stderr, "window: %s\n", SDL_GetError()); return false; }
+    SDL_SetWindowMinimumSize(win, MIN_SCREEN_W, MIN_SCREEN_H);
     u32 flags = software ? SDL_RENDERER_SOFTWARE : (SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     ren = SDL_CreateRenderer(win, -1, flags);
     if (!ren && !software) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
     if (!ren) { fprintf(stderr, "renderer: %s\n", SDL_GetError()); return false; }
-    SDL_RenderSetLogicalSize(ren, SCREEN_W, SCREEN_H);
+    onResize();
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     { Canvas c(2, 2); c.fillRect(0, 0, 2, 2, rgb(255, 255, 255)); white = fromCanvas(c, 0, 0).tex; }
-    buildFont(); buildTiles(); buildUnits(); buildBuildings(); buildMisc(); buildMinimap();
+    buildFont(); buildTiles(); bakeTerrain(); buildUnits(); buildBuildings(); buildMisc(); buildMinimap();
     return true;
 }
 
@@ -63,11 +89,19 @@ Sprite Gfx::fromCanvas(Canvas& c, float ox, float oy) {
     return s;
 }
 
+Sprite Gfx::fromCanvasSmooth(Canvas& c, float ox, float oy) {
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+    Sprite s = fromCanvas(c, ox, oy);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+    return s;
+}
+
 // ------------------------------------------------------------ primitives
 void Gfx::draw(const Sprite& s, float x, float y, float angle, float scale, Color mod, u8 alpha) {
     if (!s.tex) return;
-    SDL_Rect dst = { (int)std::lround(x - s.ox * scale), (int)std::lround(y - s.oy * scale), (int)(s.w * scale), (int)(s.h * scale) };
-    SDL_Point c = { (int)(s.ox * scale), (int)(s.oy * scale) };
+    scale *= s.dscale;
+    SDL_Rect dst = { (int)std::lround(x - s.ox * scale), (int)std::lround(y - s.oy * scale), (int)std::lround(s.w * scale), (int)std::lround(s.h * scale) };
+    SDL_Point c = { (int)std::lround(s.ox * scale), (int)std::lround(s.oy * scale) };
     SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b);
     SDL_SetTextureAlphaMod(s.tex, alpha);
     if (angle == 0) SDL_RenderCopy(ren, s.tex, nullptr, &dst);
@@ -112,6 +146,35 @@ void Gfx::circle(float cx, float cy, float r, Color c, int segs) {
 void Gfx::fillCircle(float cx, float cy, float r, Color c) {
     // draw as a scaled blob sprite (cheap)
     draw(blob, cx, cy, 0, r / 16.0f, c, c.a);
+}
+void Gfx::glowAdd(float cx, float cy, float r, Color c) {
+    if (!blob.tex) return;
+    SDL_SetTextureBlendMode(blob.tex, SDL_BLENDMODE_ADD);
+    draw(blob, cx, cy, 0, r / 16.0f, c, c.a);
+    SDL_SetTextureBlendMode(blob.tex, SDL_BLENDMODE_BLEND);
+}
+void Gfx::discFill(float cx, float cy, float r, Color c) {
+    if (!disc.tex || r < 1) return;
+    SDL_FRect dst = { cx - r, cy - r, r * 2, r * 2 };
+    SDL_SetTextureColorMod(disc.tex, c.r, c.g, c.b);
+    SDL_SetTextureAlphaMod(disc.tex, c.a);
+    SDL_RenderCopyF(ren, disc.tex, nullptr, &dst);
+}
+void Gfx::dashedCircle(float cx, float cy, float r, Color c, float phase, float dash, float gap) {
+    if (r < 2) return;
+    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
+    float circ = 6.2831853f * r;
+    int n = clampi((int)(circ / 3.0f), 24, 900);
+    float step = circ / n, period = dash + gap;
+    SDL_FPoint pts[3];
+    for (int i = 0; i < n; i++) {
+        float s = i * step + phase;
+        if (std::fmod(s < 0 ? s + period * 1000 : s, period) > dash) continue;
+        float a0 = i * 6.2831853f / n, a1 = (i + 1) * 6.2831853f / n;
+        pts[0] = { cx + std::cos(a0) * r, cy + std::sin(a0) * r };
+        pts[1] = { cx + std::cos(a1) * r, cy + std::sin(a1) * r };
+        SDL_RenderDrawLinesF(ren, pts, 2);
+    }
 }
 void Gfx::bevelPanel(int x, int y, int w, int h, Color base, bool raised) {
     fill(x, y, w, h, base);
@@ -212,6 +275,7 @@ void Gfx::buildTiles() {
     for (int v = 0; v < 4; v++) for (int t = 0; t < T_COUNT; t++) {
         Canvas c(TILE, TILE);
         paintTile(c, t, v, r);
+        tilePx[t][v] = c.px;
         tiles[t][v] = fromCanvas(c, 0, 0);
     }
     // edge strips: the tile's own texture fading out, drawn over lower-priority neighbours
@@ -226,123 +290,138 @@ void Gfx::buildTiles() {
     }
 }
 
-// ------------------------------------------------------------ units
-static void tracks(Canvas& c, int x, int y, int w, int h, Color dark) {
-    c.fillRect(x, y, w, h, dark);
-    for (int i = x; i < x + w; i += 3) c.fillRect(i, y, 1, h, shade(dark, 1.5f));
-}
-static void teamMark(Canvas& c, int x, int y, int w, int h, Color team) { c.fillRect(x, y, w, h, team); }
 
+// ------------------------------------------------------------ baked world terrain
+static float nhash(int x, int y, u32 seed) {
+    u32 h = (u32)x * 374761393u + (u32)y * 668265263u + seed * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u; h ^= h >> 16;
+    return (h & 0xFFFF) / 65535.0f;
+}
+static float nnoise(float x, float y, u32 seed) {
+    int ix = (int)std::floor(x), iy = (int)std::floor(y);
+    float fx = x - ix, fy = y - iy; fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    return lerpf(lerpf(nhash(ix, iy, seed), nhash(ix + 1, iy, seed), fx), lerpf(nhash(ix, iy + 1, seed), nhash(ix + 1, iy + 1, seed), fx), fy);
+}
+static void paintTreeCanopy(Canvas& c, Rng& r) {
+    int n = r.range(3, 4);
+    float cx[4], cy[4], cr[4];
+    for (int k = 0; k < n; k++) { cx[k] = r.f(9, 23); cy[k] = r.f(9, 23); cr[k] = r.f(6, 9); }
+    for (int k = 0; k < n; k++) c.fillCircle(cx[k] + 3, cy[k] + 4, cr[k], rgb(14, 30, 16, 120));
+    for (int k = 0; k < n; k++) { c.fillCircle(cx[k], cy[k], cr[k], rgb(34, 82, 40)); c.fillCircle(cx[k] - cr[k] * 0.25f, cy[k] - cr[k] * 0.3f, cr[k] * 0.6f, rgb(50, 106, 50)); c.fillCircle(cx[k] - cr[k] * 0.4f, cy[k] - cr[k] * 0.45f, cr[k] * 0.28f, rgb(80, 138, 66)); }
+    for (int k = 0; k < 14; k++) { int x = r.range(1, 30), y = r.range(1, 30); if (Canvas::unpack(c.px[y * c.w + x]).a > 250) c.set(x, y, rgb(40, 92, 44)); }
+}
+
+void Gfx::bakeTerrain() {
+    const int W = WORLD_W, H = WORLD_H;
+    Canvas c(W, H);
+    auto typeAt = [&](float fx, float fy) -> u8 {
+        int tx = clampi((int)std::floor(fx / TILE), 0, MAP_W - 1), ty = clampi((int)std::floor(fy / TILE), 0, MAP_H - 1);
+        u8 t = g_map.tile(tx, ty);
+        return t == T_TREE ? (u8)T_GRASS : t;
+    };
+    auto sample = [&](float fx, float fy, int px, int py) -> Color {
+        int tx = clampi((int)std::floor(fx / TILE), 0, MAP_W - 1), ty = clampi((int)std::floor(fy / TILE), 0, MAP_H - 1);
+        u8 t = typeAt(fx, fy);
+        int v = g_map.variant[ty * MAP_W + tx] % 4;
+        return Canvas::unpack(tilePx[t][v][(py & (TILE - 1)) * TILE + (px & (TILE - 1))]);
+    };
+    static const float JX[4] = { -3.5f, 3.5f, -2.0f, 2.5f }, JY[4] = { -2.5f, -3.0f, 3.5f, 2.0f };
+    for (int py = 0; py < H; py++) for (int px = 0; px < W; px++) {
+        // domain warp so tile borders become organic curves, then average four jittered lookups for soft blends
+        float wx = px + (nnoise(px * 0.045f, py * 0.045f, 11) - 0.5f) * 20.0f + (nnoise(px * 0.15f, py * 0.15f, 12) - 0.5f) * 6.0f;
+        float wy = py + (nnoise(px * 0.045f + 50, py * 0.045f + 50, 13) - 0.5f) * 20.0f + (nnoise(px * 0.15f, py * 0.15f + 30, 14) - 0.5f) * 6.0f;
+        float r = 0, g = 0, b = 0;
+        int rockN = 0, waterN = 0;
+        for (int k = 0; k < 4; k++) {
+            u8 t = typeAt(wx + JX[k], wy + JY[k]);
+            Color s = sample(wx + JX[k], wy + JY[k], px, py);
+            r += s.r; g += s.g; b += s.b;
+            if (t == T_ROCK) rockN++;
+            if (t == T_WATER) waterN++;
+        }
+        r *= 0.25f; g *= 0.25f; b *= 0.25f;
+        // low-frequency tint breaks up tiling, plus a faint light gradient (light from the north-west)
+        float tint = 0.90f + 0.20f * nnoise(px * 0.012f, py * 0.012f, 21) + 0.06f * (nnoise(px * 0.05f, py * 0.05f, 22) - 0.5f);
+        // shoreline: pixels that are land but touch water get a wet dark rim, water touching land a light foam
+        if (waterN > 0 && waterN < 4) { float k = waterN / 4.0f; r = lerpf(r, 170, 0.35f * (1 - std::abs(k - 0.5f) * 2)); g = lerpf(g, 205, 0.35f * (1 - std::abs(k - 0.5f) * 2)); b = lerpf(b, 215, 0.35f * (1 - std::abs(k - 0.5f) * 2)); }
+        // cliffs: rock edges lit from the north-west, shadowed on the south-east
+        if (rockN > 0 && rockN < 4) { float sh = (rockN <= 2) ? 0.78f : 1.0f; r *= sh; g *= sh; b *= sh; }
+        c.px[py * W + px] = Canvas::pack(Color{(u8)clampf(r * tint, 0, 255), (u8)clampf(g * tint, 0, 255), (u8)clampf(b * tint, 0, 255), 255});
+    }
+    // soft drop shadows from rock cliffs onto the ground to their south-east
+    {
+        std::vector<u32> src = c.px;
+        for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
+            if (g_map.tile(tx, ty) == T_ROCK || g_map.tile(tx, ty) == T_WATER) continue;
+            bool rockNW = g_map.tile(tx - 1, ty) == T_ROCK || g_map.tile(tx, ty - 1) == T_ROCK;
+            if (!rockNW) continue;
+            for (int j = 0; j < 8; j++) for (int i = 0; i < TILE; i++) {
+                if (g_map.tile(tx, ty - 1) != T_ROCK) break;
+                Color k = Canvas::unpack(c.px[(ty * TILE + j) * W + tx * TILE + i]);
+                float f = 1.0f - 0.28f * (1.0f - j / 8.0f);
+                c.px[(ty * TILE + j) * W + tx * TILE + i] = Canvas::pack(Color{(u8)(k.r * f), (u8)(k.g * f), (u8)(k.b * f), 255});
+            }
+        }
+    }
+    // trees: canopies composited over the grass, four variants
+    Rng tr(777);
+    Canvas canopy[4] = { Canvas(TILE, TILE), Canvas(TILE, TILE), Canvas(TILE, TILE), Canvas(TILE, TILE) };
+    for (int v = 0; v < 4; v++) paintTreeCanopy(canopy[v], tr);
+    for (int ty = 0; ty < MAP_H; ty++) for (int tx = 0; tx < MAP_W; tx++) {
+        if (g_map.tile(tx, ty) != T_TREE) continue;
+        Canvas& cv = canopy[g_map.variant[ty * MAP_W + tx] % 4];
+        for (int j = 0; j < TILE; j++) for (int i = 0; i < TILE; i++) {
+            Color k = Canvas::unpack(cv.px[j * TILE + i]);
+            if (k.a == 0) continue;
+            int X = tx * TILE + i, Y = ty * TILE + j;
+            Color o = Canvas::unpack(c.px[Y * W + X]);
+            float a = k.a / 255.0f;
+            c.px[Y * W + X] = Canvas::pack(Color{(u8)lerpf(o.r, k.r, a), (u8)lerpf(o.g, k.g, a), (u8)lerpf(o.b, k.b, a), 255});
+        }
+    }
+    worldTerrain = fromCanvas(c, 0, 0);
+    // fog mask, filtered bilinearly at creation time (hint is read when the texture is created)
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+    shroudTex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, MAP_W, MAP_H);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+    if (shroudTex) SDL_SetTextureBlendMode(shroudTex, SDL_BLENDMODE_BLEND);
+}
+
+void Gfx::updateShroud(const std::vector<u8>& ex) {
+    if (!shroudTex) return;
+    // 0 = explored, 255 = never seen; explored tiles bordering the shroud get a partial veil so the edge reads as a gradient
+    static std::vector<u32> buf;
+    buf.assign((size_t)MAP_W * MAP_H, 0);
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+        u8 a = ex[y * MAP_W + x] ? 0 : 245;
+        buf[y * MAP_W + x] = (u32)a << 24 | 10u << 16 | 6u << 8 | 4u;
+    }
+    SDL_UpdateTexture(shroudTex, nullptr, buf.data(), MAP_W * 4);
+}
+
+// ------------------------------------------------------------ units
+// Unit art lives in art.cpp: 2x supersampled sprites (drawn at 0.5 scale, bilinear filtered), with two extra
+// animation frames for anything that walks or rolls, turrets per player, and a spinning rotor for helicopters.
 void Gfx::buildUnits() {
     for (int p = 0; p < MAX_PLAYERS; p++) {
         Color team = PLAYER_COLOR[p];
         for (int t = 0; t < U_COUNT; t++) {
             const UnitType& u = UNITS[t];
-            bool cy = u.faction == F_CYBER;
-            Color hull = cy ? CY_HULL : CK_HULL, panel = cy ? CY_PANEL : CK_PANEL, dark = cy ? CY_DARK : CK_DARK, accent = cy ? CY_GLOW : CK_YEL;
-            int local = t - firstUnitOf(u.faction);
-            Canvas c(32, 32);
-            // all unit sprites face +x (right); center at (16,16)
-            switch (local) {
-            case 0: // dozer / fabricator
-                tracks(c, 8, 7, 14, 4, dark); tracks(c, 8, 21, 14, 4, dark);
-                c.panel(8, 10, 13, 12, hull, 1);
-                c.fillRect(11, 12, 6, 8, panel);
-                if (cy) { c.fillRect(20, 9, 4, 14, shade(panel, 1.1f)); c.fillRect(24, 11, 2, 10, accent); c.glow(25, 16, 5, rgb(110, 230, 255, 120)); }
-                else { c.fillRect(21, 8, 3, 16, CK_STEEL); c.fillRect(24, 7, 2, 18, CK_YEL); for (int k = 8; k < 24; k += 4) c.fillRect(24, k, 2, 2, dark); }
-                teamMark(c, 9, 11, 3, 3, team);
-                break;
-            case 1: // harvester
-                tracks(c, 6, 8, 20, 3, dark); tracks(c, 6, 21, 20, 3, dark);
-                c.panel(5, 10, 13, 12, shade(hull, 0.9f), 1);   // cargo bed
-                c.panel(18, 10, 8, 12, panel, 1);               // cab
-                c.fillRect(24, 12, 2, 8, dark);
-                if (cy) { c.fillRect(7, 12, 9, 8, shade(hull, 1.2f)); c.fillRect(8, 15, 7, 2, accent); }
-                else { c.fillCircle(9, 16, 3, CK_RUST); c.fillCircle(14, 16, 3, CK_RUST); c.fillRect(6, 11, 1, 10, CK_YEL); }
-                teamMark(c, 19, 11, 3, 3, team);
-                break;
-            case 2: case 3: case 4: { // infantry
-                c.fillCircle(16, 16, 5.5f, shade(hull, 0.85f));   // shoulders
-                c.fillCircle(16, 16, 3.2f, cy ? panel : rgb(120, 110, 80)); // head/helmet
-                c.fillCircle(15.2f, 15.2f, 1.2f, shade(cy ? panel : rgb(120, 110, 80), 1.4f));
-                Color gun = local == 3 ? accent : (local == 4 ? (cy ? CY_WHITE : CK_STEEL) : dark);
-                int gl = local == 3 ? 9 : (local == 4 ? 8 : 7);
-                c.fillRect(18, 15, gl, 2, gun);
-                if (local == 4 && !cy) c.fillRect(18, 17, 4, 1, dark);
-                if (local == 3 && !cy) { c.fillRect(20, 14, 6, 4, CK_RUST); }
-                if (local == 4 && cy) c.glow(24, 16, 3, rgb(160, 220, 255, 150));
-                teamMark(c, 12, 14, 2, 4, team);
-                break;
+            for (int f = 0; f < 3; f++) {
+                if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
+                Canvas c(ART_SIZE, ART_SIZE);
+                artUnitBody(c, t, team, f);
+                Sprite s = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2);
+                s.dscale = UNIT_SCALE * artScale(t);
+                if (f == 0) unitBody[t][p] = s; else unitAnim[t][p][f - 1] = s;
             }
-            case 5: // main tank body
-                tracks(c, 5, 6, 22, 5, dark); tracks(c, 5, 21, 22, 5, dark);
-                c.panel(6, 9, 20, 14, hull, 1);
-                c.fillRect(8, 11, 16, 10, shade(hull, 1.1f));
-                if (cy) { c.fillRect(7, 11, 1, 10, accent); c.fillRect(24, 11, 1, 10, accent); }
-                else { c.fillRect(6, 9, 3, 14, CK_RUST); c.fillRect(23, 10, 2, 12, dark); }
-                teamMark(c, 9, 12, 3, 3, team);
-                break;
-            case 6: // volt walker / gatling tank
-                if (cy) {
-                    c.line(8, 8, 16, 16, dark, 3); c.line(8, 24, 16, 16, dark, 3); c.line(26, 16, 16, 16, dark, 3);
-                    c.fillCircle(8, 8, 2.5f, panel); c.fillCircle(8, 24, 2.5f, panel); c.fillCircle(26, 16, 2.5f, panel);
-                    c.fillCircle(16, 16, 6.5f, hull); c.fillCircle(16, 16, 4.5f, panel);
-                } else {
-                    tracks(c, 6, 7, 20, 4, dark); tracks(c, 6, 21, 20, 4, dark);
-                    c.panel(7, 10, 18, 12, hull, 1); c.fillRect(9, 12, 14, 8, shade(hull, 1.1f));
-                    c.fillRect(7, 10, 2, 12, CK_YEL);
-                }
-                teamMark(c, 10, 12, 3, 3, team);
-                break;
-            case 7: // railgun tank / rocket launcher
-                tracks(c, 4, 6, 24, 5, dark); tracks(c, 4, 21, 24, 5, dark);
-                c.panel(5, 9, 22, 14, cy ? shade(hull, 1.05f) : shade(hull, 0.95f), 1);
-                if (cy) { c.fillRect(7, 11, 18, 10, shade(hull, 1.15f)); c.fillRect(6, 15, 20, 2, accent); }
-                else { c.fillRect(7, 11, 18, 10, CK_PANEL); c.fillRect(5, 9, 2, 14, CK_RUST); }
-                teamMark(c, 8, 12, 3, 3, team);
-                break;
-            case 8: // aircraft
-                if (cy) {
-                    // delta drone
-                    for (int y = 4; y < 29; y++) { int half = std::abs(y - 16); int len = 24 - half * 2; if (len > 0) c.fillRect(5 + half, y, len, 1, y == 16 ? panel : hull); }
-                    c.fillRect(20, 14, 8, 5, panel);
-                    c.glow(9, 16, 4, rgb(110, 230, 255, 200)); c.fillRect(6, 15, 4, 3, accent);
-                    teamMark(c, 14, 15, 3, 3, team);
-                } else {
-                    // gunship: fuselage + tail + rotor disc
-                    c.fillRect(6, 15, 8, 3, dark); c.fillRect(6, 13, 2, 7, dark);
-                    c.panel(12, 11, 14, 11, hull, 1); c.fillRect(22, 13, 5, 7, panel);
-                    c.fillRect(13, 22, 10, 2, CK_RUST); c.fillRect(13, 9, 10, 2, CK_RUST);
-                    c.ring(18, 16, 12, 1.2f, rgb(60, 60, 60, 110)); c.line(6, 16, 30, 16, rgb(70, 70, 70, 140)); c.line(18, 4, 18, 28, rgb(70, 70, 70, 140));
-                    teamMark(c, 14, 13, 3, 3, team);
-                }
-                break;
-            }
-            if (local != 8) c.outline(rgb(10, 12, 14, 200));
-            unitBody[t][p] = fromCanvas(c, 16, 16);
-            // turrets (shared across players)
-            if (p == 0) {
-                Canvas tc(32, 32);
-                bool has = false;
-                switch (local) {
-                case 5: has = true;
-                    tc.fillCircle(16, 16, 6, shade(hull, 1.25f)); tc.fillCircle(15, 15, 3.5f, panel);
-                    if (cy) { tc.fillRect(20, 15, 11, 3, dark); tc.fillRect(26, 14, 5, 5, accent); }
-                    else { tc.fillRect(20, 15, 12, 2, dark); tc.fillRect(29, 14, 3, 4, CK_STEEL); }
-                    break;
-                case 6: has = true;
-                    if (cy) { tc.fillCircle(16, 16, 4, CY_WHITE); tc.glow(16, 16, 8, rgb(150, 230, 255, 170)); tc.ring(16, 16, 5.5f, 1.2f, accent); }
-                    else { tc.fillCircle(16, 16, 5, shade(hull, 1.25f)); tc.fillRect(20, 13, 10, 2, dark); tc.fillRect(20, 16, 10, 2, dark); tc.fillRect(20, 15, 9, 1, CK_STEEL); }
-                    break;
-                case 7: has = true;
-                    if (cy) { tc.fillCircle(16, 16, 5.5f, shade(hull, 1.3f)); tc.fillRect(19, 15, 13, 2, CY_WHITE); tc.fillRect(19, 14, 4, 4, panel); tc.glow(31, 16, 3, rgb(200, 240, 255, 200)); }
-                    else { tc.panel(10, 11, 16, 10, CK_STEEL, 1); for (int k = 0; k < 4; k++) tc.fillRect(12 + k * 3, 13, 2, 6, dark); tc.fillRect(24, 12, 4, 8, CK_RUST); }
-                    break;
-                }
-                if (has) { tc.outline(rgb(10, 12, 14, 160)); unitTurret[t] = fromCanvas(tc, 16, 16); }
-            }
+            if (u.kind == UK_AIR) { unitAnim[t][p][0] = unitBody[t][p]; unitAnim[t][p][1] = unitBody[t][p]; }
+            Canvas tc(ART_SIZE, ART_SIZE);
+            if (artUnitTurret(tc, t, team)) { unitTurret[t][p] = fromCanvasSmooth(tc, ART_SIZE / 2, ART_SIZE / 2); unitTurret[t][p].dscale = UNIT_SCALE * artScale(t); }
         }
     }
+    { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, false); rotorDisc = fromCanvasSmooth(c, 32, 32); rotorDisc.dscale = UNIT_SCALE; }
+    { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, true); rotorBlades = fromCanvasSmooth(c, 32, 32); rotorBlades.dscale = UNIT_SCALE; }
 }
 
 // ------------------------------------------------------------ buildings
@@ -364,11 +443,17 @@ void Gfx::buildBuildings() {
             bool cy = b.faction == F_CYBER;
             int W = b.w * TILE, H = b.h * TILE;
             Canvas c(W, H);
-            Color base = cy ? rgb(58, 70, 92) : rgb(108, 106, 90);
-            Color plate = cy ? rgb(44, 54, 74) : rgb(88, 88, 76);
-            Color roof = cy ? CY_PANEL : CK_PANEL;
+            // every structure role has its own material tone inside the faction's family
+            static const Color CY_BASE[11] = { rgb(70, 90, 124), rgb(36, 90, 100), rgb(84, 90, 102), rgb(60, 82, 122), rgb(54, 62, 80), rgb(46, 56, 74), rgb(46, 50, 76), rgb(72, 92, 116), rgb(64, 78, 104) };
+            static const Color CY_ROOF[11] = { rgb(128, 160, 204), rgb(70, 130, 136), rgb(124, 134, 150), rgb(104, 134, 182), rgb(94, 106, 130), rgb(70, 82, 104), rgb(92, 100, 140), rgb(110, 132, 160), rgb(96, 116, 150), rgb(60, 70, 96), rgb(96, 100, 112) };
+            static const Color CY_ACC[11] = { rgb(110, 230, 255), rgb(120, 255, 214), rgb(255, 190, 92), rgb(110, 230, 255), rgb(110, 230, 255), rgb(214, 240, 255), rgb(206, 232, 255), rgb(110, 230, 255), rgb(140, 255, 255), rgb(255, 214, 90), rgb(255, 96, 80) };
+            static const Color CK_BASE[11] = { rgb(122, 112, 84), rgb(94, 90, 82), rgb(112, 92, 64), rgb(92, 104, 68), rgb(88, 92, 86), rgb(100, 98, 90), rgb(106, 76, 58), rgb(102, 102, 88), rgb(90, 98, 82), rgb(66, 62, 58), rgb(96, 100, 88) };
+            static const Color CK_ROOF[11] = { rgb(160, 148, 112), rgb(128, 124, 112), rgb(152, 130, 92), rgb(130, 140, 94), rgb(126, 122, 106), rgb(120, 118, 108), rgb(152, 114, 90), rgb(126, 126, 108), rgb(116, 124, 104), rgb(90, 84, 78), rgb(132, 136, 120) };
+            Color base = cy ? CY_BASE[b.role] : CK_BASE[b.role];
+            Color plate = shade(base, 0.74f);
+            Color roof = cy ? CY_ROOF[b.role] : CK_ROOF[b.role];
             Color dark = cy ? CY_DARK : CK_DARK;
-            Color accent = cy ? CY_GLOW : CK_YEL;
+            Color accent = cy ? CY_ACC[b.role] : CK_YEL;
             // foundation plate with a 2px margin
             c.panel(1, 1, W - 2, H - 2, plate, 1);
             for (int i = 0; i < W * H / 40; i++) c.set(r.range(2, W - 3), r.range(2, H - 3), shade(plate, 0.9f));
@@ -438,10 +523,34 @@ void Gfx::buildBuildings() {
                 if (cy) { c.panel(10, 10, W - 20, H - 20, roof, 1); c.fillRect(14, 14, 2, H - 28, accent); c.fillRect(W - 16, 14, 2, H - 28, accent); }
                 else { c.panel(10, 10, W - 20, H - 20, CK_STEEL, 1); hazardStripe(c, 6, H - 8, W - 12, 2); }
                 break;
+            case BR_INCOME:
+                if (cy) {   // bitcoin datacenter: rack rows with gold-lit servers and a coin mark
+                    c.panel(4, 4, W - 8, H - 8, base, 2);
+                    for (int k = 0; k < 4; k++) { int x = 10 + k * 20; c.panel(x, 9, 16, H - 26, dark, 1);
+                        for (int j = 0; j < 5; j++) c.set(x + 3, 13 + j * 6, (j + k) % 2 ? accent : rgb(90, 255, 160)), c.fillRect(x + 6, 13 + j * 6, 6, 1, shade(CY_PANEL, 1.2f)); }
+                    c.fillCircle(W - 14, H - 11, 6, accent); c.ring(W - 14, H - 11, 5, 1, dark); c.fillRect(W - 15, H - 15, 2, 8, dark);
+                    c.glow(W / 2, H / 2, 30, rgb(255, 214, 90, 60)); lightStrip(c, 8, H - 8, W - 16, 2, accent);
+                } else {    // oil well: derrick tower over a dark pit with a pump beam
+                    c.fillCircle(W / 2, H / 2, 27, rgb(48, 44, 40)); c.ring(W / 2, H / 2, 27, 3, CK_STEEL);
+                    c.fillCircle(W / 2, H / 2, 15, rgb(20, 18, 18)); c.glow(W / 2, H / 2, 16, rgb(120, 100, 60, 90));
+                    c.line(W / 2 - 22, H / 2 + 20, W / 2, H / 2 - 24, CK_STEEL, 2); c.line(W / 2 + 22, H / 2 + 20, W / 2, H / 2 - 24, CK_STEEL, 2);
+                    c.line(W / 2 - 12, H / 2 + 2, W / 2 + 12, H / 2 + 2, CK_STEEL, 1); c.fillCircle(W / 2, H / 2 - 24, 3, rgb(230, 60, 50));
+                    hazardStripe(c, 6, H - 10, W - 12, 3);
+                }
+                break;
+            case BR_NUKE:
+                c.panel(4, 4, W - 8, H - 8, base, 2);
+                c.fillRect(W / 2 - 22, 10, 44, H - 20, dark);                       // launch bay
+                c.fillRect(W / 2 - 14, 12, 28, H - 24, shade(dark, 1.5f));
+                c.fillRect(W / 2 - 7, 16, 14, H - 30, rgb(198, 200, 200));           // missile body
+                c.fillRect(W / 2 - 7, 30, 14, 6, rgb(230, 190, 40));                 // warhead band
+                c.fillCircle(W / 2, 20, 7, rgb(214, 70, 60));                       // nose
+                c.fillRect(W / 2 - 12, H - 24, 24, 4, rgb(150, 150, 150));
+                hazardStripe(c, 8, H - 12, W - 16, 4); hazardStripe(c, 8, 8, W - 16, 3);
+                c.fillCircle(14, 16, 4, accent); c.fillCircle(W - 14, 16, 4, accent);
+                break;
             }
-            // team stripe at a corner of the plate
-            c.fillRect(2, 2, std::min(14, W / 4), 3, team);
-            c.fillRect(2, 2, 3, std::min(14, H / 4), team);
+            (void)team;   // ownership is shown by the player's flag (Gfx::drawFlag), drawn live above the roof
             c.outline(rgb(10, 12, 14, 220));
             building[t][p] = fromCanvas(c, W * 0.5f, H * 0.5f);
             if (p == 0) {
@@ -455,36 +564,73 @@ void Gfx::buildBuildings() {
             }
         }
     }
-    // turret heads (the rotating part) are drawn as unit turrets: laser turret uses a dedicated sprite
-    {
-        Canvas tc(32, 32);
-        tc.fillCircle(16, 16, 5, CY_PANEL); tc.fillRect(19, 14, 12, 4, CY_DARK); tc.fillRect(26, 13, 5, 6, CY_GLOW); tc.glow(29, 16, 4, rgb(150, 230, 255, 180));
-        tc.outline(rgb(10, 12, 14, 160));
-        turretHead[0] = fromCanvas(tc, 16, 16);  // laser turret head
-    }
-    {
-        Canvas tc(32, 32);
-        tc.fillCircle(16, 16, 5, CK_STEEL); tc.fillRect(19, 13, 10, 2, CK_DARK); tc.fillRect(19, 17, 10, 2, CK_DARK); tc.fillRect(19, 15, 9, 2, rgb(70, 70, 70));
-        tc.outline(rgb(10, 12, 14, 160));
-        turretHead[1] = fromCanvas(tc, 16, 16);  // gun nest head
-    }
-    {
-        Canvas tc(32, 32);
-        tc.panel(6, 9, 20, 14, rgb(200, 205, 210), 1); for (int k = 0; k < 4; k++) tc.fillRect(9 + k * 4, 11, 3, 10, rgb(60, 62, 70)); tc.fillRect(24, 10, 3, 12, rgb(170, 170, 175));
-        tc.outline(rgb(10, 12, 14, 160));
-        turretHead[2] = fromCanvas(tc, 16, 16);   // patriot launcher box
-    }
-    {
-        Canvas tc(32, 32);
-        tc.panel(6, 8, 20, 16, CK_STEEL, 1); for (int j = 0; j < 2; j++) for (int k = 0; k < 3; k++) tc.fillCircle(11 + k * 5, 12 + j * 8, 2, CK_DARK); tc.fillRect(24, 9, 3, 14, CK_RUST);
-        tc.outline(rgb(10, 12, 14, 160));
-        turretHead[3] = fromCanvas(tc, 16, 16);   // rocket battery pod
-    }
+    // rotating heads of the defensive structures
+    for (int i = 0; i < 4; i++) { Canvas tc(ART_SIZE, ART_SIZE); artTurretHead(tc, i); turretHead[i] = fromCanvasSmooth(tc, 32, 32); turretHead[i].dscale = 0.5f; }
 }
 
 // ------------------------------------------------------------ misc
+// ------------------------------------------------------------ flags
+// One flag per player, unique by silhouette and emblem as well as by colour: 0 rectangle with a chevron, 1 swallowtail
+// with a roundel, 2 pennant with a diagonal bar, 3 burgee with a cross.
+static void paintFlag(Canvas& c, int player, Color team) {
+    const int W = Gfx::FLAG_W, H = Gfx::FLAG_H;
+    Color edge = shade(team, 0.55f), hi = shade(team, 1.22f);
+    Color mark = player == 2 ? rgb(38, 40, 44) : rgb(246, 248, 250);
+    auto inside = [&](int x, int y) -> bool {
+        float fx = (x + 0.5f) / W, fy = (y + 0.5f) / H;
+        switch (player) {
+        case 0: return true;                                                   // rectangle
+        case 1: return !(fx > 0.72f && std::abs(fy - 0.5f) < (fx - 0.72f) * 1.7f);   // swallowtail
+        case 2: return std::abs(fy - 0.5f) < 0.5f * (1.0f - fx);               // pennant
+        default: return std::abs(fy - 0.5f) < 0.5f - 0.14f * fx;               // burgee: narrows toward the fly
+        }
+    };
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        if (!inside(x, y)) continue;
+        Color k = team;
+        if (y < 2) k = hi;                    // lit top edge
+        else if (y >= H - 2) k = shade(team, 0.78f);
+        if (x == 0) k = edge;                 // hoist
+        c.set(x, y, k);
+    }
+    switch (player) {
+    case 0: for (int i = 0; i < 6; i++) { c.set(6 + i, 3 + i, mark); c.set(7 + i, 3 + i, mark); c.set(6 + i, H - 4 - i, mark); c.set(7 + i, H - 4 - i, mark); } break;   // chevron >
+    case 1: c.ring(11.5f, H / 2.0f, 4.6f, 1.6f, mark); c.fillCircle(11.5f, H / 2.0f, 1.4f, mark); break;
+    case 2: for (int x = 3; x < 15; x++) { int y = H / 2 + (x - 9) / 2; c.set(x, y - 1, mark); c.set(x, y, mark); } break;
+    default: c.fillRect(8, 5, 8, 2, mark); c.fillRect(11, 2, 2, 11, mark); break;   // cross
+    }
+    // outline only around the cloth, so the mast gap stays clean
+    c.outline(rgb(10, 12, 14, 200));
+}
+
+void Gfx::drawFlag(float px, float py, int player, float scale, float phase) {
+    if (player < 0 || player >= MAX_PLAYERS || !flag[player].tex) return;
+    float mastH = 27 * scale;
+    // mast: dark shaft with a lit edge, a small base plate and a finial
+    fill((int)std::lround(px) - 1, (int)std::lround(py - mastH), 2, (int)std::lround(mastH) + 1, rgb(28, 30, 34));
+    fill((int)std::lround(px), (int)std::lround(py - mastH), 1, (int)std::lround(mastH), rgb(150, 156, 166));
+    fill((int)std::lround(px) - 3, (int)std::lround(py) - 1, 6, 3, rgb(40, 42, 48));
+    fillCircle(px, py - mastH - 1, 1.9f * std::max(scale, 0.8f), rgb(226, 200, 110));
+    // cloth in 2px slices, each displaced by a travelling wave; the free end swings more than the hoist
+    const Sprite& s = flag[player];
+    float cw = s.w * scale, ch = s.h * scale;
+    float x0 = px + 1.0f, y0 = py - mastH + 1.0f;
+    SDL_SetTextureColorMod(s.tex, 255, 255, 255); SDL_SetTextureAlphaMod(s.tex, 255);
+    const int step = 2;
+    for (int sx = 0; sx < s.w; sx += step) {
+        float k = (float)sx / s.w;
+        float dy = std::sin(phase - sx * 0.42f) * 1.7f * k * scale;
+        float dxs = -std::sin(phase - sx * 0.42f + 0.6f) * 0.6f * k * scale;
+        SDL_Rect src = { sx, 0, std::min(step, s.w - sx), s.h };
+        SDL_FRect dst = { x0 + sx * scale + dxs, y0 + dy, src.w * scale + 0.6f, ch };
+        SDL_RenderCopyF(ren, s.tex, &src, &dst);
+    }
+    (void)cw;
+}
+
 void Gfx::buildMisc() {
     Rng r(31337);
+    for (int p = 0; p < MAX_PLAYERS; p++) { Canvas c(FLAG_W, FLAG_H); paintFlag(c, p, PLAYER_COLOR[p]); flag[p] = fromCanvas(c, 0, 0); }
     for (int v = 0; v < 3; v++) {
         Canvas c(40, 40);
         // supply crates stacked
@@ -498,6 +644,7 @@ void Gfx::buildMisc() {
         c.outline(rgb(10, 12, 14, 180));
         pile[v] = fromCanvas(c, 20, 20);
     }
+    { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float d = std::sqrt((x + 0.5f - 128) * (x + 0.5f - 128) + (y + 0.5f - 128) * (y + 0.5f - 128)); float a = clampf(128 - d, 0, 1); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{255, 255, 255, (u8)(a * 255)}); } disc = fromCanvasSmooth(c, 128, 128); }
     { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blob = fromCanvas(c, 16, 16); }
     { Canvas c(24, 16); for (int y = 0; y < 16; y++) for (int x = 0; x < 24; x++) { float dx = (x - 12) / 12.0f, dy = (y - 8) / 8.0f; float d = dx * dx + dy * dy; if (d < 1) c.set(x, y, rgb(0, 0, 0, (u8)(110 * (1 - d)))); } shadowSmall = fromCanvas(c, 12, 8); }
     { Canvas c(40, 26); for (int y = 0; y < 26; y++) for (int x = 0; x < 40; x++) { float dx = (x - 20) / 20.0f, dy = (y - 13) / 13.0f; float d = dx * dx + dy * dy; if (d < 1) c.set(x, y, rgb(0, 0, 0, (u8)(120 * (1 - d)))); } shadowLarge = fromCanvas(c, 20, 13); }

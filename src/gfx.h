@@ -75,7 +75,7 @@ struct Canvas {
     }
 };
 
-struct Sprite { SDL_Texture* tex = nullptr; int w = 0, h = 0; float ox = 0, oy = 0; };
+struct Sprite { SDL_Texture* tex = nullptr; int w = 0, h = 0; float ox = 0, oy = 0; float dscale = 1; };   // dscale: on-screen size relative to the texture (2x supersampled unit sprites use 0.5)
 
 extern const Color PLAYER_COLOR[MAX_PLAYERS];
 
@@ -86,15 +86,25 @@ struct Gfx {
     SDL_Texture* white = nullptr;
     Sprite tiles[T_COUNT][4];
     Sprite unitBody[U_COUNT][MAX_PLAYERS];
-    Sprite unitTurret[U_COUNT];
+    Sprite unitAnim[U_COUNT][MAX_PLAYERS][2];   // walk / track cycle frames
+    Sprite unitTurret[U_COUNT][MAX_PLAYERS];
+    Sprite rotorDisc, rotorBlades;
     Sprite turretHead[4];           // laser turret, gun nest, patriot, rocket battery
     Sprite building[B_COUNT][MAX_PLAYERS];
     Sprite site[B_COUNT];
     Sprite pile[3];
-    Sprite shadowSmall, shadowLarge, blob;
+    Sprite shadowSmall, shadowLarge, blob, disc;
+    Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
+    static const int FLAG_W = 24, FLAG_H = 15;
     Sprite edgeTile[T_COUNT];
     Sprite minimapTerrain;
-    bool init(int scale, bool software);
+    Sprite worldTerrain;            // whole map baked into one texture (organic, noise-blended transitions)
+    SDL_Texture* shroudTex = nullptr;   // MAP_W x MAP_H alpha mask, bilinear-scaled for soft fog edges
+    std::vector<u32> tilePx[T_COUNT][4];
+    void updateShroud(const std::vector<u8>& explored);
+    int userScale = 0;              // 0 = pick the UI scale from the window size
+    bool init(int scale, bool software, int reqW = 0, int reqH = 0);
+    void onResize();                // window size changed: recompute the logical (UI) size
     void shutdown();
     Sprite fromCanvas(Canvas& c, float ox, float oy);
     void draw(const Sprite& s, float x, float y, float angle = 0, float scale = 1, Color mod = rgb(255, 255, 255), u8 alpha = 255);
@@ -107,7 +117,12 @@ struct Gfx {
     void thickLine(float x0, float y0, float x1, float y1, Color c, float thick);
     void circle(float cx, float cy, float r, Color c, int segs = 20);
     void fillCircle(float cx, float cy, float r, Color c);
+    void glowAdd(float cx, float cy, float r, Color c);   // additive light blob
+    void discFill(float cx, float cy, float r, Color c);  // flat translucent disc with a soft edge
+    void dashedCircle(float cx, float cy, float r, Color c, float phase, float dash = 9, float gap = 6);
+    Sprite fromCanvasSmooth(Canvas& c, float ox, float oy);   // bilinear-filtered texture (supersampled sprites)
     void bevelPanel(int x, int y, int w, int h, Color base, bool raised = true);
+    void drawFlag(float poleX, float poleY, int player, float scale, float phase);   // mast standing at (poleX, poleY), flag waving
     void present();
     void beginFrame(Color clear);
 private:
@@ -117,5 +132,6 @@ private:
     void buildBuildings();
     void buildMisc();
     void buildMinimap();
+    void bakeTerrain();
 };
 extern Gfx g_gfx;

@@ -1,4 +1,7 @@
 #include "ai.h"
+// Evaluation showed the learned wave gate loses to the plain heuristic (17-33 over 64 games) while the learned
+// unit-choice model wins (31-21), so wave gating is opt-in: ONEHOUR_WAVEMODEL=1. ONEHOUR_ABLATE=u disables the unit model.
+static int ablate() { static int v = -1; if (v < 0) { const char* e = getenv("ONEHOUR_ABLATE"); v = (e && e[0] == 'u') ? 2 : (getenv("ONEHOUR_WAVEMODEL") ? 0 : 1); } return v; }   // 1 = no wave model, 2 = no unit model
 static bool aiDebug() { static int v = -1; if (v < 0) v = getenv("ONEHOUR_DEBUG") ? 1 : 0; return v == 1; }
 
 AiManager g_ai;
@@ -7,8 +10,10 @@ static float unitValue(const Entity& e) { return e.isUnit() ? UNITS[e.type].cost
 
 void AiManager::init(u64 seed) {
     for (int p = 0; p < MAX_PLAYERS; p++) {
+        bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
-        if (g_sim.players[p].active && g_sim.players[p].isAI) ais[p].init(p, seed + p * 7919);
+        ais[p].useBrain = ub;
+        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].init(p, seed + p * 7919); }
     }
 }
 void AiManager::update() {
@@ -87,24 +92,33 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         cands.push_back({base + 2, 1.0f + fi * 1.5f});                    // rifle
         cands.push_back({base + 3, 0.9f + fv * 2.0f + fa * 2.5f});        // anti-armor / AA
         cands.push_back({base + 4, 0.7f + fi * 2.0f});                    // tech infantry
+        cands.push_back({base + 9, 0.8f + fi * 1.0f + fv * 1.6f});        // elite (needs the Advanced Program)
     } else if (role == BR_FACTORY) {
         cands.push_back({base + 5, 1.4f + fv * 1.0f});                    // main tank
         cands.push_back({base + 6, 0.9f + fi * 2.0f + fa * 2.0f});        // anti-inf / AA vehicle
         cands.push_back({base + 7, (early ? 0.3f : 0.9f) + fv * 1.2f});  // artillery / railgun
+        cands.push_back({base + 10, 1.0f + fv * 1.5f});                   // super-heavy (needs the Advanced Program)
     } else if (role == BR_AIRFIELD) {
         cands.push_back({base + 8, 1.0f});
     }
-    // weight by how many we already have (diminishing returns), availability, and observed efficiency:
-    // types that have destroyed more enemy value per credit spent get favoured (online counter learning)
+    // weight by how many we already have (diminishing returns), availability, and predicted efficiency:
+    // the brain's per-type regression (value destroyed per credit given the enemy mix) replaces the old
+    // running average when learning is on
+    float x[UNIT_F]; Brain::unitFeatures(fi, fv, fa, x);
     float avgEff = 0; int nEff = 0;
-    for (auto& c : cands) if (pl.spentOn[c.type] > 0) { avgEff += pl.valueDealt[c.type] / pl.spentOn[c.type]; nEff++; }
+    for (auto& c : cands) {
+        if (useBrain && ablate() != 2) { avgEff += g_brain.unitEff(c.type, x); nEff++; }
+        else if (pl.spentOn[c.type] > 0) { avgEff += pl.valueDealt[c.type] / pl.spentOn[c.type]; nEff++; }
+    }
     avgEff = nEff ? avgEff / nEff : 0;
     float best = -1; int pick = -1;
     for (auto& c : cands) {
         if (!g_sim.unitAvailable(player, c.type)) continue;
         int have = g_sim.countUnits(player, c.type);
         float w = c.w / (1.0f + have * 0.25f) * rng.f(0.85f, 1.15f);
-        if (pl.spentOn[c.type] >= 1500 && avgEff > 0) {
+        if (useBrain && ablate() != 2) {
+            if (avgEff > 0) w *= clampf(0.65f + 0.7f * (g_brain.unitEff(c.type, x) / avgEff), 0.5f, 1.8f);
+        } else if (pl.spentOn[c.type] >= 1500 && avgEff > 0) {
             float eff = pl.valueDealt[c.type] / pl.spentOn[c.type];
             w *= clampf(0.7f + 0.6f * (eff / avgEff), 0.5f, 1.8f);
         }
@@ -150,6 +164,18 @@ Entity* AiPlayer::pickAttackTarget() {
     return best;
 }
 
+// Feed the outcome of a finished wave back into the model: did it destroy at least as much as it lost?
+void AiPlayer::endWave(float remainingValue) {
+    if (!waveHasSample) return;
+    waveHasSample = false;
+    Player& pl = g_sim.players[player];
+    float dealt = -waveDealt0; for (int u = 0; u < U_COUNT; u++) dealt += pl.valueDealt[u];
+    float lost = std::max(0.0f, waveValue - remainingValue);
+    bool success = dealt >= lost * 0.9f && dealt > 300;
+    if (useBrain) g_brain.learnWave(waveX, success);
+    if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] wave result: dealt %.0f lost %.0f -> %s\n", player, g_sim.time, dealt, lost, success ? "success" : "failure");
+}
+
 void AiPlayer::managePower() {
     Player& pl = g_sim.players[player];
     int base = firstBuildOf(pl.faction);
@@ -171,16 +197,16 @@ void AiPlayer::think() {
 
     // ---------- survey
     int dozers = 0, harvesters = 0, armyCount = 0; float armyValue = 0;
-    std::vector<Ref> army, idleArmy, aircraft;
+    std::vector<Ref> army, idleArmy, aircraft, haulers;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged;
-    int turrets = 0, powerPlants = 0, techs = 0;
+    int turrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0;
     for (auto& e : S.ents) {
         if (!e.alive || e.owner != player) continue;
         if (e.isUnit()) {
             const UnitType& ut = e.ut();
             if (ut.role == UR_DOZER) dozers++;
-            else if (ut.role == UR_HARVESTER) harvesters++;
+            else if (ut.role == UR_HARVESTER) { harvesters++; haulers.push_back(S.refOf(e)); }
             else if (ut.kind == UK_AIR) aircraft.push_back(S.refOf(e));
             else { army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e); if (e.order == O_IDLE) idleArmy.push_back(S.refOf(e)); }
         } else {
@@ -194,6 +220,8 @@ void AiPlayer::think() {
             case BR_TURRET: case BR_AATURRET: turrets++; break;
             case BR_POWER: powerPlants++; break;
             case BR_TECH: techs++; break;
+            case BR_INCOME: incomes++; break;
+            case BR_NUKE: ramps++; break;
             }
         }
     }
@@ -229,6 +257,21 @@ void AiPlayer::think() {
         }
     }
 
+    // enemy mix, and periodic learning of per-type efficiency from the last interval
+    {
+        float tot = std::max(1, enemyInf + enemyVeh + enemyAir);
+        if (enemyInf + enemyVeh + enemyAir > 0) { mixFi = enemyInf / tot; mixFv = enemyVeh / tot; mixFa = enemyAir / tot; }
+        if (S.time >= nextLearn) {
+            nextLearn = S.time + 30;
+            float x[UNIT_F]; Brain::unitFeatures(mixFi, mixFv, mixFa, x);
+            for (int u = 0; u < U_COUNT; u++) {
+                float ds = pl.spentOn[u] - prevSpent[u], dd = pl.valueDealt[u] - prevDealt[u];
+                if (ds >= 400 && useBrain) g_brain.learnUnit(u, x, dd / ds);
+                if (ds >= 400) { prevSpent[u] = pl.spentOn[u]; prevDealt[u] = pl.valueDealt[u]; }
+            }
+        }
+    }
+
     // main enemy = nearest living enemy base
     if (mainEnemy < 0 || !S.players[mainEnemy].alive) {
         float bd = 1e18f; mainEnemy = -1;
@@ -250,6 +293,28 @@ void AiPlayer::think() {
     int queuedDozer = 0;
     if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER) queuedDozer++;
     if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200)) S.cmdTrain(S.refOf(*hq), ubase + 0);
+
+    // ---------- supply areas: every hub gets a gather circle around the piles near it; haulers are spread across them
+    struct Mine { Vec2 c; float r; int workers; };
+    std::vector<Mine> mines;
+    for (auto* h : supplyHubs) {
+        if (!h->constructed) continue;
+        Vec2 sum; float wsum = 0; int n = 0;
+        for (auto& p : S.ents) if (p.alive && p.kind == EK_RESOURCE && p.amount > 0 && dist(p.pos, h->pos) < 16 * TILE) { sum += p.pos * (float)p.amount; wsum += p.amount; n++; }
+        if (n == 0) continue;
+        Vec2 c = sum * (1.0f / wsum);
+        float r = 0; for (auto& p : S.ents) if (p.alive && p.kind == EK_RESOURCE && p.amount > 0 && dist(p.pos, h->pos) < 16 * TILE) r = std::max(r, dist(p.pos, c));
+        mines.push_back({c, clampf(r + 2.0f * TILE, 4.0f * TILE, 14.0f * TILE), 0});
+    }
+    for (auto r : haulers) { Entity* e = S.get(r); if (!e || e->zoneR <= 0) continue; for (auto& m : mines) if (dist(m.c, e->zone) < 5 * TILE) m.workers++; }
+    for (auto r : haulers) {
+        Entity* e = S.get(r);
+        if (!e || e->zoneR > 0 || e->cargo > 0 || (e->order != O_IDLE && e->order != O_HARVEST)) continue;
+        Mine* best = nullptr;
+        for (auto& m : mines) if (!best || m.workers < best->workers || (m.workers == best->workers && dist(m.c, e->pos) < dist(best->c, e->pos))) best = &m;
+        if (best) { S.cmdGatherArea({r}, best->c, best->r); best->workers++; }
+        else if (e->order == O_IDLE) { Entity* pile = S.findPile(*e, 60 * TILE); if (pile) S.cmdHarvest({r}, S.refOf(*pile)); }   // nothing near a hub: fall back to the nearest pile anywhere
+    }
 
     // ---------- construction (one decision per think, with a reserve for economy)
     Entity* dz = idleDozer();
@@ -296,6 +361,9 @@ void AiPlayer::think() {
                 pl.basePos = saved;
             }
         }
+        // steady income: oil wells / bitcoin datacenters, then nuke ramps once the economy is comfortable
+        if (!built && incomes < (pl.difficulty >= 2 ? 3 : 2) && minutes > (pl.difficulty >= 2 ? 3.0f : 5.0f) && pl.money > 2200 && powerPlants > 0) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
+        if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 2 ? 9.0f : 13.0f) && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
         if (!built && barracks.size() < 2 && minutes > 10 && pl.money > 3500) built = tryBuild(base + BR_BARRACKS, pl.basePos);
         // repair
         if (!built && !damaged.empty()) S.cmdAssist({S.refOf(*dz)}, S.refOf(*damaged[0]));
@@ -311,6 +379,8 @@ void AiPlayer::think() {
     // ---------- production
     int reserve = (hubs == 0 || pl.powerMade < pl.powerUsed) ? 1600 : 0;
     if (harvesters + queuedHarv < 2 && hubs > 0) reserve = std::max(reserve, 900);
+    // save up for a nuke ramp once the tech structure stands
+    if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 2 ? 8.0f : 12.0f) && !threat) reserve = std::max(reserve, 5300);
     // early game: economy and structures first, a modest guard force, then ramp
     float rampStart = pl.difficulty >= 3 ? 1.5f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 3.0f : 4.0f));
     int armyCap;
@@ -329,7 +399,9 @@ void AiPlayer::think() {
     for (auto* b : barracks) S.cmdSetRally(S.refOf(*b), rally);
     for (auto* f : factories) S.cmdSetRally(S.refOf(*f), rally);
 
-    // ---------- special power
+    // ---------- tech structure: the Advanced Program, a map scan when nothing is known about the enemy, and the strike
+    if (techs > 0 && S.programAvailable(player) && minutes > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
+    if (techs > 0 && enemyUnits.empty() && minutes > 4 && S.time >= pl.scanReady) S.cmdScan(player);
     if (techs > 0 && S.time >= pl.powerReady && !enemyUnits.empty()) {
         const PowerType& pw = POWERS[pl.faction];
         Vec2 bestPos; float bestScore = 0;
@@ -341,6 +413,19 @@ void AiPlayer::think() {
             if (score > bestScore) { bestScore = score; bestPos = e->pos; }
         }
         if (bestScore >= (pl.faction == F_CYBER ? 2500.0f : 1800.0f)) S.cmdPower(player, bestPos);
+    }
+
+    // ---------- nukes: fire at the densest cluster of enemy structures we know about
+    if (ramps > 0 && S.nukesReady(player) > 0) {
+        Vec2 bestPos; float bestScore = 0;
+        for (auto& e : S.ents) {
+            if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+            float score = 0;
+            for (auto& o : S.ents) if (o.alive && S.enemies(player, o.owner) && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 0.8f) score += o.isUnit() ? UNITS[o.type].cost : BUILDS[o.type].cost * 0.6f;
+            for (auto& o : S.ents) if (o.alive && o.owner == player && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 1.1f) score -= 4000;   // never nuke our own people
+            if (score > bestScore) { bestScore = score; bestPos = e.pos; }
+        }
+        if (bestScore >= 3500.0f) S.cmdNuke(player, bestPos);
     }
 
     // ---------- army
@@ -359,7 +444,7 @@ void AiPlayer::think() {
         if (attacking && threatCount >= 4) defenders = army;
         if (!defenders.empty()) S.cmdMove(defenders, threat->pos, true);
         for (auto r : aircraft) { Entity* a = S.get(r); if (a && a->ammo > 0 && a->order == O_IDLE) S.cmdAttack({r}, S.refOf(*threat)); }
-        if (attacking && armyValue < waveValue * 0.5f) { attacking = false; wave.clear(); }
+        if (attacking && armyValue < waveValue * 0.5f) { endWave(armyValue); attacking = false; wave.clear(); }
     } else if (attacking) {
         // prune the wave and measure what is left of it
         wave.erase(std::remove_if(wave.begin(), wave.end(), [&](Ref r) { return S.get(r) == nullptr; }), wave.end());
@@ -371,6 +456,7 @@ void AiPlayer::think() {
         bool stale = S.time - attackStarted > 240.0f;
         if (exhausted || stale || !tgt) {
             if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] %s value=%.0f/%.0f units=%d\n", player, S.time, exhausted ? "RETREAT" : "REGROUP", waveNow, waveValue, (int)wave.size());
+            endWave(waveNow);
             attacking = false; regroupUntil = S.time + (exhausted ? 40.0f : 10.0f);
             if (exhausted && tgt) { failedTarget = attackTarget; failedAt = S.time; }
             S.cmdMove(wave, rally, true);
@@ -387,7 +473,7 @@ void AiPlayer::think() {
             for (auto r : army) if (std::find(wave.begin(), wave.end(), r) == wave.end()) { reserveUnits.push_back(r); reserveValue += unitValue(*S.get(r)); }
             std::vector<Ref> farIdle;
             for (auto r : reserveUnits) { Entity* e = S.get(r); if (e && e->order == O_IDLE && dist(e->pos, rally) > 4 * TILE) farIdle.push_back(r); }
-            if (!farIdle.empty()) S.cmdMove(farIdle, rally, true);
+            if (!farIdle.empty()) S.cmdGuardArea(farIdle, rally, 6 * TILE);
             if (reserveValue >= waveThreshold * 0.6f && reserveUnits.size() >= 5) {
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] REINFORCE value=%.0f units=%d\n", player, S.time, reserveValue, (int)reserveUnits.size());
                 S.cmdMove(reserveUnits, tgt->pos, true);
@@ -396,21 +482,53 @@ void AiPlayer::think() {
             }
         }
     } else {
-        // gather at rally
+        // idle fighters take up a guard circle at the rally point; a few also protect the mining area
         if (!idleArmy.empty()) {
             std::vector<Ref> far;
             for (auto r : idleArmy) { Entity* e = S.get(r); if (e && dist(e->pos, rally) > 4 * TILE) far.push_back(r); }
-            if (!far.empty()) S.cmdMove(far, rally, true);
+            if (!far.empty()) S.cmdGuardArea(far, rally, clampf((4.0f + armyCount * 0.15f) * TILE, 5.0f * TILE, 8.0f * TILE));
+        }
+        if (!mines.empty() && minutes > 3.0f) {
+            const Mine& m = mines[0];
+            int want = pl.difficulty >= 2 ? 3 : 2, have = 0;
+            for (auto r : army) { Entity* e = S.get(r); if (e && e->zoneR > 0 && dist(e->zone, m.c) < 3 * TILE) have++; }
+            if (have < want) {
+                std::vector<Ref> pick;
+                for (auto r : army) {
+                    Entity* e = S.get(r);
+                    if (!e || (int)pick.size() >= want - have) break;
+                    bool atRally = e->zoneR > 0 && dist(e->zone, rally) < 3 * TILE;
+                    if ((e->order == O_IDLE || atRally) && e->weapon() >= 0) pick.push_back(r);
+                }
+                if (!pick.empty()) S.cmdGuardArea(pick, m.c, std::max(m.r + 2 * TILE, 6.0f * TILE));
+            }
         }
         bool overwhelming = armyValue > enemyArmyValue * 1.6f + 1500 && armyCount >= 6;
-        if (S.time > regroupUntil && S.time > firstWaveAt && (armyValue >= waveThreshold || (overwhelming && minutes > 6)) && mainEnemy >= 0) {
+        bool eligible = armyValue >= waveThreshold || (overwhelming && minutes > 6);
+        bool waveModel = useBrain && ablate() != 1;
+        if (S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
             Entity* tgt = pickAttackTarget();
-            // only commit when the wave outweighs what is waiting for it (a margin that shrinks as the game drags on)
-            float need = enemyStrengthNear(tgt ? tgt->pos : Vec2(), 11) * (minutes < 15 ? 1.3f : 1.1f);
-            if (tgt && armyValue < need && armyCount < armyCap) { if (aiDebug() && (int)S.time % 30 == 0) fprintf(stderr, "[ai%d t=%.0f] holding: army %.0f vs defense %.0f\n", player, S.time, armyValue, need); tgt = nullptr; }
+            float defense = tgt ? enemyStrengthNear(tgt->pos, 11) : 0;
+            float x[WAVE_F]; Brain::waveFeatures(armyValue, defense, enemyArmyValue, minutes, armyCount, x);
+            bool go = true;
             if (tgt) {
+                if (waveModel) {
+                    float p = g_brain.waveProb(x);
+                    float thr = 0.45f;   // the model can only hold a wave back, never launch a smaller one
+                    // exploration: now and then launch (or hold) against the model's advice so it keeps seeing both outcomes
+                    bool explore = g_brain.learning && rng.f() < 0.15f;   // launch against its advice sometimes so it keeps seeing both outcomes
+                    go = explore || p >= thr || armyCount >= armyCap;
+                    if (aiDebug() && !go && (int)S.time % 30 == 0) fprintf(stderr, "[ai%d t=%.0f] holding: p=%.2f army %.0f vs defense %.0f\n", player, S.time, p, armyValue, defense);
+                } else {
+                    // heuristic: commit only when the wave outweighs what is waiting for it
+                    float need = defense * (minutes < 15 ? 1.3f : 1.1f);
+                    go = !(armyValue < need && armyCount < armyCap);
+                }
+            }
+            if (tgt && go) {
                 attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*tgt);
                 wave = army;
+                memcpy(waveX, x, sizeof x); waveHasSample = true; waveDealt0 = 0; for (int u = 0; u < U_COUNT; u++) waveDealt0 += pl.valueDealt[u];
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d -> %s at %d,%d\n", player, S.time, armyValue, armyCount, tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
                 S.cmdMove(army, tgt->pos, true);
                 nextOrderTime = S.time + 6;
@@ -431,7 +549,10 @@ void AiPlayer::think() {
     // aircraft strike on their own cadence: hit the juiciest known target
     for (auto r : aircraft) {
         Entity* a = S.get(r);
-        if (!a || a->order != O_IDLE || a->ammo < a->ut().ammo) continue;
+        if (!a) continue;
+        // between strikes drones patrol a circle over the base
+        if (a->order == O_IDLE && a->weapon() >= 0) S.cmdGuardArea({r}, pl.basePos, 9 * TILE);
+        if ((a->order != O_IDLE && a->order != O_GUARDAREA) || a->ammo < a->ut().ammo) continue;
         Entity* best = nullptr; float bs = 1e18f;
         for (auto& e : S.ents) {
             if (!e.alive || !S.enemies(player, e.owner) || e.kind == EK_RESOURCE) continue;

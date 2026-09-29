@@ -1,6 +1,7 @@
 // One Hour - skirmish AI (utility-driven base building, economy, army composition and attack waves)
 #pragma once
 #include "sim.h"
+#include "brain.h"
 
 struct AiPlayer {
     int player = -1;
@@ -21,7 +22,16 @@ struct AiPlayer {
     std::vector<Ref> wave;      // units committed to the current attack
     Ref failedTarget; float failedAt = -1000;   // last target a wave broke against
 
+    bool useBrain = true;       // false = the original hand-tuned heuristics only (baseline for evaluation)
+    float waveX[WAVE_F] = {};   // features at launch, for learning from the outcome
+    float waveDealt0 = 0;       // enemy value destroyed by this player when the wave launched
+    bool waveHasSample = false;
+    float nextLearn = 30;
+    float prevSpent[U_COUNT] = {}, prevDealt[U_COUNT] = {};
+    float mixFi = 0.33f, mixFv = 0.33f, mixFa = 0.33f;
+
     void init(int p, u64 seed);
+    void endWave(float remainingValue);
     void think();
 private:
     bool findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty);
@@ -35,6 +45,7 @@ private:
 
 struct AiManager {
     AiPlayer ais[MAX_PLAYERS];
+    bool brainEnabled[MAX_PLAYERS] = { true, true, true, true };
     void init(u64 seed);
     void update();
 };

@@ -212,7 +212,7 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) con
     auto h = [&](int idx) {
         int x = idx % MAP_W, y = idx / MAP_W;
         int dx = std::abs(x - gx), dy = std::abs(y - gy);
-        return (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+        return 0.8f * 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));   // octile distance scaled by the cheapest step (road) => admissible; epsilon breaks ties toward the goal
     };
     gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen;
     open.push({h(start), start});
@@ -240,7 +240,7 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) con
             float ng = gScore[n.idx] + step;
             if (visitGen[ni] != curGen || ng < gScore[ni]) {
                 visitGen[ni] = curGen; gScore[ni] = ng; parentIdx[ni] = n.idx;
-                open.push({ng + hh * 0 + h(ni), ni});
+                open.push({ng + h(ni), ni});
             }
         }
     }

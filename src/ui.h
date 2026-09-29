@@ -29,7 +29,12 @@ struct Game {
     int placingType = -1;           // build type being placed
     bool attackMoveMode = false;
     bool powerMode = false;
+    bool nukeMode = false;          // picking a nuke target
     bool rallyMode = false;
+    bool areaMode = false;          // picking the circle a selection should guard / gather in
+    bool areaDrag = false; Vec2 areaStart; float areaRadius = 0;
+    struct ZoneFlash { Vec2 pos; float r; float time; bool gather; };
+    std::vector<ZoneFlash> zoneFlashes;
     int mouseX = 0, mouseY = 0;
     bool mouseInWindow = true;
     float lastClickTime = -1; Ref lastClickEnt;
@@ -43,7 +48,15 @@ struct Game {
     int hoverButton = -1;
     u64 seed = 1;
     bool quitRequested = false;
-    float escArmedUntil = -1;
+    // pause menu (Esc): game speed, sound, help, restart, surrender, quit
+    bool menuOpen = false;
+    int menuCursor = 0;
+    int menuConfirm = -1;           // row waiting for a second confirmation, -1 none
+    bool pausedBeforeMenu = false;
+    void openPauseMenu();
+    void closePauseMenu();
+    void stepSpeed(int dir);        // move to the next/previous entry of SPEED_STEPS
+    static const int SPEED_COUNT = 7;
     struct Ping { Vec2 pos; float time; };
     std::vector<Ping> pings;
 
@@ -62,6 +75,11 @@ private:
     void renderWorld();
     void renderHud();
     void renderGameOver();
+    void renderPauseMenu();
+    void pauseMenuEvent(const SDL_Event& e);
+    void pauseMenuActivate(int row);
+    void cancelModes();
+    void drawNukes();
     void scroll(float dt);
     Vec2 screenToWorld(int sx, int sy) const { return Vec2(sx + cam.x, sy + cam.y); }
     Vec2 worldToScreen(Vec2 w) const { return Vec2(w.x - cam.x, w.y - cam.y); }
@@ -83,6 +101,11 @@ private:
     void drawEntity(Entity& e);
     void drawFx();
     void drawShroud();
+    void drawZones();
+    void drawRangeRings();
+    void rangeRing(Vec2 screenPos, float radiusPx, int weapon, const char* label, bool powered, bool enemy, bool faint);
+    void applyArea(Vec2 center, float radius);
+    bool selectionCanArea() const;
     void drawMinimap(int x, int y, int size);
     void hotkey(SDL_Keycode k, u16 mod);
     void cmdSelection(int kind, int id);

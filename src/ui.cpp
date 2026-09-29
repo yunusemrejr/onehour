@@ -2,17 +2,43 @@
 
 Game g_game;
 
-enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL };
+enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE };
 
-static const int MINIMAP_X = 8, MINIMAP_Y = SCREEN_H - HUD_H + 8, MINIMAP_SIZE = 116;
-static const int GRID_X = 676, GRID_Y = SCREEN_H - HUD_H + 8, BTN_W = 110, BTN_H = 37, BTN_GAP = 4;
-static const int INFO_X = 134, INFO_W = 534;
+static const char* kindHotkey(int kind, int id) {
+    switch (kind) {
+    case BK_BUILD: return BUILDS[id].hotkey;
+    case BK_TRAIN: return UNITS[id].hotkey;
+    case BK_POWER: return "X";
+    case BK_SCAN: return "V";
+    case BK_RESEARCH: return "R";
+    case BK_NUKE: return "K";
+    case BK_ATTACKMOVE: return "A";
+    case BK_STOP: return "S";
+    case BK_AREA: return "G";
+    }
+    return nullptr;
+}
+static const float AREA_DEFAULT_R = 6.0f * TILE;   // circle radius for a plain click in area mode
+
+// HUD layout: minimap left, command grid anchored right, the info panel takes whatever is between
+static const int MINIMAP_X = 8, MINIMAP_SIZE = 116, BTN_W = 120, BTN_H = 28, BTN_GAP = 3;
+static const int INFO_X = 134;
+static inline int MINIMAP_Y_() { return SCREEN_H - HUD_H + 8; }
+static inline int GRID_X_() { return SCREEN_W - (3 * BTN_W + 2 * BTN_GAP) - 10; }
+static inline int GRID_Y_() { return SCREEN_H - HUD_H + 8; }
+static inline int INFO_W_() { return GRID_X_() - 8 - INFO_X; }
+#define MINIMAP_Y MINIMAP_Y_()
+#define GRID_X GRID_X_()
+#define GRID_Y GRID_Y_()
+#define INFO_W INFO_W_()
 
 static Color hudBase(Faction f) { return f == F_CYBER ? rgb(36, 44, 58) : rgb(62, 60, 46); }
 static Color hudAccent(Faction f) { return f == F_CYBER ? rgb(110, 230, 255) : rgb(222, 178, 60); }
 static Color hudText() { return rgb(222, 226, 230); }
 static Color hudDim() { return rgb(150, 156, 164); }
 
+static int menuOffsetY() { return std::max(0, (SCREEN_H - MIN_SCREEN_H) / 2); }
+static const float SPEED_STEPS[Game::SPEED_COUNT] = { 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f };
 static const char* DIFF_NAME[4] = { "Easy", "Normal", "Hard", "Brutal" };
 
 void Game::addMessage(const char* text, Color c) {
@@ -36,7 +62,7 @@ void Game::startGame() {
     selection.clear();
     for (auto& g : groups) g.clear();
     messages.clear();
-    placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; paused = false; speed = 1.0f;
+    placingType = -1; attackMoveMode = false; powerMode = false; nukeMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -48,7 +74,7 @@ void Game::startGame() {
 void Game::update(float dt) {
     wallTime += dt;
     if (state != GS_PLAYING) return;
-    scroll(dt);
+    if (!menuOpen) scroll(dt);
     if (!paused && !g_sim.gameOver) {
         accumulator += dt * speed;
         int steps = 0;
@@ -66,6 +92,7 @@ void Game::update(float dt) {
     g_audio.setListener(cam, SCREEN_W, VIEW_H);
     if (g_sim.gameOver && state == GS_PLAYING) {
         state = GS_GAMEOVER; gameOverAt = wallTime;
+        if (!g_brainPath.empty()) { g_brain.games++; g_brain.save(g_brainPath.c_str()); }
         bool won = g_sim.winnerTeam == g_sim.players[0].team;
         g_audio.play(won ? SND_VICTORY : SND_DEFEAT, Vec2(), true);
     }
@@ -82,6 +109,7 @@ void Game::processEvents() {
         case EV_NOFUNDS: if (mine) { g_audio.play(SND_NOFUNDS, Vec2(), true); addMessage("Insufficient funds", rgb(255, 170, 90)); } break;
         case EV_LOWPOWER: if (mine) { g_audio.play(SND_LOWPOWER, Vec2(), true); addMessage("Low power: build another power plant", rgb(255, 170, 90)); } break;
         case EV_SUPPLY_EMPTY: if (mine) addMessage("Supply pile depleted", hudDim()); break;
+        case EV_MSG: if (mine) addMessage(ev.msg.c_str(), rgb(255, 200, 120)); break;
         case EV_PLAYER_DEAD: {
             char buf[96]; snprintf(buf, sizeof buf, "%s (%s) has been eliminated", ev.player == 0 ? "You" : "Enemy", ev.msg.c_str());
             addMessage(buf, ev.player == 0 ? rgb(255, 120, 100) : rgb(150, 240, 150));
@@ -216,7 +244,7 @@ void Game::buildButtons() {
     Player& pl = g_sim.players[g_sim.humanPlayer];
     auto add = [&](int kind, int id, bool enabled, const char* label, const std::string& tip) {
         int i = (int)buttons.size();
-        if (i >= 9) return;
+        if (i >= 12) return;
         Button b; b.x = GRID_X + (i % 3) * (BTN_W + BTN_GAP); b.y = GRID_Y + (i / 3) * (BTN_H + BTN_GAP); b.w = BTN_W; b.h = BTN_H;
         b.kind = kind; b.id = id; b.enabled = enabled; b.label = label; b.tip = tip;
         buttons.push_back(b);
@@ -232,14 +260,30 @@ void Game::buildButtons() {
             const UnitType& ut = UNITS[u];
             if (ut.faction != pl.faction || ut.builtBy != role) continue;
             bool ok = g_sim.unitAvailable(g_sim.humanPlayer, u);
-            snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", ut.name, ut.cost, ut.hotkey, ut.desc, ok ? "" : "  Requires ", ok ? "" : BUILDS[ut.requires_].name);
+            const char* need = ok ? "" : (ut.program && !pl.advTech ? "  Requires the Advanced Program (tech structure)" : (ut.requires_ >= 0 ? "  Requires " : ""));
+            snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", ut.name, ut.cost, ut.hotkey, ut.desc, need, (!ok && !(ut.program && !pl.advTech) && ut.requires_ >= 0) ? BUILDS[ut.requires_].name : "");
             add(BK_TRAIN, u, ok, ut.name, tip);
         }
-        if (role == BR_HQ) {
+        if (role == BR_HQ || role == BR_TECH) {
             bool tech = g_sim.hasRole(g_sim.humanPlayer, BR_TECH);
             const PowerType& pw = POWERS[pl.faction];
             snprintf(tip, sizeof tip, "%s  [X]  %s%s", pw.name, pw.desc, tech ? "" : "  Requires tech structure");
             add(BK_POWER, 0, tech && g_sim.time >= pl.powerReady, pw.name, tip);
+        }
+        if (role == BR_TECH) {
+            const ScanType& sc = SCANS[pl.faction];
+            snprintf(tip, sizeof tip, "%s  [V]  %s", sc.name, sc.desc);
+            add(BK_SCAN, 0, g_sim.time >= pl.scanReady, sc.name, tip);
+            const ProgramType& pg = PROGRAMS[pl.faction];
+            if (pl.advTech) snprintf(tip, sizeof tip, "%s researched: %s", pg.name, pg.desc);
+            else if (pl.researching) snprintf(tip, sizeof tip, "%s in progress (%d%%): %s", pg.name, (int)(pl.researchProgress * 100), pg.desc);
+            else snprintf(tip, sizeof tip, "%s  $%d  [R]  %s", pg.name, pg.cost, pg.desc);
+            add(BK_RESEARCH, 0, g_sim.programAvailable(g_sim.humanPlayer) && g_sim.canAfford(g_sim.humanPlayer, pg.cost), pg.name, tip);
+        }
+        if (role == BR_NUKE) {
+            int rdy = g_sim.nukesReady(g_sim.humanPlayer);
+            snprintf(tip, sizeof tip, "Launch Nuke  [K]  Devastates a %d tile radius. One warhead per ramp every 5 minutes%s", (int)NUKE_RADIUS, pl.lowPower() ? "  (LOW POWER)" : "");
+            add(BK_NUKE, 0, rdy > 0, "Launch Nuke", tip);
         }
         if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY) add(BK_RALLY, 0, true, "Rally", "Set rally point (right-click ground while selected)");
         add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
@@ -250,15 +294,24 @@ void Game::buildButtons() {
             const BuildType& bt = BUILDS[t];
             if (bt.faction != pl.faction || bt.role == BR_HQ) continue;
             bool ok = g_sim.buildAvailable(g_sim.humanPlayer, t);
-            snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", bt.name, bt.cost, bt.hotkey, bt.desc, ok ? "" : "  Requires ", ok ? "" : BUILDS[bt.requires_].name);
+            bool lim = g_sim.atIncomeLimit(g_sim.humanPlayer, t);
+            snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", bt.name, bt.cost, bt.hotkey, bt.desc, ok ? "" : (lim ? "  Limit reached" : "  Requires "), ok || lim ? "" : BUILDS[bt.requires_].name);
             add(BK_BUILD, t, ok, bt.name, tip);
         }
         return;
     }
     bool combat = false;
     for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; }
+    bool haul = selectionHasRole(UR_HARVESTER);
     if (combat) add(BK_ATTACKMOVE, 0, true, "Attack Move", "Attack-move: engage everything on the way  [A]");
+    if (combat || haul) add(BK_AREA, 0, true, combat && haul ? "Guard/Gather" : (haul ? "Gather Area" : "Guard Area"),
+                            haul && !combat ? "Gather Area: haulers search a circle you pick for supplies and collect them  [G]"
+                                            : "Guard Area: pick a circle (click, or drag to size it); units protect it, aircraft patrol it  [G]");
     add(BK_STOP, 0, true, "Stop", "Stop and hold position  [S]");
+}
+
+void Game::cancelModes() {
+    placingType = -1; attackMoveMode = false; powerMode = false; nukeMode = false; rallyMode = false; areaMode = false; areaDrag = false;
 }
 
 void Game::clickButton(const Button& b) {
@@ -281,7 +334,11 @@ void Game::cmdSelection(int kind, int id) {
     case BK_SELL: { Entity* b = selectedBuilding(); if (b) { g_sim.cmdSell(g_sim.refOf(*b)); selection.clear(); } break; }
     case BK_RALLY: rallyMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_POWER: if (g_sim.time >= pl.powerReady && g_sim.hasRole(g_sim.humanPlayer, BR_TECH)) { powerMode = true; placingType = -1; attackMoveMode = false; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
-    case BK_ATTACKMOVE: attackMoveMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_NUKE: if (g_sim.nukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_ATTACKMOVE: attackMoveMode = true; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_AREA: areaMode = true; areaDrag = false; placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_STOP: g_sim.cmdStop(selection); g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_CANCEL: placingType = -1; break;
     }
@@ -301,11 +358,28 @@ void Game::hotkey(SDL_Keycode k, u16 mod) {
     buildButtons();
     char c = (char)toupper((int)k);
     for (auto& b : buttons) {
-        const char* hk = b.kind == BK_BUILD ? BUILDS[b.id].hotkey : (b.kind == BK_TRAIN ? UNITS[b.id].hotkey : (b.kind == BK_POWER ? "X" : (b.kind == BK_ATTACKMOVE ? "A" : (b.kind == BK_STOP ? "S" : nullptr))));
+        const char* hk = kindHotkey(b.kind, b.id);
         if (hk && hk[0] == c) { clickButton(b); return; }
     }
     if (c == 'S') { g_sim.cmdStop(selection); return; }
     if (c == 'A' && !selection.empty()) { attackMoveMode = true; return; }
+}
+
+bool Game::selectionCanArea() const {
+    for (auto r : selection) { const Entity* e = g_sim.get(r); if (e && e->isUnit() && ((e->ut().role == UR_COMBAT && e->weapon() >= 0) || e->ut().role == UR_HARVESTER)) return true; }
+    return false;
+}
+
+void Game::applyArea(Vec2 center, float radius) {
+    areaMode = false; areaDrag = false;
+    if (!selectionCanArea()) return;
+    bool combat = false;
+    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->ut().role == UR_COMBAT) combat = true; }
+    g_sim.cmdArea(selection, center, radius);
+    float r = clampf(radius, 2.0f * TILE, 14.0f * TILE);
+    zoneFlashes.push_back({center, r, wallTime, !combat});
+    if (zoneFlashes.size() > 4) zoneFlashes.erase(zoneFlashes.begin());
+    g_audio.play(SND_ORDER, Vec2(), true, 0.7f);
 }
 
 // ------------------------------------------------------------ events
@@ -354,38 +428,37 @@ void Game::menuEvent(const SDL_Event& e) {
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
         int x = e.button.x, y = e.button.y;
-        int rowY0 = 250, rowH = 34;
+        int oy = menuOffsetY(), cx = SCREEN_W / 2;
+        int rowY0 = 250 + oy, rowH = 34;
         int row = (y - rowY0) / rowH;
         if (y >= rowY0 && row >= 0 && row < 7) {
             if (row >= 2 && row <= 4 && row - 2 >= menu.enemies) return;
             menu.cursor = row;
-            if (x >= 560 && x < 600) change(row, -1);
-            else if (x >= 800 && x < 840) change(row, 1);
-            else if (x >= 600 && x < 800) change(row, 1);
+            if (x >= cx - 260 && x < cx - 130) change(row, -1);
+            else if (x >= cx - 130 && x < cx + 260) change(row, 1);
         }
-        if (y >= 520 && y < 560 && x >= 412 && x < 612) { menu.cursor = 7; change(7, 1); }
-        if (y >= 572 && y < 604 && x >= 462 && x < 562) quitRequested = true;
+        if (y >= 520 + oy && y < 560 + oy && x >= cx - 100 && x < cx + 100) { menu.cursor = 7; change(7, 1); }
+        if (y >= 572 + oy && y < 604 + oy && x >= cx - 50 && x < cx + 50) quitRequested = true;
     }
 }
 
 void Game::gameEvent(const SDL_Event& e) {
+    if (menuOpen) { pauseMenuEvent(e); return; }
     Vec2 w = screenToWorld(mouseX, mouseY);
     bool overHud = mouseY >= VIEW_H;
     if (e.type == SDL_KEYDOWN) {
         SDL_Keycode k = e.key.keysym.sym;
         u16 mod = e.key.keysym.mod;
         if (k == SDLK_ESCAPE) {
-            if (placingType >= 0 || attackMoveMode || powerMode || rallyMode) { placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; }
-            else if (!selection.empty()) selection.clear();
+            if (placingType >= 0 || attackMoveMode || powerMode || nukeMode || rallyMode || areaMode) cancelModes();
             else if (showHelp) showHelp = false;
-            else if (wallTime < escArmedUntil) { state = GS_MENU; }
-            else { escArmedUntil = wallTime + 2.5f; addMessage("Press Esc again to leave the game", rgb(255, 200, 120)); }
+            else openPauseMenu();
             return;
         }
         if (k == SDLK_SPACE || k == SDLK_PAUSE) { paused = !paused; return; }
         if (k == SDLK_F1) { showHelp = !showHelp; return; }
-        if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) { speed = std::min(3.0f, speed + 0.5f); return; }
-        if (k == SDLK_MINUS || k == SDLK_KP_MINUS) { speed = std::max(0.5f, speed - 0.5f); return; }
+        if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) { stepSpeed(1); return; }
+        if (k == SDLK_MINUS || k == SDLK_KP_MINUS) { stepSpeed(-1); return; }
         if (k == SDLK_BACKSPACE || k == SDLK_HOME) { Vec2 b = g_sim.players[0].basePos; cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); return; }
         if (k == SDLK_TAB) {
             // select all combat units on screen
@@ -417,8 +490,10 @@ void Game::gameEvent(const SDL_Event& e) {
             // minimap
             if (onMini) {
                 Vec2 wp((mouseX - MINIMAP_X) * (float)WORLD_W / MINIMAP_SIZE, (mouseY - MINIMAP_Y) * (float)WORLD_H / MINIMAP_SIZE);
-                if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
+                if (areaMode) applyArea(wp, AREA_DEFAULT_R);
+                else if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
                 else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp)) powerMode = false; }
+                else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp)) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
                 else cam = Vec2(clampf(wp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(wp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 return;
             }
@@ -445,13 +520,15 @@ void Game::gameEvent(const SDL_Event& e) {
                 return;
             }
             if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w)) powerMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w)) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
             if (attackMoveMode) { issueAttackMove(w); attackMoveMode = false; return; }
             if (rallyMode) { Entity* b = selectedBuilding(); if (b) g_sim.cmdSetRally(g_sim.refOf(*b), w); rallyMode = false; return; }
+            if (areaMode) { areaDrag = true; areaStart = w; areaRadius = 0; return; }
             dragging = true; dragStart = w; dragNow = w;
             return;
         }
         if (btn == SDL_BUTTON_RIGHT) {
-            if (placingType >= 0 || attackMoveMode || powerMode || rallyMode) { placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; return; }
+            if (placingType >= 0 || attackMoveMode || powerMode || nukeMode || rallyMode || areaMode) { cancelModes(); return; }
             issueRightClick(w);
             return;
         }
@@ -459,9 +536,14 @@ void Game::gameEvent(const SDL_Event& e) {
     if (e.type == SDL_MOUSEMOTION) {
         if (midDrag) { cam -= Vec2(e.motion.xrel, e.motion.yrel); cam.x = clampf(cam.x, 0, WORLD_W - SCREEN_W); cam.y = clampf(cam.y, 0, WORLD_H - VIEW_H); }
         if (dragging) dragNow = screenToWorld(mouseX, mouseY);
+        if (areaDrag) areaRadius = dist(areaStart, screenToWorld(mouseX, mouseY));
     }
     if (e.type == SDL_MOUSEBUTTONUP) {
         if (e.button.button == SDL_BUTTON_MIDDLE) midDrag = false;
+        if (e.button.button == SDL_BUTTON_LEFT && areaDrag) {
+            float r = areaRadius >= 24 ? areaRadius : AREA_DEFAULT_R;
+            applyArea(areaStart, r);
+        }
         if (e.button.button == SDL_BUTTON_LEFT && dragging) {
             dragging = false;
             bool shift = SDL_GetModState() & KMOD_SHIFT;
@@ -486,7 +568,7 @@ void Game::gameEvent(const SDL_Event& e) {
 void Game::render() {
     switch (state) {
     case GS_MENU: renderMenu(); break;
-    case GS_PLAYING: renderWorld(); renderHud(); break;
+    case GS_PLAYING: renderWorld(); renderHud(); if (menuOpen) renderPauseMenu(); break;
     case GS_GAMEOVER: renderWorld(); renderHud(); renderGameOver(); break;
     }
 }
@@ -494,34 +576,34 @@ void Game::render() {
 void Game::renderMenu() {
     Gfx& g = g_gfx;
     g.beginFrame(rgb(18, 22, 28));
-    // backdrop: a slice of the map with a shroud vignette
-    for (int ty = 0; ty < SCREEN_H / TILE + 1; ty++) for (int tx = 0; tx < SCREEN_W / TILE + 1; tx++) {
-        int mx = tx + 12, my = ty + 20;
-        if (!inMap(mx, my)) continue;
-        u8 t = g_map.tile(mx, my);
-        g.drawRect(g.tiles[t][g_map.variant[my * MAP_W + mx] % 4], tx * TILE, ty * TILE, TILE, TILE, 255);
+    // backdrop: a slice of the baked map
+    {
+        int sw = std::min(SCREEN_W, WORLD_W - 400), sh = std::min(SCREEN_H, WORLD_H - 640);
+        SDL_Rect src = { 400, 640, sw, sh }, dst = { 0, 0, sw, sh };
+        SDL_RenderCopy(g.ren, g.worldTerrain.tex, &src, &dst);
     }
     g.fill(0, 0, SCREEN_W, SCREEN_H, rgb(10, 14, 20, 170));
     Color accent = hudAccent(menu.playerFaction);
-    g.fill(0, 110, SCREEN_W, 4, accent);
-    g.text(SCREEN_W / 2 - g.textW("ONE HOUR", 6) / 2, 40, "ONE HOUR", rgb(240, 244, 248), 6);
-    g.text(SCREEN_W / 2 - g.textW("Skirmish: Cyber Army vs Clanker Army", 2) / 2, 130, "Skirmish: Cyber Army vs Clanker Army", hudDim(), 2);
+    int cx = SCREEN_W / 2, oy = menuOffsetY();
+    g.fill(0, 110 + oy, SCREEN_W, 4, accent);
+    g.text(cx - g.textW("ONE HOUR", 6) / 2, 40 + oy, "ONE HOUR", rgb(240, 244, 248), 6);
+    g.text(cx - g.textW("Skirmish: Cyber Army vs Clanker Army", 2) / 2, 130 + oy, "Skirmish: Cyber Army vs Clanker Army", hudDim(), 2);
     const char* fdesc = menu.playerFaction == F_CYBER
-        ? "Lasers, railguns, volt coils, Patriot batteries, EMP Strike. Fast electric armor."
-        : "Diesel tanks, gatling guns, rocket artillery, gun nests, Shell Storm. Heavy and cheap.";
-    g.text(SCREEN_W / 2 - g.textW(fdesc) / 2, 170, fdesc, hudText());
-    g.text(SCREEN_W / 2 - g.textW("One map: Lakeside, 4 corner bases, contested supply piles in the middle") / 2, 190, "One map: Lakeside, 4 corner bases, contested supply piles in the middle", hudDim());
+        ? "Lasers, railguns, volt coils, EMP Strike, Orbital Scan, Ion Lancers and Aegis Titans."
+        : "Diesel tanks, gatling guns, Shell Storm, Recon Flight, Grenadiers and Behemoths.";
+    g.text(cx - g.textW(fdesc) / 2, 170 + oy, fdesc, hudText());
+    g.text(cx - g.textW("One map: Lakeside, 4 corner bases, contested supply piles in the middle") / 2, 190 + oy, "One map: Lakeside, 4 corner bases, contested supply piles in the middle", hudDim());
 
-    int rowY0 = 250, rowH = 34;
+    int rowY0 = 250 + oy, rowH = 34;
     auto row = [&](int i, const char* label, const char* value, bool enabled) {
         int y = rowY0 + i * rowH;
         bool cur = menu.cursor == i;
-        if (cur) g.fill(300, y - 4, 560, rowH - 4, rgb(255, 255, 255, 22));
-        g.text(320, y + 4, label, enabled ? hudText() : hudDim(), 2);
-        if (!enabled) { g.text(620, y + 4, "-", hudDim(), 2); return; }
-        g.text(570, y + 4, "<", cur ? accent : hudDim(), 2);
-        g.text(700 - g.textW(value, 2) / 2, y + 4, value, cur ? rgb(255, 255, 255) : hudText(), 2);
-        g.text(810, y + 4, ">", cur ? accent : hudDim(), 2);
+        if (cur) g.fill(cx - 260, y - 4, 520, rowH - 4, rgb(255, 255, 255, 22));
+        g.text(cx - 240, y + 4, label, enabled ? hudText() : hudDim(), 2);
+        if (!enabled) { g.text(cx + 70, y + 4, "-", hudDim(), 2); return; }
+        g.text(cx + 10, y + 4, "<", cur ? accent : hudDim(), 2);
+        g.text(cx + 130 - g.textW(value, 2) / 2, y + 4, value, cur ? rgb(255, 255, 255) : hudText(), 2);
+        g.text(cx + 234, y + 4, ">", cur ? accent : hudDim(), 2);
     };
     static const char* FN[3] = { "Cyber Army", "Clanker Army", "Random" };
     char buf[32];
@@ -532,38 +614,138 @@ void Game::renderMenu() {
     row(6, "Enemy teams", menu.enemiesAllied ? "Allied vs you" : "Free for all", true);
     // start / quit
     bool cur = menu.cursor == 7;
-    g.bevelPanel(412, 520, 200, 40, cur ? shade(accent, 0.55f) : rgb(50, 58, 70));
-    g.text(512 - g.textW("START", 3) / 2, 528, "START", rgb(255, 255, 255), 3);
-    g.bevelPanel(462, 572, 100, 32, rgb(50, 58, 70));
-    g.text(512 - g.textW("Quit", 2) / 2, 580, "Quit", hudText(), 2);
-    g.text(SCREEN_W / 2 - g.textW("Arrows to change, Enter to start, Esc to quit") / 2, 616, "Arrows to change, Enter to start, Esc to quit", hudDim());
+    g.bevelPanel(cx - 100, 520 + oy, 200, 40, cur ? shade(accent, 0.55f) : rgb(50, 58, 70));
+    g.text(cx - g.textW("START", 3) / 2, 528 + oy, "START", rgb(255, 255, 255), 3);
+    g.bevelPanel(cx - 50, 572 + oy, 100, 32, rgb(50, 58, 70));
+    g.text(cx - g.textW("Quit", 2) / 2, 580 + oy, "Quit", hudText(), 2);
+    g.text(cx - g.textW("Arrows to change, Enter to start, Esc to quit") / 2, 616 + oy, "Arrows to change, Enter to start, Esc to quit", hudDim());
 }
 
 void Game::drawShroud() {
     Gfx& g = g_gfx;
+    if (g_sim.revealed(g_sim.humanPlayer)) {
+        // scan running: no shroud, a faint tint and a sweeping scan line instead
+        Color ac = hudAccent(g_sim.players[g_sim.humanPlayer].faction);
+        float left = g_sim.players[g_sim.humanPlayer].revealUntil - g_sim.time;
+        u8 a = (u8)(left < 5.0f ? 10 + (int)(14 * (0.5f + 0.5f * std::sin(wallTime * 12.0f))) : 18);
+        g.fill(0, 0, SCREEN_W, VIEW_H, Color{ac.r, ac.g, ac.b, a});
+        float sweep = std::fmod(wallTime * 0.45f, 1.0f) * VIEW_H;
+        g.fill(0, (int)sweep, SCREEN_W, 2, Color{ac.r, ac.g, ac.b, 70});
+        g.fill(0, (int)sweep - 6, SCREEN_W, 6, Color{ac.r, ac.g, ac.b, 18});
+        return;
+    }
+    static u32 lastStamp = 0; static const void* lastPtr = nullptr;
     const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
+    // refresh the mask when the exploration changed (cheap hash of the array)
+    u32 h = 2166136261u; for (size_t i = 0; i < ex.size(); i += 3) h = (h ^ ex[i]) * 16777619u;
+    if (h != lastStamp || lastPtr != ex.data()) { g.updateShroud(ex); lastStamp = h; lastPtr = ex.data(); }
     int tx0 = std::max(0, tileOf(cam.x)), ty0 = std::max(0, tileOf(cam.y));
     int tx1 = std::min(MAP_W - 1, tileOf(cam.x + SCREEN_W)), ty1 = std::min(MAP_H - 1, tileOf(cam.y + VIEW_H));
-    SDL_SetRenderDrawColor(g.ren, 4, 6, 10, 255);
-    for (int ty = ty0; ty <= ty1; ty++) {
-        int runStart = -1;
-        for (int tx = tx0; tx <= tx1 + 1; tx++) {
-            bool dark = tx <= tx1 && !ex[ty * MAP_W + tx];
-            if (dark && runStart < 0) runStart = tx;
-            if (!dark && runStart >= 0) {
-                SDL_Rect r = { (int)(runStart * TILE - cam.x), (int)(ty * TILE - cam.y), (tx - runStart) * TILE, TILE };
-                SDL_RenderFillRect(g.ren, &r);
-                runStart = -1;
-            }
+    SDL_Rect src = { tx0, ty0, tx1 - tx0 + 1, ty1 - ty0 + 1 };
+    SDL_FRect dst = { tx0 * TILE - cam.x, ty0 * TILE - cam.y, (float)src.w * TILE, (float)src.h * TILE };
+    SDL_RenderCopyF(g.ren, g.shroudTex, &src, &dst);
+}
+
+
+// Circle a group is assigned to: translucent disc, marching dashes, and what it is for.
+static void zoneCircle(Gfx& g, Vec2 sc, float r, bool gather, float phase, float alpha, const char* label) {
+    Color col = gather ? rgb(245, 205, 90) : rgb(110, 255, 170);
+    Color f = col; f.a = (u8)(30 * alpha);
+    g.discFill(sc.x, sc.y, r, f);
+    Color ring = col; ring.a = (u8)(230 * alpha);
+    g.dashedCircle(sc.x, sc.y, r, ring, phase);
+    g.dashedCircle(sc.x, sc.y, r - 1.2f, Color{ring.r, ring.g, ring.b, (u8)(ring.a / 2)}, phase);
+    g.line(sc.x - 5, sc.y, sc.x + 5, sc.y, ring); g.line(sc.x, sc.y - 5, sc.x, sc.y + 5, ring);
+    if (label) g.text((int)(sc.x - g.textW(label) / 2), (int)std::max(24.0f, sc.y - r - 12), label, Color{ring.r, ring.g, ring.b, (u8)(255 * alpha)});
+}
+
+void Game::drawZones() {
+    Gfx& g = g_gfx;
+    float phase = wallTime * 22.0f;
+    // the assignments of everything selected (one circle per distinct assignment)
+    struct Z { Vec2 c; float r; bool gather; };
+    std::vector<Z> seen;
+    for (auto ref : selection) {
+        Entity* e = g_sim.get(ref);
+        if (!e || !e->isUnit() || e->zoneR <= 0) continue;
+        bool gather = e->ut().role == UR_HARVESTER;
+        bool dup = false;
+        for (auto& z : seen) if (dist(z.c, e->zone) < 4 && std::abs(z.r - e->zoneR) < 4 && z.gather == gather) dup = true;
+        Vec2 sc = worldToScreen(e->zone);
+        if (!dup) { seen.push_back({e->zone, e->zoneR, gather}); zoneCircle(g, sc, e->zoneR, gather, phase, 1.0f, gather ? "GATHER" : "GUARD"); }
+        // a thin tether from a unit that is still on its way
+        Vec2 up = worldToScreen(entPos(*e));
+        if (selection.size() <= 8 && dist(e->pos, e->zone) > e->zoneR + 30) g.line(up.x, up.y, sc.x, sc.y, Color{200, 255, 220, 40});
+    }
+    // confirmation pulse right after giving the order
+    for (size_t i = 0; i < zoneFlashes.size();) {
+        float age = wallTime - zoneFlashes[i].time;
+        if (age > 0.9f) { zoneFlashes.erase(zoneFlashes.begin() + i); continue; }
+        Vec2 sc = worldToScreen(zoneFlashes[i].pos);
+        float k = age / 0.9f;
+        Color col = zoneFlashes[i].gather ? rgb(245, 205, 90) : rgb(110, 255, 170);
+        col.a = (u8)(200 * (1 - k));
+        g.dashedCircle(sc.x, sc.y, zoneFlashes[i].r * (0.6f + 0.4f * k), col, 0, 40, 0);
+        i++;
+    }
+    // choosing a circle: follows the cursor, or grows while dragging
+    if (areaMode && mouseY < VIEW_H) {
+        bool haul = selectionHasRole(UR_HARVESTER), combat = false;
+        for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->ut().role == UR_COMBAT) combat = true; }
+        Vec2 c = areaDrag ? worldToScreen(areaStart) : Vec2(mouseX, mouseY);
+        float r = areaDrag && areaRadius >= 24 ? areaRadius : AREA_DEFAULT_R;
+        r = clampf(r, 2.0f * TILE, 14.0f * TILE);
+        zoneCircle(g, c, r, haul && !combat, phase, 0.9f, nullptr);
+        const char* hint = haul && !combat ? "GATHER AREA: click, or drag to size" : "GUARD AREA: click, or drag to size";
+        g.text((int)(c.x - g.textW(hint) / 2), (int)(c.y - r - 12), hint, haul && !combat ? rgb(245, 205, 90) : rgb(110, 255, 170));
+    }
+}
+
+// Range of one weapon around a point: what a defense (or a selected unit) can hit.
+void Game::rangeRing(Vec2 sp, float radiusPx, int weapon, const char* label, bool powered, bool enemy, bool faint) {
+    Gfx& g = g_gfx;
+    const Weapon& w = WEAPONS[weapon];
+    Color col = !powered ? rgb(150, 150, 160) : enemy ? rgb(255, 90, 80) : (w.ground && w.air) ? rgb(120, 225, 255) : (w.ground ? rgb(255, 190, 90) : rgb(150, 175, 255));
+    float a = faint ? 0.55f : 1.0f;
+    Color f = col; f.a = (u8)((faint ? 10 : 24) * (powered ? 1.0f : 0.6f));
+    g.discFill(sp.x, sp.y, radiusPx, f);
+    Color ring = col; ring.a = (u8)(200 * a);
+    if (powered) g.circle(sp.x, sp.y, radiusPx, ring, 96);
+    else g.dashedCircle(sp.x, sp.y, radiusPx, ring, wallTime * 10.0f, 6, 6);
+    g.circle(sp.x, sp.y, radiusPx - 1.0f, Color{col.r, col.g, col.b, (u8)(ring.a / 3)}, 96);
+    if (w.minRange > 0) g.dashedCircle(sp.x, sp.y, w.minRange * TILE, Color{col.r, col.g, col.b, (u8)(150 * a)}, 0, 4, 4);
+    if (!faint && label) {
+        char buf[96]; snprintf(buf, sizeof buf, "%s  %s  range %.1f", label, powered ? (w.ground && w.air ? "ground + air" : (w.ground ? "ground" : "air only")) : "NO POWER", w.range);
+        float ly = sp.y - radiusPx - 12;
+        if (ly < 24) ly = std::min(sp.y + radiusPx + 4, (float)VIEW_H - 14);   // ring runs off the top: label below it
+        g.text((int)clampf(sp.x - g.textW(buf) / 2, 4, SCREEN_W - g.textW(buf) - 4), (int)ly, buf, col);
+    }
+}
+
+void Game::drawRangeRings() {
+    Player& pl = g_sim.players[g_sim.humanPlayer];
+    int fewUnits = 0;
+    for (auto ref : selection) { Entity* e = g_sim.get(ref); if (e && e->isUnit() && e->weapon() >= 0) fewUnits++; }
+    for (auto ref : selection) {
+        Entity* e = g_sim.get(ref);
+        if (!e) continue;
+        Vec2 sp = worldToScreen(entPos(*e));
+        if (e->isBuilding() && e->constructed && e->bt().weapon >= 0) {
+            const BuildType& bt = e->bt();
+            bool powered = !(pl.lowPower() && bt.power < 0) && e->disabledUntil <= g_sim.time;
+            rangeRing(sp, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, powered, false, false);
+        } else if (e->isUnit() && e->weapon() >= 0 && fewUnits <= 3) {
+            rangeRing(sp, WEAPONS[e->weapon()].range * TILE + e->radius(), e->weapon(), nullptr, true, false, true);
         }
     }
-    // soft edge: darken explored tiles adjacent to shroud
-    SDL_SetRenderDrawColor(g.ren, 4, 6, 10, 110);
-    for (int ty = ty0; ty <= ty1; ty++) for (int tx = tx0; tx <= tx1; tx++) {
-        if (!ex[ty * MAP_W + tx]) continue;
-        bool edge = false;
-        for (int d = 0; d < 4 && !edge; d++) { int nx = tx + (d == 0) - (d == 1), ny = ty + (d == 2) - (d == 3); if (inMap(nx, ny) && !ex[ny * MAP_W + nx]) edge = true; }
-        if (edge) { SDL_Rect r = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE }; SDL_RenderFillRect(g.ren, &r); }
+    // a defense under the cursor: show what it covers (enemy ones in red)
+    if (placingType < 0 && !areaMode && mouseY < VIEW_H) {
+        Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
+        if (h && h->isBuilding() && h->constructed && h->bt().weapon >= 0 && std::find(selection.begin(), selection.end(), g_sim.refOf(*h)) == selection.end()) {
+            bool mine = h->owner == g_sim.humanPlayer;
+            const BuildType& bt = h->bt();
+            rangeRing(worldToScreen(h->pos), WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, !(mine && pl.lowPower() && bt.power < 0), !mine, false);
+        }
     }
 }
 
@@ -629,11 +811,26 @@ void Game::drawEntity(Entity& e) {
     }
     if (selected) g.circle(p.x, p.y + (air ? 14 : 0), e.radius() + 4, rgb(255, 255, 255, 230), 18);
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
-    g.draw(body, p.x, p.y, e.angle, 1, mod);
-    const Sprite& tur = g.unitTurret[e.type];
+    // walk / track cycle: the two extra frames alternate while the unit is actually moving
+    const Sprite* bs = &body;
+    if (!air && !paused && !disabled && (e.pos - e.prevPos).len2() > 0.01f) {
+        float travelled = ut.kind == UK_INF ? wallTime * 9.0f + e.gen * 0.7f : (e.pos.x + e.pos.y) / 3.0f;
+        bs = &g.unitAnim[e.type][owner][((int)std::floor(travelled)) & 1];
+    }
+    if (!air && ut.kind == UK_VEH && !paused && bs != &body && e.fxTick != g_sim.tick && (g_sim.tick + e.gen) % 3 == 0) {
+        e.fxTick = g_sim.tick;
+        Vec2 back = Vec2(std::cos(e.angle), std::sin(e.angle)) * -(e.radius() * 0.8f);
+        g_sim.fx.push_back({FX_SMOKE, e.pos + back, Vec2(), 0, 0.9f, rgb(150, 132, 104), 3.0f + (float)(g_sim.tick % 3), back.norm() * 10.0f});
+    }
+    g.draw(*bs, p.x, p.y, e.angle, 1, mod);
+    const Sprite& tur = g.unitTurret[e.type][owner];
     if (tur.tex) g.draw(tur, p.x, p.y, e.turret, 1, mod);
-    if (ut.kind == UK_AIR && ut.faction == F_CLANKER) g.circle(p.x + 2, p.y, 12, rgb(90, 90, 90, 90 + 60 * ((g_sim.tick & 1))), 12); // rotor blur
-    if (e.cargo > 0) g.fillCircle(p.x, p.y, 3, rgb(230, 200, 90));
+    if (ut.kind == UK_AIR && ut.faction == F_CLANKER) {   // main rotor: motion-blur disc plus a spinning blade pair
+        float spin = paused || disabled ? 0.4f : wallTime * 38.0f;
+        g.draw(g.rotorDisc, p.x - 2, p.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
+        g.draw(g.rotorBlades, p.x - 2, p.y, spin, 1, rgb(255, 255, 255), 150);
+    }
+    if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
     if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10, p.y - e.radius() - 7, 20, e.hp / e.maxHp);
     if (selected && air && ut.ammo > 0) for (int k = 0; k < ut.ammo; k++) g.fill((int)p.x - 10 + k * 3, (int)p.y - e.radius() - 11, 2, 2, k < e.ammo ? rgb(255, 230, 120) : rgb(80, 80, 80));
 }
@@ -644,7 +841,7 @@ void Game::drawFx() {
         float k = f.t / f.life;
         Vec2 a = worldToScreen(f.a), b = worldToScreen(f.b);
         switch (f.type) {
-        case FX_BEAM: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.thickLine(a.x, a.y, b.x, b.y, c, 2); c.a /= 3; g.thickLine(a.x, a.y, b.x, b.y, c, 5); break; }
+        case FX_BEAM: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.thickLine(a.x, a.y, b.x, b.y, c, 2); c.a /= 3; g.thickLine(a.x, a.y, b.x, b.y, c, 5); Color w = rgb(255, 255, 255, (u8)(200 * (1 - k))); g.line(a.x, a.y, b.x, b.y, w); g.glowAdd(b.x, b.y, 9, Color{f.color.r, f.color.g, f.color.b, (u8)(150 * (1 - k))}); break; }
         case FX_RAIL: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.thickLine(a.x, a.y, b.x, b.y, c, 3); Color h = rgb(120, 200, 255, (u8)(120 * (1 - k))); g.thickLine(a.x, a.y, b.x, b.y, h, 7); break; }
         case FX_ARC: {
             Color c = f.color; c.a = (u8)(255 * (1 - k));
@@ -653,10 +850,11 @@ void Game::drawFx() {
             for (int i = 1; i <= segs; i++) { float t = i / (float)segs; Vec2 q = a + (b - a) * t; if (i < segs) q += Vec2(r.f(-7, 7), r.f(-7, 7)); g.thickLine(prev.x, prev.y, q.x, q.y, c, 2); prev = q; }
             break;
         }
-        case FX_FLASH: g.fillCircle(a.x, a.y, f.size * (1 - k * 0.5f), rgb(255, 250, 200, 220)); break;
+        case FX_FLASH: g.glowAdd(a.x, a.y, f.size * 2.2f * (1 - k * 0.5f), rgb(255, 210, 120, (u8)(200 * (1 - k)))); g.fillCircle(a.x, a.y, f.size * (1 - k * 0.5f), rgb(255, 250, 200, 220)); break;
         case FX_EXPLODE: {
             float rr = f.size * (0.3f + 0.7f * k);
             Color c = mix(rgb(255, 240, 160), rgb(200, 60, 20), k); c.a = (u8)(230 * (1 - k * k));
+            g.glowAdd(a.x, a.y, rr * 2.0f, rgb(255, 140, 50, (u8)(160 * (1 - k))));
             g.fillCircle(a.x, a.y, rr, c);
             g.fillCircle(a.x, a.y, rr * 0.5f, rgb(255, 255, 220, (u8)(200 * (1 - k))));
             break;
@@ -665,6 +863,15 @@ void Game::drawFx() {
         case FX_SPARK: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.fillCircle(a.x, a.y, f.size, c); break; }
         case FX_DEBRIS: g.fill((int)a.x, (int)a.y, (int)f.size, (int)f.size, f.color); break;
         case FX_RING: g.circle(a.x, a.y, f.size * k, f.color); break;
+        case FX_WRECK: {
+            int ut = (int)f.b.x, ow = (int)f.b.y;
+            u8 al = (u8)(255 * clampf((1 - k) * 5.0f, 0, 1));
+            Color cinder = rgb(58, 54, 50);
+            g.draw(g.unitBody[ut][ow], a.x, a.y, f.vel.x, 1, cinder, al);
+            if (g.unitTurret[ut][ow].tex) g.draw(g.unitTurret[ut][ow], a.x + 2, a.y + 1, f.size + 0.5f, 1, cinder, al);
+            if (f.t < 5.0f) g.glowAdd(a.x, a.y, 9 + 4 * std::sin(wallTime * 9 + f.a.x), Color{255, 120, 40, (u8)(70 * (1 - f.t / 5.0f))});
+            break;
+        }
         case FX_EMP: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.circle(a.x, a.y, f.size * k, c, 40); c.a /= 2; g.circle(a.x, a.y, f.size * k * 0.7f, c, 40); break; }
         }
     }
@@ -675,26 +882,32 @@ void Game::renderWorld() {
     g.beginFrame(rgb(6, 8, 12));
     SDL_Rect clip = { 0, 0, SCREEN_W, VIEW_H };
     SDL_RenderSetClipRect(g.ren, &clip);
+    // screen shake from big blasts near the view centre (restored at the end of the frame)
+    Vec2 camSaved = cam;
+    {
+        float amp = 0; Vec2 centre = cam + Vec2(SCREEN_W * 0.5f, VIEW_H * 0.5f);
+        for (auto& f : g_sim.fx) if (f.type == FX_EXPLODE && f.size >= 26 && f.t < 0.3f) amp = std::max(amp, (f.size / 60.0f) * (1 - f.t / 0.3f) * clampf(1.4f - dist(f.a, centre) / 900.0f, 0, 1));
+        if (amp > 0 && !paused) cam += Vec2(std::sin(wallTime * 93.0f), std::cos(wallTime * 77.0f)) * (amp * 5.0f);
+    }
     // terrain
     int tx0 = std::max(0, tileOf(cam.x)), ty0 = std::max(0, tileOf(cam.y));
     int tx1 = std::min(MAP_W - 1, tileOf(cam.x + SCREEN_W)), ty1 = std::min(MAP_H - 1, tileOf(cam.y + VIEW_H));
     const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
-    static const int PRIO[T_COUNT] = { 3, 3, 2, 1, 4, 0, 5, 3 };
-    static const int DX[4] = { 0, 1, 0, -1 }, DY[4] = { -1, 0, 1, 0 };
+    const bool rev = g_sim.revealed(g_sim.humanPlayer);
+    // baked terrain: one blit of the visible window
+    {
+        int sx0 = clampi((int)cam.x, 0, WORLD_W - 1), sy0 = clampi((int)cam.y, 0, WORLD_H - 1);
+        int sw = std::min(SCREEN_W + 1, WORLD_W - sx0), sh = std::min(VIEW_H + 1, WORLD_H - sy0);
+        SDL_Rect src = { sx0, sy0, sw, sh }, dst = { sx0 - (int)cam.x, sy0 - (int)cam.y, sw, sh };
+        SDL_SetTextureColorMod(g.worldTerrain.tex, 255, 255, 255); SDL_SetTextureAlphaMod(g.worldTerrain.tex, 255);
+        SDL_RenderCopy(g.ren, g.worldTerrain.tex, &src, &dst);
+    }
+    // water shimmer: animated ripples over interior water tiles
     for (int ty = ty0; ty <= ty1; ty++) for (int tx = tx0; tx <= tx1; tx++) {
-        if (!ex[ty * MAP_W + tx]) continue;
-        u8 t = g_map.tile(tx, ty);
-        int v = (g_map.variant[ty * MAP_W + tx] + (t == T_WATER ? (int)(wallTime * 2.5f) : 0)) % 4;
-        int sx = (int)(tx * TILE - cam.x), sy = (int)(ty * TILE - cam.y);
-        g.drawRect(g.tiles[t][v], sx, sy, TILE, TILE);
-        // blend higher-priority neighbours over this tile's edges
-        for (int d = 0; d < 4; d++) {
-            int nx = tx + DX[d], ny = ty + DY[d];
-            if (!inMap(nx, ny)) continue;
-            u8 n = g_map.tile(nx, ny);
-            if (PRIO[n] <= PRIO[t] || n == T_TREE) continue;
-            g.draw(g.edgeTile[n], sx + 16, sy + 16, d * 1.5707963f);
-        }
+        if (g_map.tile(tx, ty) != T_WATER || !(rev || ex[ty * MAP_W + tx])) continue;
+        if (g_map.tile(tx - 1, ty) != T_WATER || g_map.tile(tx + 1, ty) != T_WATER || g_map.tile(tx, ty - 1) != T_WATER || g_map.tile(tx, ty + 1) != T_WATER) continue;
+        int v = (g_map.variant[ty * MAP_W + tx] + (int)(wallTime * 2.0f)) % 4;
+        g.drawRect(g.tiles[T_WATER][v], (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE, 70);
     }
     // placement ghost
     if (placingType >= 0) {
@@ -703,29 +916,52 @@ void Game::renderWorld() {
         int tx = tileOf(w.x) - bt.w / 2, ty = tileOf(w.y) - bt.h / 2;
         bool ok = g_sim.canPlace(g_sim.humanPlayer, placingType, tx, ty);
         Vec2 c = worldToScreen(g_sim.buildingCenter(placingType, tx, ty));
+        if (bt.weapon >= 0) rangeRing(c, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, true, false, false);
         g.draw(g.building[placingType][g_sim.humanPlayer], c.x, c.y, 0, 1, ok ? rgb(160, 255, 160) : rgb(255, 120, 120), 150);
         for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
             bool t = g_map.buildable(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
             g.fill((int)((tx + i) * TILE - cam.x), (int)((ty + j) * TILE - cam.y), TILE, TILE, t ? rgb(80, 255, 80, 60) : rgb(255, 60, 60, 90));
         }
     }
+    if (nukeMode) {
+        Vec2 m = Vec2(mouseX, mouseY);
+        float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f);
+        g.discFill(m.x, m.y, NUKE_RADIUS * TILE, rgb(255, 60, 40, (int)(34 * pulse)));
+        g.circle(m.x, m.y, NUKE_RADIUS * TILE, rgb(255, 90, 60), 48);
+        g.circle(m.x, m.y, NUKE_RADIUS * TILE * 0.35f, rgb(255, 200, 90), 32);
+    }
     if (powerMode) {
         Vec2 m = Vec2(mouseX, mouseY);
-        g.circle(m.x, m.y, POWERS[g_sim.players[0].faction].radius * TILE, hudAccent(g_sim.players[0].faction), 40);
+        g.circle(m.x, m.y, POWERS[g_sim.players[g_sim.humanPlayer].faction].radius * TILE, hudAccent(g_sim.players[g_sim.humanPlayer].faction), 40);
     }
+    drawZones();
+    drawRangeRings();
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
-        if (e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
+        if (!rev && e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
         if (e.kind == EK_RESOURCE || e.isBuilding()) drawEntity(e);
         else if (e.isAir()) air.push_back(&e);
         else ground.push_back(&e);
     }
     std::sort(ground.begin(), ground.end(), [](Entity* a, Entity* b) { return a->pos.y < b->pos.y; });
     for (auto* e : ground) drawEntity(*e);
+    // flags: every finished structure flies its owner's flag from a mast on the roof edge (over units, under aircraft)
+    for (auto& e : g_sim.ents) {
+        if (!e.alive || !e.isBuilding() || !e.constructed || e.owner < 0) continue;
+        if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
+        if (!rev && e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
+        const BuildType& bt = e.bt();
+        Vec2 p = worldToScreen(e.pos);
+        float hw = bt.w * TILE * 0.5f, hh = bt.h * TILE * 0.5f;
+        int area = bt.w * bt.h;
+        float sc = area >= 12 ? 1.3f : (area >= 6 ? 1.0f : (area >= 4 ? 0.85f : 0.62f));
+        float px = p.x + (bt.w >= 3 ? hw * 0.5f : hw * 0.4f), py = p.y - hh + (area >= 6 ? 12.0f : 7.0f);
+        g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
+    }
     // projectiles
     for (auto& p : g_sim.projs) {
         const Weapon& w = WEAPONS[p.weapon];
@@ -744,6 +980,7 @@ void Game::renderWorld() {
         }
     }
     drawFx();
+    drawNukes();
     for (auto* e : air) drawEntity(*e);
     drawShroud();
     // drag box
@@ -753,8 +990,10 @@ void Game::renderWorld() {
         g.box((int)std::min(a.x, b.x), (int)std::min(a.y, b.y), (int)std::abs(b.x - a.x), (int)std::abs(b.y - a.y), rgb(120, 255, 120, 200));
     }
     // cursor hints
-    if (attackMoveMode) g.text(mouseX + 12, mouseY - 4, "ATTACK", rgb(255, 90, 80));
-    else if (powerMode) g.text(mouseX + 12, mouseY - 4, POWERS[g_sim.players[0].faction].name, hudAccent(g_sim.players[0].faction));
+    if (areaMode) {}
+    else if (attackMoveMode) g.text(mouseX + 12, mouseY - 4, "ATTACK", rgb(255, 90, 80));
+    else if (nukeMode) g.text(mouseX + 12, mouseY - 4, "NUKE", rgb(255, 100, 70));
+    else if (powerMode) g.text(mouseX + 12, mouseY - 4, POWERS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (rallyMode) g.text(mouseX + 12, mouseY - 4, "RALLY", rgb(120, 255, 120));
     else if (mouseY < VIEW_H) {
         Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
@@ -765,6 +1004,7 @@ void Game::renderWorld() {
         } else if (h && h->kind == EK_RESOURCE) { char buf[40]; snprintf(buf, sizeof buf, "Supplies: $%d", h->amount); g.text(mouseX + 12, mouseY - 4, buf, rgb(240, 220, 150)); }
     }
     SDL_RenderSetClipRect(g.ren, nullptr);
+    cam = camSaved;
 }
 
 void Game::drawMinimap(int x, int y, int size) {
@@ -774,7 +1014,8 @@ void Game::drawMinimap(int x, int y, int size) {
     const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
     SDL_SetRenderDrawColor(g.ren, 4, 6, 10, 255);
     // shroud in 2x2 tile blocks (cheap)
-    for (int ty = 0; ty < MAP_H; ty += 2) for (int tx = 0; tx < MAP_W; tx += 2) {
+    const bool rev = g_sim.revealed(g_sim.humanPlayer);
+    for (int ty = 0; ty < MAP_H && !rev; ty += 2) for (int tx = 0; tx < MAP_W; tx += 2) {
         if (ex[ty * MAP_W + tx] || ex[ty * MAP_W + tx + 1] || ex[(ty + 1) * MAP_W + tx] || ex[(ty + 1) * MAP_W + tx + 1]) continue;
         SDL_Rect r = { (int)(x + tx * sc), (int)(y + ty * sc), (int)std::ceil(2 * sc), (int)std::ceil(2 * sc) };
         SDL_RenderFillRect(g.ren, &r);
@@ -782,8 +1023,8 @@ void Game::drawMinimap(int x, int y, int size) {
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
         int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
-        if (e.kind == EK_RESOURCE) { if (ex[ty * MAP_W + tx]) g.fill((int)(x + tx * sc), (int)(y + ty * sc), 2, 2, rgb(230, 200, 90)); continue; }
-        if (e.owner != g_sim.humanPlayer && !ex[ty * MAP_W + tx]) continue;
+        if (e.kind == EK_RESOURCE) { if (rev || ex[ty * MAP_W + tx]) g.fill((int)(x + tx * sc), (int)(y + ty * sc), 2, 2, rgb(230, 200, 90)); continue; }
+        if (!rev && e.owner != g_sim.humanPlayer && !ex[ty * MAP_W + tx]) continue;
         Color c = PLAYER_COLOR[e.owner];
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
@@ -817,11 +1058,20 @@ void Game::renderHud() {
     snprintf(buf, sizeof buf, "%d/%d", used, made); g.text(px + 150, 6, buf, pl.lowPower() ? rgb(255, 140, 120) : hudText());
     int secs = (int)g_sim.time;
     snprintf(buf, sizeof buf, "%02d:%02d", secs / 60, secs % 60); g.text(SCREEN_W / 2 - 15, 6, buf, hudText());
-    snprintf(buf, sizeof buf, "%s%s  speed x%.1f%s", FACTION_NAME[pl.faction], g_audio.isMuted() ? "  [muted]" : "", speed, paused ? "  PAUSED" : "");
+    snprintf(buf, sizeof buf, "%s%s  speed x%.2g%s", FACTION_NAME[pl.faction], g_audio.isMuted() ? "  [muted]" : "", speed, paused ? "  PAUSED" : "");
     g.text(SCREEN_W - 8 - g.textW(buf), 6, buf, hudDim());
     // alive players
     int ax = SCREEN_W / 2 + 40;
-    for (int p = 0; p < g_sim.numPlayers; p++) { g.fill(ax + p * 14, 7, 9, 7, g_sim.players[p].alive ? PLAYER_COLOR[p] : rgb(60, 60, 60)); }
+    for (int p = 0; p < g_sim.numPlayers; p++) {
+        const Sprite& fl = g.flag[p];
+        int fx = ax + p * 22;
+        if (g_sim.players[p].alive) { g.draw(fl, (float)fx, 4.0f, 0, 0.75f); g.fill(fx - 1, 3, 1, 14, rgb(200, 204, 212)); }
+        else { g.draw(fl, (float)fx, 4.0f, 0, 0.75f, rgb(70, 70, 70), 160); g.fill(fx - 1, 3, 1, 14, rgb(90, 90, 96)); g.line((float)fx, 5, (float)fx + 17, 15, rgb(20, 20, 20)); }
+    }
+    if (g_sim.revealed(g_sim.humanPlayer)) {
+        snprintf(buf, sizeof buf, "%s %ds", SCANS[pl.faction].name, (int)std::ceil(pl.revealUntil - g_sim.time));
+        g.text(ax + g_sim.numPlayers * 22 + 12, 6, buf, accent);
+    }
     // messages
     for (size_t i = 0; i < messages.size(); i++) {
         float age = wallTime - messages[i].time;
@@ -829,7 +1079,7 @@ void Game::renderHud() {
         Color c = messages[i].color; c.a = (u8)(255 * clampf(1.5f - age / 6.0f, 0, 1));
         g.text(8, 26 + (int)i * 11, messages[i].text.c_str(), c);
     }
-    if (paused) g.text(SCREEN_W / 2 - g.textW("PAUSED", 3) / 2, VIEW_H / 2 - 12, "PAUSED", rgb(255, 255, 255), 3);
+    if (paused && !menuOpen) g.text(SCREEN_W / 2 - g.textW("PAUSED", 3) / 2, VIEW_H / 2 - 12, "PAUSED", rgb(255, 255, 255), 3);
 
     // ---- command bar
     g.fill(0, hy, SCREEN_W, HUD_H, base);
@@ -847,7 +1097,7 @@ void Game::renderHud() {
             g.bevelPanel(INFO_X + 8, hy + 14, 68, 68, shade(base, 0.55f), false);
             if (e->isUnit()) {
                 g.draw(g.unitBody[e->type][e->owner], INFO_X + 42, hy + 48, 0, 2);
-                if (g.unitTurret[e->type].tex) g.draw(g.unitTurret[e->type], INFO_X + 42, hy + 48, 0, 2);
+                if (g.unitTurret[e->type][e->owner].tex) g.draw(g.unitTurret[e->type][e->owner], INFO_X + 42, hy + 48, 0, 2);
             } else {
                 const Sprite& s = g.building[e->type][e->owner];
                 float sc = std::min(60.0f / s.w, 60.0f / s.h);
@@ -864,12 +1114,20 @@ void Game::renderHud() {
                 if (ut.role == UR_HARVESTER) { snprintf(buf, sizeof buf, "Cargo $%d / %d", e->cargo, SUPPLY_PER_TRIP); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.ammo > 0) { snprintf(buf, sizeof buf, "Ammo %d / %d", e->ammo, ut.ammo); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
-                const char* st = e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
+                const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);
             } else {
                 const BuildType& bt = e->bt();
                 if (bt.power != 0) { snprintf(buf, sizeof buf, "Power %+d", bt.power); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
-                { char d[40]; snprintf(d, sizeof d, "%.38s", bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
+                { char d[96]; snprintf(d, sizeof d, "%.*s", e->queue.empty() ? 76 : 38, bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
+                if (bt.role == BR_TECH && e->constructed) {
+                    const ProgramType& pg = PROGRAMS[pl.faction];
+                    if (pl.advTech) snprintf(buf, sizeof buf, "%s: researched, special units unlocked", pg.name);
+                    else if (pl.researching) snprintf(buf, sizeof buf, "%s: researching %d%%%s", pg.name, (int)(pl.researchProgress * 100), pl.lowPower() ? " (slowed: low power)" : "");
+                    else snprintf(buf, sizeof buf, "%s: not researched ($%d)", pg.name, pg.cost);
+                    g.text(INFO_X + 86, hy + 84, buf, pl.advTech ? accent : hudDim());
+                    if (g_sim.revealed(g_sim.humanPlayer)) { snprintf(buf, sizeof buf, "%s: %ds left", SCANS[pl.faction].name, (int)std::ceil(pl.revealUntil - g_sim.time)); g.text(INFO_X + 86, hy + 98, buf, accent); }
+                }
                 if (!e->queue.empty()) {
                     g.text(INFO_X + 330, hy + 58, "Queue (click to cancel)", hudDim());
                     int qx = INFO_X + 330, qy = hy + 70;
@@ -880,7 +1138,20 @@ void Game::renderHud() {
                     }
                     snprintf(buf, sizeof buf, "%s %d%%", UNITS[e->queue[0]].name, (int)(e->queueProgress * 100)); g.text(INFO_X + 330, hy + 104, buf, hudText());
                 } else if (e->constructed && (bt.role == BR_BARRACKS || bt.role == BR_FACTORY || bt.role == BR_AIRFIELD || bt.role == BR_HQ || bt.role == BR_SUPPLY)) g.text(INFO_X + 330, hy + 58, "Production idle", hudDim());
-                if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + 98, "LOW POWER: reduced output", rgb(255, 140, 120));
+                if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + (bt.role == BR_TECH ? 110 : 98), "LOW POWER: reduced output", rgb(255, 140, 120));
+                if (bt.role == BR_INCOME && e->constructed) {
+                    bool half = pl.lowPower() && bt.power < 0;
+                    int amt = pl.faction == F_CYBER ? 75 : 60;
+                    snprintf(buf, sizeof buf, "Income $%d every %ds%s   total earned $%d", amt, (int)INCOME_INTERVAL, half ? " (low power: half rate)" : "", pl.mined); g.text(INFO_X + 86, hy + 84, buf, rgb(240, 220, 130));
+                    snprintf(buf, sizeof buf, "%d of %d income structures", g_sim.countRole(g_sim.humanPlayer, BR_INCOME, false), INCOME_MAX); g.text(INFO_X + 86, hy + 96, buf, hudDim());
+                }
+                if (bt.role == BR_NUKE && e->constructed) {
+                    float w = std::max(0.0f, e->actionTimer - g_sim.time);
+                    if (w > 0) snprintf(buf, sizeof buf, "Warhead %s: %d:%02d", "loading", (int)w / 60, (int)w % 60);
+                    else snprintf(buf, sizeof buf, "WARHEAD READY  (K to launch)");
+                    g.text(INFO_X + 86, hy + 84, buf, w > 0 ? rgb(255, 200, 120) : rgb(255, 110, 90));
+                    snprintf(buf, sizeof buf, "%d ramp(s) ready of %d", g_sim.nukesReady(g_sim.humanPlayer), g_sim.countRole(g_sim.humanPlayer, BR_NUKE, true)); g.text(INFO_X + 86, hy + 96, buf, hudDim());
+                }
                 if (bt.role == BR_AIRFIELD && e->constructed) {
                     int n = 0; Ref self = g_sim.refOf(*e);
                     for (auto& u : g_sim.ents) if (u.alive && u.isUnit() && u.isAir() && u.home == self) n++;
@@ -921,16 +1192,22 @@ void Game::renderHud() {
         Color bc = b.enabled ? (hover ? shade(base, 1.5f) : shade(base, 1.15f)) : shade(base, 0.7f);
         g.bevelPanel(b.x, b.y, b.w, b.h, bc, true);
         Color tc = b.enabled ? rgb(255, 255, 255) : hudDim();
-        g.text(b.x + 5, b.y + 5, b.label, tc);
+        g.text(b.x + 5, b.y + 4, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
-        if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(b.x + 5, b.y + 20, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
-        if (b.kind == BK_POWER) {
-            float rem = pl.powerReady - g_sim.time;
-            if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(b.x + 5, b.y + 20, buf, hudDim()); }
-            else if (b.enabled) g.text(b.x + 5, b.y + 20, "READY", accent);
+        if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
+        if (b.kind == BK_POWER || b.kind == BK_SCAN) {
+            float rem = (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
+            if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(b.x + 5, b.y + 15, buf, hudDim()); }
+            else if (b.enabled) g.text(b.x + 5, b.y + 15, "READY", accent);
         }
-        const char* hk = b.kind == BK_BUILD ? BUILDS[b.id].hotkey : (b.kind == BK_TRAIN ? UNITS[b.id].hotkey : (b.kind == BK_POWER ? "X" : (b.kind == BK_ATTACKMOVE ? "A" : (b.kind == BK_STOP ? "S" : nullptr))));
-        if (hk) g.text(b.x + b.w - 12, b.y + 20, hk, accent);
+        if (b.kind == BK_RESEARCH) {
+            const ProgramType& pg = PROGRAMS[pl.faction];
+            if (pl.advTech) g.text(b.x + 5, b.y + 15, "DONE", accent);
+            else if (pl.researching) { snprintf(buf, sizeof buf, "%d%%", (int)(pl.researchProgress * 100)); g.text(b.x + 5, b.y + 15, buf, accent); g.fill(b.x + 36, b.y + 18, (int)((b.w - 42) * clampf(pl.researchProgress, 0, 1)), 3, accent); }
+            else { snprintf(buf, sizeof buf, "$%d", pg.cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= pg.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
+        }
+        const char* hk = kindHotkey(b.kind, b.id);
+        if (hk) g.text(b.x + b.w - 12, b.y + 15, hk, accent);
         if (b.kind == BK_BUILD && placingType == b.id) g.box(b.x, b.y, b.w, b.h, accent);
     }
     if (hoverButton >= 0) {
@@ -941,25 +1218,170 @@ void Game::renderHud() {
         g.text(tx + 6, VIEW_H - 18, tip.c_str(), rgb(255, 255, 255));
     }
     if (showHelp) {
-        g.fill(200, 60, 624, 300, rgb(8, 10, 14, 235));
-        g.box(200, 60, 624, 300, accent);
-        g.text(216, 72, "ONE HOUR - controls", rgb(255, 255, 255), 2);
+        int hx = SCREEN_W / 2 - 312, hy0 = std::max(30, VIEW_H / 2 - 170);
+        g.fill(hx, hy0, 624, 300, rgb(8, 10, 14, 235));
+        g.box(hx, hy0, 624, 300, accent);
+        g.text(hx + 16, hy0 + 12, "ONE HOUR - controls", rgb(255, 255, 255), 2);
         const char* lines[] = {
             "Left click / drag box      select units (double-click: all of that type on screen)",
             "Right click                move / attack / gather / repair / rally (also on the minimap)",
             "A + click                  attack-move       S: stop        Tab: army on screen",
+            "G, then click or drag      guard an area (fighters, drones) / gather in an area (haulers)",
+            "Click a turret or battery  shows the area it covers (hover any defense to see its reach)",
             "Ctrl + 0-9 / 0-9           assign / recall control group (Alt+#: jump to it)",
             "Arrows, screen edge, middle-drag, wheel: scroll     Home: your base",
             "Dozer selected             build menu; click the ground to place, Shift for several",
             "Structure selected         train units; right-click ground for rally; Del sells",
-            "Command Core/Post          special power (X) once your tech structure is built",
+            "Tech structure            X strike, V map scan (30s), R Advanced Program: unlocks elite units",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",
             "",
             "Supplies: haulers carry $300 per trip to a Supply Hub/Depot.",
             "Power: keep production above consumption or turrets and factories slow down.",
         };
-        for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) g.text(216, 100 + (int)i * 16, lines[i], hudText());
+        for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) g.text(hx + 16, hy0 + 40 + (int)i * 16, lines[i], hudText());
     }
+}
+
+// ------------------------------------------------------------ nukes and pause menu
+void Game::drawNukes() {
+    Gfx& g = g_gfx;
+    for (auto& n : g_sim.nukes) {
+        float k = clampf(n.t / Sim::NUKE_FLIGHT, 0, 1);
+        Vec2 tgt = worldToScreen(n.pos);
+        // warning zone
+        float pulse = 0.5f + 0.5f * std::sin(wallTime * 9.0f);
+        g.discFill(tgt.x, tgt.y, NUKE_RADIUS * TILE, rgb(255, 60, 40, (int)(20 + 26 * pulse)));
+        g.dashedCircle(tgt.x, tgt.y, NUKE_RADIUS * TILE, rgb(255, 90, 60), wallTime * 30.0f);
+        char buf[32]; snprintf(buf, sizeof buf, "NUKE %ds", (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
+        g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, rgb(255, 230, 200));
+        // the missile: rises from the ramp on a long arc and falls on the target
+        auto at = [&](float u) { Vec2 p = worldToScreen(n.from) + (tgt - worldToScreen(n.from)) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; };
+        for (int i = 8; i >= 1; i--) { float u0 = std::max(0.0f, k - i * 0.02f), u1 = std::max(0.0f, k - (i - 1) * 0.02f); Vec2 a = at(u0), b = at(u1); g.thickLine(a.x, a.y, b.x, b.y, rgb(255, 200 - i * 14, 120, 200 - i * 22), 3.0f); }
+        Vec2 m = at(k); g.glowAdd(m.x, m.y, 26, rgb(255, 160, 70, 200)); g.fillCircle(m.x, m.y, 4, rgb(255, 255, 240));
+    }
+}
+
+void Game::stepSpeed(int dir) {
+    int cur = 0; float bd = 1e9f;
+    for (int i = 0; i < SPEED_COUNT; i++) if (std::abs(SPEED_STEPS[i] - speed) < bd) { bd = std::abs(SPEED_STEPS[i] - speed); cur = i; }
+    speed = SPEED_STEPS[clampi(cur + dir, 0, SPEED_COUNT - 1)];
+}
+
+void Game::openPauseMenu() {
+    menuOpen = true; menuCursor = 0; menuConfirm = -1;
+    pausedBeforeMenu = paused; paused = true;
+    cancelModes(); dragging = false; midDrag = false;
+    g_audio.play(SND_CLICK, Vec2(), true);
+}
+void Game::closePauseMenu() {
+    menuOpen = false; menuConfirm = -1; paused = pausedBeforeMenu;
+    g_audio.play(SND_CLICK, Vec2(), true);
+}
+
+static const int PM_ROWS = 8;
+static const char* PM_LABEL[PM_ROWS] = { "Resume", "Game speed", "Sound", "Controls help", "Restart match", "Surrender (end game)", "Quit to main menu", "Quit to desktop" };
+static int pmY0() { return SCREEN_H / 2 - 178; }
+static const int PM_W = 440, PM_RH = 34;
+
+void Game::pauseMenuActivate(int row) {
+    // destructive rows ask twice
+    bool destructive = row >= 4;
+    if (destructive && menuConfirm != row) { menuConfirm = row; g_audio.play(SND_CLICK, Vec2(), true); return; }
+    menuConfirm = -1;
+    switch (row) {
+    case 0: closePauseMenu(); break;
+    case 1: stepSpeed(1); break;
+    case 2: g_audio.setMuted(!g_audio.isMuted()); break;
+    case 3: closePauseMenu(); showHelp = true; break;
+    case 4: closePauseMenu(); startGame(); break;
+    case 5: {
+        closePauseMenu(); paused = false;
+        int me = g_sim.humanPlayer, winner = -1;
+        for (int p = 0; p < g_sim.numPlayers; p++) if (p != me && g_sim.players[p].alive) { winner = g_sim.players[p].team; break; }
+        g_sim.players[me].alive = false;
+        g_sim.gameOver = true; g_sim.winnerTeam = winner;
+        break;
+    }
+    case 6: closePauseMenu(); state = GS_MENU; break;
+    case 7: quitRequested = true; break;
+    }
+}
+
+void Game::pauseMenuEvent(const SDL_Event& e) {
+    int x0 = SCREEN_W / 2 - PM_W / 2, y0 = pmY0();
+    if (e.type == SDL_KEYDOWN) {
+        SDL_Keycode k = e.key.keysym.sym;
+        if (k == SDLK_ESCAPE) { if (menuConfirm >= 0) menuConfirm = -1; else closePauseMenu(); return; }
+        if (k == SDLK_UP) { menuCursor = (menuCursor + PM_ROWS - 1) % PM_ROWS; menuConfirm = -1; }
+        else if (k == SDLK_DOWN) { menuCursor = (menuCursor + 1) % PM_ROWS; menuConfirm = -1; }
+        else if (k == SDLK_LEFT) { if (menuCursor == 1) stepSpeed(-1); else if (menuCursor == 2) g_audio.setMuted(!g_audio.isMuted()); }
+        else if (k == SDLK_RIGHT) { if (menuCursor == 1) stepSpeed(1); else if (menuCursor == 2) g_audio.setMuted(!g_audio.isMuted()); }
+        else if (k == SDLK_MINUS || k == SDLK_KP_MINUS) stepSpeed(-1);
+        else if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) stepSpeed(1);
+        else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+            pauseMenuActivate(menuCursor);
+        }
+        return;
+    }
+    if (e.type == SDL_MOUSEMOTION) {
+        int row = (mouseY - y0) / PM_RH;
+        if (mouseX >= x0 && mouseX < x0 + PM_W && mouseY >= y0 && row >= 0 && row < PM_ROWS && row != menuCursor) { menuCursor = row; menuConfirm = -1; }
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        int row = (mouseY - y0) / PM_RH;
+        if (mouseX < x0 || mouseX >= x0 + PM_W || mouseY < y0 || row < 0 || row >= PM_ROWS) return;
+        menuCursor = row;
+        if (row == 1) {
+            // slider: click a notch to jump there, the arrows step
+            int sx = x0 + 190, sw = PM_W - 200;
+            if (mouseX >= sx - 14 && mouseX <= sx + sw + 14) {
+                int i = clampi((int)std::floor((mouseX - sx) / (float)sw * (SPEED_COUNT - 1) + 0.5f), 0, SPEED_COUNT - 1);
+                speed = SPEED_STEPS[i]; g_audio.play(SND_CLICK, Vec2(), true);
+            }
+        } else pauseMenuActivate(row);
+    }
+}
+
+void Game::renderPauseMenu() {
+    Gfx& g = g_gfx;
+    Player& pl = g_sim.players[g_sim.humanPlayer];
+    Color accent = hudAccent(pl.faction), base = hudBase(pl.faction);
+    g.fill(0, 0, SCREEN_W, SCREEN_H, rgb(6, 8, 12, 165));
+    int x0 = SCREEN_W / 2 - PM_W / 2, y0 = pmY0();
+    g.bevelPanel(x0 - 16, y0 - 62, PM_W + 32, PM_ROWS * PM_RH + 112, shade(base, 0.7f), true);
+    g.fill(x0 - 16, y0 - 62, PM_W + 32, 3, accent);
+    g.text(SCREEN_W / 2 - g.textW("GAME PAUSED", 3) / 2, y0 - 46, "GAME PAUSED", rgb(255, 255, 255), 3);
+    int secs = (int)g_sim.time; char buf[96];
+    snprintf(buf, sizeof buf, "%s   %02d:%02d   $%d", FACTION_NAME[pl.faction], secs / 60, secs % 60, pl.money);
+    g.text(SCREEN_W / 2 - g.textW(buf) / 2, y0 - 16, buf, hudDim());
+    for (int i = 0; i < PM_ROWS; i++) {
+        int y = y0 + i * PM_RH;
+        bool cur = i == menuCursor, conf = menuConfirm == i;
+        Color rowc = conf ? rgb(150, 50, 40) : (cur ? shade(base, 1.6f) : shade(base, 1.05f));
+        g.bevelPanel(x0, y, PM_W, PM_RH - 4, rowc, true);
+        const char* lab = PM_LABEL[i];
+        if (conf) lab = i == 5 ? "Surrender? Enter = yes" : (i == 4 ? "Restart? Enter = yes" : (i == 6 ? "Leave the match? Enter = yes" : "Exit game? Enter = yes"));
+        g.text(x0 + 12, y + 9, lab, cur ? rgb(255, 255, 255) : hudText(), 1);
+        if (i == 0) g.text(x0 + PM_W - 12 - g.textW("Esc"), y + 9, "Esc", hudDim());
+        if (i == 2) g.text(x0 + PM_W - 12 - g.textW(g_audio.isMuted() ? "Off" : "On"), y + 9, g_audio.isMuted() ? "Off" : "On", g_audio.isMuted() ? rgb(255, 150, 120) : accent);
+        if (i == 3) g.text(x0 + PM_W - 12 - g.textW("F1"), y + 9, "F1", hudDim());
+        if (i == 1) {
+            int sx = x0 + 190, sw = PM_W - 200, ty = y + 13;
+            g.fill(sx, ty, sw, 3, shade(base, 0.5f));
+            int cur_i = 0; float bd = 1e9f;
+            for (int k = 0; k < SPEED_COUNT; k++) if (std::abs(SPEED_STEPS[k] - speed) < bd) { bd = std::abs(SPEED_STEPS[k] - speed); cur_i = k; }
+            for (int k = 0; k < SPEED_COUNT; k++) {
+                int nx = sx + (int)(sw * k / (float)(SPEED_COUNT - 1));
+                g.fill(nx - 1, ty - 4, 3, 11, k <= cur_i ? accent : hudDim());
+            }
+            int hx = sx + (int)(sw * cur_i / (float)(SPEED_COUNT - 1));
+            g.fill(sx, ty, hx - sx, 3, accent);
+            g.bevelPanel(hx - 5, ty - 7, 11, 17, rgb(240, 244, 248), true);
+            snprintf(buf, sizeof buf, "x%.2g", speed);
+            g.text(x0 + 110, y + 9, buf, accent);
+        }
+    }
+    g.text(SCREEN_W / 2 - g.textW("Up/Down choose   Left/Right change   Enter select   Esc resume") / 2, y0 + PM_ROWS * PM_RH + 6, "Up/Down choose   Left/Right change   Enter select   Esc resume", hudDim());
 }
 
 void Game::renderGameOver() {
@@ -967,14 +1389,14 @@ void Game::renderGameOver() {
     bool won = g_sim.winnerTeam == g_sim.players[0].team;
     g.fill(0, 0, SCREEN_W, SCREEN_H, rgb(0, 0, 0, 150));
     const char* t = won ? "VICTORY" : "DEFEAT";
-    g.text(SCREEN_W / 2 - g.textW(t, 6) / 2, 150, t, won ? rgb(140, 255, 150) : rgb(255, 110, 100), 6);
+    g.text(SCREEN_W / 2 - g.textW(t, 6) / 2, SCREEN_H / 2 - 170, t, won ? rgb(140, 255, 150) : rgb(255, 110, 100), 6);
     Player& pl = g_sim.players[0];
     char buf[128];
     int secs = (int)g_sim.time;
     snprintf(buf, sizeof buf, "Time %02d:%02d   Units built %d   Units lost %d   Kills %d   Structures destroyed %d   Supplies gathered $%d",
              secs / 60, secs % 60, pl.unitsBuilt, pl.unitsLost, pl.unitsKilled, pl.structuresKilled, pl.harvested);
-    g.text(SCREEN_W / 2 - g.textW(buf) / 2, 230, buf, hudText());
-    g.text(SCREEN_W / 2 - g.textW("Press Enter to return to the menu", 2) / 2, 270, "Press Enter to return to the menu", hudDim(), 2);
+    g.text(SCREEN_W / 2 - g.textW(buf) / 2, SCREEN_H / 2 - 90, buf, hudText());
+    g.text(SCREEN_W / 2 - g.textW("Press Enter to return to the menu", 2) / 2, SCREEN_H / 2 - 50, "Press Enter to return to the menu", hudDim(), 2);
 }
 
 void Game::screenshot(const char* path) {
