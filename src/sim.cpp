@@ -251,7 +251,7 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
 Vec2 Sim::unitExit(const Entity& b) const {
     const BuildType& t = b.bt();
     Vec2 p = b.pos + Vec2(0, t.h * TILE * 0.5f + 18);
-    return g_map.nearestFree(p, 8);
+    return g_map.nearestFree(p, 14);
 }
 
 // ------------------------------------------------------------ commands
@@ -426,7 +426,7 @@ bool Sim::cmdPower(int player, Vec2 pos) {
         fx.push_back({FX_EMP, pos, pos, 0, 1.2f, rgb(160, 220, 255), pw.radius * TILE});
         emit(EV_SOUND, -1, SND_EMP, pos);
     } else {
-        storms.push_back({pos, pw.radius * TILE, player, 0, 16, 0});
+        storms.push_back({pos, pw.radius * TILE, player, 0, 18, 0});
         emit(EV_SOUND, -1, SND_CANNON, pos);
     }
     return true;
@@ -706,7 +706,7 @@ void Sim::updateStorms() {
             s.shellsLeft--;
             float a = rng.f(0, 6.283f), r = rng.f(0, s.radius);
             Vec2 at = s.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
-            Projectile p; p.pos = at + Vec2(0, -400); p.prevPos = p.pos; p.vel = p.pos; p.dest = at; p.weapon = 12; p.owner = s.owner;
+            Projectile p; p.pos = at + Vec2(0, -400); p.prevPos = p.pos; p.vel = p.pos; p.dest = at; p.weapon = 18; p.owner = s.owner;
             p.arcLen = 0.7f; p.arcT = 0; p.life = 1.0f; p.target = NOREF;
             projs.push_back(p);
             emit(EV_SOUND, -1, SND_CANNON, at);
@@ -759,7 +759,7 @@ void Sim::updateUnit(Entity& e) {
 
     // Ground units standing on a blocked tile (new structure) get nudged off
     if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && !g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y)))
-        e.pos = g_map.nearestFree(e.pos, 8);
+        e.pos = g_map.nearestFree(e.pos, 14);
 
     switch (e.order) {
     case O_IDLE: {

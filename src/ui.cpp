@@ -881,6 +881,11 @@ void Game::renderHud() {
                     snprintf(buf, sizeof buf, "%s %d%%", UNITS[e->queue[0]].name, (int)(e->queueProgress * 100)); g.text(INFO_X + 330, hy + 104, buf, hudText());
                 } else if (e->constructed && (bt.role == BR_BARRACKS || bt.role == BR_FACTORY || bt.role == BR_AIRFIELD || bt.role == BR_HQ || bt.role == BR_SUPPLY)) g.text(INFO_X + 330, hy + 58, "Production idle", hudDim());
                 if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + 98, "LOW POWER: reduced output", rgb(255, 140, 120));
+                if (bt.role == BR_AIRFIELD && e->constructed) {
+                    int n = 0; Ref self = g_sim.refOf(*e);
+                    for (auto& u : g_sim.ents) if (u.alive && u.isUnit() && u.isAir() && u.home == self) n++;
+                    snprintf(buf, sizeof buf, "Aircraft %d / 4%s", n, n >= 4 ? "  (full: production waits)" : ""); g.text(INFO_X + 86, hy + 84, buf, n >= 4 ? rgb(255, 200, 120) : hudDim());
+                }
             }
         }
     } else if (selection.size() > 1) {

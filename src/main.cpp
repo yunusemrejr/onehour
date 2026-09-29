@@ -220,7 +220,7 @@ static bool uiTest() {
     if (g_game.selection.size() != 1) return fail("drag box select failed");
     // minimap click moves the camera
     Vec2 camBefore = g_game.cam;
-    click(8 + 100, SCREEN_H - HUD_H + 8 + 100, SDL_BUTTON_LEFT);
+    click(8 + 58, SCREEN_H - HUD_H + 8 + 58, SDL_BUTTON_LEFT);   // map centre: never equals a corner base view
     if (dist(camBefore, g_game.cam) < 100) return fail("minimap click did not move camera");
     key(SDLK_HOME);
     // pause toggles, speed keys, help, mute, screenshot key path

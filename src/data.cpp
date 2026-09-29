@@ -20,6 +20,7 @@ const Weapon WEAPONS[] = {
     /* 15 */{ "Gunship Rockets", 40, 5.0f, 0, 1.20f, PJ_ROCKET, 0.4f, true, true,  {0.9f, 1.00f, 0.80f, 0.90f, 0.5f}, 1, 500,  SND_ROCKET,      rgb(255, 200, 120) },
     /* 16 */{ "Gun Nest",        13, 6.5f, 0, 0.20f, PJ_BULLET, 0,    true, true,  {1.3f, 0.55f, 0.40f, 0.20f, 0.5f}, 1, 1000, SND_MG,          rgb(255, 230, 140) },
     /* 17 */{ "Rocket Battery",  56, 8.0f, 0, 1.60f, PJ_ROCKET, 0.4f, true, true,  {0.5f, 0.90f, 0.90f, 0.50f, 1.5f}, 1, 520,  SND_ROCKET,      rgb(255, 210, 140) },
+    /* 18 */{ "Storm Shell",     95, 0.0f, 0, 1.00f, PJ_SHELL,  1.0f, true, false, {1.2f, 1.00f, 0.90f, 1.00f, 0.0f}, 1, 600,  SND_CANNON,      rgb(255, 210, 120) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
