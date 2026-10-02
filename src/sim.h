@@ -41,6 +41,8 @@ struct Entity {
     float zoneR = 0;        // px, 0 = no area assigned
     bool leashed = false;   // current target was auto-acquired for the zone: do not chase it out of the zone
     float orbit = 0;        // aircraft loiter phase
+    float alt = 1;          // aircraft altitude 0 (parked on the pad) .. 1 (airborne); visual only
+    float jetBreak = 0;     // jets: seconds left of the breakaway after a strafing pass
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     std::vector<Vec2> path;
@@ -91,9 +93,10 @@ struct Projectile {
     bool alive = true;
 };
 
-enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_SPARK, FX_RING, FX_DEBRIS, FX_EMP, FX_WRECK };
+enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_SPARK, FX_RING, FX_DEBRIS, FX_EMP, FX_WRECK, FX_RUBBLE };
 struct Fx {
     FxType type; Vec2 a, b; float t = 0, life = 1; Color color; float size = 8; Vec2 vel;
+    bool seen = false;      // render side: cosmetic particles for this effect have been spawned
 };
 
 struct Player {
@@ -187,6 +190,7 @@ struct Sim {
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
     bool atIncomeLimit(int player, int buildType) const;
+    bool atBuildLimit(int player, int buildType) const;   // income structures and Command Cores are capped per player
     bool cmdScan(int player);                 // tech structure: reveal the whole map for SCANS[].duration
     bool cmdResearch(int player);             // tech structure: research the Advanced Program (unlocks special units)
     bool programAvailable(int player) const;  // tech structure standing, program not yet researched or running
@@ -243,6 +247,9 @@ private:
     Entity* findSupplyBuilding(Entity& h);
     Entity* findAirfield(Entity& a);
     void deathFx(Entity& e);
+    Vec2 padSlot(const Entity& airfield, const Entity& craft) const;
+    void flyTo(Entity& e, Vec2 dest, float speed);       // aircraft: straight slide, jets: turn-limited and slowing as they close in
+    void jetAttack(Entity& e, Entity& t);                // fixed-wing strafing pass: dive on the target, fire, break away, come round again
 };
 
 extern Sim g_sim;

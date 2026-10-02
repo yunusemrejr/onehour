@@ -84,24 +84,31 @@ struct Gfx {
     SDL_Renderer* ren = nullptr;
     SDL_Texture* font = nullptr;
     SDL_Texture* white = nullptr;
-    Sprite tiles[T_COUNT][4];
     Sprite unitBody[U_COUNT][MAX_PLAYERS];
     Sprite unitAnim[U_COUNT][MAX_PLAYERS][2];   // walk / track cycle frames
     Sprite unitTurret[U_COUNT][MAX_PLAYERS];
     Sprite rotorDisc, rotorBlades;
     Sprite turretHead[4];           // laser turret, gun nest, patriot, rocket battery
-    Sprite building[B_COUNT][MAX_PLAYERS];
+    Sprite building[B_COUNT];       // one colour sprite per structure type, shared by every owner (2x supersampled, shadow baked in)
+    Sprite buildingTeam[B_COUNT];   // white-on-clear owner marks, drawn over the structure with the owner's colour modulated in
     Sprite site[B_COUNT];
+    Sprite armed[B_COUNT];          // the warhead over a nuke ramp (only the nuke ramps have one)
+    Sprite rubble[6];               // scorched ruins by footprint class
+    Sprite prop[4];                 // live-rotated structure props: cyber dish, clanker radar, pump jack beam, fan
     Sprite pile[3];
     Sprite shadowSmall, shadowLarge, blob, disc;
+    Sprite blobAdd;                 // additive radial glow (muzzle light, fire glow, beacons)
+    // baked effect sprites: smoke and dust puffs, fireball frames, flame tongues, muzzle stars, sparks, shock rings, beams, debris, scorch decals
+    struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], missile, cloud[3]; } fxs;
+    Sprite waterFx[4];              // seamless animated caustics laid over open water
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
     static const int FLAG_W = 24, FLAG_H = 15;
-    Sprite edgeTile[T_COUNT];
     Sprite minimapTerrain;
     Sprite worldTerrain;            // whole map baked into one texture (organic, noise-blended transitions)
-    SDL_Texture* shroudTex = nullptr;   // MAP_W x MAP_H alpha mask, bilinear-scaled for soft fog edges
-    std::vector<u32> tilePx[T_COUNT][4];
+    static const int SHROUD_SS = 4;     // shroud mask cells per tile
+    SDL_Texture* shroudTex = nullptr;   // (MAP_W*SS) x (MAP_H*SS) alpha mask, bilinear-scaled; the edge is displaced by noise so it drifts like cloud
     void updateShroud(const std::vector<u8>& explored);
+    bool softwareRenderer = false;  // no GPU: skip purely atmospheric full-screen blends (cloud shadows)
     int userScale = 0;              // 0 = pick the UI scale from the window size
     bool init(int scale, bool software, int reqW = 0, int reqH = 0);
     void onResize();                // window size changed: recompute the logical (UI) size
@@ -118,20 +125,22 @@ struct Gfx {
     void circle(float cx, float cy, float r, Color c, int segs = 20);
     void fillCircle(float cx, float cy, float r, Color c);
     void glowAdd(float cx, float cy, float r, Color c);   // additive light blob
+    void drawSized(const Sprite& s, float cx, float cy, float w, float h, float angle, Color mod = rgb(255, 255, 255), u8 alpha = 255);   // centred, any aspect, rotated about its centre
     void discFill(float cx, float cy, float r, Color c);  // flat translucent disc with a soft edge
     void dashedCircle(float cx, float cy, float r, Color c, float phase, float dash = 9, float gap = 6);
     Sprite fromCanvasSmooth(Canvas& c, float ox, float oy);   // bilinear-filtered texture (supersampled sprites)
+    Sprite fromCanvasAdd(Canvas& c, float ox, float oy);      // bilinear + additive blending
     void bevelPanel(int x, int y, int w, int h, Color base, bool raised = true);
     void drawFlag(float poleX, float poleY, int player, float scale, float phase);   // mast standing at (poleX, poleY), flag waving
     void present();
     void beginFrame(Color clear);
 private:
     void buildFont();
-    void buildTiles();
     void buildUnits();
     void buildBuildings();
     void buildMisc();
     void buildMinimap();
     void bakeTerrain();
+    void buildEffects();
 };
 extern Gfx g_gfx;

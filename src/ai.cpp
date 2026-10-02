@@ -99,7 +99,8 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         cands.push_back({base + 7, (early ? 0.3f : 0.9f) + fv * 1.2f});  // artillery / railgun
         cands.push_back({base + 10, 1.0f + fv * 1.5f});                   // super-heavy (needs the Advanced Program)
     } else if (role == BR_AIRFIELD) {
-        cands.push_back({base + 8, 1.0f});
+        cands.push_back({base + 8, 1.0f});                                // strike drone / gunship
+        cands.push_back({base + 11, 0.8f + fa * 2.2f + fv * 0.9f});       // supersonic jet (needs the tech structure): best against aircraft and vehicles
     }
     // weight by how many we already have (diminishing returns), availability, and predicted efficiency:
     // the brain's per-type regression (value destroyed per credit given the enemy mix) replaces the old
@@ -322,7 +323,9 @@ void AiPlayer::think() {
         bool built = false;
         // 1. power
         if (pl.powerMade < pl.powerUsed) { managePower(); built = idleDozer() != dz; }
-        // 2. supply
+        // 2. a lost Command Core is rebuilt as soon as the treasury allows: it is the only source of dozers
+        if (!built && !hq && S.countRole(player, BR_HQ, false) == 0) built = tryBuild(base + BR_HQ, pl.basePos, 14);
+        // 3. supply
         if (!built && hubs == 0) {
             // nearest pile to base
             Entity* pile = nullptr; float bd = 1e18f;
@@ -378,6 +381,7 @@ void AiPlayer::think() {
 
     // ---------- production
     int reserve = (hubs == 0 || pl.powerMade < pl.powerUsed) ? 1600 : 0;
+    if (!hq && dozers > 0 && S.countRole(player, BR_HQ, false) == 0) reserve = std::max(reserve, BUILDS[base + BR_HQ].cost + 200);   // bank the price of a new Command Core
     if (harvesters + queuedHarv < 2 && hubs > 0) reserve = std::max(reserve, 900);
     // save up for a nuke ramp once the tech structure stands
     if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 2 ? 8.0f : 12.0f) && !threat) reserve = std::max(reserve, 5300);
@@ -394,7 +398,7 @@ void AiPlayer::think() {
         for (auto* b : barracks) if (b->constructed && b->queue.size() < 2 && pl.money - reserve > 400) { int t = chooseUnit(BR_BARRACKS, enemyInf, enemyVeh, enemyAir); if (t >= 0) S.cmdTrain(S.refOf(*b), t); }
         for (auto* f : factories) if (f->constructed && f->queue.size() < 2 && pl.money - reserve > 900) { int t = chooseUnit(BR_FACTORY, enemyInf, enemyVeh, enemyAir); if (t >= 0) S.cmdTrain(S.refOf(*f), t); }
     }
-    for (auto* a : airfields) if (a->constructed && a->queue.empty() && pl.money - reserve > 2500 && aircraft.size() < 4) { int t = chooseUnit(BR_AIRFIELD, enemyInf, enemyVeh, enemyAir); if (t >= 0) S.cmdTrain(S.refOf(*a), t); }
+    for (auto* a : airfields) if (a->constructed && a->queue.empty() && pl.money - reserve > 2500 && aircraft.size() < 6) { int t = chooseUnit(BR_AIRFIELD, enemyInf, enemyVeh, enemyAir); if (t >= 0) S.cmdTrain(S.refOf(*a), t); }
     // rally new units toward the front
     for (auto* b : barracks) S.cmdSetRally(S.refOf(*b), rally);
     for (auto* f : factories) S.cmdSetRally(S.refOf(*f), rally);

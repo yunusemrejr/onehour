@@ -97,6 +97,9 @@ void Audio::synthAll() {
     { Synth s(0.18f); s.tone(1200, 1, 0, 0.06f, 0.003f, 0.04f); s.tone(1600, 1, 0.07f, 0.1f, 0.003f, 0.06f); set(SND_SUPPLY, s, 0.25f); }
     { Synth s(0.6f); s.sweep(180, 420, 1, 0.05f, 0.3f, 0.5f); s.noise(0.4f, 0.05f, 0.3f, 0.15f, 0.3f); set(SND_AIR, s, 0.35f); }
     { Synth s(0.14f); s.square(140, 1, 0.003f, 0.08f, 0, 0.13f); set(SND_CANT, s, 0.3f); }
+    // supersonic flyby: a rising turbine whine, a roar that swells and fades, and a sharp crack as the jet breaks the sound barrier
+    { Synth s(1.5f); s.sweep(380, 1500, 0.35f, 0.25f, 0.5f, 0.5f, 0, 0.6f); s.noise(1, 0.3f, 0.45f, 0.06f, 0.5f, 0, 1.3f); s.sweep(140, 55, 0.7f, 0.2f, 0.5f, 0.3f);
+      s.noise(1.0f, 0.002f, 0.045f, 0.95f, 0.4f, 0.38f, 0.14f); s.sweep(90, 30, 0.9f, 0.003f, 0.12f, 0.1f, 0.38f, 0.5f); set(SND_JET, s, 0.55f); }
     // ambient wind loop (4 seconds, seamless-ish via crossfade)
     { Synth s(4.0f); s.noise(1, 0.5f, 100.0f, 0.02f, 0.03f);
       int n = s.n();
@@ -191,7 +194,7 @@ void Audio::play(Sound s, Vec2 pos, bool isUi, float gain) {
 
 void Audio::debugStats() {
     if (clips[SND_RIFLE].data.empty()) synthAll();
-    static const char* NAMES[SND_COUNT] = { "none", "rifle", "mg", "laser", "laser_heavy", "arc", "cannon", "rocket", "rail", "explode_s", "explode_l", "hit", "select", "order", "place", "build_done", "unit_ready", "nofunds", "lowpower", "attacked", "victory", "defeat", "click", "emp", "supply", "air", "cant" };
+    static const char* NAMES[SND_COUNT] = { "none", "rifle", "mg", "laser", "laser_heavy", "arc", "cannon", "rocket", "rail", "explode_s", "explode_l", "hit", "select", "order", "place", "build_done", "unit_ready", "nofunds", "lowpower", "attacked", "victory", "defeat", "click", "emp", "supply", "air", "cant", "jet" };
     for (int i = 1; i < SND_COUNT; i++) {
         const auto& d = clips[i].data;
         float peak = 0, sq = 0; int clipped = 0;

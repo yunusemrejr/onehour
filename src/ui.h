@@ -18,6 +18,11 @@ struct MenuSettings {
 
 struct Message { std::string text; float time; Color color; };
 
+// Cosmetic, render-side effects: they never touch the simulation, pause with the game and are capped, so they stay cheap.
+enum PKind : u8 { PK_SMOKE = 0, PK_DUST, PK_DEBRIS, PK_CONTRAIL, PK_SPARK, PK_FLAME, PK_RING, PK_GLOW };
+struct Particle { float x, y, vx, vy, ay, drag, age, life, s0, s1, rot, vrot; Color col; u8 kind, var; };
+struct Decal { float x, y, r, rot, age, life; u8 kind; };       // ground scorch marks
+
 struct Game {
     GameState state = GS_MENU;
     MenuSettings menu;
@@ -59,6 +64,11 @@ struct Game {
     static const int SPEED_COUNT = 7;
     struct Ping { Vec2 pos; float time; };
     std::vector<Ping> pings;
+    std::vector<Particle> parts;
+    std::vector<Decal> decals;
+    float nukeFlash = 0;            // seconds of white-out left after a tactical nuke goes off on screen
+    float frameDt = 0;              // wall time this frame, zero while paused (drives particle emission and ageing)
+    Rng fxRng{ 0xFA11 };
 
     void startGame();
     void update(float dt);          // called each frame; runs fixed sim ticks
@@ -66,6 +76,8 @@ struct Game {
     void handleEvent(const SDL_Event& e);
     void addMessage(const char* text, Color c);
     void screenshot(const char* path);
+    void spawnFromFx();
+    void updateParticles(float dt);
 private:
     float accumulator = 0;
     void processEvents();
@@ -94,12 +106,24 @@ private:
     struct Button { int x, y, w, h; int kind; int id; bool enabled; const char* label; std::string tip; };
     std::vector<Button> buttons;
     void buildButtons();
+public:
+    void buildButtonsPublic() { buildButtons(); }                 // test hooks
+    const std::vector<Button>& buttonsPublic() const { return buttons; }
+private:
     void clickButton(const Button& b);
     bool selectionHasRole(UnitRole r) const;
     Entity* selectedBuilding() const;
     int selectionOwner() const;
     void drawEntity(Entity& e);
+    void drawBuildingAnim(const Entity& e, Vec2 p, bool disabled);
+    void drawBuildingDamage(const Entity& e, Vec2 p);
     void drawFx();
+    void drawClouds();
+    void drawGroundFx();            // scorch marks, ruins and wrecks: on the ground, under everything that stands or drives
+    void drawParticles(int pass);
+    // spawnFromFx(): cosmetic debris, sparks, smoke and scorch for sim effects the first frame they show up
+    void emitP(float x, float y, float vx, float vy, float life, float s0, float s1, Color col, u8 kind, u8 var = 0, float ay = 0, float drag = 0, float rot = 0, float vrot = 0);
+    bool onScreen(float x, float y, float pad = 48) const { return x > cam.x - pad && y > cam.y - pad && x < cam.x + SCREEN_W + pad && y < cam.y + VIEW_H + pad; }
     void drawShroud();
     void drawZones();
     void drawRangeRings();

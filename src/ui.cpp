@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "art.h"
 
 Game g_game;
 
@@ -62,6 +63,7 @@ void Game::startGame() {
     selection.clear();
     for (auto& g : groups) g.clear();
     messages.clear();
+    parts.clear(); decals.clear(); nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
     placingType = -1; attackMoveMode = false; powerMode = false; nukeMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
@@ -87,6 +89,9 @@ void Game::update(float dt) {
         if (steps == 8) accumulator = 0;   // can't keep up: drop time rather than spiral
     }
     renderAlpha = paused ? 1.0f : clampf(accumulator / SIM_DT, 0, 1);
+    frameDt = (paused || menuOpen || g_sim.gameOver) ? 0.0f : dt * speed;
+    spawnFromFx();
+    updateParticles(frameDt);
     processEvents();
     cleanSelection();
     g_audio.setListener(cam, SCREEN_W, VIEW_H);
@@ -147,6 +152,15 @@ void Game::scroll(float dt) {
 }
 
 // ------------------------------------------------------------ selection helpers
+// how far a structure's raised roof reaches above its footprint (matches the art in artb.cpp): the visible roof is clickable too
+static float roofLift(const BuildType& b) {
+    switch (b.role) {
+    case BR_HQ: return 22; case BR_POWER: return 14; case BR_SUPPLY: return 16; case BR_BARRACKS: return 12; case BR_FACTORY: return 20;
+    case BR_AIRFIELD: return 14; case BR_TECH: return 16; case BR_AATURRET: return 6; case BR_INCOME: return b.faction == F_CYBER ? 10 : 8; case BR_NUKE: return 16;
+    default: return 0;
+    }
+}
+
 Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
     Entity* best = nullptr; float bd = 1e9f;
     for (auto& e : g_sim.ents) {
@@ -154,7 +168,13 @@ Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
         if (ownOnly && e.owner != g_sim.humanPlayer) continue;
         if (e.owner != g_sim.humanPlayer && e.kind != EK_RESOURCE && !g_sim.explored(g_sim.humanPlayer, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
         float d;
-        if (e.isBuilding()) d = g_sim.distToEntity(w, e) > 0 ? 1e9f : dist(w, e.pos) * 0.1f;
+        if (e.isBuilding()) {
+            if (g_sim.distToEntity(w, e) <= 0) d = dist(w, e.pos) * 0.1f;
+            else {   // the lifted roof above the footprint: anything standing there is picked in preference
+                float x0 = (float)e.tx * TILE, y0 = (float)e.ty * TILE, lift = roofLift(e.bt());
+                d = (e.constructed && w.x >= x0 && w.x < x0 + e.bt().w * TILE && w.y < y0 && w.y >= y0 - lift) ? 400.0f : 1e9f;
+            }
+        }
         else if (e.kind == EK_RESOURCE) d = dist(w, e.pos) <= 20 ? dist(w, e.pos) : 1e9f;
         else d = dist(w, e.pos) <= e.radius() + 6 ? dist(w, e.pos) : 1e9f;
         if (e.isAir()) d *= 0.5f;
@@ -290,11 +310,12 @@ void Game::buildButtons() {
         return;
     }
     if (selectionHasRole(UR_DOZER)) {
-        for (int t = 0; t < B_COUNT; t++) {
+        // the Command Core / Post comes last so the other buttons keep their places
+        for (int pass = 0; pass < 2; pass++) for (int t = 0; t < B_COUNT; t++) {
             const BuildType& bt = BUILDS[t];
-            if (bt.faction != pl.faction || bt.role == BR_HQ) continue;
+            if (bt.faction != pl.faction || (bt.role == BR_HQ) != (pass == 1)) continue;
             bool ok = g_sim.buildAvailable(g_sim.humanPlayer, t);
-            bool lim = g_sim.atIncomeLimit(g_sim.humanPlayer, t);
+            bool lim = g_sim.atBuildLimit(g_sim.humanPlayer, t);
             snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", bt.name, bt.cost, bt.hotkey, bt.desc, ok ? "" : (lim ? "  Limit reached" : "  Requires "), ok || lim ? "" : BUILDS[bt.requires_].name);
             add(BK_BUILD, t, ok, bt.name, tip);
         }
@@ -589,8 +610,8 @@ void Game::renderMenu() {
     g.text(cx - g.textW("ONE HOUR", 6) / 2, 40 + oy, "ONE HOUR", rgb(240, 244, 248), 6);
     g.text(cx - g.textW("Skirmish: Cyber Army vs Clanker Army", 2) / 2, 130 + oy, "Skirmish: Cyber Army vs Clanker Army", hudDim(), 2);
     const char* fdesc = menu.playerFaction == F_CYBER
-        ? "Lasers, railguns, volt coils, EMP Strike, Orbital Scan, Ion Lancers and Aegis Titans."
-        : "Diesel tanks, gatling guns, Shell Storm, Recon Flight, Grenadiers and Behemoths.";
+        ? "Lasers, railguns, volt coils, EMP Strike, Orbital Scan, Ion Lancers, Aegis Titans and Specter Jets."
+        : "Diesel tanks, gatling guns, Shell Storm, Recon Flight, Grenadiers, Behemoths and Talon Jets.";
     g.text(cx - g.textW(fdesc) / 2, 170 + oy, fdesc, hudText());
     g.text(cx - g.textW("One map: Lakeside, 4 corner bases, contested supply piles in the middle") / 2, 190 + oy, "One map: Lakeside, 4 corner bases, contested supply piles in the middle", hudDim());
 
@@ -638,11 +659,13 @@ void Game::drawShroud() {
     const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
     // refresh the mask when the exploration changed (cheap hash of the array)
     u32 h = 2166136261u; for (size_t i = 0; i < ex.size(); i += 3) h = (h ^ ex[i]) * 16777619u;
-    if (h != lastStamp || lastPtr != ex.data()) { g.updateShroud(ex); lastStamp = h; lastPtr = ex.data(); }
+    static float nextShroud = 0;   // the cloudy edge costs a few ms to rebuild: refresh at most about 8 times a second while units uncover ground
+    if ((h != lastStamp && wallTime >= nextShroud) || lastPtr != ex.data()) { g.updateShroud(ex); lastStamp = h; lastPtr = ex.data(); nextShroud = wallTime + 0.12f; }
     int tx0 = std::max(0, tileOf(cam.x)), ty0 = std::max(0, tileOf(cam.y));
     int tx1 = std::min(MAP_W - 1, tileOf(cam.x + SCREEN_W)), ty1 = std::min(MAP_H - 1, tileOf(cam.y + VIEW_H));
-    SDL_Rect src = { tx0, ty0, tx1 - tx0 + 1, ty1 - ty0 + 1 };
-    SDL_FRect dst = { tx0 * TILE - cam.x, ty0 * TILE - cam.y, (float)src.w * TILE, (float)src.h * TILE };
+    const int SS = Gfx::SHROUD_SS;
+    SDL_Rect src = { tx0 * SS, ty0 * SS, (tx1 - tx0 + 1) * SS, (ty1 - ty0 + 1) * SS };
+    SDL_FRect dst = { tx0 * TILE - cam.x, ty0 * TILE - cam.y, (float)(tx1 - tx0 + 1) * TILE, (float)(ty1 - ty0 + 1) * TILE };
     SDL_RenderCopyF(g.ren, g.shroudTex, &src, &dst);
 }
 
@@ -749,6 +772,78 @@ void Game::drawRangeRings() {
     }
 }
 
+// draw a sprite scaled to fit a square box, centred on the point its anchor (the structure's footprint centre) would map to
+static void drawFitted(Gfx& g, const Sprite& s, float cx, float cy, float box, const Sprite* ref = nullptr, Color mod = rgb(255, 255, 255)) {
+    const Sprite& r = ref ? *ref : s;
+    float d = r.dscale, w = r.w * d, h = r.h * d, sc = std::min(box / w, box / h);
+    g.draw(s, cx + (r.ox - r.w * 0.5f) * d * sc, cy + (r.oy - r.h * 0.5f) * d * sc, 0, sc, mod);
+}
+
+// Live details over a finished structure: pulsing reactor cores, turning dishes, a pumping jack, blinking beacons.
+void Game::drawBuildingAnim(const Entity& e, Vec2 p, bool disabled) {
+    Gfx& g = g_gfx;
+    const BuildType& bt = e.bt();
+    bool cy = bt.faction == F_CYBER;
+    if (disabled || paused) { }
+    float t = wallTime + (float)e.gen * 0.37f;
+    bool powered = !(g_sim.players[e.owner < 0 ? 0 : e.owner].lowPower() && bt.power < 0);
+    float pulse = powered ? 0.55f + 0.45f * std::sin(t * 3.0f) : 0.12f;
+    switch (bt.role) {
+    case BR_HQ:
+        if (cy) g.glowAdd(p.x, p.y - 17, 22, Color{110, 232, 255, (u8)(70 + 80 * pulse)});
+        else { g.draw(g.prop[1], p.x - 39, p.y - 13, disabled ? 0.3f : t * 1.7f, 0.95f); }
+        break;
+    case BR_POWER:
+        if (cy) { g.glowAdd(p.x - 22, p.y + 7, 20, Color{110, 232, 255, (u8)(60 + 100 * pulse)}); g.glowAdd(p.x + 22, p.y + 7, 20, Color{110, 232, 255, (u8)(60 + 100 * (1 - pulse))}); }
+        else { g.glowAdd(p.x + 28, p.y + 2, 9, Color{255, 120, 40, (u8)(40 + 50 * pulse)}); g.glowAdd(p.x + 39, p.y + 2, 9, Color{255, 120, 40, (u8)(40 + 50 * (1 - pulse))}); }
+        break;
+    case BR_TECH:
+        if (cy) g.draw(g.prop[0], p.x + 22, p.y - 36, disabled ? 0.6f : t * 1.1f, 0.78f);
+        break;
+    case BR_SUPPLY:
+        if (cy) g.glowAdd(p.x - 24, p.y + 36, 14, Color{110, 232, 255, (u8)(40 + 90 * pulse)});
+        break;
+    case BR_INCOME:
+        if (cy) g.glowAdd(p.x, p.y - 22, 26, Color{255, 214, 96, (u8)(40 + 90 * pulse)});
+        else g.draw(g.prop[2], p.x, p.y + 6, powered ? std::sin(t * 2.4f) * 0.26f : 0, 1.15f);
+        break;
+    case BR_NUKE:
+        if (g_sim.time >= e.actionTimer && powered && g.armed[e.type].tex) g.draw(g.armed[e.type], p.x, p.y, 0, 1, disabled ? rgb(120, 140, 170) : rgb(255, 255, 255));
+        if (cy) { Color rc = Color{255, 80, 70, (u8)((std::sin(t * 5.0f) > 0 && powered) ? 190 : 40)}; g.glowAdd(p.x - 37, p.y - 51, 9, rc); g.glowAdd(p.x + 37, p.y - 51, 9, rc); }
+        else g.glowAdd(p.x - 24, p.y + 26, 18, Color{255, 120, 50, (u8)(30 + 50 * (0.5f + 0.5f * std::sin(t * 7.0f)))});
+        break;
+    default: break;
+    }
+}
+
+// Soot, flames and a smoke column on a hurt structure.
+void Game::drawBuildingDamage(const Entity& e, Vec2 p) {
+    Gfx& g = g_gfx;
+    const BuildType& bt = e.bt();
+    float f = e.hp / e.maxHp, fw = (float)bt.w * TILE, fh = (float)bt.h * TILE;
+    Rng r((u64)e.gen * 7919 + (u64)e.type * 131 + 1);
+    int soot = 2 + bt.w * bt.h / 3;
+    for (int i = 0; i < soot; i++) {
+        float x = p.x + r.f(-0.42f, 0.42f) * fw, y = p.y + r.f(-0.5f, 0.3f) * fh;
+        g.fillCircle(x, y, r.f(7, 14) * (1.3f - f), rgb(10, 8, 6, (int)(120 * (0.66f - f) / 0.66f + 20)));
+    }
+    if (f < 0.5f) {
+        int n = 1 + (int)((0.5f - f) * 2 * (1 + bt.w * bt.h / 4));
+        for (int i = 0; i < n; i++) {
+            float x = p.x + r.f(-0.4f, 0.4f) * fw, y = p.y + r.f(-0.45f, 0.3f) * fh;
+            float fl = 0.7f + 0.3f * std::sin(wallTime * 13.0f + i * 2.1f + e.gen);
+            int fr = ((int)(wallTime * 13) + i * 2 + (int)e.gen) % 6;
+            float sc = (0.7f + 0.5f * (0.5f - f) * 2) * (0.8f + 0.2f * fl);
+            g.glowAdd(x, y - 6 * sc, 18 * sc, Color{255, 120, 40, (u8)(110 * fl)});
+            g.draw(g.fxs.flame[fr], x, y + 4, 0, sc, rgb(255, 255, 255), (u8)(230));
+            if (frameDt > 0 && fxRng.f() < (2.2f + (0.5f - f) * 4) * frameDt)
+                emitP(e.pos.x + (x - p.x), e.pos.y + (y - p.y) - 6, fxRng.f(-6, 6), fxRng.f(-34, -18), fxRng.f(1.8f, 3.0f), 6 + 8 * sc, 16 + 14 * sc, rgb(44, 42, 40, 230), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), fxRng.f(-0.3f, 0.3f));
+        }
+    } else if (frameDt > 0 && fxRng.f() < 1.2f * frameDt) {
+        emitP(e.pos.x + r.f(-0.35f, 0.35f) * fw, e.pos.y + r.f(-0.4f, 0.2f) * fh, fxRng.f(-4, 4), fxRng.f(-20, -10), fxRng.f(1.5f, 2.4f), 5, 12, rgb(80, 76, 72, 150), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.2f);
+    }
+}
+
 static void hpBar(Gfx& g, float x, float y, float w, float frac, bool big = false) {
     int h = big ? 4 : 3;
     g.fill((int)x, (int)y, (int)w, h, rgb(0, 0, 0, 200));
@@ -769,63 +864,117 @@ void Game::drawEntity(Entity& e) {
     }
     if (e.isBuilding()) {
         const BuildType& bt = e.bt();
-        const Sprite& s = g.building[e.type][owner];
-        g.fill((int)(p.x - s.ox) + 5, (int)(p.y - s.oy) + 6, s.w, s.h, rgb(0, 0, 0, 70));   // drop shadow
+        const Sprite& s = g.building[e.type];
+        float fw = (float)bt.w * TILE, fh = (float)bt.h * TILE;           // footprint
+        float fx = p.x - fw * 0.5f, fy = p.y - fh * 0.5f;
+        Color tint = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
         if (!e.constructed) {
             g.draw(g.site[e.type], p.x, p.y);
-            // finished structure rises from the bottom as construction progresses
-            int rows = (int)(s.h * clampf(e.progress, 0, 1));
+            // the finished structure rises out of the site from the ground up as construction progresses, with a work light along the cut
+            float prog = clampf(e.progress, 0, 1);
+            int rows = (int)(s.h * prog);
             if (rows > 0) {
+                float d = s.dscale;
                 SDL_Rect src = { 0, s.h - rows, s.w, rows };
-                SDL_Rect dst = { (int)(p.x - s.ox), (int)(p.y - s.oy) + s.h - rows, s.w, rows };
+                SDL_FRect dst = { p.x - s.ox * d, p.y - s.oy * d + (s.h - rows) * d, s.w * d, rows * d };
                 SDL_SetTextureColorMod(s.tex, 255, 255, 255); SDL_SetTextureAlphaMod(s.tex, 255);
-                SDL_RenderCopy(g.ren, s.tex, &src, &dst);
+                SDL_RenderCopyF(g.ren, s.tex, &src, &dst);
+                Color wl = hudAccent(bt.faction);
+                g.fill((int)(fx - 2), (int)dst.y, (int)(fw + 4), 1, rgb(wl.r, wl.g, wl.b, 200));
+                g.glowAdd(fx + std::fmod(wallTime * 40.0f + e.gen * 17.0f, fw), dst.y, 10, Color{wl.r, wl.g, wl.b, 150});
             }
         } else {
-            g.draw(s, p.x, p.y, 0, 1, disabled ? rgb(120, 140, 170) : rgb(255, 255, 255));
+            g.draw(s, p.x, p.y, 0, 1, tint);
+            if (g.buildingTeam[e.type].tex) { Color tc = PLAYER_COLOR[owner]; if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
+            drawBuildingAnim(e, p, disabled);
             // rotating heads for defenses
-            if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle);
-            else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle);
+            if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
+            else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);
             // production activity light
-            if (!e.queue.empty() && ((int)(wallTime * 3) & 1)) g.fillCircle(p.x + s.w * 0.5f - 6, p.y - s.h * 0.5f + 6, 2.5f, hudAccent(bt.faction));
+            if (!e.queue.empty() && ((int)(wallTime * 3) & 1)) { Color ac = hudAccent(bt.faction); g.glowAdd(fx + fw - 7, fy + 2, 7, Color{ac.r, ac.g, ac.b, 160}); g.fillCircle(fx + fw - 7, fy + 2, 2.4f, ac); }
         }
-        // damage smoke
-        if (e.hp < e.maxHp * 0.5f && e.constructed && ((g_sim.tick + e.gen) % 7 == 0) && !paused)
-            g_sim.fx.push_back({FX_SMOKE, e.pos + Vec2(g_sim.rng.f(-bt.w * 10.0f, bt.w * 10.0f), g_sim.rng.f(-bt.h * 10.0f, bt.h * 10.0f)), Vec2(), 0, 1.6f, rgb(40, 40, 40), 6, Vec2(0, -18)});
+        // damage: soot, then flames and smoke columns once the structure is badly hurt (drawn live, cheap)
+        if (e.constructed && e.hp < e.maxHp * 0.66f && !disabled) drawBuildingDamage(e, p);
         if (selected) {
-            g.box((int)(p.x - s.ox) - 2, (int)(p.y - s.oy) - 2, s.w + 4, s.h + 4, rgb(255, 255, 255, 200));
+            Color sc = rgb(255, 255, 255, 230); float L = 9;
+            for (int cx = 0; cx < 2; cx++) for (int cy = 0; cy < 2; cy++) {   // corner brackets
+                float x = cx ? fx + fw + 1 : fx - 2, y = cy ? fy + fh + 1 : fy - 2, dx = cx ? -L : L, dy = cy ? -L : L;
+                g.fill((int)std::min(x, x + dx), (int)y, (int)L, 1, sc); g.fill((int)x, (int)std::min(y, y + dy), 1, (int)L, sc);
+            }
             if (e.hasRally && e.constructed) { Vec2 r = worldToScreen(e.rally); g.line(p.x, p.y, r.x, r.y, rgb(120, 255, 120, 160)); g.circle(r.x, r.y, 5, rgb(120, 255, 120)); }
         }
-        if (selected || e.hp < e.maxHp || !e.constructed) hpBar(g, p.x - s.w * 0.5f, p.y - s.h * 0.5f - 6, s.w, e.constructed ? e.hp / e.maxHp : e.progress, true);
+        if (selected || e.hp < e.maxHp || !e.constructed) hpBar(g, fx, fy - 8, fw, e.constructed ? e.hp / e.maxHp : e.progress, true);
         if (disabled) g.text((int)p.x - 9, (int)p.y - 4, "EMP", rgb(160, 220, 255));
         return;
     }
     const UnitType& ut = e.ut();
     const Sprite& body = g.unitBody[e.type][owner];
     bool air = ut.kind == UK_AIR;
+    float alt = air ? e.alt : 0.0f;
+    float spd = (e.pos - e.prevPos).len() / SIM_DT;            // px/s over the last tick
+    Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
     if (air) {
-        g.draw(g.shadowLarge, p.x + 14, p.y + 26, 0, 0.8f, rgb(255, 255, 255), 120);
-        p.y -= 14;   // altitude
+        // shadow: the aircraft's own silhouette, thrown to the south-east and sliding closer as it settles onto the pad
+        g.draw(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, 1, rgb(0, 0, 0), (u8)(70 + 40 * (1 - alt)));
+        p.y -= 14 * alt;   // altitude
     } else {
         g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
+        if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
     }
-    if (selected) g.circle(p.x, p.y + (air ? 14 : 0), e.radius() + 4, rgb(255, 255, 255, 230), 18);
-    Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
+    if (selected) {   // a soft ring on the ground under the unit (not under its altitude), squashed a little for the viewing angle
+        float rr = (e.radius() + 5) * 2.0f, gy = p.y + (air ? 14 * alt : 0) + 2;
+        g.drawSized(g.fxs.ring, p.x, gy, rr, rr * 0.8f, 0, rgb(150, 255, 170), 235);
+        g.drawSized(g.fxs.ring, p.x, gy, rr * 1.1f, rr * 0.88f, 0, rgb(150, 255, 170), 70);
+    }
     // walk / track cycle: the two extra frames alternate while the unit is actually moving
     const Sprite* bs = &body;
-    if (!air && !paused && !disabled && (e.pos - e.prevPos).len2() > 0.01f) {
+    bool moving = (e.pos - e.prevPos).len2() > 0.01f;
+    if (!air && !paused && !disabled && moving) {
         float travelled = ut.kind == UK_INF ? wallTime * 9.0f + e.gen * 0.7f : (e.pos.x + e.pos.y) / 3.0f;
         bs = &g.unitAnim[e.type][owner][((int)std::floor(travelled)) & 1];
     }
-    if (!air && ut.kind == UK_VEH && !paused && bs != &body && e.fxTick != g_sim.tick && (g_sim.tick + e.gen) % 3 == 0) {
-        e.fxTick = g_sim.tick;
-        Vec2 back = Vec2(std::cos(e.angle), std::sin(e.angle)) * -(e.radius() * 0.8f);
-        g_sim.fx.push_back({FX_SMOKE, e.pos + back, Vec2(), 0, 0.9f, rgb(150, 132, 104), 3.0f + (float)(g_sim.tick % 3), back.norm() * 10.0f});
+    // vehicles kick up dust: a puff behind the tracks now and then, grey on asphalt and tan on bare ground
+    if (!air && ut.kind == UK_VEH && moving && frameDt > 0 && fxRng.f() < 11.0f * frameDt) {
+        Vec2 back = Vec2(std::cos(e.angle), std::sin(e.angle)) * -(e.radius() * 0.85f);
+        bool road = g_map.tile(clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) == T_ROAD;
+        float sz = e.radius() * 0.42f;
+        emitP(e.pos.x + back.x + fxRng.f(-3, 3), e.pos.y + back.y + fxRng.f(-3, 3), back.norm().x * 14 + fxRng.f(-6, 6), back.norm().y * 14 + fxRng.f(-6, 6), fxRng.f(0.6f, 1.0f), sz, sz * 2.6f,
+              road ? rgb(150, 150, 152, 150) : rgb(178, 150, 108, 170), PK_DUST, (u8)fxRng.range(0, 2), 0, 1.4f, fxRng.f(0, 6), fxRng.f(-0.6f, 0.6f));
+    }
+    // jets: afterburner flame, glow and a vapour trail while they are moving fast
+    if (air && ut.jet && spd > 120 && !disabled) {
+        float burn = clampf((spd - 120) / 360.0f, 0, 1), th = e.angle;
+        Vec2 tail = Vec2(p.x - std::cos(th) * 25.0f * 0.62f * 1.28f, p.y - std::sin(th) * 25.0f * 0.62f * 1.28f);
+        int fr = ((int)(wallTime * 24) + (int)e.gen) % 6;
+        bool cyj = ut.faction == F_CYBER;
+        Color fc = cyj ? rgb(140, 230, 255) : rgb(255, 190, 110);
+        g.draw(g.fxs.flame[fr], tail.x, tail.y, th - 1.5708f, 0.55f + 1.0f * burn, fc, (u8)(150 + 105 * burn));
+        g.glowAdd(tail.x, tail.y, 9 + 9 * burn, Color{fc.r, fc.g, fc.b, (u8)(120 * burn + 40)});
+        if (frameDt > 0 && burn > 0.45f && fxRng.f() < 40.0f * frameDt) {
+            float wy = alt > 0.5f ? 1.0f : 0.0f; (void)wy;
+            emitP(e.pos.x - std::cos(th) * 18, e.pos.y - std::sin(th) * 18 - 14 * alt, 0, 0, fxRng.f(1.1f, 1.7f), 2.4f, 7.5f, rgb(238, 244, 248, 150), PK_CONTRAIL, (u8)fxRng.range(0, 3), 0, 0.3f, fxRng.f(0, 6), 0.1f);
+        }
     }
     g.draw(*bs, p.x, p.y, e.angle, 1, mod);
     const Sprite& tur = g.unitTurret[e.type][owner];
-    if (tur.tex) g.draw(tur, p.x, p.y, e.turret, 1, mod);
-    if (ut.kind == UK_AIR && ut.faction == F_CLANKER) {   // main rotor: motion-blur disc plus a spinning blade pair
+    if (tur.tex) {
+        // the barrel kicks back for a moment after every shot
+        float rec = 0;
+        if (ut.weapon >= 0 && !paused) { const Weapon& w = WEAPONS[ut.weapon]; float since = w.cooldown - e.cooldown; if (w.cooldown > 0.6f && since >= 0 && since < 0.15f) rec = 1.0f - since / 0.15f; }
+        g.draw(tur, p.x - std::cos(e.turret) * 3.2f * rec, p.y - std::sin(e.turret) * 3.2f * rec, e.turret, 1, mod);
+    }
+    // a badly hurt vehicle or aircraft trails smoke, and burns when nearly dead
+    if (ut.kind != UK_INF && e.hp < e.maxHp * 0.4f && !disabled) {
+        float hpf = e.hp / e.maxHp;
+        if (frameDt > 0 && fxRng.f() < (7.0f + (0.4f - hpf) * 18.0f) * frameDt)
+            emitP(e.pos.x + fxRng.f(-4, 4), e.pos.y - 14 * alt + fxRng.f(-4, 4), fxRng.f(-8, 8), fxRng.f(-26, -12), fxRng.f(0.9f, 1.6f), 3.5f, 9.0f, hpf < 0.2f ? rgb(36, 34, 32, 230) : rgb(110, 106, 100, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.8f, fxRng.f(0, 6), 0.3f);
+        if (hpf < 0.2f) {
+            int fr = ((int)(wallTime * 13) + (int)e.gen) % 6;
+            g.glowAdd(p.x, p.y - 2, 13, Color{255, 120, 40, (u8)(90 + 40 * std::sin(wallTime * 11 + e.gen))});
+            g.draw(g.fxs.flame[fr], p.x + 1, p.y + 3, 0, 0.5f, rgb(255, 255, 255), 230);
+        }
+    }
+    if (ut.kind == UK_AIR && ut.faction == F_CLANKER && !ut.jet) {   // main rotor: motion-blur disc plus a spinning blade pair
         float spin = paused || disabled ? 0.4f : wallTime * 38.0f;
         g.draw(g.rotorDisc, p.x - 2, p.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
         g.draw(g.rotorBlades, p.x - 2, p.y, spin, 1, rgb(255, 255, 255), 150);
@@ -833,48 +982,6 @@ void Game::drawEntity(Entity& e) {
     if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
     if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10, p.y - e.radius() - 7, 20, e.hp / e.maxHp);
     if (selected && air && ut.ammo > 0) for (int k = 0; k < ut.ammo; k++) g.fill((int)p.x - 10 + k * 3, (int)p.y - e.radius() - 11, 2, 2, k < e.ammo ? rgb(255, 230, 120) : rgb(80, 80, 80));
-}
-
-void Game::drawFx() {
-    Gfx& g = g_gfx;
-    for (auto& f : g_sim.fx) {
-        float k = f.t / f.life;
-        Vec2 a = worldToScreen(f.a), b = worldToScreen(f.b);
-        switch (f.type) {
-        case FX_BEAM: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.thickLine(a.x, a.y, b.x, b.y, c, 2); c.a /= 3; g.thickLine(a.x, a.y, b.x, b.y, c, 5); Color w = rgb(255, 255, 255, (u8)(200 * (1 - k))); g.line(a.x, a.y, b.x, b.y, w); g.glowAdd(b.x, b.y, 9, Color{f.color.r, f.color.g, f.color.b, (u8)(150 * (1 - k))}); break; }
-        case FX_RAIL: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.thickLine(a.x, a.y, b.x, b.y, c, 3); Color h = rgb(120, 200, 255, (u8)(120 * (1 - k))); g.thickLine(a.x, a.y, b.x, b.y, h, 7); break; }
-        case FX_ARC: {
-            Color c = f.color; c.a = (u8)(255 * (1 - k));
-            Rng r((u64)(f.t * 1000) + (u64)f.a.x);
-            Vec2 prev = a; int segs = 6;
-            for (int i = 1; i <= segs; i++) { float t = i / (float)segs; Vec2 q = a + (b - a) * t; if (i < segs) q += Vec2(r.f(-7, 7), r.f(-7, 7)); g.thickLine(prev.x, prev.y, q.x, q.y, c, 2); prev = q; }
-            break;
-        }
-        case FX_FLASH: g.glowAdd(a.x, a.y, f.size * 2.2f * (1 - k * 0.5f), rgb(255, 210, 120, (u8)(200 * (1 - k)))); g.fillCircle(a.x, a.y, f.size * (1 - k * 0.5f), rgb(255, 250, 200, 220)); break;
-        case FX_EXPLODE: {
-            float rr = f.size * (0.3f + 0.7f * k);
-            Color c = mix(rgb(255, 240, 160), rgb(200, 60, 20), k); c.a = (u8)(230 * (1 - k * k));
-            g.glowAdd(a.x, a.y, rr * 2.0f, rgb(255, 140, 50, (u8)(160 * (1 - k))));
-            g.fillCircle(a.x, a.y, rr, c);
-            g.fillCircle(a.x, a.y, rr * 0.5f, rgb(255, 255, 220, (u8)(200 * (1 - k))));
-            break;
-        }
-        case FX_SMOKE: { Color c = f.color; c.a = (u8)(140 * (1 - k)); g.fillCircle(a.x, a.y, f.size * (0.6f + k), c); break; }
-        case FX_SPARK: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.fillCircle(a.x, a.y, f.size, c); break; }
-        case FX_DEBRIS: g.fill((int)a.x, (int)a.y, (int)f.size, (int)f.size, f.color); break;
-        case FX_RING: g.circle(a.x, a.y, f.size * k, f.color); break;
-        case FX_WRECK: {
-            int ut = (int)f.b.x, ow = (int)f.b.y;
-            u8 al = (u8)(255 * clampf((1 - k) * 5.0f, 0, 1));
-            Color cinder = rgb(58, 54, 50);
-            g.draw(g.unitBody[ut][ow], a.x, a.y, f.vel.x, 1, cinder, al);
-            if (g.unitTurret[ut][ow].tex) g.draw(g.unitTurret[ut][ow], a.x + 2, a.y + 1, f.size + 0.5f, 1, cinder, al);
-            if (f.t < 5.0f) g.glowAdd(a.x, a.y, 9 + 4 * std::sin(wallTime * 9 + f.a.x), Color{255, 120, 40, (u8)(70 * (1 - f.t / 5.0f))});
-            break;
-        }
-        case FX_EMP: { Color c = f.color; c.a = (u8)(255 * (1 - k)); g.circle(a.x, a.y, f.size * k, c, 40); c.a /= 2; g.circle(a.x, a.y, f.size * k * 0.7f, c, 40); break; }
-        }
-    }
 }
 
 void Game::renderWorld() {
@@ -902,13 +1009,21 @@ void Game::renderWorld() {
         SDL_SetTextureColorMod(g.worldTerrain.tex, 255, 255, 255); SDL_SetTextureAlphaMod(g.worldTerrain.tex, 255);
         SDL_RenderCopy(g.ren, g.worldTerrain.tex, &src, &dst);
     }
-    // water shimmer: animated ripples over interior water tiles
-    for (int ty = ty0; ty <= ty1; ty++) for (int tx = tx0; tx <= tx1; tx++) {
-        if (g_map.tile(tx, ty) != T_WATER || !(rev || ex[ty * MAP_W + tx])) continue;
-        if (g_map.tile(tx - 1, ty) != T_WATER || g_map.tile(tx + 1, ty) != T_WATER || g_map.tile(tx, ty - 1) != T_WATER || g_map.tile(tx, ty + 1) != T_WATER) continue;
-        int v = (g_map.variant[ty * MAP_W + tx] + (int)(wallTime * 2.0f)) % 4;
-        g.drawRect(g.tiles[T_WATER][v], (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE, 70);
+    // water: seamless animated caustics over open water (one small draw per visible interior tile)
+    {
+        int fr = ((int)(wallTime * 3.0f)) & 3;
+        const Sprite& w = g.waterFx[fr];
+        SDL_SetTextureColorMod(w.tex, 255, 255, 255); SDL_SetTextureAlphaMod(w.tex, 255);
+        for (int ty = ty0; ty <= ty1; ty++) for (int tx = tx0; tx <= tx1; tx++) {
+            if (g_map.tile(tx, ty) != T_WATER || !(rev || ex[ty * MAP_W + tx])) continue;
+            if (tx < 1 || ty < 1 || tx > MAP_W - 2 || ty > MAP_H - 2) continue;
+            if (g_map.tile(tx - 1, ty) != T_WATER || g_map.tile(tx + 1, ty) != T_WATER || g_map.tile(tx, ty - 1) != T_WATER || g_map.tile(tx, ty + 1) != T_WATER) continue;
+            SDL_Rect src = { (tx & 3) * TILE, (ty & 3) * TILE, TILE, TILE };
+            SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE };
+            SDL_RenderCopy(g.ren, w.tex, &src, &dst);
+        }
     }
+    drawGroundFx();
     // placement ghost
     if (placingType >= 0) {
         Vec2 w = screenToWorld(mouseX, mouseY);
@@ -917,7 +1032,7 @@ void Game::renderWorld() {
         bool ok = g_sim.canPlace(g_sim.humanPlayer, placingType, tx, ty);
         Vec2 c = worldToScreen(g_sim.buildingCenter(placingType, tx, ty));
         if (bt.weapon >= 0) rangeRing(c, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, true, false, false);
-        g.draw(g.building[placingType][g_sim.humanPlayer], c.x, c.y, 0, 1, ok ? rgb(160, 255, 160) : rgb(255, 120, 120), 150);
+        { Color gt = ok ? rgb(160, 255, 160) : rgb(255, 120, 120); g.draw(g.building[placingType], c.x, c.y, 0, 1, gt, 150); if (g.buildingTeam[placingType].tex) g.draw(g.buildingTeam[placingType], c.x, c.y, 0, 1, gt, 150); }
         for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
             bool t = g_map.buildable(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
             g.fill((int)((tx + i) * TILE - cam.x), (int)((ty + j) * TILE - cam.y), TILE, TILE, t ? rgb(80, 255, 80, 60) : rgb(255, 60, 60, 90));
@@ -962,24 +1077,37 @@ void Game::renderWorld() {
         float px = p.x + (bt.w >= 3 ? hw * 0.5f : hw * 0.4f), py = p.y - hh + (area >= 6 ? 12.0f : 7.0f);
         g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
     }
-    // projectiles
+    drawClouds();
+    // projectiles: hot streaks for bullets and rockets, a lobbed shell with a ground shadow
     for (auto& p : g_sim.projs) {
         const Weapon& w = WEAPONS[p.weapon];
         Vec2 s = worldToScreen(p.prevPos + (p.pos - p.prevPos) * renderAlpha);
+        if (s.x < -40 || s.y < -80 || s.x > SCREEN_W + 40 || s.y > VIEW_H + 40) continue;
         if (w.proj == PJ_SHELL) {
-            float h = std::sin(clampf(p.arcT, 0, 1) * 3.14159f) * 60;
-            g.fillCircle(s.x, s.y + 2, 3, rgb(0, 0, 0, 90));
-            g.fillCircle(s.x, s.y - h, 2.5f, rgb(40, 40, 40));
+            float t = clampf(p.arcT, 0, 1), h = std::sin(t * 3.14159f) * 60;
+            float sc = 1.0f + 0.5f * std::sin(t * 3.14159f);
+            g.drawSized(g.shadowSmall, s.x, s.y + 2, 9 * sc, 5 * sc, 0, rgb(255, 255, 255), 150);
+            g.fillCircle(s.x, s.y - h, 3.0f, rgb(30, 30, 32));
+            g.fillCircle(s.x - 0.8f, s.y - h - 0.8f, 1.3f, rgb(150, 150, 154));
+            g.glowAdd(s.x, s.y - h, 6, Color{255, 190, 110, 70});
         } else if (w.proj == PJ_ROCKET) {
             Vec2 d = p.vel.norm();
-            g.thickLine(s.x - d.x * 6, s.y - d.y * 6, s.x, s.y, rgb(255, 230, 160), 2);
-            g.fillCircle(s.x, s.y, 2, w.color);
+            float ang = std::atan2(d.y, d.x);
+            Vec2 mid = s - d * 9.0f;
+            g.drawSized(g.fxs.streak, mid.x, mid.y, 22, 4.0f, ang, rgb(255, 214, 150), 255);
+            g.glowAdd(s.x, s.y, 7, Color{w.color.r, w.color.g, w.color.b, 150});
+            g.fillCircle(s.x, s.y, 1.9f, rgb(255, 250, 235));
         } else {
             Vec2 d = p.vel.norm();
-            g.thickLine(s.x - d.x * 8, s.y - d.y * 8, s.x, s.y, w.color, 1);
+            float ang = std::atan2(d.y, d.x);
+            Vec2 mid = s - d * 8.0f;
+            g.drawSized(g.fxs.streak, mid.x, mid.y, 18, 2.6f, ang, w.color, 255);
+            g.glowAdd(s.x, s.y, 4.5f, Color{w.color.r, w.color.g, w.color.b, 110});
         }
     }
+    drawParticles(0);
     drawFx();
+    drawParticles(1);
     drawNukes();
     for (auto* e : air) drawEntity(*e);
     drawShroud();
@@ -1096,12 +1224,12 @@ void Game::renderHud() {
             // portrait
             g.bevelPanel(INFO_X + 8, hy + 14, 68, 68, shade(base, 0.55f), false);
             if (e->isUnit()) {
-                g.draw(g.unitBody[e->type][e->owner], INFO_X + 42, hy + 48, 0, 2);
-                if (g.unitTurret[e->type][e->owner].tex) g.draw(g.unitTurret[e->type][e->owner], INFO_X + 42, hy + 48, 0, 2);
+                float psc = (e->ut().jet ? 1.6f : 2.0f) / artScale(e->type);   // the big elite units and the long jets are scaled to sit inside the frame
+                g.draw(g.unitBody[e->type][e->owner], INFO_X + 42, hy + 48, 0, psc);
+                if (g.unitTurret[e->type][e->owner].tex) g.draw(g.unitTurret[e->type][e->owner], INFO_X + 42, hy + 48, 0, psc);
             } else {
-                const Sprite& s = g.building[e->type][e->owner];
-                float sc = std::min(60.0f / s.w, 60.0f / s.h);
-                g.draw(s, INFO_X + 42, hy + 48, 0, sc);
+                drawFitted(g, g.building[e->type], INFO_X + 42, hy + 48, 60);
+                if (g.buildingTeam[e->type].tex) drawFitted(g, g.buildingTeam[e->type], INFO_X + 42, hy + 48, 60, &g.building[e->type], PLAYER_COLOR[e->owner]);
             }
             const char* name = e->isUnit() ? e->ut().name : e->bt().name;
             g.text(INFO_X + 86, hy + 16, name, rgb(255, 255, 255), 2);
@@ -1255,12 +1383,22 @@ void Game::drawNukes() {
         char buf[32]; snprintf(buf, sizeof buf, "NUKE %ds", (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
         g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, rgb(255, 230, 200));
         // the missile: rises from the ramp on a long arc and falls on the target
-        auto at = [&](float u) { Vec2 p = worldToScreen(n.from) + (tgt - worldToScreen(n.from)) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; };
-        for (int i = 8; i >= 1; i--) { float u0 = std::max(0.0f, k - i * 0.02f), u1 = std::max(0.0f, k - (i - 1) * 0.02f); Vec2 a = at(u0), b = at(u1); g.thickLine(a.x, a.y, b.x, b.y, rgb(255, 200 - i * 14, 120, 200 - i * 22), 3.0f); }
-        Vec2 m = at(k); g.glowAdd(m.x, m.y, 26, rgb(255, 160, 70, 200)); g.fillCircle(m.x, m.y, 4, rgb(255, 255, 240));
+        auto world = [&](float u) { Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; };
+        Vec2 w0 = world(k), w1 = world(std::min(1.0f, k + 0.012f));
+        Vec2 m = worldToScreen(w0), dir = (w1 - w0).norm();
+        float ang = std::atan2(dir.y, dir.x);
+        int fr = ((int)(wallTime * 24)) % 6;
+        Vec2 tail = m - dir * 17.0f;
+        g.draw(g.fxs.flame[fr], tail.x, tail.y, ang - 1.5708f, 1.5f, rgb(255, 214, 160), 235);
+        g.glowAdd(tail.x, tail.y, 30, Color{255, 160, 70, 170});
+        g.draw(g.fxs.missile, m.x, m.y, ang, 1.5f);
+        if (frameDt > 0 && onScreen(w0.x, w0.y, 200) && fxRng.f() < 55.0f * frameDt)
+            emitP(w0.x - dir.x * 20, w0.y - dir.y * 20, fxRng.f(-8, 8), fxRng.f(-8, 8), fxRng.f(1.8f, 2.6f), 5, 17, rgb(232, 228, 222, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.8f, fxRng.f(0, 6), fxRng.f(-0.4f, 0.4f));
+    }
+    if (nukeFlash > 0) {
+        g.fill(0, 0, SCREEN_W, VIEW_H, rgb(255, 246, 228, (int)(215 * clampf(nukeFlash / 0.55f, 0, 1))));
     }
 }
-
 void Game::stepSpeed(int dir) {
     int cur = 0; float bd = 1e9f;
     for (int i = 0; i < SPEED_COUNT; i++) if (std::abs(SPEED_STEPS[i] - speed) < bd) { bd = std::abs(SPEED_STEPS[i] - speed); cur = i; }

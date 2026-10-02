@@ -33,6 +33,7 @@ static void paintDisc(Map& m, float cx, float cy, float r, u8 t, bool onlyIf(u8)
     }
 }
 static void paintRoad(Map& m, float x0, float y0, float x1, float y1, float halfW) {
+    m.roads.push_back({x0, y0, x1, y1, halfW});
     float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
     int steps = (int)(len * 2) + 1;
     for (int i = 0; i <= steps; i++) {
@@ -53,6 +54,7 @@ static bool isGrass(u8 t) { return t == T_GRASS || t == T_GRASS2; }
 
 void Map::generate() {
     const u32 SEED = 1979;
+    roads.clear();
     // Base terrain from noise: grass with dirt patches, sand near center
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         float n = fbm(x * 0.07f, y * 0.07f, SEED);

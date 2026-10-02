@@ -6,6 +6,7 @@ enum Tile : u8 { T_GRASS = 0, T_GRASS2, T_DIRT, T_SAND, T_ROAD, T_WATER, T_ROCK,
 
 struct StartSpot { int tx, ty; };
 struct SupplySpot { int tx, ty; int amount; };
+struct RoadSeg { float x0, y0, x1, y1, halfW; };   // tile units; kept so the baked terrain can paint centre lines
 
 struct Map {
     u8 tiles[MAP_W * MAP_H];
@@ -13,6 +14,7 @@ struct Map {
     u8 variant[MAP_W * MAP_H];      // visual variation
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
     std::vector<SupplySpot> supplies;
+    std::vector<RoadSeg> roads;
 
     void generate();
     u8 tile(int x, int y) const { return tiles[y * MAP_W + x]; }

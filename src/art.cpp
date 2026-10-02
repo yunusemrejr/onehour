@@ -1,4 +1,7 @@
 #include "art.h"
+#include "paint.h"
+
+using namespace paint;
 
 // Everything is authored in 64x64 canvas pixels, facing +x. Shapes are signed distance fields: each pixel gets
 // anti-aliased coverage and a bevel lit from the north-west, which is what gives the hulls their metal look.
@@ -14,7 +17,7 @@ const Color CKH0 = rgb(94, 104, 64), CKP0 = rgb(142, 134, 98), CKD0 = rgb(38, 40
 
 struct CyTone { Color h, p, m, d, g; };
 struct CkTone { Color h, p, d, r, y, s, t; };
-const CyTone CY_TONES[11] = {
+const CyTone CY_TONES[12] = {
     { rgb(104, 114, 128), rgb(152, 164, 178), rgb(64, 72, 86),  rgb(30, 34, 42), rgb(255, 190, 92)  },   // Fabricator: brushed titanium, amber work lights
     { rgb(34, 104, 112),  rgb(82, 154, 160),  rgb(26, 62, 70),  rgb(16, 38, 44), rgb(120, 255, 214) },   // E-Hauler: deep teal
     { rgb(70, 92, 130),   rgb(112, 146, 192), rgb(44, 56, 82),  rgb(24, 32, 48), rgb(110, 232, 255) },   // Trooper: slate blue
@@ -26,8 +29,9 @@ const CyTone CY_TONES[11] = {
     { rgb(32, 38, 54),    rgb(68, 76, 98),    rgb(22, 26, 40),  rgb(10, 12, 20), rgb(110, 232, 255) },   // Wraith Drone: matte stealth
     { rgb(178, 192, 206), rgb(224, 234, 244), rgb(102, 116, 134),rgb(44, 52, 66), rgb(150, 255, 255) },  // Ion Lancer: polar white
     { rgb(82, 90, 106),   rgb(134, 144, 160), rgb(52, 58, 74),  rgb(22, 26, 36), rgb(255, 214, 124) },   // Aegis Titan: titanium, gold emitters
+    { rgb(44, 54, 76),    rgb(92, 112, 146),  rgb(26, 32, 48),  rgb(12, 16, 26), rgb(120, 240, 255) },   // Specter Jet: gunmetal, ice-blue emitters
 };
-const CkTone CK_TONES[11] = {
+const CkTone CK_TONES[12] = {
     { rgb(96, 104, 68),  rgb(142, 134, 98),  rgb(38, 40, 32), rgb(156, 90, 48),  rgb(232, 186, 58),  rgb(124, 126, 124), rgb(160, 144, 102) },   // Dozer: yellow machine
     { rgb(112, 88, 60),  rgb(158, 130, 92),  rgb(40, 34, 28), rgb(164, 84, 44),  rgb(226, 182, 62),  rgb(124, 122, 116), rgb(168, 140, 96)  },   // Supply Truck: earth brown
     { rgb(92, 106, 62),  rgb(138, 142, 96),  rgb(36, 40, 30), rgb(150, 92, 50),  rgb(226, 182, 62),  rgb(124, 126, 124), rgb(150, 138, 96)  },   // Rifleman: olive drab
@@ -39,6 +43,7 @@ const CkTone CK_TONES[11] = {
     { rgb(74, 88, 96),   rgb(116, 132, 140), rgb(28, 34, 38), rgb(150, 92, 52),  rgb(226, 182, 62),  rgb(132, 136, 138), rgb(150, 150, 130) },   // Vulture: slate blue-grey
     { rgb(108, 62, 56),  rgb(150, 100, 90),  rgb(40, 26, 24), rgb(180, 96, 50),  rgb(236, 190, 66),  rgb(126, 118, 112), rgb(170, 128, 104) },   // Grenadier: maroon
     { rgb(74, 76, 72),   rgb(118, 118, 108), rgb(30, 30, 28), rgb(162, 92, 48),  rgb(238, 190, 60),  rgb(140, 142, 140), rgb(150, 146, 120) },   // Behemoth: cast iron, hazard trim
+    { rgb(112, 120, 92), rgb(158, 160, 124), rgb(34, 36, 30), rgb(168, 94, 48),  rgb(236, 190, 62),  rgb(150, 152, 150), rgb(176, 160, 116) },   // Talon Jet: olive drab over sand
 };
 
 // type < 0 selects the neutral default palette (structures' turret heads)
@@ -47,7 +52,7 @@ void setTone(int type) {
     CKH = CKH0; CKP = CKP0; CKD = CKD0; CKR = CKR0; CKY = CKY0; CKS = CKS0; CKT = CKT0;
     if (type < 0) return;
     int local = type - firstUnitOf(UNITS[type].faction);
-    if (local < 0 || local > 10) return;
+    if (local < 0 || local > 11) return;
     if (UNITS[type].faction == F_CYBER) {
         const CyTone& t = CY_TONES[local];
         CYH = t.h; CYP = t.p; CYM = t.m; CYD = t.d; CYG = t.g;
@@ -57,115 +62,6 @@ void setTone(int type) {
         CKH = t.h; CKP = t.p; CKD = t.d; CKR = t.r; CKY = t.y; CKS = t.s; CKT = t.t;
     }
 }
-
-struct P { float x, y; };
-inline float hyp(float x, float y) { return std::sqrt(x * x + y * y); }
-
-float sdBox(float px, float py, float cx, float cy, float hw, float hh, float r) {
-    float qx = std::abs(px - cx) - (hw - r), qy = std::abs(py - cy) - (hh - r);
-    return hyp(std::max(qx, 0.0f), std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
-}
-float sdCap(float px, float py, float ax, float ay, float bx, float by, float r) {
-    float pax = px - ax, pay = py - ay, bax = bx - ax, bay = by - ay;
-    float h = clampf((pax * bax + pay * bay) / std::max(1e-6f, bax * bax + bay * bay), 0, 1);
-    return hyp(pax - bax * h, pay - bay * h) - r;
-}
-float sdPoly(const std::vector<P>& v, float px, float py, float sgn) {
-    float d = -1e9f; size_t n = v.size();
-    for (size_t i = 0; i < n; i++) {
-        const P& a = v[i]; const P& b = v[(i + 1) % n];
-        float ex = b.x - a.x, ey = b.y - a.y, l = hyp(ex, ey);
-        float nx = sgn * ey / l, ny = -sgn * ex / l;
-        d = std::max(d, nx * (px - a.x) + ny * (py - a.y));
-    }
-    return d;
-}
-
-// straight-alpha "over" so anti-aliased edges keep the right colour on a transparent canvas
-void put(Canvas& c, int x, int y, Color s) {
-    if (x < 0 || y < 0 || x >= c.w || y >= c.h || s.a == 0) return;
-    u32& dst = c.px[y * c.w + x];
-    Color d = Canvas::unpack(dst);
-    if (d.a == 0 || s.a == 255) { dst = Canvas::pack(s); return; }
-    float sa = s.a / 255.0f, da = d.a / 255.0f, oa = sa + da * (1 - sa);
-    Color o{(u8)((s.r * sa + d.r * da * (1 - sa)) / oa), (u8)((s.g * sa + d.g * da * (1 - sa)) / oa), (u8)((s.b * sa + d.b * da * (1 - sa)) / oa), (u8)(oa * 255)};
-    dst = Canvas::pack(o);
-}
-
-struct Art {
-    Canvas& c; Color team;
-    Art(Canvas& cv, Color t) : c(cv), team(t) {}
-
-    template <class F> void shape(int x0, int y0, int x1, int y1, F sdf, Color base, float bevel, float k, float alpha) {
-        x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(c.w - 1, x1); y1 = std::min(c.h - 1, y1);
-        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
-            float px = x + 0.5f, py = y + 0.5f, d = sdf(px, py);
-            if (d > 0.75f) continue;
-            float cov = clampf(0.5f - d, 0, 1) * alpha;
-            if (cov <= 0) continue;
-            float f = 1.0f;
-            if (k != 0) {
-                float gx = sdf(px + 0.6f, py) - sdf(px - 0.6f, py), gy = sdf(px, py + 0.6f) - sdf(px, py - 0.6f), gl = hyp(gx, gy);
-                float lit = gl > 1e-4f ? (gx * -0.62f - gy * 0.78f) / gl : 0;
-                float w = clampf((bevel + d) / bevel, 0, 1);
-                f = 1.0f + k * lit * w;
-            }
-            Color col = shade(base, f); col.a = (u8)(base.a * cov);
-            put(c, x, y, col);
-        }
-    }
-    void circle(float cx, float cy, float r, Color base, float bevel = 2.4f, float k = 0.5f, float a = 1) {
-        shape((int)(cx - r - 2), (int)(cy - r - 2), (int)(cx + r + 2), (int)(cy + r + 2), [=](float x, float y) { return hyp(x - cx, y - cy) - r; }, base, bevel, k, a);
-    }
-    void ell(float cx, float cy, float rx, float ry, Color base, float bevel = 2.4f, float k = 0.5f, float a = 1) {
-        float m = std::min(rx, ry);
-        shape((int)(cx - rx - 2), (int)(cy - ry - 2), (int)(cx + rx + 2), (int)(cy + ry + 2), [=](float x, float y) { return (hyp((x - cx) / rx, (y - cy) / ry) - 1) * m; }, base, bevel, k, a);
-    }
-    void box(float cx, float cy, float hw, float hh, float r, Color base, float bevel = 2.2f, float k = 0.5f, float a = 1) {
-        r = std::min(r, std::min(hw, hh));
-        shape((int)(cx - hw - 2), (int)(cy - hh - 2), (int)(cx + hw + 2), (int)(cy + hh + 2), [=](float x, float y) { return sdBox(x, y, cx, cy, hw, hh, r); }, base, bevel, k, a);
-    }
-    void cap(float ax, float ay, float bx, float by, float r, Color base, float bevel = 1.6f, float k = 0.5f, float a = 1) {
-        shape((int)(std::min(ax, bx) - r - 2), (int)(std::min(ay, by) - r - 2), (int)(std::max(ax, bx) + r + 2), (int)(std::max(ay, by) + r + 2), [=](float x, float y) { return sdCap(x, y, ax, ay, bx, by, r); }, base, bevel, k, a);
-    }
-    void poly(std::vector<P> v, Color base, float bevel = 2.4f, float k = 0.5f, float a = 1) {
-        float area = 0, mnx = 1e9f, mny = 1e9f, mxx = -1e9f, mxy = -1e9f;
-        for (size_t i = 0; i < v.size(); i++) { const P& p = v[i]; const P& q = v[(i + 1) % v.size()]; area += p.x * q.y - q.x * p.y; mnx = std::min(mnx, p.x); mny = std::min(mny, p.y); mxx = std::max(mxx, p.x); mxy = std::max(mxy, p.y); }
-        float sgn = area > 0 ? 1.0f : -1.0f;
-        shape((int)mnx - 2, (int)mny - 2, (int)mxx + 2, (int)mxy + 2, [&v, sgn](float x, float y) { return sdPoly(v, x, y, sgn); }, base, bevel, k, a);
-    }
-    // flat anti-aliased strokes and dots (no lighting)
-    void line(float ax, float ay, float bx, float by, float w, Color col) { cap(ax, ay, bx, by, w * 0.5f, col, 1, 0, 1); }
-    void dot(float cx, float cy, float r, Color col) { circle(cx, cy, r, col, 1, 0, 1); }
-    void glow(float cx, float cy, float r, Color col) {
-        for (int y = (int)(cy - r - 1); y <= (int)(cy + r + 1); y++) for (int x = (int)(cx - r - 1); x <= (int)(cx + r + 1); x++) {
-            float d = hyp(x + 0.5f - cx, y + 0.5f - cy) / r;
-            if (d >= 1) continue;
-            Color k = col; k.a = (u8)(col.a * (1 - d) * (1 - d));
-            put(c, x, y, k);
-        }
-    }
-    // dirt, wear and rust: modulate what is already painted
-    void grain(int x0, int y0, int x1, int y1, float amount, u32 seed) {
-        Rng r(seed);
-        for (int y = std::max(0, y0); y <= std::min(c.h - 1, y1); y++) for (int x = std::max(0, x0); x <= std::min(c.w - 1, x1); x++) {
-            Color p = Canvas::unpack(c.px[y * c.w + x]);
-            if (p.a < 200) continue;
-            float f = 1.0f + (r.f() - 0.5f) * amount;
-            c.px[y * c.w + x] = Canvas::pack(shade(p, f));
-        }
-    }
-    void darken(int x0, int y0, int x1, int y1, float f) {
-        for (int y = std::max(0, y0); y <= std::min(c.h - 1, y1); y++) for (int x = std::max(0, x0); x <= std::min(c.w - 1, x1); x++) {
-            Color p = Canvas::unpack(c.px[y * c.w + x]);
-            if (p.a < 200) continue;
-            c.px[y * c.w + x] = Canvas::pack(shade(p, f));
-        }
-    }
-    Color tm(float f = 1.0f) const { return shade(team, f); }
-};
-
-Color rgba(Color c, int a) { c.a = (u8)a; return c; }
 
 // The player's mark on a unit: a small jewel-like dot. Dark seat ring for contrast on any hull tone, the team colour lit from
 // the north-west like every other surface, a pinpoint highlight, and a faint halo so it still reads at half size.
@@ -466,6 +362,65 @@ void behemothBody(Art& A, int frame) {   // Behemoth body: cast-iron slab hull o
 }
 
 // ---------------------------------------------------------------- aircraft
+
+void jetCyber(Art& A) {   // Specter Jet: slender stealth delta, canted twin fins, glowing twin exhausts
+    // planform: swept delta wings with a cut-back trailing edge
+    A.poly({ {62, 32}, {50, 28.5f}, {38, 25}, {21, 4.5f}, {13, 4.5f}, {15.5f, 23}, {10, 27.5f}, {10, 36.5f}, {15.5f, 41}, {13, 59.5f}, {21, 59.5f}, {38, 39}, {50, 35.5f} }, CYH, 2.6f, 0.62f);
+    A.poly({ {54, 32}, {42, 27.6f}, {28, 21}, {24, 22}, {32, 28.6f}, {18, 29.6f}, {16, 32}, {18, 34.4f}, {32, 35.4f}, {24, 42}, {28, 43}, {42, 36.4f} }, shade(CYP, 0.9f), 2.2f, 0.55f);   // raised centre section
+    // wing panel lines and leading-edge emitter strips
+    A.line(36, 25.6f, 21.5f, 7, 0.9f, rgba(CYG, 200)); A.line(36, 38.4f, 21.5f, 57, 0.9f, rgba(CYG, 200));
+    A.glow(28, 16, 12, rgba(CYG, 60)); A.glow(28, 48, 12, rgba(CYG, 60));
+    A.line(15, 22, 31, 24.4f, 0.7f, rgba(CYD, 170)); A.line(15, 42, 31, 39.6f, 0.7f, rgba(CYD, 170));
+    A.line(19, 12, 29, 13.4f, 0.6f, rgba(CYD, 140)); A.line(19, 52, 29, 50.6f, 0.6f, rgba(CYD, 140));
+    // fuselage spine, nose and canopy
+    A.cap(10, 32, 52, 32, 4.8f, shade(CYH, 1.12f), 2.6f, 0.62f);
+    A.cap(46, 32, 63, 32, 2.4f, CYP, 1.8f, 0.55f);
+    A.ell(43, 32, 7.2f, 2.9f, rgb(16, 46, 66), 1.8f, 0.6f);
+    A.ell(41.6f, 31, 3.4f, 1.0f, rgba(CYW, 200), 1, 0);
+    A.line(34, 32, 52, 32, 0.6f, rgba(CYG, 150));
+    // intakes
+    A.box(33.5f, 27, 3.4f, 1.5f, 0.6f, rgb(8, 12, 18), 1, 0.3f); A.box(33.5f, 37, 3.4f, 1.5f, 0.6f, rgb(8, 12, 18), 1, 0.3f);
+    // canted tail fins (seen edge-on from above: two slim blades leaning outward)
+    A.cap(21, 25.6f, 8.5f, 20.5f, 1.35f, shade(CYP, 1.1f), 1.2f, 0.6f); A.cap(21, 38.4f, 8.5f, 43.5f, 1.35f, shade(CYP, 1.1f), 1.2f, 0.6f);
+    A.dot(8.5f, 20.5f, 0.9f, CYG); A.dot(8.5f, 43.5f, 0.9f, CYG);
+    // twin exhaust nozzles
+    for (int s = -1; s <= 1; s += 2) { A.box(9.4f, 32 + s * 3.7f, 3.2f, 2.3f, 0.8f, shade(CYD, 1.4f), 1.2f, 0.5f); A.dot(6.4f, 32 + s * 3.7f, 2.0f, CYG); A.glow(5.6f, 32 + s * 3.7f, 7, rgba(CYG, 170)); }
+    teamDot(A, 27.0f, 15.5f, 2.4f); teamDot(A, 27.0f, 48.5f, 2.4f);
+    A.dot(14.2f, 5.6f, 0.9f, rgb(255, 80, 70)); A.dot(14.2f, 58.4f, 0.9f, rgb(80, 255, 120));
+    A.grain(8, 4, 63, 60, 0.05f, 55);
+}
+
+void jetClanker(Art& A) {   // Talon Jet: swept-wing fighter-bomber, camouflage, underwing missiles, single afterburner
+    // tailplanes, then wings, then the fuselage over them
+    for (int s = -1; s <= 1; s += 2) {
+        float m = s < 0 ? 0 : 64;
+        auto Y = [&](float y) { return s < 0 ? y : 64 - y; };
+        (void)m;
+        A.poly({ {15, Y(28.5f)}, {7.5f, Y(17)}, {3.8f, Y(17.6f)}, {6, Y(28.6f)} }, shade(CKH, 0.92f), 1.6f, 0.58f);
+        A.poly({ {44, Y(29)}, {25.5f, Y(5)}, {18, Y(5.4f)}, {19.6f, Y(14)}, {27, Y(28)} }, CKH, 2.4f, 0.6f);
+        A.line(41, Y(27.6f), 26.5f, Y(8), 0.7f, rgba(CKD, 140)); A.line(21, Y(13), 29, Y(23.5f), 0.6f, rgba(CKD, 120));
+        A.line(18.4f, Y(6.4f), 20.4f, Y(13), 0.8f, rgba(CKS, 160));
+    }
+    // camouflage splotches in sand and dark olive
+    A.ell(34, 14, 6, 2.6f, rgba(CKT, 190), 1, 0); A.ell(34, 50, 6, 2.6f, rgba(CKT, 190), 1, 0); A.ell(25, 20, 4.4f, 1.8f, rgba(CKD, 150), 1, 0); A.ell(25, 44, 4.4f, 1.8f, rgba(CKD, 150), 1, 0);
+    A.ell(50, 30.6f, 6, 1.7f, rgba(CKT, 190), 1, 0); A.ell(50, 33.4f, 6, 1.7f, rgba(CKT, 190), 1, 0);
+    // fuselage: tapered, with an air intake each side, a bubble canopy and a long nose probe
+    A.cap(8, 32, 52, 32, 5.0f, shade(CKH, 1.06f), 2.8f, 0.62f);
+    A.cap(46, 32, 62, 32, 2.8f, shade(CKH, 0.9f), 1.8f, 0.55f);
+    A.cap(60, 32, 64, 32, 0.8f, CKD, 1, 0.4f);
+    A.box(36.5f, 26.4f, 4.4f, 1.8f, 0.8f, rgb(10, 12, 12), 1.1f, 0.3f); A.box(36.5f, 37.6f, 4.4f, 1.8f, 0.8f, rgb(10, 12, 12), 1.1f, 0.3f);
+    A.ell(41.5f, 32, 7.6f, 3.2f, rgb(74, 110, 126), 2.0f, 0.75f); A.ell(40, 30.6f, 3.4f, 1.0f, rgba(rgb(210, 232, 246), 200), 1, 0);
+    A.line(41, 28.8f, 41, 35.2f, 0.5f, rgba(CKD, 190));
+    A.line(14, 32, 32, 32, 0.8f, rgba(CKD, 150));          // spine seam
+    A.box(18, 32, 5.5f, 1.2f, 0.5f, shade(CKH, 0.7f), 1, 0.4f);   // dorsal fin edge-on
+    // big single nozzle
+    A.circle(6.2f, 32, 4.4f, shade(CKD, 1.5f), 1.8f, 0.55f); A.circle(6.2f, 32, 2.8f, rgb(36, 20, 14), 1.4f, 0.4f); A.glow(5, 32, 9, rgba(rgb(255, 150, 50), 150));
+    // underwing sidewinders and wingtip rails
+    for (int s = -1; s <= 1; s += 2) { float y = 32 + s * 17.0f; A.cap(24, y, 38, y, 1.3f, rgb(226, 228, 226), 1, 0.6f); A.dot(38.8f, y, 1.2f, rgb(214, 54, 44)); A.line(25, y - s * 1.2f, 29, y - s * 2.0f, 0.5f, rgba(CKD, 150)); }
+    teamDot(A, 30.0f, 19.0f, 2.4f); teamDot(A, 30.0f, 45.0f, 2.4f);
+    A.dot(19.6f, 6.0f, 0.9f, rgb(255, 80, 70)); A.dot(19.6f, 58.0f, 0.9f, rgb(80, 255, 120));
+    A.grain(4, 4, 64, 60, 0.12f, 77);
+}
 void droneBody(Art& A) {   // Wraith Drone: stealth flying wing
     A.poly({ {58, 32}, {40, 24}, {13, 8}, {8, 12}, {19, 26}, {15, 32}, {19, 38}, {8, 52}, {13, 56}, {40, 40} }, CYH, 2.8f, 0.6f);
     // centre spine and canopy sensor
@@ -525,6 +480,7 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 8: if (cy) droneBody(A); else gunshipBody(A); break;
     case 9: soldier(A, cy, local, frame); break;
     case 10: if (cy) titanCyber(A, frame); else behemothBody(A, frame); break;
+    case 11: if (cy) jetCyber(A); else jetClanker(A); break;
     }
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }
@@ -707,6 +663,7 @@ void artTurretHead(Canvas& c, int idx) {
 float artScale(int type) {
     int local = type - firstUnitOf(UNITS[type].faction);
     if (local == 10) return 1.26f;   // Aegis Titan / Behemoth
+    if (local == 11) return 1.28f;   // supersonic jets: long and slender, drawn large enough to read at a glance
     if (local == 9) return 1.06f;    // elite infantry
     return 1.0f;
 }

@@ -13,7 +13,7 @@ enum Sound {
     SND_NONE = 0, SND_RIFLE, SND_MG, SND_LASER, SND_LASER_HEAVY, SND_ARC, SND_CANNON, SND_ROCKET,
     SND_RAIL, SND_EXPLODE_S, SND_EXPLODE_L, SND_HIT, SND_SELECT, SND_ORDER, SND_PLACE,
     SND_BUILD_DONE, SND_UNIT_READY, SND_NOFUNDS, SND_LOWPOWER, SND_ATTACKED, SND_VICTORY, SND_DEFEAT,
-    SND_CLICK, SND_EMP, SND_SUPPLY, SND_AIR, SND_CANT, SND_COUNT
+    SND_CLICK, SND_EMP, SND_SUPPLY, SND_AIR, SND_CANT, SND_JET, SND_COUNT
 };
 
 struct Weapon {
@@ -36,8 +36,8 @@ enum UnitKind { UK_INF = 0, UK_VEH, UK_AIR };
 enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER };
 
 enum UnitTypeId {
-    U_C_DOZER = 0, U_C_HARV, U_C_INF1, U_C_INF2, U_C_INF3, U_C_TANK, U_C_VOLT, U_C_RAIL, U_C_AIR, U_C_ELITE, U_C_TITAN,
-    U_K_DOZER, U_K_HARV, U_K_INF1, U_K_INF2, U_K_INF3, U_K_TANK, U_K_GATLING, U_K_MLRS, U_K_AIR, U_K_ELITE, U_K_TITAN,
+    U_C_DOZER = 0, U_C_HARV, U_C_INF1, U_C_INF2, U_C_INF3, U_C_TANK, U_C_VOLT, U_C_RAIL, U_C_AIR, U_C_ELITE, U_C_TITAN, U_C_JET,
+    U_K_DOZER, U_K_HARV, U_K_INF1, U_K_INF2, U_K_INF3, U_K_TANK, U_K_GATLING, U_K_MLRS, U_K_AIR, U_K_ELITE, U_K_TITAN, U_K_JET,
     U_COUNT
 };
 
@@ -68,6 +68,7 @@ struct UnitType {
     int requires_;      // BuildTypeId prerequisite or -1
     const char* desc;
     int program;        // 1 = also needs the faction's Advanced Program (researched at the tech structure)
+    int jet;            // 1 = supersonic fighter: fixed-wing strafing passes with a limited turn rate instead of hovering
 };
 
 struct BuildType {
@@ -108,8 +109,10 @@ static const float NUKE_RADIUS = 6.0f;        // tiles
 static const float INCOME_INTERVAL = 5.0f;    // seconds between payouts of an income structure
 static const int   INCOME_MAX = 4;            // income structures per player
 static const float REARM_TIME = 0.45f;    // seconds to reload one round of aircraft ammunition on the pad
+static const int   HQ_MAX = 3;                // Command Cores / Posts per player (a dozer can rebuild a lost one, or found a second base)
+static const float JET_TURN = 3.4f;           // rad/s: a supersonic jet at 560 px/s swings a turn circle of about 165 px
 
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures
 int firstBuildOf(Faction f);
-static const int UNITS_PER_FACTION = 11;
+static const int UNITS_PER_FACTION = 12;
 static const int BUILDS_PER_FACTION = 11;

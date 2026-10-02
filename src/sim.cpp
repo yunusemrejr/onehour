@@ -117,12 +117,21 @@ void Sim::deathFx(Entity& e) {
         }
         for (int k = 0; k < 14; k++)
             fx.push_back({FX_DEBRIS, e.pos, e.pos, 0, rng.f(0.6f, 1.3f), rgb(70, 70, 70), rng.f(2, 5), Vec2(rng.f(-120, 120), rng.f(-160, -40))});
+        fx.push_back({FX_RUBBLE, e.pos, Vec2((float)e.bt().w, (float)e.bt().h), 0, 50.0f, rgb(255, 255, 255), (float)e.gen});   // scorched ruins stay behind
         emit(EV_SOUND, -1, SND_EXPLODE_L, e.pos);
     } else if (e.isUnit() && e.ut().kind == UK_INF) {
-        fx.push_back({FX_SPARK, e.pos, e.pos, 0, 0.4f, rgb(200, 40, 40), 5});
+        // a fallen soldier lies where they dropped for a few seconds (vel.y = 1 marks a corpse rather than a burning wreck)
+        fx.push_back({FX_WRECK, e.pos, Vec2((float)e.type, (float)std::max(0, e.owner)), 0, 7.0f, rgb(255, 255, 255), e.turret, Vec2(e.angle + rng.f(-0.6f, 0.6f), 1.0f)});
+        fx.push_back({FX_SPARK, e.pos, e.pos, 0, 0.3f, rgb(255, 200, 120), 4});
         emit(EV_SOUND, -1, SND_HIT, e.pos);
     } else if (e.isUnit()) {
         if (e.ut().kind == UK_VEH) fx.push_back({FX_WRECK, e.pos, Vec2((float)e.type, (float)std::max(0, e.owner)), 0, 16.0f, rgb(255, 255, 255), e.turret, Vec2(e.angle, 0)});
+        if (e.isAir()) {   // a downed aircraft hits the ground a moment later, short of where it was shot
+            Vec2 g = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 26.0f + Vec2(0, 20);
+            fx.push_back({FX_EXPLODE, g, g, -0.3f, 0.8f, rgb(255, 170, 70), r * 2.6f});
+            fx.push_back({FX_SMOKE, g, g, -0.3f, 3.0f, rgb(46, 44, 42), r * 1.6f, Vec2(0, -22)});
+            for (int k = 0; k < 8; k++) fx.push_back({FX_DEBRIS, g, g, -0.3f, rng.f(0.5f, 1.1f), rgb(80, 80, 82), rng.f(2, 4), Vec2(rng.f(-130, 130), rng.f(-150, -30))});
+        }
         fx.push_back({FX_EXPLODE, e.pos, e.pos, 0, 0.6f, rgb(255, 180, 70), r * 1.6f});
         fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 2.0f, rgb(50, 50, 50), r, Vec2(0, -25)});
         for (int k = 0; k < 6; k++)
@@ -216,12 +225,16 @@ bool Sim::unitAvailable(int player, int unitType) const {
 bool Sim::buildAvailable(int player, int buildType) const {
     const BuildType& b = BUILDS[buildType];
     if (b.faction != players[player].faction) return false;
-    if (b.role == BR_HQ) return false; // command centers are not rebuildable
-    if (atIncomeLimit(player, buildType)) return false;
+    if (atBuildLimit(player, buildType)) return false;
     return prereqMet(player, b.requires_);
 }
 bool Sim::atIncomeLimit(int player, int buildType) const {
     return BUILDS[buildType].role == BR_INCOME && countRole(player, BR_INCOME, false) >= INCOME_MAX;
+}
+// a dozer may found or rebuild a Command Core / Post any time it can pay for one; up to HQ_MAX stand (or rise) at once
+bool Sim::atBuildLimit(int player, int buildType) const {
+    if (atIncomeLimit(player, buildType)) return true;
+    return BUILDS[buildType].role == BR_HQ && countRole(player, BR_HQ, false) >= HQ_MAX;
 }
 int Sim::countUnits(int player, int type) const {
     int n = 0;
@@ -697,13 +710,15 @@ bool Sim::tryFire(Entity& e, Entity& tgt) {
     }
     fireWeapon(e, tgt, wp);
     e.cooldown = wp.cooldown;
-    if (wp.burst > 1) { e.burstLeft = wp.burst - 1; e.burstTimer = 0.14f; }
+    if (wp.burst > 1) { e.burstLeft = wp.burst - 1; e.burstTimer = e.isUnit() && e.ut().jet ? 0.07f : 0.14f; }
     return true;
 }
 
 void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
     Vec2 from = e.pos;
     if (e.isUnit() && e.ut().kind == UK_VEH) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * (e.radius() * 0.9f);
+    else if (e.isUnit() && e.ut().kind == UK_INF) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * 12.0f;   // muzzle of the rifle, not the soldier's chest
+    else if (e.isUnit() && e.ut().kind == UK_AIR) from = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 9.0f;
     Ref tref = refOf(tgt);
     Ref self = refOf(e);
     emit(EV_SOUND, e.owner, w.sound, from);
@@ -860,7 +875,7 @@ void Sim::updateProjectiles() {
 void Sim::updateFx() {
     // burning wrecks smoulder for a while (collected first: pushing while iterating would invalidate the loop)
     static std::vector<Fx> puffs; puffs.clear();
-    for (auto& f : fx) if (f.type == FX_WRECK && (tick % 6) == ((u32)(f.a.x * 7 + f.a.y * 13) % 6) && f.t < f.life * 0.7f)
+    for (auto& f : fx) if (f.type == FX_WRECK && f.vel.y < 0.5f && (tick % 6) == ((u32)(f.a.x * 7 + f.a.y * 13) % 6) && f.t < f.life * 0.7f)
         puffs.push_back({FX_SMOKE, f.a + Vec2((float)((int)(f.a.x + tick) % 9 - 4), (float)((int)(f.a.y + tick * 3) % 7 - 3)), Vec2(), 0, 2.4f, rgb(46, 44, 42), 6.0f + (float)(tick % 3), Vec2((float)((int)tick % 5 - 2), -14)});
     for (auto& p : puffs) fx.push_back(p);
     for (auto& f : fx) {
@@ -925,6 +940,64 @@ Entity* Sim::findAirfield(Entity& a) {
     return best;
 }
 
+// ------------------------------------------------------------ aircraft
+static float angDiff(float a, float b) {   // b - a wrapped to (-pi, pi]
+    float d = b - a;
+    while (d > 3.14159265f) d -= 6.2831853f;
+    while (d < -3.14159265f) d += 6.2831853f;
+    return d;
+}
+
+Vec2 Sim::padSlot(const Entity& h, const Entity& e) const {
+    int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
+    return h.pos + Vec2((slot - 1.5f) * 30, 0);
+}
+
+void Sim::flyTo(Entity& e, Vec2 dest, float speed) {
+    Vec2 d = dest - e.pos;
+    float l = d.len();
+    if (!e.ut().jet) {
+        if (l > 3) { e.pos += d.norm() * std::min(l, speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
+        return;
+    }
+    // a fixed-wing craft cannot turn on the spot: swing at JET_TURN and bleed speed in proportion to the distance left,
+    // which keeps the turn circle (speed / JET_TURN) under half the distance, so it always spirals in instead of orbiting the spot
+    if (l < 4) return;
+    float want = std::atan2(d.y, d.x);
+    float v = std::max(36.0f, std::min(speed, l * 1.6f));
+    float turn = JET_TURN * SIM_DT * (l < 120 ? 2.0f : 1.0f);
+    e.angle += clampf(angDiff(e.angle, want), -turn, turn);
+    if (l < 14) { float a = angDiff(e.angle, want); e.angle += a * 0.5f; }
+    Vec2 step(std::cos(e.angle) * v * SIM_DT, std::sin(e.angle) * v * SIM_DT);
+    e.pos += step.len() >= l ? d : step;
+}
+
+void Sim::jetAttack(Entity& e, Entity& t) {
+    const UnitType& ut = e.ut();
+    const Weapon& w = WEAPONS[ut.weapon];
+    Vec2 to = t.pos - e.pos;
+    float d = distToEntity(e.pos, t) / TILE;
+    float want = std::atan2(to.y, to.x);
+    if (e.jetBreak > 0) {
+        e.jetBreak -= SIM_DT;
+        want = e.angle;                                    // fly on past the target
+    } else if (d <= w.range && std::abs(angDiff(e.angle, want)) < 0.3f) {
+        if (e.cooldown <= 0 && tryFire(e, t)) { e.jetBreak = 0.95f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
+    } else if (d < 2.0f && e.cooldown > 0) {
+        e.jetBreak = 0.8f;                                 // arrived with the guns still cooling: commit to the fly-through
+    }
+    // stay over the map: near an edge, the breakaway curves back toward the middle
+    const float edge = 3.5f * TILE;
+    if (e.pos.x < edge || e.pos.y < edge || e.pos.x > WORLD_W - edge || e.pos.y > WORLD_H - edge) {
+        Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos;
+        want = std::atan2(c.y, c.x);
+    }
+    float turn = JET_TURN * SIM_DT;
+    e.angle += clampf(angDiff(e.angle, want), -turn, turn);
+    e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (ut.speed * SIM_DT);
+    e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
+}
+
 // ------------------------------------------------------------ unit update
 void Sim::updateUnit(Entity& e) {
     const UnitType& ut = e.ut();
@@ -932,13 +1005,20 @@ void Sim::updateUnit(Entity& e) {
     if (e.disabledUntil > time) return;
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
 
-    // burst continuation
+    // aircraft settle onto the pad when idle there and climb away otherwise (drawn lower and without a detached shadow)
+    if (e.isAir()) {
+        bool parked = false;
+        if (e.order == O_IDLE || e.order == O_REARM) { Entity* h = get(e.home); if (h && dist(e.pos, padSlot(*h, e)) < 10) parked = true; }
+        e.alt = clampf(e.alt + (parked ? -1.4f : 1.4f) * SIM_DT, 0.0f, 1.0f);
+    }
+
+    // burst continuation (a jet's volley comes in a tight stream: it covers a lot of ground between rounds)
     if (e.burstLeft > 0) {
         e.burstTimer -= SIM_DT;
         if (e.burstTimer <= 0) {
             Entity* t = get(e.targetEnt.valid() ? e.targetEnt : e.engaged);
             if (t && canTarget(e, *t)) fireWeapon(e, *t, WEAPONS[ut.weapon]);
-            e.burstLeft--; e.burstTimer = 0.14f;
+            e.burstLeft--; e.burstTimer = ut.jet ? 0.07f : 0.14f;
         }
     }
 
@@ -958,10 +1038,11 @@ void Sim::updateUnit(Entity& e) {
             if (!h) { h = findAirfield(e); if (h) e.home = refOf(*h); }
             if (h) {
                 int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
-                Vec2 pad = h->pos + Vec2((slot - 1.5f) * 30, 0);
+                Vec2 pad = padSlot(*h, e);
                 if (h->hasRally && e.ammo >= ut.ammo) pad = h->rally + Vec2((slot - 1.5f) * 34, 0);   // loaded aircraft wait at the rally point, empty ones return to the pad
                 Vec2 d = pad - e.pos;
-                if (d.len() > 3) { e.pos += d.norm() * std::min(d.len(), ut.speed * 0.6f * SIM_DT); e.angle = std::atan2(d.y, d.x); }
+                flyTo(e, pad, ut.speed * 0.6f);
+                if (ut.jet && d.len() < 14 && pad.y == padSlot(*h, e).y && pad.x == padSlot(*h, e).x) e.angle += angDiff(e.angle, -1.5708f) * 0.2f;   // parked jets face up the runway
                 if (e.ammo < ut.ammo && d.len() < 8) { e.actionTimer += SIM_DT; if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo++; } }
             }
             if (e.ammo > 0) {
@@ -1002,10 +1083,12 @@ void Sim::updateUnit(Entity& e) {
         const Weapon& w = WEAPONS[ut.weapon];
         if (e.isAir()) {
             // loiter in a slow circle over the zone, strike whatever enters it
-            e.orbit += SIM_DT * ut.speed * 0.4f / std::max(48.0f, e.zoneR * 0.45f);
-            Vec2 wp = e.zone + Vec2(std::cos(e.orbit), std::sin(e.orbit)) * (e.zoneR * 0.45f);
+            float orbR = ut.jet ? std::max(e.zoneR * 0.55f, 4.0f * TILE) : e.zoneR * 0.45f;
+            e.orbit += SIM_DT * ut.speed * (ut.jet ? 0.5f : 0.4f) / std::max(48.0f, orbR);
+            Vec2 wp = e.zone + Vec2(std::cos(e.orbit), std::sin(e.orbit)) * orbR;
             Vec2 d = wp - e.pos; float l = d.len();
-            if (l > 2) { e.pos += d.norm() * std::min(l, ut.speed * SIM_DT * (l > 140 ? 1.0f : 0.55f)); e.angle = std::atan2(d.y, d.x); }
+            if (ut.jet) flyTo(e, wp, ut.speed * 0.8f);
+            else if (l > 2) { e.pos += d.norm() * std::min(l, ut.speed * SIM_DT * (l > 140 ? 1.0f : 0.55f)); e.angle = std::atan2(d.y, d.x); }
             if ((tick + e.gen) % 4 == 0) {
                 Entity* t = acquireZoneTarget(e);
                 if (t) { e.order = O_ATTACK; e.postOrder = O_GUARDAREA; e.targetEnt = refOf(*t); e.leashed = true; e.repathTimer = 0; }
@@ -1043,8 +1126,8 @@ void Sim::updateUnit(Entity& e) {
         if (e.isAir()) {
             Vec2 d = e.target - e.pos;
             if (d.len() < 6) { e.order = O_IDLE; e.postOrder = O_IDLE; break; }
-            e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT);
-            e.angle = std::atan2(d.y, d.x);
+            if (ut.jet) flyTo(e, e.target, ut.speed);
+            else { e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
         } else {
             if (e.path.empty()) requestPath(e, e.target);
             moveAlong(e, ut.speed);
@@ -1088,6 +1171,7 @@ void Sim::updateUnit(Entity& e) {
         }
         if (e.isAir()) {
             if (e.ammo <= 0 && ut.ammo > 0) { e.order = O_REARM; break; }
+            if (ut.jet) { jetAttack(e, *t); break; }
             Vec2 dv = t->pos - e.pos;
             if (d > w.range - 0.4f) { e.pos += dv.norm() * std::min(dv.len(), ut.speed * SIM_DT); e.angle = std::atan2(dv.y, dv.x); }
             else { e.angle = std::atan2(dv.y, dv.x); tryFire(e, *t); }
@@ -1214,11 +1298,11 @@ void Sim::updateUnit(Entity& e) {
         Entity* h = get(e.home);
         if (!h) { h = findAirfield(e); if (h) e.home = refOf(*h); }
         if (!h) { e.order = O_IDLE; break; }  // nowhere to land: loiter
-        int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
-        Vec2 pad = h->pos + Vec2((slot - 1.5f) * 30, 0);
+        Vec2 pad = padSlot(*h, e);
         Vec2 d = pad - e.pos;
-        if (d.len() > 4) { e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
+        if (d.len() > 4) flyTo(e, pad, ut.speed);
         else {
+            if (ut.jet) e.angle += angDiff(e.angle, -1.5708f) * 0.25f;
             e.actionTimer += SIM_DT;
             if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo = std::min(ut.ammo, e.ammo + 1); }
             if (e.ammo >= ut.ammo) {
@@ -1239,6 +1323,12 @@ void Sim::finishBuilding(Entity& b) {
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
     b.actionTimer = 0;
     if (b.bt().role == BR_NUKE) b.actionTimer = time + 60.0f;   // arming time for the first warhead
+    if (b.bt().role == BR_HQ && b.owner >= 0) {
+        // a rebuilt Command Core becomes the home base again when no other one stands (camera Home key, AI base layout)
+        bool other = false;
+        for (auto& e : ents) if (e.alive && &e != &b && e.isBuilding() && e.owner == b.owner && e.constructed && e.bt().role == BR_HQ) other = true;
+        if (!other) players[b.owner].basePos = b.pos;
+    }
     updatePower();
 }
 
