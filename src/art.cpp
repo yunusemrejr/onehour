@@ -47,11 +47,14 @@ const CkTone CK_TONES[12] = {
 };
 
 // type < 0 selects the neutral default palette (structures' turret heads)
+// position inside the army's block; the medics live after both blocks but are drawn as the 13th design
+static int unitLocal(int type) { return type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction); }
+
 void setTone(int type) {
     CYH = CYH0; CYP = CYP0; CYD = CYD0; CYG = CYG0; CYW = CYW0; CYM = CYM0;
     CKH = CKH0; CKP = CKP0; CKD = CKD0; CKR = CKR0; CKY = CKY0; CKS = CKS0; CKT = CKT0;
     if (type < 0) return;
-    int local = type - firstUnitOf(UNITS[type].faction);
+    int local = unitLocal(type);
     if (local < 0 || local > 11) return;
     if (UNITS[type].faction == F_CYBER) {
         const CyTone& t = CY_TONES[local];
@@ -250,6 +253,23 @@ void harvClanker(Art& A, int frame) {
     A.box(46, 32, 1.5f, 8, 0.6f, shade(CKR, 0.75f), 1, 0.3f);
     A.dot(55.5f, 27, 1.0f, rgb(255, 240, 190)); A.dot(55.5f, 37, 1.0f, rgb(255, 240, 190));
     weatherClanker(A, 17, 8, 12, 60, 52);
+    teamDot(A, 10.0f, 32, 2.8f);
+}
+
+
+void medicBody(Art& A, bool cy, int frame) {
+    Color hull = cy ? rgb(226, 236, 240) : rgb(222, 218, 196), trim = cy ? rgb(70, 190, 210) : rgb(150, 150, 96), cross = cy ? rgb(40, 220, 170) : rgb(220, 60, 52);
+    Color dark = cy ? CYD : CKD;
+    for (int s = -1; s <= 1; s += 2) for (int i = 0; i < 3; i++) A.box(19 + i * 9.5f, 32 + s * 13.6f, 3.9f, 2.8f, 1.2f, dark, 1.4f, 0.4f);
+    A.box(26, 32, 20, 13, 2.0f, hull, 2.4f, 0.55f);                                      // box body
+    A.box(26, 32, 17, 10, 1.0f, shade(hull, 0.93f), 1.2f, 0.4f);
+    A.box(26, 32, 3.0f, 9.0f, 0.8f, cross, 1.4f, 0.55f); A.box(26, 32, 9.0f, 3.0f, 0.8f, cross, 1.4f, 0.55f);   // the cross
+    A.box(49, 32, 8.5f, 10.2f, 2, trim, 2.4f, 0.55f);                                    // cab
+    A.box(52.5f, 32, 3.2f, 7.6f, 1, rgb(80, 110, 124), 1.2f, 0.5f);
+    A.box(16, 32, 2.0f, 13.5f, 1.0f, shade(trim, 0.8f), 1.2f, 0.5f);
+    A.dot(56, 27.4f, 1.0f, rgb(255, 245, 200)); A.dot(56, 36.6f, 1.0f, rgb(255, 245, 200));
+    float pulse = frame == 1 ? 1.0f : 0.5f;
+    A.glow(44, 32, 7 * pulse + 3, rgba(cross, 130)); A.dot(44, 28, 1.3f, cross); A.dot(44, 36, 1.3f, cross);    // beacon bar
     teamDot(A, 10.0f, 32, 2.8f);
 }
 
@@ -591,7 +611,7 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     setTone(type);
     Art A(c, team);
     bool cy = UNITS[type].faction == F_CYBER;
-    int local = type - firstUnitOf(UNITS[type].faction);
+    int local = unitLocal(type);
     switch (local) {
     case 0: if (cy) dozerCyber(A, frame); else dozerClanker(A, frame); break;
     case 1: if (cy) harvCyber(A, frame); else harvClanker(A, frame); break;
@@ -603,9 +623,10 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 9: soldier(A, cy, local, frame); break;
     case 10: if (cy) titanCyber(A, frame); else behemothBody(A, frame); break;
     case 11: if (cy) jetCyber(A); else jetClanker(A); break;
+    case 12: medicBody(A, cy, frame); break;
     }
     if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
-    else if (local != 8 && local != 11) vehicleDetail(A, cy, local);
+    else if (local != 8 && local != 11 && local != 12) vehicleDetail(A, cy, local);
     enhance(c, local == 8 || local == 11 ? 0.45f : 0.7f);
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }
@@ -614,7 +635,7 @@ bool artUnitTurret(Canvas& c, int type, Color team) {
     setTone(type);
     Art A(c, team);
     bool cy = UNITS[type].faction == F_CYBER;
-    int local = type - firstUnitOf(UNITS[type].faction);
+    int local = unitLocal(type);
     switch (local) {
     case 5:
         if (cy) {   // photon cannon turret
@@ -786,7 +807,7 @@ void artTurretHead(Canvas& c, int idx) {
 }
 
 float artScale(int type) {
-    int local = type - firstUnitOf(UNITS[type].faction);
+    int local = unitLocal(type);
     if (local == 10) return 1.26f;   // Aegis Titan / Behemoth
     if (local == 11) return 1.28f;   // supersonic jets: long and slender, drawn large enough to read at a glance
     if (local == 9) return 1.06f;    // elite infantry

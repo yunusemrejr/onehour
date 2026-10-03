@@ -25,8 +25,8 @@ const Weapon WEAPONS[] = {
     /* 20 */{ "Twin Ion Cannon", 74, 7.5f, 0, 1.30f, PJ_LASER,  0,    true, true,  {0.7f, 1.10f, 1.10f, 0.90f, 0.7f}, 2, 0,    SND_LASER_HEAVY, rgb(120, 240, 255) },
     /* 21 */{ "Grenade Launcher",70, 6.5f, 1.5f, 2.20f, PJ_SHELL, 1.1f, true, false, {1.4f, 0.90f, 0.70f, 1.20f, 0.0f}, 1, 330,  SND_CANNON,      rgb(255, 190, 110) },
     /* 22 */{ "Behemoth Cannon", 78, 6.8f, 0, 2.00f, PJ_SHELL,  0.7f, true, false, {0.6f, 1.00f, 1.10f, 0.90f, 0.0f}, 2, 520,  SND_CANNON,      rgb(255, 200, 110) },
-    /* 23 */{ "Plasma Lances",   30, 6.0f, 0, 2.30f, PJ_LASER,  0,    true, true,  {0.8f, 1.00f, 0.70f, 0.40f, 1.8f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
-    /* 24 */{ "Sidewinder Salvo",46, 7.0f, 0, 2.30f, PJ_ROCKET, 0.55f,true, true,  {0.9f, 1.10f, 0.90f, 0.80f, 1.6f}, 4, 880,  SND_ROCKET,      rgb(255, 214, 140) },
+    /* 23 */{ "Plasma Lances",   44, 6.0f, 0, 2.30f, PJ_LASER,  0,    true, true,  {0.8f, 1.00f, 0.70f, 0.40f, 1.8f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
+    /* 24 */{ "Sidewinder Salvo",62, 7.0f, 0, 2.30f, PJ_ROCKET, 0.55f,true, true,  {0.9f, 1.10f, 0.90f, 0.80f, 1.6f}, 4, 880,  SND_ROCKET,      rgb(255, 214, 140) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -43,7 +43,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Wraith Drone",   "W", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   720, 250, 1200, 16, 9, 10, 6,  12, BR_AIRFIELD, -1,        "Strike drone, 12 rounds, reloads in seconds on the Drone Pad" },
     { "Ion Lancer",     "I", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   150, 50,  750,  12, 8, 6,  19, 0, BR_BARRACKS, B_C_TECH,   "Elite sniper, piercing ion lance out to 9 tiles", 1 },
     { "Aegis Titan",    "N", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 1700, 58, 2300, 26, 8, 17, 20, 0, BR_FACTORY,  B_C_TECH,   "Super-heavy walker, twin ion cannons hit ground and air", 1 },
-    { "Specter Jet",    "J", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   520, 560, 1800, 20, 11, 11, 23, 6, BR_AIRFIELD, B_C_TECH,  "Supersonic fighter: plasma lances, 6 strafing passes, shreds aircraft and light armor", 0, 1 },
+    { "Specter Jet",    "J", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   900, 560, 1800, 20, 11, 11, 23, 8, BR_AIRFIELD, B_C_TECH,  "Supersonic fighter: plasma lances, 8 strafing passes, shreds aircraft and light armor", 0, 1 },
 
     { "Dozer",          "D", F_CLANKER, UK_VEH, UR_DOZER,     AR_LIGHT, 420, 82,  1000, 12, 6, 12, -1, 0, BR_HQ,       -1,         "Constructs structures" },
     { "Supply Truck",   "H", F_CLANKER, UK_VEH, UR_HARVESTER, AR_LIGHT, 450, 96,  700,  9,  6, 12, -1, 0, BR_SUPPLY,   -1,         "Hauls supplies to a Supply Depot" },
@@ -56,7 +56,10 @@ const UnitType UNITS[U_COUNT] = {
     { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   850, 210, 1200, 16, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Twin-rocket gunship, 16 rounds, reloads in seconds on the Airstrip" },
     { "Grenadier",      "B", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   170, 48,  700,  12, 7, 6,  21, 0, BR_BARRACKS, B_K_TECH,   "Elite lobber, splash grenades crack infantry and bunkers", 1 },
     { "Behemoth",       "N", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 2000, 52, 2300, 26, 8, 17, 22, 0, BR_FACTORY,  B_K_TECH,   "Super-heavy tank, twin 150mm shells with splash", 1 },
-    { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   580, 540, 1800, 20, 11, 12, 24, 6, BR_AIRFIELD, B_K_TECH,  "Supersonic fighter: homing Sidewinders, 6 strafing passes, hunts aircraft and vehicles", 0, 1 },
+    { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   950, 540, 1800, 20, 11, 12, 24, 8, BR_AIRFIELD, B_K_TECH,  "Supersonic fighter: homing Sidewinders, 8 strafing passes, hunts aircraft and vehicles", 0, 1 },
+
+    { "Medic Rig",      "Y", F_CYBER,   UK_VEH, UR_HEALER, AR_LIGHT, 520, 92, 900, 12, 7, 13, -1, 0, BR_FACTORY, -1, "Nano-repair field: heals every friendly soldier, vehicle and aircraft near it, structures slowly" },
+    { "Field Medic",    "Y", F_CLANKER, UK_VEH, UR_HEALER, AR_LIGHT, 540, 88, 900, 12, 7, 13, -1, 0, BR_FACTORY, -1, "Repair crew: heals every friendly soldier, vehicle and aircraft near it, structures slowly" },
 };
 
 const BuildType BUILDS[B_COUNT] = {
@@ -70,8 +73,8 @@ const BuildType BUILDS[B_COUNT] = {
     { "Data Center",     "E", F_CYBER, BR_TECH,     2000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank; EMP Strike, Orbital Scan, Overclock" },
     { "Laser Turret",    "L", F_CYBER, BR_TURRET,   1300, 1000, 14, 1, 1, -3, 8,  7,  B_C_POWER, "Heavy ground defense laser, needs power" },
     { "Patriot Battery", "T", F_CYBER, BR_AATURRET, 1700, 1200, 16, 2, 2, -3, 9,  8,  B_C_POWER, "Heavy missile defense, brutal against air, good on ground" },
-    { "Bitcoin Datacenter","M", F_CYBER, BR_INCOME,  1600, 1600, 22, 3, 2, -5, 7, -1, B_C_POWER, "Mines $75 every 5s (max 4), half rate on low power" },
-    { "Nuke Ramp",       "K", F_CYBER, BR_NUKE,     2600, 5000, 40, 3, 3, -6, 8, -1, B_C_TECH,  "Launches a tactical nuke every 5 min per ramp (key K)" },
+    { "Bitcoin Datacenter","M", F_CYBER, BR_INCOME,  1600, 1600, 22, 3, 2, -5, 7, -1, B_C_POWER, "Mines $450 every 5s (max 4), half rate on low power" },
+    { "Nuke Ramp",       "K", F_CYBER, BR_NUKE,     2600, 5000, 40, 3, 3, -6, 8, -1, B_C_TECH,  "Launches a devastating nuke every 5 min per ramp (key K): huge blast, mushroom cloud, lingering radiation" },
 
     { "Command Post",    "C", F_CLANKER, BR_HQ,       5200, 3000, 45, 4, 4, 0,  10, -1, -1,        "Trains Dozers. A Dozer can raise another one if this falls (max 3)" },
     { "Diesel Generator","P", F_CLANKER, BR_POWER,    1500, 800,  12, 3, 2, 10, 7,  -1, -1,        "Provides 10 power" },
@@ -82,8 +85,8 @@ const BuildType BUILDS[B_COUNT] = {
     { "Arms Lab",        "E", F_CLANKER, BR_TECH,     2200, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher; Shell Storm, Recon Flight, Ordnance" },
     { "Gun Nest",        "N", F_CLANKER, BR_TURRET,   1600, 900,  14, 1, 1, -1, 8,  16, -1,        "Machine gun bunker, ground and light air" },
     { "Rocket Battery",  "T", F_CLANKER, BR_AATURRET, 1400, 1200, 16, 2, 2, -3, 9,  17, B_K_POWER, "Rocket defense, ground and air" },
-    { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $60 every 5s forever (max 4), no power needed" },
-    { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "Launches a tactical nuke every 5 min per ramp (key K)" },
+    { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
+    { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "Launches a devastating nuke every 5 min per ramp (key K): huge blast, mushroom cloud, lingering radiation" },
 };
 
 const PowerType POWERS[F_COUNT] = {

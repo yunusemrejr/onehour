@@ -302,7 +302,7 @@ void Game::buildButtons() {
         }
         if (role == BR_NUKE) {
             int rdy = g_sim.nukesReady(g_sim.humanPlayer);
-            snprintf(tip, sizeof tip, "Launch Nuke  [K]  Devastates a %d tile radius. One warhead per ramp every 5 minutes%s", (int)NUKE_RADIUS, pl.lowPower() ? "  (LOW POWER)" : "");
+            snprintf(tip, sizeof tip, "Launch Nuke  [K]  Obliterates a %d tile radius and leaves lethal radiation for over a minute. One warhead per ramp every 5 minutes%s", (int)NUKE_RADIUS, pl.lowPower() ? "  (LOW POWER)" : "");
             add(BK_NUKE, 0, rdy > 0, "Launch Nuke", tip);
         }
         if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY) add(BK_RALLY, 0, true, "Rally", "Set rally point (right-click ground while selected)");

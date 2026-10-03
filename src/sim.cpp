@@ -10,7 +10,7 @@ static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
-    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear();
+    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); fallouts.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -535,24 +535,70 @@ void Sim::updateNukes() {
         nukes.erase(nukes.begin() + i);
         float R = NUKE_RADIUS * TILE;
         std::vector<Ref> hit;
-        forEachNear(n.pos, R + 60, [&](Entity& e) { if (e.kind != EK_RESOURCE && enemies(n.owner, e.owner)) hit.push_back(refOf(e)); });
+        forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
         for (auto r : hit) {
             Entity* e = get(r); if (!e) continue;
             float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
             if (d > R) continue;
-            float f = 1.0f - 0.65f * (d / R);
-            applyDamage(*e, (e->isBuilding() ? 2600.0f : 2200.0f) * f, n.owner, NOREF, nullptr);
+            float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
+            if (e->isAir()) continue;
+            Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
+            if (enemies(n.owner, e->owner)) {
+                bool bld = e->isBuilding();
+                applyDamage(*e, (bld ? 9500.0f : 6000.0f) * f, n.owner, NOREF, nullptr);
+                e = get(r); if (!e) continue;
+                e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f);   // survivors are stunned by the pulse
+            }
+            if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
+                Vec2 np = e->pos + away * (90.0f * f);
+                if (g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
+                e->path.clear();
+            }
         }
-        fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 1.6f, rgb(255, 240, 200), R * 1.1f});
-        fx.push_back({FX_RING, n.pos, n.pos, 0, 1.4f, rgb(255, 200, 120), R});
-        fx.push_back({FX_EMP, n.pos, n.pos, 0, 1.6f, rgb(255, 210, 140), R});
-        for (int k = 0; k < 18; k++) {
-            float a = rng.f(0, 6.283f), r = rng.f(0, R * 0.8f); Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
-            fx.push_back({FX_EXPLODE, p, p, -rng.f(0, 0.8f), 0.9f, rgb(255, 150, 50), rng.f(24, 50)});
-            fx.push_back({FX_SMOKE, p, p, -rng.f(0, 1.0f), 4.5f, rgb(70, 62, 56), rng.f(24, 46), Vec2(rng.f(-10, 10), rng.f(-40, -18))});
+        // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
+        fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, rgb(255, 240, 200), R * 1.3f});
+        fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, rgb(255, 210, 140), R * 1.2f});
+        fx.push_back({FX_RING, n.pos, n.pos, -0.5f, 2.4f, rgb(255, 180, 100), R * 1.7f});
+        fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.0f, rgb(255, 220, 160), R * 1.3f});
+        fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 18.0f, rgb(255, 255, 255), R});
+        for (int k = 0; k < 44; k++) {
+            float a = rng.f(0, 6.283f), r = R * std::sqrt(rng.f(0.0f, 1.0f)) * 1.05f; Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
+            fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 3.0f) - r / R * 0.8f, 1.0f, rgb(255, 150, 50), rng.f(26, 70)});
+            fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f), 6.0f, rgb(60, 54, 50), rng.f(28, 56), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
         }
+        for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
+        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, rgb(120, 255, 90), R * 0.95f});
+        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f});
         emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
         emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+    }
+}
+
+// Radioactive fallout: for FALLOUT_LIFE seconds everything on the ground inside the zone is poisoned, friend and foe alike;
+// during the first seconds fires and secondary blasts keep tearing through it.
+void Sim::updateFallout() {
+    for (size_t i = 0; i < fallouts.size();) {
+        Fallout& f = fallouts[i];
+        f.t += SIM_DT; f.tick += SIM_DT;
+        if (f.t >= FALLOUT_LIFE) { fallouts.erase(fallouts.begin() + i); continue; }
+        if (f.t < 12.0f && rng.f() < 0.06f) {   // chaos: random blasts and flame inside the crater
+            float a = rng.f(0, 6.283f), r = f.r * std::sqrt(rng.f(0.0f, 1.0f)) * 0.9f; Vec2 p = f.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
+            fx.push_back({FX_EXPLODE, p, p, 0, 0.8f, rgb(255, 150, 60), rng.f(20, 44)});
+            fx.push_back({FX_SMOKE, p, p, 0, 4.0f, rgb(52, 48, 44), rng.f(18, 36), Vec2(rng.f(-8, 8), rng.f(-34, -16))});
+        }
+        if (f.tick >= 0.5f) {
+            f.tick -= 0.5f;
+            float strength = f.t < FALLOUT_LIFE - 15.0f ? 1.0f : (FALLOUT_LIFE - f.t) / 15.0f;   // dies down at the end
+            std::vector<Ref> in;
+            forEachNear(f.pos, f.r, [&](Entity& e) { if (e.kind != EK_RESOURCE && !e.isAir() && dist(e.pos, f.pos) <= f.r) in.push_back(refOf(e)); });
+            for (auto r : in) {
+                Entity* e = get(r); if (!e) continue;
+                float dmg = e->isBuilding() ? e->maxHp * 0.006f : std::max(7.0f, e->maxHp * 0.03f);
+                applyDamage(*e, dmg * strength, -1, NOREF, nullptr);
+            }
+        }
+        i++;
     }
 }
 
@@ -651,6 +697,20 @@ bool Sim::canTarget(const Entity& e, const Entity& t) const {
     return wp.ground;
 }
 
+
+// how many enemy anti-air guns cover a target (jets avoid diving into flak when softer targets exist)
+float Sim::aaCover(const Entity& t, int owner) {
+    float n = 0;
+    forEachNear(t.pos, 11.0f * TILE, [&](Entity& g) {
+        if (g.kind == EK_RESOURCE || !enemies(owner, g.owner) || !g.alive) return;
+        if (g.isBuilding() && !g.constructed) return;
+        int w = g.weapon();
+        if (w < 0 || !WEAPONS[w].air) return;
+        if (distToEntity(t.pos, g) <= (WEAPONS[w].range + 1.0f) * TILE) n += WEAPONS[w].mult[AR_AIR] >= 1.5f ? 2.0f : 1.0f;
+    });
+    return n;
+}
+
 Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
     int w = e.weapon();
     if (w < 0) return nullptr;
@@ -665,6 +725,7 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
         if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
+        if (e.isAir() && !t.isAir()) { if (e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f); if (t.isBuilding() && t.bt().role != BR_AATURRET && t.bt().weapon < 0) score += 1.5f; }
         if (score < bs) { bs = score; best = &t; }
     });
     return best;
@@ -687,6 +748,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
         if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;
+        if (e.isAir() && !t.isAir() && e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
         if (score < bs) { bs = score; best = &t; }
     });
     return best;
@@ -980,11 +1042,11 @@ void Sim::jetAttack(Entity& e, Entity& t) {
     float want = std::atan2(to.y, to.x);
     if (e.jetBreak > 0) {
         e.jetBreak -= SIM_DT;
-        want = e.angle;                                    // fly on past the target
+        want = std::atan2(-to.y, -to.x);                   // peel away: turn back out of range instead of flying through the defences
     } else if (d <= w.range && std::abs(angDiff(e.angle, want)) < 0.3f) {
-        if (e.cooldown <= 0 && tryFire(e, t)) { e.jetBreak = 0.95f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
+        if (e.cooldown <= 0 && tryFire(e, t)) { e.jetBreak = 1.25f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
     } else if (d < 2.0f && e.cooldown > 0) {
-        e.jetBreak = 0.8f;                                 // arrived with the guns still cooling: commit to the fly-through
+        e.jetBreak = 0.9f;                                 // arrived with the guns still cooling: peel off and come round again
     }
     // stay over the map: near an edge, the breakaway curves back toward the middle
     const float edge = 3.5f * TILE;
@@ -1004,6 +1066,20 @@ void Sim::updateUnit(Entity& e) {
     if (e.cooldown > 0) e.cooldown -= SIM_DT;
     if (e.disabledUntil > time) return;
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
+
+    // medics: a healing field around them (units at the full rate, structures slowly), pulsed four times a second
+    if (ut.role == UR_HEALER && (tick + e.gen) % 5 == 0) {
+        float R = HEAL_RADIUS * TILE, dt = 5 * SIM_DT; int healed = 0;
+        forEachNear(e.pos, R, [&](Entity& t) {
+            if (&t == &e || t.owner != e.owner || t.kind == EK_RESOURCE || t.hp >= t.maxHp) return;
+            if (t.isBuilding() && !t.constructed) return;
+            if (dist(t.pos, e.pos) > R + t.radius()) return;
+            t.hp = std::min(t.maxHp, t.hp + t.maxHp * HEAL_RATE * (t.isBuilding() ? 0.33f : 1.0f) * dt);
+            healed++;
+            if (((tick / 5) + (u32)(&t - &ents[0])) % 3 == 0) fx.push_back({FX_SPARK, t.pos + Vec2(rng.f(-6, 6), rng.f(-8, 2)), Vec2(), 0, 0.5f, rgb(110, 255, 150), 4});
+        });
+        if (tick % 20 == (e.gen % 20) || (healed && tick % 10 == 0)) fx.push_back({FX_RING, e.pos, e.pos, 0, 1.2f, rgb(110, 255, 160), R * 0.8f});
+    }
 
     // aircraft settle onto the pad when idle there and climb away otherwise (drawn lower and without a detached shadow)
     if (e.isAir()) {
@@ -1031,6 +1107,28 @@ void Sim::updateUnit(Entity& e) {
 
     switch (e.order) {
     case O_IDLE: {
+        if (ut.role == UR_HEALER) {   // drift toward the nearest wounded friendly unit
+            if ((tick + e.gen) % 10 == 0) {
+                Entity* best = nullptr; float bd = 14.0f * TILE;
+                forEachNear(e.pos, bd, [&](Entity& t) {
+                    if (&t == &e || t.owner != e.owner || !t.isUnit() || t.ut().role == UR_HEALER || t.hp >= t.maxHp * 0.98f) return;
+                    float d = dist(t.pos, e.pos); if (d < bd) { bd = d; best = &t; }
+                });
+                if (best && bd > HEAL_RADIUS * TILE * 0.5f) { e.order = O_MOVE; e.target = g_map.nearestFree(best->pos, 6); e.targetEnt = NOREF; requestPath(e, e.target); }
+            }
+            break;
+        }
+        if (ut.role == UR_DOZER) {    // bulldozers mend damaged structures on their own when they have nothing to do
+            if ((tick + e.gen) % 20 == 0) {
+                Entity* best = nullptr; float bd = 1e18f;
+                for (auto& b : ents) {
+                    if (!b.alive || !b.isBuilding() || b.owner != e.owner || !b.constructed || b.hp >= b.maxHp * 0.995f || time - b.lastDamaged < 4.0f) continue;
+                    float d = dist2(b.pos, e.pos); if (d < bd) { bd = d; best = &b; }
+                }
+                if (best) { e.order = O_BUILD; e.targetEnt = refOf(*best); e.repathTimer = 0; e.path.clear(); }
+            }
+            break;
+        }
         if (ut.weapon < 0) break;
         if (e.isAir()) {
             // hover home
@@ -1362,7 +1460,7 @@ void Sim::updateBuilding(Entity& b) {
         b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
         if (b.actionTimer >= INCOME_INTERVAL) {
             b.actionTimer -= INCOME_INTERVAL;
-            int amt = pl.faction == F_CYBER ? 75 : 60;
+            int amt = pl.faction == F_CYBER ? INCOME_CYBER : INCOME_CLANKER;
             pl.money += amt; pl.mined += amt;
             fx.push_back({FX_SPARK, b.pos, b.pos, 0, 0.6f, rgb(255, 224, 90), 9});
         }
@@ -1489,6 +1587,7 @@ void Sim::step() {
     updateProjectiles();
     updateStorms();
     updateNukes();
+    updateFallout();
     separateUnits();
     updateFx();
     if (tick % 4 == 0) updateVision();

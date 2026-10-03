@@ -51,7 +51,7 @@ std::string Brain::defaultPath() {
 bool Brain::save(const char* path) const {
     FILE* f = fopen(path, "w");
     if (!f) return false;
-    fprintf(f, "onehour-brain 3 %d %d\n", games, waveSamples);   // v3: the jets joined the unit table; per-type rows are indexed by UnitTypeId
+    fprintf(f, "onehour-brain 4 %d %d\n", games, waveSamples);   // v4: the medics joined the unit table (v3: the jets); per-type rows are indexed by UnitTypeId
     for (int i = 0; i < WAVE_F; i++) fprintf(f, "%.5f ", ww[i]);
     fprintf(f, "\n");
     for (int t = 0; t < U_COUNT; t++) { fprintf(f, "%d", unitSamples[t]); for (int i = 0; i < UNIT_F; i++) fprintf(f, " %.5f", wu[t][i]); fprintf(f, "\n"); }
@@ -64,10 +64,10 @@ bool Brain::load(const char* path) {
     if (!f) return false;
     Brain b;
     int ver = 0;
-    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver == 2 || ver == 3);   // older layouts index a different unit table: start fresh
+    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 4);   // older layouts index a different unit table: start fresh
     for (int i = 0; ok && i < WAVE_F; i++) ok = fscanf(f, "%f", &b.ww[i]) == 1;
     // v2 had 22 rows (11 per army, no jets): map them onto the new table, the jets keep the prior
-    for (int row = 0; ok && row < (ver == 2 ? 22 : (int)U_COUNT); row++) {
+    for (int row = 0; ok && row < (ver == 2 ? 22 : (ver == 3 ? 24 : (int)U_COUNT)); row++) {
         int t = row;
         if (ver == 2 && row >= 11) t = row + 1;            // the Clanker block moved up by one to make room for the Cyber jet
         ok = fscanf(f, "%d", &b.unitSamples[t]) == 1;

@@ -38,7 +38,7 @@ void AiPlayer::init(int p, u64 seed) {
 
 Entity* AiPlayer::idleDozer() {
     for (auto& e : g_sim.ents)
-        if (e.alive && e.isUnit() && e.owner == player && e.ut().role == UR_DOZER && (e.order == O_IDLE || e.order == O_MOVE)) return &e;
+        if (e.alive && e.isUnit() && e.owner == player && e.ut().role == UR_DOZER && (e.order == O_IDLE || e.order == O_MOVE || (e.order == O_BUILD && g_sim.get(e.targetEnt) && g_sim.get(e.targetEnt)->constructed))) return &e;   // a dozer busy mending a finished structure is free to build
     return nullptr;
 }
 

@@ -257,7 +257,7 @@ void Game::drawFx() {
         if (f.t < 0 || f.type == FX_RUBBLE || f.type == FX_WRECK) continue;
         float k = f.t / f.life;
         Vec2 a = worldToScreen(f.a), b = worldToScreen(f.b);
-        if ((f.type == FX_BEAM || f.type == FX_RAIL || f.type == FX_ARC) ? false : (a.x < -80 || a.y < -80 || a.x > SCREEN_W + 80 || a.y > VIEW_H + 80)) continue;
+        if ((f.type == FX_BEAM || f.type == FX_RAIL || f.type == FX_ARC || f.type == FX_MUSHROOM || f.type == FX_FALLOUT) ? false : (a.x < -80 || a.y < -80 || a.x > SCREEN_W + 80 || a.y > VIEW_H + 80)) continue;
         switch (f.type) {
         case FX_BEAM: {   // textured bolt: wide soft glow, bright core, hot white filament
             float len = hyp(b.x - a.x, b.y - a.y); if (len < 1) break;
@@ -340,6 +340,53 @@ void Game::drawFx() {
             g.drawSized(g.fxs.ring, a.x, a.y, d, d, 0, f.color, (u8)(255 * (1 - k)));
             g.drawSized(g.fxs.ring, a.x, a.y, d * 0.7f, d * 0.7f, 0, f.color, (u8)(150 * (1 - k)));
             g.drawSized(g.fxs.ring, a.x, a.y, d * 0.4f, d * 0.4f, 0, f.color, (u8)(90 * (1 - k)));
+            break;
+        }
+        case FX_MUSHROOM: {   // stem, rolling cap and a hot underside, growing over several seconds
+            float R = f.size * 0.52f, t = f.t;
+            float grow = clampf(t / 7.0f, 0, 1); grow = 1 - (1 - grow) * (1 - grow);
+            float fade = clampf((1 - k) * 3.5f, 0, 1);
+            float heat = clampf(1 - t / 6.0f, 0, 1);
+            Color tint = Color{(u8)(170 + 85 * heat), (u8)(150 + 20 * heat), (u8)(135 - 55 * heat), 255};
+            float H = R * 1.7f * grow, Rc = R * (0.25f + 0.55f * grow);
+            Vec2 top(a.x, a.y - H);
+            if (heat > 0) g.glowAdd(a.x, a.y, R * 1.1f * heat, Color{255, 150, 60, (u8)(170 * heat * fade)});
+            for (int i = 0; i < 16; i++) {   // stem
+                float u = i / 15.0f; float wob = std::sin(t * 1.3f + i * 1.7f) * R * 0.04f;
+                float rad = R * (0.16f - 0.05f * u) * (0.6f + 0.4f * grow) + 6;
+                Vec2 p(a.x + wob, a.y - H * u * 0.96f);
+                g.drawSized(g.fxs.smoke[i & 3], p.x, p.y, rad * 2.4f, rad * 2.4f, t * 0.25f + i, tint, (u8)(230 * fade));
+            }
+            for (int i = 0; i < 26; i++) {   // cap: a rolling torus of billows
+                float an = i * 6.2832f / 26 + t * 0.12f;
+                float rx = Rc * (0.75f + 0.2f * std::sin(i * 2.1f)), ry = Rc * 0.38f;
+                Vec2 p(top.x + std::cos(an) * rx, top.y + std::sin(an) * ry - Rc * 0.1f * std::sin(an + t));
+                float rad = Rc * 0.46f + 10;
+                float under = std::sin(an) > 0 ? 1.0f : 0.8f;   // near side catches the fire glow
+                Color c = Color{(u8)(tint.r * under), (u8)(tint.g * under), (u8)(tint.b * under), 255};
+                g.drawSized(g.fxs.smoke[(i + 1) & 3], p.x, p.y, rad * 2.6f, rad * 2.6f, t * 0.2f + i * 0.9f, c, (u8)(255 * fade));
+            }
+            for (int i = 0; i < 8; i++) {   // dense core
+                float an = i * 0.785f + t * 0.2f; Vec2 p(top.x + std::cos(an) * Rc * 0.35f, top.y - Rc * 0.12f + std::sin(an) * Rc * 0.15f);
+                g.drawSized(g.fxs.smoke[i & 3], p.x, p.y, Rc * 1.1f, Rc * 1.1f, t * 0.3f + i, shade(tint, 0.85f), (u8)(240 * fade));
+            }
+            if (heat > 0) { g.glowAdd(top.x, top.y + Rc * 0.15f, Rc * 1.0f, Color{255, 170, 80, (u8)(190 * heat * fade)}); g.glowAdd(top.x, top.y, Rc * 0.6f, Color{255, 240, 200, (u8)(200 * heat * fade)}); }
+            break;
+        }
+        case FX_FALLOUT: {   // sickly green haze, a pulsing boundary and drifting motes
+            float R = f.size, fade = f.t < 3.0f ? f.t / 3.0f : clampf((1 - k) * 8.0f, 0, 1);
+            float pulse = 0.5f + 0.5f * std::sin(wallTime * 2.4f);
+            float cx = a.x, cy = a.y;
+            if (cx < -R - 40 || cy < -R - 40 || cx > SCREEN_W + R + 40 || cy > VIEW_H + R + 40) break;
+            g.glowAdd(cx, cy, R * 0.95f, Color{70, 220, 40, (u8)((26 + 18 * pulse) * fade)});
+            g.drawSized(g.fxs.ring, cx, cy, R * 2.0f, R * 2.0f, 0, rgb(120, 255, 80), (u8)((90 + 90 * pulse) * fade));
+            g.drawSized(g.fxs.ring, cx, cy, R * 1.5f, R * 1.5f, 0, rgb(120, 255, 80), (u8)(40 * fade));
+            for (int i = 0; i < 26; i++) {
+                float h1 = std::fmod(i * 0.6180339f, 1.0f), h2 = std::fmod(i * 0.7548776f + 0.3f, 1.0f);
+                float an = h1 * 6.2832f + wallTime * 0.05f * (1 + h2), rr = R * std::sqrt(h2) * 0.95f;
+                float fl = 0.5f + 0.5f * std::sin(wallTime * (1.5f + h1 * 3) + i);
+                g.glowAdd(cx + std::cos(an) * rr, cy + std::sin(an) * rr * 1.0f - fl * 6, 9 + 5 * fl, Color{110, 255, 70, (u8)(90 * fl * fade)});
+            }
             break;
         }
         default: break;

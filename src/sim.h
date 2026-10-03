@@ -93,7 +93,7 @@ struct Projectile {
     bool alive = true;
 };
 
-enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_SPARK, FX_RING, FX_DEBRIS, FX_EMP, FX_WRECK, FX_RUBBLE };
+enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_SPARK, FX_RING, FX_DEBRIS, FX_EMP, FX_WRECK, FX_RUBBLE, FX_MUSHROOM, FX_FALLOUT };
 struct Fx {
     FxType type; Vec2 a, b; float t = 0, life = 1; Color color; float size = 8; Vec2 vel;
     bool seen = false;      // render side: cosmetic particles for this effect have been spawned
@@ -150,6 +150,9 @@ struct Sim {
     struct Nuke { Vec2 from, pos; int owner; float t; };
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
+    static constexpr float FALLOUT_LIFE = 80.0f;
+    struct Fallout { Vec2 pos; float r; float t; float tick; };
+    std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid
     static const int GRID_CELL = 64;
@@ -229,6 +232,7 @@ private:
     void updateFx();
     void updateStorms();
     void updateNukes();
+    void updateFallout();
     void updateResearch();
     void separateUnits();
     void checkVictory();
@@ -238,6 +242,7 @@ private:
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w);
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct);
+    float aaCover(const Entity& t, int owner);
     Entity* acquireTarget(Entity& e, float range);
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);

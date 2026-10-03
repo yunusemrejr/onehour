@@ -113,8 +113,14 @@ little, like Zero Hour's).
   times N rendered frames. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
+**Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura
+heals every friendly soldier, vehicle and aircraft within 5 tiles (6% of max health per second; structures at a third of that), and an idle
+medic drifts toward the nearest wounded friend. Idle dozers also repair damaged structures on their own. Jets now peel away from each strafing
+pass instead of flying through the defences, steer clear of heavily covered targets when softer ones exist, and carry more armour and ammo.
+`--supporttest` covers medics, dozer repair, nukes and fallout.
+
 ## Income and nukes
 
-- **Oil Well** (Clanker, $1400) pumps $60 every 5 s for as long as it stands, no power needed. **Bitcoin Datacenter** (Cyber, $1600) mines $75 every 5 s and runs at half rate on low power. Up to 4 each, so income continues after the supply piles run dry.
-- **Nuke Ramp** (both armies, $5000, needs the tech structure): each ramp can launch one tactical nuke every 5 minutes (60 s arming after it is built). The warhead flies for 7 s, so the enemy gets a warning circle, and it devastates a 6 tile radius of enemy units and structures. Any number of ramps can be built; more ramps means more warheads per cycle.
+- **Oil Well** (Clanker, $1400) pumps $380 every 5 s for as long as it stands, no power needed. **Bitcoin Datacenter** (Cyber, $1600) mines $450 every 5 s and runs at half rate on low power. Up to 4 each, so income continues after the supply piles run dry.
+- **Nuke Ramp** (both armies, $5000, needs the tech structure): each ramp can launch one tactical nuke every 5 minutes (60 s arming after it is built). The warhead flies for 7 s, so the enemy gets a warning circle, and it obliterates an 11 tile radius of enemy units and structures (a lethal core, then falling damage), stuns and hurls the survivors, and sets off chain explosions under a rising mushroom cloud. The crater stays radioactive for 80 s: everything on the ground inside it, friend or foe, keeps taking damage. Any number of ramps can be built; more ramps means more warheads per cycle.
 - Airfields honor their rally point: new aircraft fly there and wait, going back to the pad only to rearm.

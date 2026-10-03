@@ -18,7 +18,7 @@ static void usage() {
            "  --train [N]      self-play N games to train the AI brain (saved to ~/.local/share/onehour/brain.txt)\n"
            "  --eval [N]       learned AI vs plain heuristic AI, N games (uses --d0 as difficulty)\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -317,7 +317,7 @@ static bool econTest(u64 seed) {
         if (placed != INCOME_MAX) return fail("income structure limit not enforced");
         int m0 = pl.money;
         for (int t = 0; t < 20 * 60; t++) { g_sim.step(); g_sim.events.clear(); }
-        int gain = pl.money - m0, per = fac[0] == F_CYBER ? 75 : 60;
+        int gain = pl.money - m0, per = fac[0] == F_CYBER ? INCOME_CYBER : INCOME_CLANKER;
         int expect = INCOME_MAX * per * 12;
         if (gain < expect - 2 * per * INCOME_MAX || gain > expect + 2 * per * INCOME_MAX) { fprintf(stderr, "gained %d expected about %d\n", gain, expect); return fail("income structures pay the wrong amount"); }
         // nukes: two ramps, an enemy cluster
@@ -482,11 +482,97 @@ static bool jetTest(u64 seed) {
         for (int t = 0; t < 20 * 30; t++) { g_sim.step(); g_sim.events.clear(); }
         Entity* j = g_sim.get(jet);
         if (j && j->ammo < UNITS[jetType].ammo && j->order != O_ATTACK) return fail("jet did not rearm");
+        // behaviour in every order mode: idle auto-acquire, attack-move, guard area and move-then-fight must all end with kills
+        for (int mode = 0; mode < 5; mode++) {
+            const char* names[5] = { "idle", "attack-move", "guard area", "move", "defended" };
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isUnit()) g_sim.destroy(e, false);
+            Entity* jj = g_sim.get(jet);
+            if (!jj) return fail("jet lost between modes");
+            g_sim.cmdStop({jet});
+            for (int t = 0; t < 20 * 25; t++) { g_sim.step(); g_sim.events.clear(); }   // back on the pad, rearmed
+            jj = g_sim.get(jet);
+            if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "  after settle: pos %.0f,%.0f pad %.0f,%.0f ammo %d order %d alt %.2f\n", jj->pos.x, jj->pos.y, g_sim.get(af)->pos.x, g_sim.get(af)->pos.y, jj->ammo, (int)jj->order, jj->alt);
+            Vec2 base = g_sim.get(af)->pos;
+            Vec2 where = g_map.nearestFree(base + Vec2((mode == 0 ? 7.0f : 16.0f) * TILE, 3 * TILE), 40);
+            std::vector<Ref> vs;
+            for (int i = 0; i < 4; i++) vs.push_back(g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, where + Vec2(i * 22, (i % 2) * 18)));
+            float h0 = 0; for (auto v : vs) h0 += g_sim.get(v)->hp;
+            if (mode == 4) {   // the column sits under anti-air cover: the jet must still hurt it, and should not simply die
+                int aa = fac[1] == F_CYBER ? B_C_PATRIOT : B_K_ROCKET;
+                for (int k = 0; k < 2; k++) for (int dy = 0; dy < 8; dy++) { int tx = tileOf(where.x) + 3 + k * 3, ty = tileOf(where.y) + dy; if (g_map.buildable(tx, ty) && g_map.buildable(tx + 1, ty + 1) && g_map.buildable(tx + 1, ty) && g_map.buildable(tx, ty + 1)) { g_sim.placeBuilding(aa, 1, tx, ty, true); break; } }
+                g_sim.updatePowerPublic();
+            }
+            if (mode == 1 || mode == 4) g_sim.cmdMove({jet}, where, true);
+            else if (mode == 2) g_sim.cmdGuardArea({jet}, where, 6 * TILE);
+            else if (mode == 3) g_sim.cmdMove({jet}, where, false);
+            int ammoStart = g_sim.get(jet)->ammo;
+            for (int t = 0; t < 20 * 40; t++) { g_sim.step(); g_sim.events.clear(); if (!g_sim.get(jet)) break; }
+            float h1 = 0; for (auto v : vs) if (Entity* e = g_sim.get(v)) h1 += e->hp;
+            Entity* j2 = g_sim.get(jet);
+            fprintf(stderr, "jettest %s %s: damage %.0f of %.0f, ammo %d->%d, order %d, jet hp %.0f\n", FACTION_NAME[fac[0]], names[mode], h0 - h1, h0, ammoStart, j2 ? j2->ammo : -1, j2 ? (int)j2->order : -1, j2 ? j2->hp : 0.0f);
+            if (mode != 3 && h1 >= h0) { fprintf(stderr, "mode %s\n", names[mode]); return fail("jet never attacked in this order mode"); }
+        }
         printf("jettest %s: ok (top speed %.0f px/s, turn %.1f rad/s, damage %.0f, kills %d)\n", FACTION_NAME[fac[0]], maxSpeed, maxTurn, hp0 - hp1, dead);
     }
     return true;
 }
 
+
+// Medics heal everything near them, idle dozers mend damaged structures by themselves, nukes flatten a wide area and leave radiation behind.
+static bool supportTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "supporttest: %s\n", m); return false; };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        Player& pl = g_sim.players[0]; pl.money = 100000;
+        std::fill(pl.explored.begin(), pl.explored.end(), 1);
+        int bb = firstBuildOf(fac[0]), ub = firstUnitOf(fac[0]);
+        Vec2 b0 = pl.basePos;
+        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
+        Vec2 sp = spot(bb + BR_POWER, 5); g_sim.placeBuilding(bb + BR_POWER, 0, (int)sp.x, (int)sp.y, true);
+        Vec2 sf = spot(bb + BR_FACTORY, 5); Ref fact = g_sim.placeBuilding(bb + BR_FACTORY, 0, (int)sf.x, (int)sf.y, true);
+        g_sim.updatePowerPublic();
+        int medic = fac[0] == F_CYBER ? U_C_MEDIC : U_K_MEDIC;
+        if (!g_sim.cmdTrain(fact, medic)) return fail("medic not trainable at the factory");
+        Ref med;
+        for (int t = 0; t < 20 * 40 && !med.valid(); t++) { g_sim.step(); g_sim.events.clear(); for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.type == medic) med = g_sim.refOf(e); }
+        if (!med.valid()) return fail("medic never produced");
+        // wounded soldier, tank, aircraft next to the medic; a second wounded tank far away
+        Vec2 at = g_sim.get(med)->pos + Vec2(40, 20);
+        Ref inf = g_sim.spawnUnit(ub + 2, 0, at), tank = g_sim.spawnUnit(ub + 5, 0, at + Vec2(30, 10)), air = g_sim.spawnUnit(ub + 8, 0, at + Vec2(0, 40));
+        Ref far = g_sim.spawnUnit(ub + 5, 0, g_map.nearestFree(at + Vec2(30 * TILE, 0), 30));
+        for (Ref r : { inf, tank, air, far }) g_sim.get(r)->hp *= 0.3f;
+        g_sim.cmdMove({med}, g_sim.get(med)->pos, false);
+        for (int t = 0; t < 20 * 14; t++) { g_sim.step(); g_sim.events.clear(); }
+        for (Ref r : { inf, tank, air }) { Entity* e = g_sim.get(r); if (!e || e->hp < e->maxHp * 0.95f) return fail("the medic did not heal a nearby friend"); }
+        // damaged structure: the idle dozer repairs it with no order
+        Entity* fb = g_sim.get(fact); fb->hp = fb->maxHp * 0.4f; fb->lastDamaged = -100;
+        Ref dz; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER) dz = g_sim.refOf(e);
+        g_sim.cmdStop({dz});
+        for (int t = 0; t < 20 * 80; t++) { g_sim.step(); g_sim.events.clear(); }
+        fb = g_sim.get(fact);
+        if (!fb || fb->hp < fb->maxHp * 0.9f) { fprintf(stderr, "factory hp %.0f / %.0f\n", fb ? fb->hp : 0, fb ? fb->maxHp : 0); return fail("the idle dozer did not repair the damaged structure"); }
+        // nuke: lots of enemy units and a structure, 9 tiles from ground zero
+        Vec2 gz = g_map.nearestFree(b0 + Vec2(0, 30 * TILE), 60);
+        Ref e1 = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, gz), e2 = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, g_map.nearestFree(gz + Vec2(9 * TILE, 0), 20));
+        Ref ally = g_sim.spawnUnit(ub + 5, 0, g_map.nearestFree(gz + Vec2(0, 3 * TILE), 20));
+        Vec2 gzE = g_sim.get(e1)->pos;
+        g_sim.nukes.push_back({b0, gzE, 0, Sim::NUKE_FLIGHT - 0.05f});
+        for (int t = 0; t < 10; t++) { g_sim.step(); g_sim.events.clear(); if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "step %d nukes %zu fallouts %zu\n", t, g_sim.nukes.size(), g_sim.fallouts.size()); }
+        if (g_sim.get(e1)) return fail("a tank at ground zero survived the nuke");
+        if (g_sim.get(e2)) return fail("a tank at 9 tiles survived the nuke");
+        if (g_sim.fallouts.empty()) { fprintf(stderr, "nukes %zu over %d gameOver %d t %.1f\n", g_sim.nukes.size(), (int)g_sim.gameOver, (int)g_sim.gameOver, g_sim.time); return fail("no radiation left behind"); }
+        Entity* al = g_sim.get(ally); float hpA = al ? al->hp : 0;
+        for (int t = 0; t < 20 * 20; t++) { g_sim.step(); g_sim.events.clear(); }
+        al = g_sim.get(ally);
+        if (al && al->hp >= hpA && Vec2(al->pos - gzE).len() < NUKE_RADIUS * TILE * 0.9f) return fail("radiation did not hurt a unit standing in it");
+        for (int t = 0; t < 20 * 90; t++) { g_sim.step(); g_sim.events.clear(); }
+        if (!g_sim.fallouts.empty()) return fail("radiation never faded");
+        printf("supporttest %s: ok\n", FACTION_NAME[fac[0]]);
+    }
+    return true;
+}
 
 // The AI's learned weights from before the jets (v2: 22 unit rows) must load into the new unit table without shifting any army's rows.
 static bool brainTest() {
@@ -753,6 +839,7 @@ int main(int argc, char** argv) {
         else if (a == "--scenario") { g_map.generate(); return scenarioTest(seed) ? 0 : 1; }
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
+        else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;
         else if (a == "--areatest") { g_map.generate(); return areaTest(seed) ? 0 : 1; }
@@ -829,6 +916,7 @@ int main(int argc, char** argv) {
             g.draw(g.unitBody[t][owner], x1, y1, 0, 1); if (g.unitTurret[t][owner].tex) g.draw(g.unitTurret[t][owner], x1, y1, 0, 1);
             if (UNITS[t].kind != UK_AIR) { g.draw(g.unitAnim[t][owner][0], 400 + u * 32, y1, 0, 1); if (g.unitTurret[t][owner].tex) g.draw(g.unitTurret[t][owner], 400 + u * 32, y1, 0, 1); }
         }
+        for (int m = 0; m < 2; m++) { int t = m == 0 ? U_C_MEDIC : U_K_MEDIC; g.draw(g.shadowLarge, 860 + m * 110, 306, 0, 1.6f); g.draw(g.unitBody[t][0], 860 + m * 110, 300, 0, 3); }   // the medics sit after both unit blocks
         for (int i = 0; i < 4; i++) g.draw(g.turretHead[i], 800 + i * 50, 480, 0, 1.2f);
         for (int p = 0; p < MAX_PLAYERS; p++) g.drawFlag(820 + p * 50, 590, p, 1.4f, 1.0f);
         g_game.screenshot(sheetPath);
@@ -940,7 +1028,7 @@ int main(int argc, char** argv) {
                 std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
                 bool boom = getenv("ONEHOUR_NEWB")[0] == 'b';   // ONEHOUR_NEWB=boom: freeze a moment after detonation instead of the flight
                 g_sim.nukes.push_back({g_sim.get(last)->pos, g_sim.get(last)->pos + Vec2(300, 40), 0, boom ? Sim::NUKE_FLIGHT - 0.05f : 4.0f});
-                if (boom) for (int t = 0; t < 22; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                if (boom) for (int t = 0, tn = getenv("ONEHOUR_BOOMT") ? atoi(getenv("ONEHOUR_BOOMT")) : 22; t < tn; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 g_game.cam = Vec2(clampf(g_sim.get(last)->pos.x - SCREEN_W / 2 + 100, 0, WORLD_W - SCREEN_W), clampf(g_sim.get(last)->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
             }
             // select something for the HUD
