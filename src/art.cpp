@@ -462,6 +462,128 @@ void gunshipBody(Art& A) {   // Vulture Gunship: fuselage, tail boom, stub wings
     teamDot(A, 21.5f, 32, 2.7f);
 }
 
+
+// ---------------------------------------------------------------- detail layer
+// Extra geometry drawn over every base sprite: soldier kit, hull skirts, stowage, vents, lamps, markings and weathering. It sits in its own layer so the
+// base drawings stay readable, and everything is placed over shapes the base drawing already guarantees.
+void scratches(Art& A, float x0, float y0, float x1, float y1, int n, u32 seed, int alpha = 80) {
+    Rng r(seed);
+    for (int i = 0; i < n; i++) {
+        float x = r.f(x0, x1), y = r.f(y0, y1), an = r.f(-0.5f, 0.5f) + (r.f() < 0.5f ? 0.0f : 1.5708f), l = r.f(1.5f, 4.0f);
+        A.line(x, y, x + std::cos(an) * l, y + std::sin(an) * l, 0.5f, rgba(rgb(238, 240, 244), alpha));
+    }
+}
+void mud(Art& A, float x0, float y0, float x1, float y1, int n, u32 seed) {
+    Rng r(seed);
+    for (int i = 0; i < n; i++) A.ell(r.f(x0, x1), r.f(y0, y1), r.f(1.0f, 2.8f), r.f(0.7f, 1.6f), rgba(rgb(70, 54, 38), 110), 1, 0);
+}
+
+void soldierDetail(Art& A, bool cy, int local) {
+    bool heavy = local == 4 || (!cy && local == 9);
+    float sw = heavy ? 10.5f : 9.5f;
+    if (cy) {
+        for (int s = -1; s <= 1; s += 2) {
+            if (!heavy) { A.ell(33.2f, 32 + s * (sw - 1.4f), 3.4f, 2.7f, shade(CYP, 1.05f), 1.6f, 0.55f); A.line(31.6f, 32 + s * (sw - 1.4f), 34.8f, 32 + s * (sw - 1.4f), 0.7f, rgba(CYG, 190)); }
+            A.box(28.6f, 32 + s * 6.4f, 1.8f, 1.5f, 0.5f, shade(CYM, 1.4f), 1.0f, 0.5f); A.dot(28.6f, 32 + s * 6.4f, 0.55f, CYG);   // hip emitters
+            A.dot(31.3f, 32 + s * 3.6f, 0.8f, rgba(CYG, 220));                                                                            // ear comms
+        }
+        A.box(35.6f, 32, 1.6f, 3.2f, 0.6f, shade(CYM, 1.35f), 1.1f, 0.5f);       // chest rig
+        A.line(29, 32 - sw + 2.2f, 29, 32 + sw - 2.2f, 0.8f, rgba(CYD, 190));    // waist band
+    } else {
+        for (int s = -1; s <= 1; s += 2) {
+            if (!heavy) A.ell(33.2f, 32 + s * (sw - 1.4f), 3.2f, 2.6f, shade(CKH, 0.78f), 1.6f, 0.55f);
+            A.box(29.2f, 32 + s * 6.2f, 1.9f, 1.6f, 0.5f, shade(CKT, 0.82f), 1.0f, 0.5f);        // belt pouches
+            A.dot(36.2f, 32 + s * 2.6f, 0.7f, rgba(CKD, 160));                                    // helmet strap rivets
+        }
+        A.line(30.4f, 32 - sw + 2.4f, 36.4f, 32 + sw - 2.4f, 0.8f, rgba(CKD, 140));  // chest straps in an X
+        A.line(30.4f, 32 + sw - 2.4f, 36.4f, 32 - sw + 2.4f, 0.8f, rgba(CKD, 140));
+        A.circle(24.8f, 32 + 7.2f, 1.6f, shade(CKS, 0.95f), 1.2f, 0.55f);           // canteen
+        A.cap(24.2f, 32 - 6.0f, 24.2f, 32 + 4.0f, 0.9f, shade(CKR, 0.9f), 0.8f, 0.4f);   // rolled blanket on the pack
+        A.ell(33.5f, 32, 5.0f, 5.2f, rgba(CKD, 0), 1, 0);
+        for (int i = 0; i < 5; i++) { float an = 3.7f + i * 0.5f; A.dot(33.5f + std::cos(an) * 3.6f, 32 + std::sin(an) * 3.6f, 0.55f, rgba(CKD, 150)); }   // helmet netting
+    }
+    scratches(A, 28, 24, 38, 40, 4, 100 + local + (cy ? 0 : 20), 60);
+}
+
+void vehicleDetail(Art& A, bool cy, int local) {
+    switch (local) {
+    case 0:   // dozer
+        if (cy) {
+            for (int s = -1; s <= 1; s += 2) { A.line(43.5f, 32 + s * 6.4f, 46.8f, 32 + s * 7.6f, 0.8f, rgba(CYW, 235)); A.box(31, 32 + s * 4.4f, 1.0f, 1.0f, 0.3f, rgb(255, 170, 60), 0.6f, 0.2f); A.glow(31, 32 + s * 4.4f, 3.4f, rgba(rgb(255, 170, 60), 130)); }
+            A.circle(15.4f, 37.5f, 2.1f, shade(CYM, 1.4f), 1.4f, 0.55f); A.ring(15.4f, 37.5f, 1.2f, 0.5f, rgba(CYG, 200), 0.5f, 0);
+            for (int i = 0; i < 3; i++) A.dot(23.6f + i * 2.6f, 25.6f, 0.45f, rgba(CYG, 200));
+        } else {
+            for (int s = -1; s <= 1; s += 2) { A.line(43.5f, 32 + s * 7.0f, 47.2f, 32 + s * 8.4f, 1.0f, rgba(CKS, 240)); A.dot(38.4f, 32 + s * 4.4f, 0.8f, rgb(255, 240, 190)); }
+            A.box(16.5f, 27.5f, 1.7f, 2.0f, 0.4f, shade(CKR, 0.85f), 1.2f, 0.6f); A.line(15.2f, 27.5f, 17.8f, 27.5f, 0.5f, rgba(CKD, 150));   // jerry can
+            A.ell(36, 36, 3.6f, 1.1f, rgba(CKR, 80), 1, 0);   // rust on the cab
+        }
+        mud(A, 14, 17, 46, 26, 5, 31); mud(A, 14, 38, 46, 47, 5, 32);
+        break;
+    case 1:   // hauler
+        if (cy) {
+            for (int i = 0; i < 4; i++) A.poly({ {11.0f + i * 2.4f, 40.6f}, {12.3f + i * 2.4f, 40.6f}, {13.4f + i * 2.4f, 43}, {12.1f + i * 2.4f, 43} }, i % 2 ? CYD : CYG, 1, 0.2f);   // rear reflectors
+            A.circle(46, 27.4f, 1.3f, shade(CYW, 0.9f), 1.0f, 0.5f);
+        } else {
+            A.ring(11.5f, 32, 3.2f, 1.5f, shade(CKD, 1.6f), 1.2f, 0.5f);       // spare tyre on the rear of the bed
+            A.line(14, 24, 36, 40, 0.6f, rgba(CKD, 120)); A.line(14, 40, 36, 24, 0.6f, rgba(CKD, 120));   // tarp ropes
+            A.ell(47, 27, 1.8f, 0.8f, rgba(CKY, 150), 1, 0);
+        }
+        mud(A, 8, 18, 40, 24, 5, 41); mud(A, 8, 40, 40, 46, 5, 42);
+        break;
+    case 5:   // main battle tank hull
+        if (cy) {
+            for (int s = -1; s <= 1; s += 2) { A.box(30, 32 + s * 11.3f, 15, 1.2f, 0.5f, shade(CYP, 0.95f), 1.2f, 0.55f); for (int i = 0; i < 4; i++) A.line(18 + i * 8.0f, 32 + s * 10.1f, 18 + i * 8.0f, 32 + s * 12.5f, 0.5f, rgba(CYD, 180)); }
+            A.dot(9.8f, 25.6f, 0.9f, rgb(255, 80, 70)); A.dot(9.8f, 38.4f, 0.9f, rgb(255, 80, 70)); A.glow(9.8f, 25.6f, 3, rgba(rgb(255, 80, 70), 110)); A.glow(9.8f, 38.4f, 3, rgba(rgb(255, 80, 70), 110));
+            A.line(46, 29, 49, 29, 0.6f, rgba(CYG, 200)); A.line(46, 35, 49, 35, 0.6f, rgba(CYG, 200));
+        } else {
+            for (int s = -1; s <= 1; s += 2) { A.line(18, 32 + s * 10.4f, 40, 32 + s * 10.4f, 0.7f, rgba(CKD, 190)); A.dot(40, 32 + s * 10.4f, 0.9f, shade(CKS, 1.1f)); }   // tow cables
+            for (int i = 0; i < 3; i++) A.box(46.5f, 27.6f + i * 4.4f, 1.0f, 1.4f, 0.3f, shade(CKS, 0.9f), 0.8f, 0.5f);                        // spare track links on the glacis
+            A.ell(13, 32, 2.6f, 3.4f, rgba(CKR, 90), 1, 0);
+        }
+        mud(A, 12, 14, 50, 20, 6, 51); mud(A, 12, 44, 50, 50, 6, 52);
+        break;
+    case 7:   // railgun tank / rocket launcher carrier
+        if (cy) { for (int i = 0; i < 4; i++) A.line(28 + i * 4.2f, 26, 28 + i * 4.2f, 38, 0.5f, rgba(CYD, 160)); A.dot(53, 28.4f, 0.9f, CYW); A.dot(53, 35.6f, 0.9f, CYW); A.glow(53, 28.4f, 3, rgba(CYW, 100)); A.glow(53, 35.6f, 3, rgba(CYW, 100)); }
+        else { for (int s = -1; s <= 1; s += 2) A.line(14, 32 + s * 9.0f, 40, 32 + s * 9.0f, 0.6f, rgba(CKD, 150)); A.box(46, 32 - 3.6f, 1.2f, 1.2f, 0.3f, rgb(214, 54, 44), 0.7f, 0.3f); A.box(46, 32 + 3.6f, 1.2f, 1.2f, 0.3f, rgb(214, 54, 44), 0.7f, 0.3f); A.line(38, 28, 38, 36, 0.6f, rgba(CKD, 150)); }
+        break;
+    case 6:   // gatling tank (walker keeps its own detail)
+        if (!cy) { for (int s = -1; s <= 1; s += 2) A.line(14, 32 + s * 9.4f, 38, 32 + s * 9.4f, 0.6f, rgba(CKD, 150)); A.ell(14, 26.4f, 2.4f, 1.4f, rgba(CKR, 90), 1, 0); mud(A, 12, 14, 50, 20, 5, 61); mud(A, 12, 44, 50, 50, 5, 62); }
+        else { for (int i = 0; i < 6; i++) { float an = i * 1.0472f + 0.5f; A.dot(32 + std::cos(an) * 6.0f, 32 + std::sin(an) * 6.0f, 0.5f, rgba(CYW, 180)); } }
+        break;
+    case 10:  // super-heavy
+        if (cy) {
+            for (int s = -1; s <= 1; s += 2) { A.box(30, 32 + s * 12.4f, 22, 1.0f, 0.4f, shade(CYP, 1.1f), 1.0f, 0.55f); A.box(46.5f, 32 + s * 9.0f, 3.0f, 1.8f, 0.6f, shade(CYM, 1.4f), 1.2f, 0.55f); A.dot(48.5f, 32 + s * 9.0f, 0.8f, rgb(255, 214, 124)); A.glow(48.5f, 32 + s * 9.0f, 3, rgba(rgb(255, 214, 124), 120)); }
+            for (int i = 0; i < 5; i++) A.dot(11 + i * 7.0f, 22.0f, 0.5f, rgba(CYG, 190)), A.dot(11 + i * 7.0f, 42.0f, 0.5f, rgba(CYG, 190));
+        } else {
+            for (int s = -1; s <= 1; s += 2) { A.line(10, 32 + s * 11.6f, 50, 32 + s * 11.6f, 0.8f, rgba(CKD, 190)); for (int i = 0; i < 4; i++) A.dot(14 + i * 10.0f, 32 + s * 11.6f, 0.8f, shade(CKS, 1.15f)); }
+            A.box(32, 32, 0.8f, 7.5f, 0.3f, rgba(CKY, 150), 0.6f, 0.2f);
+            A.ell(20, 30, 3.0f, 1.4f, rgba(CKR, 90), 1, 0);
+            mud(A, 8, 14, 52, 20, 7, 71); mud(A, 8, 44, 52, 50, 7, 72);
+        }
+        break;
+    }
+}
+
+// local contrast: an unsharp mask on the opaque pixels (alpha-weighted so the sprite edge does not halo), which crisps panel seams and rivets at display size
+void enhance(Canvas& c, float amount) {
+    std::vector<u32> src = c.px;
+    auto at = [&](int x, int y) { return Canvas::unpack(src[clampi(y, 0, c.h - 1) * c.w + clampi(x, 0, c.w - 1)]); };
+    for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
+        Color p = at(x, y);
+        if (p.a < 200) continue;
+        float r = 0, g = 0, b = 0, w = 0;
+        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+            Color q = at(x + dx, y + dy);
+            if (q.a < 200) continue;
+            float k = (dx == 0 && dy == 0) ? 2.0f : 1.0f;
+            r += q.r * k; g += q.g * k; b += q.b * k; w += k;
+        }
+        r /= w; g /= w; b /= w;
+        Color o{(u8)clampf(p.r + amount * (p.r - r), 0, 255), (u8)clampf(p.g + amount * (p.g - g), 0, 255), (u8)clampf(p.b + amount * (p.b - b), 0, 255), p.a};
+        c.px[y * c.w + x] = Canvas::pack(o);
+    }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- public entry points
@@ -482,6 +604,9 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 10: if (cy) titanCyber(A, frame); else behemothBody(A, frame); break;
     case 11: if (cy) jetCyber(A); else jetClanker(A); break;
     }
+    if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
+    else if (local != 8 && local != 11) vehicleDetail(A, cy, local);
+    enhance(c, local == 8 || local == 11 ? 0.45f : 0.7f);
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }
 
