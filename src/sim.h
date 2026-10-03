@@ -42,7 +42,7 @@ struct Entity {
     bool leashed = false;   // current target was auto-acquired for the zone: do not chase it out of the zone
     float orbit = 0;        // aircraft loiter phase
     float alt = 1;          // aircraft altitude 0 (parked on the pad) .. 1 (airborne); visual only
-    float jetBreak = 0;     // jets: seconds left of the breakaway after a strafing pass
+    float jetBreak = 0;     // jets and bombers: seconds left of the breakaway after a pass
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     std::vector<Vec2> path;
@@ -57,6 +57,8 @@ struct Entity {
     Ref home;               // aircraft: airfield
     int burstLeft = 0;
     float burstTimer = 0;
+    int bombsLeft = 0;      // bombers: bombs still to drop from the stick being released
+    float bombTimer = 0;
     // building
     int tx = 0, ty = 0;     // top-left tile
     bool constructed = true;
@@ -219,6 +221,8 @@ struct Sim {
     bool revealed(int player) const { return time < players[player].revealUntil; }
     Vec2 buildingCenter(int type, int tx, int ty) const { return Vec2(tx * TILE + BUILDS[type].w * TILE * 0.5f, ty * TILE + BUILDS[type].h * TILE * 0.5f); }
     float distToEntity(Vec2 p, const Entity& e) const; // edge distance in px
+    bool inFallout(Vec2 p, float margin = 0) const;      // inside a radiation zone that is still dangerous
+    float aaCover(const Entity& t, int owner);          // how many anti-air guns of players hostile to 'owner' cover a target (flak a bomber would fly into)
 
     void emit(EventType t, int player, Sound s, Vec2 pos, const char* msg = "");
     void updatePowerPublic() { updatePower(); }
@@ -242,7 +246,6 @@ private:
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w);
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct);
-    float aaCover(const Entity& t, int owner);
     Entity* acquireTarget(Entity& e, float range);
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);
@@ -255,6 +258,10 @@ private:
     Vec2 padSlot(const Entity& airfield, const Entity& craft) const;
     void flyTo(Entity& e, Vec2 dest, float speed);       // aircraft: straight slide, jets: turn-limited and slowing as they close in
     void jetAttack(Entity& e, Entity& t);                // fixed-wing strafing pass: dive on the target, fire, break away, come round again
+    void bomberAttack(Entity& e, Entity& t);             // bombing run: line up on the target, release a stick of bombs, fly on, loop back
+    void dropBomb(Entity& e, Vec2 at);                   // one bomb falls from the aircraft toward the ground point 'at'
+    void bombImpact(Projectile& p);                      // fireball, shockwave, debris and splash damage of a bomb
+    void nukeBlast(const Nuke& n);                       // detonation of a tactical nuke (see updateNukes)
 };
 
 extern Sim g_sim;

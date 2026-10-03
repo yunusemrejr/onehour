@@ -9,11 +9,15 @@ enum GameState { GS_MENU = 0, GS_PLAYING, GS_GAMEOVER };
 
 struct MenuSettings {
     Faction playerFaction = F_CYBER;
-    int enemies = 2;
-    int enemyFaction[3] = { 2, 2, 2 };   // 0 cyber, 1 clanker, 2 random
-    int difficulty = 1;
-    bool enemiesAllied = true;
-    int cursor = 0;
+    int enemyFaction[3] = { 2, 2, 3 };   // per enemy army: 0 cyber, 1 clanker, 2 random, 3 off (the first enemy is always on)
+    int enemyDiff[3] = { 1, 1, 1 };      // per enemy army: 0 easy, 1 normal, 2 hard, 3 brutal
+    int allyFaction = 3;                 // your computer-controlled ally: 0 cyber, 1 clanker, 2 random, 3 none
+    int allyDiff = 1;
+    bool enemiesAllied = true;           // with two or more enemies: they fight together against your team, or each against everyone
+    int cursor = 0;                      // row of the setup table
+    int col = 0;                         // focused control within the row: 0 army, 1 difficulty
+    bool hasAlly() const { return allyFaction != 3; }
+    int enemyCount() const { int n = 0; for (int i = 0; i < 3; i++) if (enemyFaction[i] != 3) n++; return n; }
 };
 
 struct Message { std::string text; float time; Color color; };

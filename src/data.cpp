@@ -27,6 +27,8 @@ const Weapon WEAPONS[] = {
     /* 22 */{ "Behemoth Cannon", 78, 6.8f, 0, 2.00f, PJ_SHELL,  0.7f, true, false, {0.6f, 1.00f, 1.10f, 0.90f, 0.0f}, 2, 520,  SND_CANNON,      rgb(255, 200, 110) },
     /* 23 */{ "Plasma Lances",   44, 6.0f, 0, 2.30f, PJ_LASER,  0,    true, true,  {0.8f, 1.00f, 0.70f, 0.40f, 1.8f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
     /* 24 */{ "Sidewinder Salvo",62, 7.0f, 0, 2.30f, PJ_ROCKET, 0.55f,true, true,  {0.9f, 1.10f, 0.90f, 0.80f, 1.6f}, 4, 880,  SND_ROCKET,      rgb(255, 214, 140) },
+    /* 25 */{ "Plasma Bombs",   150, 1.0f, 0, 0.00f, PJ_BOMB,   2.0f, true, false, {1.2f, 1.25f, 1.00f, 1.50f, 0.0f}, 4, 0,    SND_EXPLODE_L,   rgb(120, 230, 255) },
+    /* 26 */{ "Carpet Bombs",   165, 1.0f, 0, 0.00f, PJ_BOMB,   2.1f, true, false, {1.3f, 1.20f, 1.00f, 1.60f, 0.0f}, 4, 0,    SND_EXPLODE_L,   rgb(255, 176, 90) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -40,7 +42,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Photon Tank",    "T", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 720, 84,  900,  12, 7, 13, 3,  0, BR_FACTORY,  -1,         "Fast electric tank with photon cannon" },
     { "Volt Walker",    "V", F_CYBER, UK_VEH, UR_COMBAT,    AR_LIGHT, 560, 76,  800,  11, 7, 12, 4,  0, BR_FACTORY,  -1,         "Volt coil, arcs across infantry and drones" },
     { "Railgun Tank",   "G", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 700, 62,  1300, 17, 8, 14, 5,  0, BR_FACTORY,  B_C_TECH,   "Long range railgun, punches heavy armor" },
-    { "Wraith Drone",   "W", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   720, 250, 1200, 16, 9, 10, 6,  12, BR_AIRFIELD, -1,        "Strike drone, 12 rounds, reloads in seconds on the Drone Pad" },
+    { "Wraith Drone",   "W", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   880, 250, 1200, 16, 9, 10, 6,  12, BR_AIRFIELD, -1,        "Bomber drone: carpet-bombs ground targets with plasma bombs (12 bombs a sortie), guns for aircraft", 0, 0, 1 },
     { "Ion Lancer",     "I", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   150, 50,  750,  12, 8, 6,  19, 0, BR_BARRACKS, B_C_TECH,   "Elite sniper, piercing ion lance out to 9 tiles", 1 },
     { "Aegis Titan",    "N", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 1700, 58, 2300, 26, 8, 17, 20, 0, BR_FACTORY,  B_C_TECH,   "Super-heavy walker, twin ion cannons hit ground and air", 1 },
     { "Specter Jet",    "J", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   900, 560, 1800, 20, 11, 11, 23, 8, BR_AIRFIELD, B_C_TECH,  "Supersonic fighter: plasma lances, 8 strafing passes, shreds aircraft and light armor", 0, 1 },
@@ -53,7 +55,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Brute Tank",     "T", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 900, 74,  900,  12, 7, 14, 12, 0, BR_FACTORY,  -1,         "Diesel main battle tank, 120mm cannon" },
     { "Gatling Tank",   "A", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 580, 80,  800,  11, 7, 12, 13, 0, BR_FACTORY,  -1,         "Gatling gun, anti-infantry and anti-air" },
     { "Rocket Launcher","M", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 450, 60,  1100, 16, 8, 13, 14, 0, BR_FACTORY,  B_K_TECH,   "Long range rocket artillery" },
-    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   850, 210, 1200, 16, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Twin-rocket gunship, 16 rounds, reloads in seconds on the Airstrip" },
+    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   1000, 210, 1200, 16, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Bomber gunship: drops sticks of heavy bombs on ground targets (16 bombs a sortie), rockets for aircraft", 0, 0, 1 },
     { "Grenadier",      "B", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   170, 48,  700,  12, 7, 6,  21, 0, BR_BARRACKS, B_K_TECH,   "Elite lobber, splash grenades crack infantry and bunkers", 1 },
     { "Behemoth",       "N", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 2000, 52, 2300, 26, 8, 17, 22, 0, BR_FACTORY,  B_K_TECH,   "Super-heavy tank, twin 150mm shells with splash", 1 },
     { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   950, 540, 1800, 20, 11, 12, 24, 8, BR_AIRFIELD, B_K_TECH,  "Supersonic fighter: homing Sidewinders, 8 strafing passes, hunts aircraft and vehicles", 0, 1 },

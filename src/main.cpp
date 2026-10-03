@@ -17,8 +17,10 @@ static void usage() {
            "  --ticks N        sim ticks to run before --shot (default 0 = main menu)\n"
            "  --train [N]      self-play N games to train the AI brain (saved to ~/.local/share/onehour/brain.txt)\n"
            "  --eval [N]       learned AI vs plain heuristic AI, N games (uses --d0 as difficulty)\n"
+           "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
+           "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --bombtest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -30,6 +32,8 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
     bool ai[4] = { true, true, true, true };
     int diff[4] = { d0, 3, 2, 1 };
     int team[4] = { 0, 1, 2, 3 };
+    if (const char* tm = getenv("ONEHOUR_TEAMS")) sscanf(tm, "%d,%d,%d,%d", &team[0], &team[1], &team[2], &team[3]);   // e.g. 0,0,1,1 for two against two
+    if (const char* dm = getenv("ONEHOUR_DIFFS")) sscanf(dm, "%d,%d,%d,%d", &diff[0], &diff[1], &diff[2], &diff[3]);
     g_sim.init(players, fac, ai, diff, team, seed);
     g_ai.init(seed);
     int ticks = seconds * SIM_HZ;
@@ -64,7 +68,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
     for (int p = 0; p < g_sim.numPlayers; p++) {
         Player& pl = g_sim.players[p];
         int ubase = firstUnitOf(pl.faction);
-        printf("  P%d: mined $%d, income structures %d, nuke ramps %d\n", p, pl.mined, g_sim.countRole(p, BR_INCOME, false), g_sim.countRole(p, BR_NUKE, false));
+        printf("  P%d: team %d diff %d doctrine %s, mined $%d, income structures %d, nuke ramps %d, nuke dodges %d, medics built %d\n", p, pl.team, pl.difficulty, DOCTRINE_NAME[g_ai.ais[p].doctrine], pl.mined, g_sim.countRole(p, BR_INCOME, false), g_sim.countRole(p, BR_NUKE, false), g_ai.ais[p].dodges, g_ai.ais[p].medicsBuilt);
         printf("  P%d: built %d lost %d kills %d structures killed %d harvested %d alive=%d | program %d, elites bought %d/%d, titans %d, drones/gunships %d, jets %d\n", p, pl.unitsBuilt, pl.unitsLost, pl.unitsKilled, pl.structuresKilled, pl.harvested, (int)pl.alive,
                (int)pl.advTech, (int)(pl.spentOn[ubase + 9] / UNITS[ubase + 9].cost), (int)(pl.spentOn[ubase + 9] > 0), (int)(pl.spentOn[ubase + 10] / UNITS[ubase + 10].cost), (int)(pl.spentOn[ubase + 8] / UNITS[ubase + 8].cost), (int)(pl.spentOn[ubase + 11] / UNITS[ubase + 11].cost));
         if (getenv("ONEHOUR_DEBUG")) {
@@ -78,15 +82,17 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
 
 
 // Plays one AI-only game headless. Returns the winning team (or -1 when nobody won within maxSecs).
-static int playAiGame(u64 seed, int players, const Faction* fac, const bool* brain, int difficulty, int maxSecs, const int* teamIn = nullptr) {
+static int playAiGame(u64 seed, int players, const Faction* fac, const bool* brain, int difficulty, int maxSecs, const int* teamIn = nullptr, const bool* smart = nullptr, const int* diffIn = nullptr) {
     bool ai[4] = { true, true, true, true };
     int diff[4] = { difficulty, difficulty, difficulty, difficulty };
     int team[4] = { 0, 1, 2, 3 };
     if (teamIn) for (int i = 0; i < 4; i++) team[i] = teamIn[i];
+    if (diffIn) for (int i = 0; i < 4; i++) diff[i] = diffIn[i];
     g_sim.init(players, fac, ai, diff, team, seed);
-    for (int p = 0; p < 4; p++) g_ai.brainEnabled[p] = brain[p];
+    for (int p = 0; p < 4; p++) { g_ai.brainEnabled[p] = brain[p]; g_ai.smartEnabled[p] = smart ? smart[p] : true; }
     g_ai.init(seed);
     for (int t = 0; t < maxSecs * SIM_HZ && !g_sim.gameOver; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
+    if (g_sim.gameOver) g_ai.finish(g_sim.winnerTeam);
     return g_sim.gameOver ? g_sim.winnerTeam : -1;
 }
 
@@ -100,11 +106,17 @@ static int trainBrain(int games, u64 seed) {
         int n = r.range(2, 4);
         Faction fac[4]; for (int k = 0; k < 4; k++) fac[k] = (Faction)r.range(0, 1);
         bool brain[4] = { true, true, true, true };
-        int w = playAiGame(seed * 1000 + i, n, fac, brain, r.range(1, 3), 1500);
+        int diffs[4]; for (int k = 0; k < 4; k++) diffs[k] = r.range(1, 3);   // every army its own difficulty, like in the menu
+        int teams[4] = { 0, 1, 2, 3 };
+        if (n == 4 && r.range(0, 1)) { teams[1] = 0; teams[3] = 2; teams[2] = 2; }          // two against two
+        else if (n >= 3 && r.range(0, 2) == 0) { teams[1] = 0; }                           // an allied pair against the rest
+        int w = playAiGame(seed * 1000 + i, n, fac, brain, 2, 1500, teams, nullptr, diffs);
         g_brain.games++;
         if ((i + 1) % 10 == 0 || i + 1 == games) {
             printf("game %3d players %d winner team %2d | waves learned %d | wave weights", i + 1, n, w, g_brain.waveSamples);
             for (int k = 0; k < WAVE_F; k++) printf(" %.2f", g_brain.ww[k]);
+            printf("\n   doctrines:");
+            for (int d = 0; d < DOCTRINES; d++) printf(" %s %.2f (%d)", DOCTRINE_NAME[d], g_brain.docQ[d], g_brain.docN[d]);
             printf("\n");
             if (!path.empty()) g_brain.save(path.c_str());
         }
@@ -136,6 +148,53 @@ static int evalBrain(int games, u64 seed, int difficulty) {
         } else if (w == brainTeam) wins++; else losses++;
     }
     printf("brain vs baseline: %d wins, %d losses, %d unresolved (of %d)\n", wins, losses, draws, games);
+    return 0;
+}
+
+
+// Evaluation of the commander itself: the current AI (player 0 or 1, alternating) against the previous generation, difficulty and factions rotated.
+static int evalAi(int games, u64 seed, int difficulty) {
+    std::string path = Brain::defaultPath();
+    if (!path.empty() && g_brain.load(path.c_str())) printf("using %s (%d games)\n", path.c_str(), g_brain.games);
+    g_brain.learning = false;
+    int wins = 0, losses = 0, draws = 0; double winTime = 0, loseTime = 0;
+    for (int i = 0; i < games; i++) {
+        Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
+        bool flip = (i >> 2) & 1;
+        bool brainOn[4] = { true, true, true, true };
+        bool smart[4] = { !flip, flip, true, true };
+        int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart);
+        int newTeam = flip ? 1 : 0;
+        const char* res;
+        if (w < 0) { draws++; res = "unresolved"; }
+        else if (w == newTeam) { wins++; winTime += g_sim.time; res = "new AI wins"; }
+        else { losses++; loseTime += g_sim.time; res = "old AI wins"; }
+        printf("  game %2d (%s%s vs %s%s): %s at %.0f s, doctrine %s\n", i + 1, flip ? "old " : "new ", FACTION_NAME[fac[0]], flip ? "new " : "old ", FACTION_NAME[fac[1]], res, g_sim.time, DOCTRINE_NAME[g_ai.ais[flip ? 1 : 0].doctrine]);
+        fflush(stdout);
+    }
+    printf("new AI vs previous generation: %d wins, %d losses, %d unresolved (of %d)%s\n", wins, losses, draws, games, "");
+    if (wins) printf("  mean time of its wins %.0f s", winTime / wins);
+    if (losses) printf("  mean time of its losses %.0f s", loseTime / losses);
+    printf("\n");
+    return 0;
+}
+
+
+// Difficulty ladder check: an army at difficulty ONEHOUR_DA against one at ONEHOUR_DB (sides and factions rotated), both with the current commander.
+static int evalDiff(int games, u64 seed) {
+    int da = getenv("ONEHOUR_DA") ? atoi(getenv("ONEHOUR_DA")) : 3, db = getenv("ONEHOUR_DB") ? atoi(getenv("ONEHOUR_DB")) : 1;
+    g_brain.learning = false;
+    int winsA = 0, winsB = 0, draws = 0;
+    for (int i = 0; i < games; i++) {
+        Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
+        bool flip = (i >> 2) & 1;
+        bool brainOn[4] = { true, true, true, true };
+        int diffs[4] = { flip ? db : da, flip ? da : db, 1, 1 };
+        int w = playAiGame(seed + i * 31, 2, fac, brainOn, 1, 1500, nullptr, nullptr, diffs);
+        int aTeam = flip ? 1 : 0;
+        if (w < 0) draws++; else if (w == aTeam) winsA++; else winsB++;
+    }
+    printf("difficulty %d vs difficulty %d: %d wins, %d losses, %d unresolved (of %d)\n", da, db, winsA, winsB, draws, games);
     return 0;
 }
 
@@ -574,6 +633,142 @@ static bool supportTest(u64 seed) {
     return true;
 }
 
+
+// The nuke wrecks rather than erases: small structures and every ground unit in the blast collapse, large structures survive heavily damaged,
+// aircraft inside the fireball fall. Bombers destroy a structure with bombing runs while the guns stay for aircraft.
+static bool bombTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "bombtest: %s\n", m); return false; };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+        int b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]), u1 = firstUnitOf(fac[1]);
+        Vec2 gz = g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f;
+        gz = g_map.nearestFree(gz, 40);
+        // enemy structures in a ring around ground zero: place each at the first buildable tile beyond the wanted distance
+        auto put = [&](int type, float distTiles, float ang) {
+            for (float extra = 0; extra < 6; extra += 0.5f) for (float da = 0; da < 1.2f; da += 0.1f) {
+                Vec2 c = gz + Vec2(std::cos(ang + da), std::sin(ang + da)) * ((distTiles + extra) * TILE);
+                int tx = tileOf(c.x) - BUILDS[type].w / 2, ty = tileOf(c.y) - BUILDS[type].h / 2;
+                if (!inMap(tx, ty) || !g_sim.canPlace(1, type, tx, ty)) continue;
+                Ref r = g_sim.placeBuilding(type, 1, tx, ty, true);
+                return r;
+            }
+            return NOREF;
+        };
+        Ref turret = put(b1 + BR_TURRET, 3, 0.2f), power = put(b1 + BR_POWER, 5, 1.6f), barracks = put(b1 + BR_BARRACKS, 3, 3.2f);
+        Ref factory = put(b1 + BR_FACTORY, 3, 4.6f), hq = put(b1 + BR_HQ, 8, 0.8f), rim = put(b1 + BR_SUPPLY, 9.5f, 2.4f);
+        for (Ref r : { turret, power, barracks, factory, hq, rim }) if (!g_sim.get(r)) return fail("could not set the scene up");
+        Ref tank = g_sim.spawnUnit(u1 + 5, 1, g_map.nearestFree(gz + Vec2(0, 50), 20));
+        Ref airC = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(20, 0)), airFar = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(NUKE_RADIUS * TILE * 0.88f, 0));
+        Ref airMine = g_sim.spawnUnit(u0 + 8, 0, gz + Vec2(-20, 10));
+        g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f});
+        for (int t = 0; t < 6; t++) { g_sim.step(); g_sim.events.clear(); }
+        if (g_sim.fallouts.empty()) return fail("the nuke never went off");
+        if (g_sim.get(tank)) return fail("a tank in the blast survived");
+        if (g_sim.get(turret)) return fail("a turret at the edge of the core survived");
+        if (g_sim.get(power)) return fail("a power plant in the inner blast survived");
+        if (g_sim.get(barracks)) return fail("barracks inside the core survived");
+        Entity* f = g_sim.get(factory); Entity* h = g_sim.get(hq); Entity* rm = g_sim.get(rim);
+        if (!f) return fail("a large factory inside the core was erased");
+        if (!h) return fail("the command structure was erased");
+        if (f->hp > f->maxHp * 0.45f) return fail("the factory in the core is barely scratched");
+        if (f->hp <= 0 || h->hp <= 0) return fail("large structure dead");
+        if (rm && rm->hp >= rm->maxHp) return fail("a structure near the rim took no damage");
+        if (g_sim.get(airC)) return fail("an aircraft inside the fireball did not fall");
+        Entity* af = g_sim.get(airFar); if (!af) return fail("an aircraft at the shock ring should have survived");
+        if (af->hp >= af->maxHp) return fail("an aircraft in the shock ring took no damage");
+        if (!g_sim.get(airMine)) return fail("the launcher's own aircraft was destroyed");
+        g_sim.destroy(*g_sim.get(airMine), false);   // (an armed idle bomber would go finish the wounded factory by itself)
+        printf("bombtest nuke %s: ok (factory %.0f%%, hq %.0f%%, rim %.0f%%, shock-ring aircraft %.0f%%)\n", FACTION_NAME[fac[0]], 100 * f->hp / f->maxHp, 100 * h->hp / h->maxHp, rm ? 100 * rm->hp / rm->maxHp : 0.0f, 100 * af->hp / af->maxHp);
+        // radiation never finishes a structure off
+        for (int t = 0; t < 20 * 90; t++) { g_sim.step(); g_sim.events.clear(); if (getenv("ONEHOUR_DEBUG") && t % 100 == 0) fprintf(stderr, "t %d factory %.0f hq %.0f\n", t, g_sim.get(factory) ? g_sim.get(factory)->hp : -1, g_sim.get(hq) ? g_sim.get(hq)->hp : -1); }
+        if (!g_sim.get(factory) || !g_sim.get(hq)) return fail("radiation killed a large structure");
+    }
+    // bombing runs
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + 10 + fi);
+        for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+        int b0 = firstBuildOf(fac[0]), b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]);
+        Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        Ref af, target;
+        for (int dy = -8; dy < 8 && !af.valid(); dy++) for (int dx = -8; dx < 8 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, b0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(b0 + BR_AIRFIELD, 0, tx, ty, true); }
+        for (int dy = 12; dy < 24 && !target.valid(); dy++) for (int dx = -10; dx < 10 && !target.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(1, b1 + BR_FACTORY, tx, ty)) target = g_sim.placeBuilding(b1 + BR_FACTORY, 1, tx, ty, true); }
+        if (!af.valid() || !target.valid()) return fail("could not set the bombing scene up");
+        Vec2 pad = g_sim.get(af)->pos;
+        std::vector<Ref> bombers;
+        for (int i = 0; i < 3; i++) { Ref b = g_sim.spawnUnit(u0 + 8, 0, pad + Vec2((i - 1) * 30, 0)); g_sim.get(b)->home = af; bombers.push_back(b); }
+        float hp0 = g_sim.get(target)->hp;
+        int bombsSeen = 0; float firstHit = -1, killedAt = -1;
+        g_sim.cmdAttack(bombers, target);
+        for (int t = 0; t < 20 * 40; t++) {
+            g_sim.step(); g_sim.events.clear();
+            for (auto& p : g_sim.projs) if (WEAPONS[p.weapon].proj == PJ_BOMB && p.arcT < 0.12f) bombsSeen++;
+            if (firstHit < 0 && g_sim.get(target) && g_sim.get(target)->hp < hp0 - 100) firstHit = g_sim.time;
+            if (!g_sim.get(target)) { killedAt = g_sim.time; break; }
+        }
+        Entity* tg = g_sim.get(target);
+        float dealt = tg ? hp0 - tg->hp : hp0;
+        if (bombsSeen < 8) { fprintf(stderr, "bombs released: %d\n", bombsSeen); return fail("the bombers released almost no bombs"); }
+        if (killedAt < 0) { fprintf(stderr, "damage dealt %.0f (target %.0f hp)\n", dealt, hp0); return fail("three bombers could not bring down a factory in 40 s"); }
+        int alive = 0; for (Ref b : bombers) if (g_sim.get(b)) alive++;
+        if (alive != 3) return fail("an undefended bomber was lost");
+        // against aircraft the bomber uses its gun, not bombs
+        Ref foe = g_sim.spawnUnit(firstUnitOf(fac[1]) + 8, 1, pad + Vec2(5 * TILE, -3 * TILE));
+        int dropped = 0;
+        float fh0 = g_sim.get(foe)->hp;
+        for (Ref b : bombers) { Entity* e = g_sim.get(b); e->ammo = e->ut().ammo; e->order = O_IDLE; e->bombsLeft = 0; }
+        g_sim.cmdAttack(bombers, foe);
+        for (int t = 0; t < 20 * 12 && g_sim.get(foe); t++) { g_sim.step(); g_sim.events.clear(); for (auto& p : g_sim.projs) if (WEAPONS[p.weapon].proj == PJ_BOMB && p.owner == 0 && p.arcT < 0.12f && g_sim.get(foe)) dropped++; }
+        Entity* fe = g_sim.get(foe);
+        if (dropped > 0) return fail("a bomber dropped bombs on an aircraft");
+        if (fe && fe->hp >= fh0) return fail("bombers did not shoot the enemy aircraft down");
+        (void)fh0;
+        printf("bombtest bombers %s: ok (%d bombs, a %.0f hp factory destroyed in %.0f s, first damage at %.0f s)\n", FACTION_NAME[fac[0]], bombsSeen, hp0, killedAt - 0, firstHit);
+    }
+    return true;
+}
+
+
+// A nuke aimed at an AI army: the smart commander walks its units out of the circle in the seven seconds of flight, the previous generation stays put.
+// Afterwards the big structures it was aimed at are still there and the commander carries on.
+static bool nukeDodgeTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "nukedodgetest: %s\n", m); return false; };
+    float survived[2] = { 0, 0 };
+    for (int mode = 0; mode < 2; mode++) {   // 0 = smart, 1 = previous generation
+        Faction fac[2] = { F_CYBER, F_CLANKER };
+        bool ai[2] = { true, true }; int diff[2] = { 2, 2 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed);
+        g_ai.smartEnabled[0] = true; g_ai.smartEnabled[1] = mode == 0;
+        g_ai.brainEnabled[0] = g_ai.brainEnabled[1] = false;
+        g_ai.init(seed);
+        g_ai.ais[0].player = -1;            // the launcher is only a name on the warhead; no war goes on while the target builds up
+        g_ai.ais[1].regroupUntil = 1e9f;    // and the target keeps its army at home (no attack waves)
+        for (int t = 0; t < 20 * 330; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
+        Vec2 gz = g_sim.players[1].basePos;
+        std::vector<Ref> inside;
+        float R = NUKE_RADIUS * TILE;
+        for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isUnit() && !e.isAir() && dist(e.pos, gz) < R) inside.push_back(g_sim.refOf(e));
+        int structures0 = g_sim.countBuildings(1, -1, true);
+        if (inside.size() < 6) { fprintf(stderr, "only %zu units in the circle\n", inside.size()); return fail("not enough units around the target to test the evasion"); }
+        g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, 0.0f});
+        for (int t = 0; t < 20 * 9; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
+        int alive = 0; for (Ref r : inside) if (g_sim.get(r)) alive++;
+        survived[mode] = alive / (float)inside.size();
+        // the commander recovers: still alive, small structures rebuilt, large ones standing
+        for (int t = 0; t < 20 * 200; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
+        int structures1 = g_sim.countBuildings(1, -1, true);
+        if (!g_sim.players[1].alive) return fail("the nuked commander was wiped out");
+        if (structures1 < structures0 * 0.6f) { fprintf(stderr, "structures %d -> %d\n", structures0, structures1); return fail("the nuked commander did not rebuild"); }
+        printf("nukedodgetest %s: %.0f%% of %zu units survived the warhead, structures %d -> %d, dodges %d\n", mode == 0 ? "smart" : "previous", survived[mode] * 100, inside.size(), structures0, structures1, g_ai.ais[1].dodges);
+    }
+    if (survived[0] < survived[1] + 0.3f) return fail("the smart commander did not save a clearly larger share of its army");
+    return true;
+}
+
 // The AI's learned weights from before the jets (v2: 22 unit rows) must load into the new unit table without shifting any army's rows.
 static bool brainTest() {
     auto fail = [](const char* m) { fprintf(stderr, "braintest: %s\n", m); return false; };
@@ -596,8 +791,18 @@ static bool brainTest() {
     Brain c;
     bool again = c.load(path.c_str());
     remove(path.c_str());
-    if (!again || c.unitSamples[U_K_DOZER] != 12 || c.unitSamples[U_K_TITAN] != 22 || c.unitSamples[U_C_TITAN] != 11) return fail("a saved v3 brain did not round-trip");
-    printf("braintest: ok (v2 weights migrated, jets start from the prior, v3 round-trips)\n");
+    if (!again || c.unitSamples[U_K_DOZER] != 12 || c.unitSamples[U_K_TITAN] != 22 || c.unitSamples[U_C_TITAN] != 11) { remove(path.c_str()); return fail("a saved brain did not round-trip"); }
+    // doctrines: the bandit prefers what wins, keeps trying the rest, and the statistics survive a save and load (older files simply have none)
+    Brain d;
+    Rng rr(5); int picks[DOCTRINES] = {};
+    for (int k = 0; k < 400; k++) { int pk = d.pickDoctrine(rr); picks[pk]++; d.learnDoctrine(pk, pk == DOC_AIR ? 0.9f : 0.3f); }   // air wins 90% of the time, everything else 30%
+    if (picks[DOC_AIR] < 200 || picks[DOC_BALANCED] < 2 || picks[DOC_RUSH] < 2 || picks[DOC_TURTLE] < 2 || picks[DOC_BOOM] < 2) { fprintf(stderr, "picks: %d %d %d %d %d\n", picks[0], picks[1], picks[2], picks[3], picks[4]); remove(path.c_str()); return fail("the doctrine bandit neither exploits nor explores"); }
+    d.save(path.c_str());
+    Brain e2; bool back = e2.load(path.c_str());
+    remove(path.c_str());
+    bool same = back; for (int k = 0; k < DOCTRINES && same; k++) same = e2.docN[k] == d.docN[k] && std::abs(e2.docQ[k] - d.docQ[k]) < 1e-3f;
+    if (!same) return fail("doctrine statistics did not round-trip");
+    printf("braintest: ok (v2 weights migrated, jets start from the prior, v5 round-trips with doctrine statistics; bandit picks air %d / 400)\n", picks[DOC_AIR]);
     return true;
 }
 
@@ -612,13 +817,24 @@ static bool uiTest() {
     };
     auto frames = [](int n) { for (int i = 0; i < n; i++) { g_game.update(1.0f / 60); g_game.render(); } };
     auto fail = [](const char* m) { fprintf(stderr, "uitest: %s\n", m); return false; };
-    // menu: pick Clanker, 1 enemy, start
-    key(SDLK_RIGHT); // faction -> clanker
-    key(SDLK_DOWN); key(SDLK_LEFT); // enemies 2 -> 1
-    for (int i = 0; i < 8 && g_game.state != GS_PLAYING; i++) { key(SDLK_DOWN); if (g_game.menu.cursor == 7) key(SDLK_RETURN); }
+    // menu: pick Clanker, add a Cyber ally on Hard, one Brutal Cyber-random enemy plus a second enemy that is switched off again, start
+    key(SDLK_RIGHT);                                         // your army -> Clanker
+    key(SDLK_DOWN); key(SDLK_RIGHT);                         // ally row: None -> Cyber Army
+    key(SDLK_TAB); key(SDLK_RIGHT);                          // ally difficulty: Normal -> Hard
+    if (!g_game.menu.hasAlly() || g_game.menu.allyDiff != 2) return fail("ally selection in the menu");
+    key(SDLK_DOWN); key(SDLK_RIGHT); key(SDLK_RIGHT);        // enemy 1 (the difficulty column stays focused): Normal -> Hard -> Brutal
+    key(SDLK_DOWN); key(SDLK_RIGHT);                         // enemy 2: Normal -> Hard
+    key(SDLK_TAB); key(SDLK_RIGHT);                          // enemy 2 army: Random -> Off
+    if (g_game.menu.enemyDiff[0] != 3 || g_game.menu.enemyDiff[1] != 2 || g_game.menu.enemyFaction[1] != 3) return fail("per-enemy difficulty in the menu");
+    key(SDLK_DOWN);                                          // enemy 3 is skipped while an ally holds the fourth seat, and the teams row while there is a single enemy
+    if (g_game.menu.cursor != 6) return fail("menu rows that cannot be changed were not skipped");
+    key(SDLK_RETURN);
     if (g_game.state != GS_PLAYING) return fail("game did not start from the menu");
     if (g_sim.players[0].faction != F_CLANKER) return fail("faction selection ignored");
-    if (g_sim.numPlayers != 2) return fail("enemy count ignored");
+    if (g_sim.numPlayers != 3) return fail("army count ignored");
+    if (!g_sim.players[1].isAI || g_sim.players[1].team != g_sim.players[0].team || g_sim.players[1].faction != F_CYBER || g_sim.players[1].difficulty != 2) return fail("the ally was not set up as chosen");
+    if (!g_sim.players[2].isAI || g_sim.players[2].team == g_sim.players[0].team || g_sim.players[2].difficulty != 3) return fail("the enemy was not set up as chosen");
+    if (g_sim.enemies(0, 1) || !g_sim.enemies(0, 2)) return fail("ally and enemy relations");
     frames(3);
     // click on the dozer
     Entity* dz = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit()) dz = &e;
@@ -816,7 +1032,7 @@ static bool uiTest() {
 
 int main(int argc, char** argv) {
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
-    int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0; bool autostart = false; int benchFrames = 0;
+    int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--scale" && i + 1 < argc) scale = clampi(atoi(argv[++i]), 1, 4);
@@ -831,6 +1047,8 @@ int main(int argc, char** argv) {
         else if (a == "--swap") swap = true;
         else if (a == "--train") { trainN = 40; if (i + 1 < argc && argv[i + 1][0] != '-') trainN = atoi(argv[++i]); }
         else if (a == "--eval") { evalN = 16; if (i + 1 < argc && argv[i + 1][0] != '-') evalN = atoi(argv[++i]); }
+        else if (a == "--evaldiff") { evalDiffN = 8; if (i + 1 < argc && argv[i + 1][0] != '-') evalDiffN = atoi(argv[++i]); }
+        else if (a == "--evalai") { evalAiN = 16; if (i + 1 < argc && argv[i + 1][0] != '-') evalAiN = atoi(argv[++i]); }
         else if (a == "--allai") allAi = true;
         else if (a == "--soundcheck") { g_audio.debugStats(); return 0; }
         else if (a == "--uitest") { headless = true; software = true; shot = nullptr; ticks = -1; }
@@ -841,6 +1059,7 @@ int main(int argc, char** argv) {
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
+        else if (a == "--bombtest") { g_map.generate(); return bombTest(seed) && nukeDodgeTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;
         else if (a == "--areatest") { g_map.generate(); return areaTest(seed) ? 0 : 1; }
         else if (a == "--view" && i + 1 < argc) viewPlayer = clampi(atoi(argv[++i]), 0, 9);
@@ -851,6 +1070,8 @@ int main(int argc, char** argv) {
     }
     g_map.generate();
     if (trainN > 0) return trainBrain(trainN, seed);
+    if (evalDiffN > 0) return evalDiff(evalDiffN, seed);
+    if (evalAiN > 0) return evalAi(evalAiN, seed, d0 >= 0 && d0 <= 3 ? d0 : 2);
     if (evalN > 0) return evalBrain(evalN, seed, d0 >= 0 && d0 <= 3 ? std::max(1, std::min(d0, 3)) : 2);
     if (selftestSecs >= 0) return selfTest(selftestSecs, seed, players, d0, swap) ? 0 : 1;
 
@@ -867,6 +1088,11 @@ int main(int argc, char** argv) {
 
     g_game.seed = seed;
     g_game.menu.playerFaction = faction;
+    if (getenv("ONEHOUR_MENUDEMO")) {   // screenshots of the setup table: an ally and two enemies with different difficulties
+        MenuSettings& m = g_game.menu;
+        m.allyFaction = 1; m.allyDiff = 2; m.enemyFaction[0] = 0; m.enemyDiff[0] = 3; m.enemyFaction[1] = 2; m.enemyDiff[1] = 1; m.enemyFaction[2] = 3;
+        m.cursor = atoi(getenv("ONEHOUR_MENUDEMO")) ; m.col = m.cursor >= 1 && m.cursor <= 3 ? 1 : 0;
+    }
     if (sheetPath) {
         Gfx& g = g_gfx;
         g.beginFrame(rgb(74, 96, 58));
@@ -1018,6 +1244,50 @@ int main(int argc, char** argv) {
                 Vec2 mid = (tg + pad) * 0.5f;
                 g_game.cam = Vec2(clampf(mid.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 g_game.selection.clear(); g_game.selection.push_back(jets[0]);
+            }
+            if (getenv("ONEHOUR_BOMBS")) {   // showcase: three bombers working over an enemy outpost (ONEHOUR_BOMBS=N ticks into the raid)
+                Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction; int bb0 = firstBuildOf(f0), bb1 = firstBuildOf(f1);
+                Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
+                std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1); std::fill(g_sim.players[1].explored.begin(), g_sim.players[1].explored.end(), 1);
+                Vec2 mid = g_map.nearestFree(bp + (ep - bp) * 0.5f, 40);
+                Ref af;
+                for (int dy = -8; dy < 8 && !af.valid(); dy++) for (int dx = -8; dx < 8 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, bb0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(bb0 + BR_AIRFIELD, 0, tx, ty, true); }
+                Vec2 pad = g_sim.get(af)->pos; Vec2 tgc = pad + Vec2(10 * TILE, 4 * TILE); Ref first;
+                int types[4] = { bb1 + BR_FACTORY, bb1 + BR_BARRACKS, bb1 + BR_POWER, bb1 + BR_SUPPLY }; int placed = 0;
+                for (int k = 0; k < 4; k++) for (int ring = 0; ring < 12; ring++) { bool ok = false; for (int a = 0; a < 16 && !ok; a++) { int tx = tileOf(tgc.x) + (int)(std::cos(a * 0.39f + k) * (ring + k * 3)), ty = tileOf(tgc.y) + (int)(std::sin(a * 0.39f + k) * (ring + k * 3)); if (g_sim.canPlace(1, types[k], tx, ty)) { Ref r = g_sim.placeBuilding(types[k], 1, tx, ty, true); if (!first.valid()) first = r; placed++; ok = true; } } if (ok) break; }
+                for (int i = 0; i < 6; i++) g_sim.spawnUnit(f1 == F_CYBER ? U_C_INF1 : U_K_INF1, 1, g_map.nearestFree(tgc + Vec2(i * 14 - 40, 40), 10));
+                std::vector<Ref> bm;
+                for (int i = 0; i < 3; i++) { Ref b = g_sim.spawnUnit(firstUnitOf(f0) + 8, 0, pad + Vec2((i - 1) * 30, 0)); g_sim.get(b)->home = af; bm.push_back(b); }
+                g_sim.cmdAttack(bm, first);
+                int n = atoi(getenv("ONEHOUR_BOMBS")); if (n < 2) n = 70;
+                g_game.cam = Vec2(clampf(tgc.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(tgc.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));   // cosmetic particles only spawn for effects on screen
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                Vec2 c = g_sim.get(first) ? g_sim.get(first)->pos : tgc;
+                g_game.cam = Vec2(clampf(c.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                g_game.selection.clear(); g_game.selection.push_back(bm[0]);
+                printf("bombs showcase: %d structures placed, %zu projectiles, %zu fx, %zu particles\n", placed, g_sim.projs.size(), g_sim.fx.size(), g_game.parts.size());
+            }
+            if (getenv("ONEHOUR_NUKEDMG")) {   // showcase: an enemy base under a nuke (ONEHOUR_NUKEDMG=N ticks after the blast)
+                Faction f1 = g_sim.players[1].faction; int bb1 = firstBuildOf(f1);
+                Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                Vec2 gz = g_map.nearestFree(bp + (ep - bp) * 0.5f, 40);
+                int types[9] = { bb1 + BR_FACTORY, bb1 + BR_BARRACKS, bb1 + BR_POWER, bb1 + BR_TURRET, bb1 + BR_SUPPLY, bb1 + BR_TECH, bb1 + BR_AATURRET, bb1 + BR_HQ, bb1 + BR_INCOME };
+                float dists[9] = { 2.5f, 4.5f, 6.0f, 3.0f, 7.5f, 8.5f, 5.0f, 9.5f, 6.5f };
+                for (int k = 0; k < 9; k++) for (int tries = 0; tries < 80; tries++) {
+                    float ang = k * 0.7f + tries * 0.31f, dd = dists[k] + (tries / 16) * 0.6f;
+                    Vec2 c = gz + Vec2(std::cos(ang), std::sin(ang)) * (dd * TILE);
+                    int tx = tileOf(c.x) - BUILDS[types[k]].w / 2, ty = tileOf(c.y) - BUILDS[types[k]].h / 2;
+                    if (inMap(tx, ty) && g_sim.canPlace(1, types[k], tx, ty)) { g_sim.placeBuilding(types[k], 1, tx, ty, true); break; }
+                }
+                for (int i = 0; i < 6; i++) g_sim.spawnUnit(f1 == F_CYBER ? U_C_TANK : U_K_TANK, 1, g_map.nearestFree(gz + Vec2(i * 30 - 80, 60 + (i % 2) * 40), 20));
+                for (int i = 0; i < 3; i++) g_sim.spawnUnit(firstUnitOf(f1) + 8, 1, gz + Vec2(i * 40 - 40, -30));
+                g_sim.nukes.push_back({bp, gz, 0, Sim::NUKE_FLIGHT - 0.05f});
+                g_game.cam = Vec2(clampf(gz.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(gz.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                int n = atoi(getenv("ONEHOUR_NUKEDMG")); if (n < 2) n = 120;
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                int left = 0, small = 0; for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1) { left++; printf("  %s %.0f%%\n", e.bt().name, 100 * e.hp / e.maxHp); }
+                (void)small; printf("nuke showcase: %d enemy structures left\n", left);
             }
             if (getenv("ONEHOUR_PAUSEMENU")) g_game.openPauseMenu();
             if (getenv("ONEHOUR_NEWB")) {   // showcase: income structure, nuke ramp, a nuke in flight

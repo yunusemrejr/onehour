@@ -77,7 +77,10 @@ struct Canvas {
 
 struct Sprite { SDL_Texture* tex = nullptr; int w = 0, h = 0; float ox = 0, oy = 0; float dscale = 1; };   // dscale: on-screen size relative to the texture (2x supersampled unit sprites use 0.5)
 
-extern const Color PLAYER_COLOR[MAX_PLAYERS];
+extern const Color PLAYER_COLOR[MAX_PLAYERS];   // palette slots: blue, red, yellow, green
+extern int g_colorSlot[MAX_PLAYERS];            // which slot each player of the current match uses (an ally takes the friendly green, enemies the warm colours)
+inline int slotOf(int owner) { return g_colorSlot[owner < 0 ? 0 : (owner >= MAX_PLAYERS ? MAX_PLAYERS - 1 : owner)]; }
+inline Color playerColor(int owner) { return PLAYER_COLOR[slotOf(owner)]; }
 
 struct Gfx {
     SDL_Window* win = nullptr;

@@ -7,7 +7,7 @@ static const char* const FACTION_NAME[F_COUNT] = { "Cyber Army", "Clanker Army" 
 
 enum Armor { AR_INF = 0, AR_LIGHT, AR_HEAVY, AR_STRUCT, AR_AIR, AR_COUNT };
 
-enum ProjKind { PJ_BULLET = 0, PJ_LASER, PJ_ARC, PJ_SHELL, PJ_ROCKET, PJ_RAIL };
+enum ProjKind { PJ_BULLET = 0, PJ_LASER, PJ_ARC, PJ_SHELL, PJ_ROCKET, PJ_RAIL, PJ_BOMB };
 
 enum Sound {
     SND_NONE = 0, SND_RIFLE, SND_MG, SND_LASER, SND_LASER_HEAVY, SND_ARC, SND_CANNON, SND_ROCKET,
@@ -70,6 +70,7 @@ struct UnitType {
     const char* desc;
     int program;        // 1 = also needs the faction's Advanced Program (researched at the tech structure)
     int jet;            // 1 = supersonic fighter: fixed-wing strafing passes with a limited turn rate instead of hovering
+    int bomber;         // 1 = carries bombs: flies bombing runs over ground targets (sticks of heavy bombs), uses its gun on aircraft
 };
 
 struct BuildType {
@@ -115,6 +116,9 @@ static const float REARM_TIME = 0.45f;    // seconds to reload one round of airc
 static const int   HQ_MAX = 3;                // Command Cores / Posts per player (a dozer can rebuild a lost one, or found a second base)
 static const float HEAL_RADIUS = 5.0f;        // tiles: a Medic's healing aura
 static const float HEAL_RATE = 0.06f;         // fraction of max health restored per second to units in the aura (a third of that for structures)
+static const float BOMBER_TURN = 2.3f;        // rad/s: a bomber swings a wide circle (about 110 px at its cruise speed) between runs
+static const int   BOMB_STICK = 4;            // bombs released in one pass, a few tens of pixels apart along the flight line
+static const int   W_BOMB_CYBER = 25, W_BOMB_CLANKER = 26;   // WEAPONS indices of the two armies' bombs
 static const float JET_TURN = 3.4f;           // rad/s: a supersonic jet at 560 px/s swings a turn circle of about 165 px
 
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures

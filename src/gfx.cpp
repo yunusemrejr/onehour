@@ -6,6 +6,7 @@
 Gfx g_gfx;
 
 const Color PLAYER_COLOR[MAX_PLAYERS] = { rgb(70, 170, 255), rgb(235, 70, 60), rgb(240, 205, 60), rgb(90, 215, 95) };
+int g_colorSlot[MAX_PLAYERS] = { 0, 1, 2, 3 };
 
 // 5x7 bitmap font, column-major, LSB = top row (ASCII 32..126)
 static const u8 FONT5x7[95][5] = {
@@ -366,7 +367,9 @@ static void paintFlag(Canvas& c, int player, Color team) {
 }
 
 void Gfx::drawFlag(float px, float py, int player, float scale, float phase) {
-    if (player < 0 || player >= MAX_PLAYERS || !flag[player].tex) return;
+    if (player < 0 || player >= MAX_PLAYERS) return;
+    player = slotOf(player);
+    if (!flag[player].tex) return;
     float mastH = 27 * scale;
     // mast: dark shaft with a lit edge, a small base plate and a finial
     fill((int)std::lround(px) - 1, (int)std::lround(py - mastH), 2, (int)std::lround(mastH) + 1, rgb(28, 30, 34));

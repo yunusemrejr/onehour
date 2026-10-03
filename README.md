@@ -1,7 +1,7 @@
 # One Hour
 
 A compact, low-resource skirmish RTS in the spirit of Command & Conquer: Generals – Zero Hour.
-One map, two armies, you against one to three AI opponents. No campaign, no tutorial, no multiplayer.
+One map, two armies, you against one to three AI opponents, with an optional computer-controlled ally on your side. Every opposing army (and the ally) has its own difficulty. No campaign, no tutorial, no multiplayer.
 
     ./run.sh              # builds (first run only) and starts the game
     ./run.sh --scale 2    # force a UI scale (default: automatic)
@@ -10,6 +10,15 @@ One map, two armies, you against one to three AI opponents. No campaign, no tuto
 
 Requirements: g++, make, and the SDL2 runtime (`libsdl2-2.0-0`). SDL2 headers are vendored
 under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of the box.
+
+## Skirmish setup
+
+The main menu is a small table: **You** (your army), **Ally**, **Enemy 1-3** and **Teams**. Every opposing army picks its own army (Cyber, Clanker, Random, or Off
+for the second and third enemy) and its own difficulty (Easy, Normal, Hard, Brutal), so one enemy can be Brutal while another is Normal. An **ally** (None, Cyber, Clanker or Random,
+with a difficulty of its own) is a computer-controlled army on your team: green, sharing its vision with you, defending your base when enemy fighters close on it, and going for the same
+enemies. There are four seats in all, so with an ally there are at most two enemies. **Teams** says whether the enemies are allied against your team or fight everybody (free for all).
+The match is won when every enemy army is gone and lost when you are out, even if your ally still stands. Keys: Up/Down pick a row, Left/Right change, Tab switches between the army and difficulty
+column, Enter starts.
 
 ## Armies
 
@@ -34,8 +43,12 @@ Team colours: every unit type has its own tone (graphite, cobalt, ceramic and te
 Clanker), a small jewel-like dot in the owner's colour marks each unit, and every finished structure flies its owner's own flag
 (rectangle+chevron, swallowtail+roundel, pennant, burgee+cross) from a mast on the roof.
 
-Aircraft carry 12 (Wraith) / 16 (Vulture) rounds, reload in under half a second per round on the pad, and hit harder and take more
-punishment than before.
+**Bombers** — the Wraith Drone and the Vulture Gunship are bombers. Against anything on the ground they fly real bombing runs: they line up on the
+target (leading a moving one), release a stick of four heavy bombs a few tens of pixels apart along the flight line, fly straight on for a second and
+swing round for another pass (12 / 16 bombs per sortie, reloaded in under half a second per bomb on the pad). A bomb splashes two tiles, hits
+structures about one and a half times as hard as soldiers' small arms, and goes off in a fireball with secondary bursts, a shockwave ring, flung debris,
+a dust ring, a climbing smoke column and a scorch mark. A flight of three takes a factory down in one or two passes, so anti-air batteries matter.
+Against aircraft they keep using their guns. They carry more armour than before (880 / 1000 hp).
 
 **Supersonic jets** — the Drone Pad and the Airstrip each build a second aircraft once the tech structure stands: the **Specter Jet**
 (Cyber, stealth delta, plasma lances) and the **Talon Jet** (Clanker, swept-wing fighter-bomber, homing Sidewinders). They are the
@@ -79,11 +92,31 @@ base layout, defenses placed toward the enemy, threat assessment, army compositi
 the observed enemy mix and continually re-weighted by which of its unit types are actually earning
 kills per credit, wave attacks that launch only when they outweigh the local defense, regroup and
 reinforcement waves, harassment of haulers, aircraft strikes and special powers aimed at the
-densest cluster. Two parts are learned online (`src/brain.cpp`): a logistic model that predicts whether
-an attack wave will trade favourably (launch/hold decision), and per-unit-type regressions of value destroyed
-per credit given the enemy's infantry/vehicle/air mix (production choice). Idle fighters of every AI guard a circle at their rally point, a few guard the mining area, drones patrol a circle over the base between strikes, and haulers are spread across gather circles around the piles near each hub. Weights persist in
-`~/.local/share/onehour/brain.txt` (override with `ONEHOUR_BRAIN`). Difficulty changes reaction time, aggression and starting cash (Brutal cheats a
-little, like Zero Hour's).
+densest cluster. Three parts are learned online (`src/brain.cpp`): a logistic model that predicts whether
+an attack wave will trade favourably (launch/hold decision), per-unit-type regressions of value destroyed
+per credit given the enemy's infantry/vehicle/air mix (production choice), and the **opening doctrine**: a commander opens a match as
+*balanced*, *rush* (early, smaller waves, few defenses), *turtle* (heavy defenses, early tech and nukes, big waves), *air* (early airfields, ten bombers, extra anti-air) or
+*boom* (an extra income structure, then a larger army), picked by UCB1 from each doctrine's running win rate and rewarded when the match ends, so it
+learns what beats the people it plays. Idle fighters of every AI guard a circle at their rally point, a few guard the mining area, drones patrol a circle over the base between strikes, and haulers are spread across gather circles around the piles near each hub. Weights persist in
+`~/.local/share/onehour/brain.txt` (override with `ONEHOUR_BRAIN`). Difficulty changes reaction time, aggression, how many income structures it raises and
+how soon, whether it dodges nukes, and starting cash (Brutal cheats a little, like Zero Hour's).
+
+Beyond the learned parts the commander plays tactically:
+
+- **Economy**: income structures pay for themselves in under a minute, so it banks for them as soon as it has power and a first army (2 / 3 / 4 of them on Easy / Normal / Hard and Brutal).
+- **Nukes**: it aims at what a warhead really costs the enemy (units and small structures in the blast, a share of large structures' value, minus friendly units in the fallout) and
+  fires only for a big enough pay-off. When an enemy nuke is launched it notices after a delay set by its difficulty (4.5 s Normal, 2 s Hard, 0.5 s Brutal, out of the 7 s flight; Easy never does) and walks its units, haulers
+  and aircraft out of the circle; afterwards non-attacking units leave radiation zones, rally points move out of them and attack waves avoid targets inside them.
+- **Bombers**: a flight waits until it is loaded, then goes together for the target with the best value (nuke ramps, income structures, supply, power, then production; harvesters;
+  clusters of units) minus the flak over it; heavily defended sites are skipped.
+- **Anti-air**: batteries follow the enemy's aircraft and airfields and are placed beside the structures most worth protecting.
+- **Medics** (one per 14 fighters, up to three) trail the army and are never sent ahead as part of a wave.
+- **Waves** break off when the fighting around them is clearly lost (two bad readings in a row), not only when half of them are dead.
+- **Allies**: a computer ally defends *your* base too (it sends most of its army to wherever enemy fighters are closing on a teammate's structures), shares its vision with you, and
+  plays at the difficulty set for it.
+
+`--evalai N` plays the current commander against the previous generation of the AI (it wins every one of 16 games at Hard, and 8 of 8 at Normal); `--evaldiff N` with
+`ONEHOUR_DA` / `ONEHOUR_DB` checks that the difficulty ladder holds (Normal beats Easy 8-0, Hard beats Normal 8-0, Brutal beats Hard 28-3 with one draw over 32 games on four seeds).
 
 ## Engineering notes
 
@@ -110,17 +143,17 @@ little, like Zero Hour's).
   headless; `--train N` self-plays N games to train the AI brain, `--eval N` pits the learned AI against the plain heuristic AI;
   `--soundcheck` prints statistics for the synthesized sounds; `--hqtest` rebuilds a lost Command Core (human dozer and AI), `--jettest` flies
   the jets (speed, banking, strafing, rearming), `--econtest` and `--areatest` cover income structures, nukes and area orders, and `--bench [N]`
-  times N rendered frames. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
+  times N rendered frames. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
 **Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura
 heals every friendly soldier, vehicle and aircraft within 5 tiles (6% of max health per second; structures at a third of that), and an idle
 medic drifts toward the nearest wounded friend. Idle dozers also repair damaged structures on their own. Jets now peel away from each strafing
 pass instead of flying through the defences, steer clear of heavily covered targets when softer ones exist, and carry more armour and ammo.
-`--supporttest` covers medics, dozer repair, nukes and fallout.
+`--supporttest` covers medics, dozer repair, nukes and fallout; `--bombtest` covers the nuke damage model (what collapses, what is left standing, who falls from the sky) and the bombing runs.
 
 ## Income and nukes
 
 - **Oil Well** (Clanker, $1400) pumps $380 every 5 s for as long as it stands, no power needed. **Bitcoin Datacenter** (Cyber, $1600) mines $450 every 5 s and runs at half rate on low power. Up to 4 each, so income continues after the supply piles run dry.
-- **Nuke Ramp** (both armies, $5000, needs the tech structure): each ramp can launch one tactical nuke every 5 minutes (60 s arming after it is built). The warhead flies for 7 s, so the enemy gets a warning circle, and it obliterates an 11 tile radius of enemy units and structures (a lethal core, then falling damage), stuns and hurls the survivors, and sets off chain explosions under a rising mushroom cloud. The crater stays radioactive for 80 s: everything on the ground inside it, friend or foe, keeps taking damage. Any number of ramps can be built; more ramps means more warheads per cycle.
+- **Nuke Ramp** (both armies, $5000, needs the tech structure): each ramp can launch one tactical nuke every 5 minutes (60 s arming after it is built). The warhead flies for 7 s, so the enemy gets a warning circle, and it tears up an 11 tile radius around ground zero. **Every enemy ground unit in the blast collapses** (a lethal core, then falling damage), **enemy aircraft inside the fireball (the inner 70%) fall out of the sky** and those in the shock ring beyond are badly mauled, **small structures collapse** (anything of six tiles or less: turrets, batteries, reactors, barracks, income structures) while **large structures survive heavily damaged** (about 80% of their health lost at ground zero, a fifth at the rim, never lethal, and knocked offline for a while). Survivors are stunned and hurled, and chain explosions go off under a rising mushroom cloud. Friendly units are thrown but never hurt by the blast itself. The crater stays radioactive for 80 s: every unit on the ground inside it, friend or foe, keeps taking damage, while structures only suffer a slow drain that stops at a tenth of their health. Any number of ramps can be built; more ramps means more warheads per cycle.
 - Airfields honor their rally point: new aircraft fly there and wait, going back to the pad only to rearm.

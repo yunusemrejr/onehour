@@ -500,6 +500,11 @@ bool Sim::cmdPower(int player, Vec2 pos) {
     return true;
 }
 
+bool Sim::inFallout(Vec2 p, float margin) const {
+    for (auto& f : fallouts) if (f.t < FALLOUT_LIFE - 8.0f && dist(p, f.pos) < f.r + margin) return true;
+    return false;
+}
+
 int Sim::nukesReady(int player) const {
     if (players[player].lowPower()) return 0;
     int n = 0;
@@ -527,52 +532,97 @@ bool Sim::cmdNuke(int player, Vec2 pos) {
     return true;
 }
 
+// What a detonation does (all of it to enemies of the launcher; friendly units are thrown but never hurt):
+//  * ground units: a lethal core, then falling damage out to the rim (they collapse, as ever)
+//  * aircraft: those inside the fireball fall out of the sky, those in the shock ring beyond it are badly mauled
+//  * small structures (footprint of NUKE_SMALL_AREA tiles or less: turrets, batteries, reactors, barracks, income structures) collapse
+//    in the inner blast; every large structure survives with heavy damage that tapers with the distance and is never lethal
+static const int NUKE_SMALL_AREA = 6;
+static const float NUKE_AIR_KILL = 0.7f;   // fraction of the blast radius that is "in direct contact" with the fireball for aircraft
+
 void Sim::updateNukes() {
     for (auto& n : nukes) n.t += SIM_DT;
     for (size_t i = 0; i < nukes.size();) {
+        if (nukes[i].t < NUKE_FLIGHT) { i++; continue; }
         Nuke n = nukes[i];
-        if (n.t < NUKE_FLIGHT) { i++; continue; }
         nukes.erase(nukes.begin() + i);
-        float R = NUKE_RADIUS * TILE;
-        std::vector<Ref> hit;
-        forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
-        for (auto r : hit) {
-            Entity* e = get(r); if (!e) continue;
-            float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
-            if (d > R) continue;
-            float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
-            if (e->isAir()) continue;
-            Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
-            if (enemies(n.owner, e->owner)) {
-                bool bld = e->isBuilding();
-                applyDamage(*e, (bld ? 9500.0f : 6000.0f) * f, n.owner, NOREF, nullptr);
-                e = get(r); if (!e) continue;
-                e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f);   // survivors are stunned by the pulse
-            }
-            if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
-                Vec2 np = e->pos + away * (90.0f * f);
-                if (g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
-                e->path.clear();
-            }
-        }
-        // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
-        fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, rgb(255, 240, 200), R * 1.3f});
-        fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, rgb(255, 210, 140), R * 1.2f});
-        fx.push_back({FX_RING, n.pos, n.pos, -0.5f, 2.4f, rgb(255, 180, 100), R * 1.7f});
-        fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.0f, rgb(255, 220, 160), R * 1.3f});
-        fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 18.0f, rgb(255, 255, 255), R});
-        for (int k = 0; k < 44; k++) {
-            float a = rng.f(0, 6.283f), r = R * std::sqrt(rng.f(0.0f, 1.0f)) * 1.05f; Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
-            fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 3.0f) - r / R * 0.8f, 1.0f, rgb(255, 150, 50), rng.f(26, 70)});
-            fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f), 6.0f, rgb(60, 54, 50), rng.f(28, 56), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
-        }
-        for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
-        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, rgb(120, 255, 90), R * 0.95f});
-        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f});
-        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
-        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
-        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+        nukeBlast(n);
     }
+}
+
+void Sim::nukeBlast(const Nuke& n) {
+    float R = NUKE_RADIUS * TILE;
+    std::vector<Ref> hit;
+    forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
+    for (auto r : hit) {
+        Entity* e = get(r); if (!e) continue;
+        float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
+        if (d > R) continue;
+        float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
+        bool foe = enemies(n.owner, e->owner);
+        if (e->isAir()) {
+            if (!foe) continue;
+            float core = R * NUKE_AIR_KILL;
+            if (d <= core) {   // caught in the fireball: the aircraft is torn apart and falls
+                fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
+                fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
+                for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
+                applyDamage(*e, e->maxHp * 2.0f, n.owner, NOREF, nullptr);
+            } else {           // the shock ring beyond it mauls what it does not destroy
+                float k = 1.0f - (d - core) / std::max(1.0f, R - core);
+                applyDamage(*e, e->maxHp * 0.62f * k, n.owner, NOREF, nullptr);
+            }
+            continue;
+        }
+        Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
+        if (foe) {
+            if (e->isBuilding()) {
+                bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA;
+                float dmg;
+                if (small) dmg = e->maxHp * 1.6f * f;                                        // f above ~0.63 (the inner blast) brings it down
+                else {
+                    dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f);                          // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
+                    dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));           // never lethal
+                }
+                if (dmg > 0) applyDamage(*e, dmg, n.owner, NOREF, nullptr);
+                e = get(r); if (!e) continue;
+                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f);            // the pulse knocks survivors offline for a while
+                if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
+                    for (int k = 0; k < 4; k++) {
+                        Vec2 p = e->pos + Vec2(rng.f(-e->radius() * 0.7f, e->radius() * 0.7f), rng.f(-e->radius() * 0.5f, e->radius() * 0.5f));
+                        fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 1.2f), 0.7f, rgb(255, 160, 60), rng.f(14, 26)});
+                        fx.push_back({FX_SMOKE, p, p, -rng.f(0.0f, 1.0f), 4.0f, rgb(52, 48, 44), rng.f(14, 24), Vec2(rng.f(-8, 8), rng.f(-32, -14))});
+                    }
+                }
+            } else {
+                applyDamage(*e, 6000.0f * f, n.owner, NOREF, nullptr);
+                e = get(r); if (!e) continue;
+                e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f);           // survivors are stunned by the pulse
+            }
+        }
+        if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
+            Vec2 np = e->pos + away * (90.0f * f);
+            if (g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
+            e->path.clear();
+        }
+    }
+    // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
+    fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, rgb(255, 240, 200), R * 1.3f});
+    fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, rgb(255, 210, 140), R * 1.2f});
+    fx.push_back({FX_RING, n.pos, n.pos, -0.5f, 2.4f, rgb(255, 180, 100), R * 1.7f});
+    fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.0f, rgb(255, 220, 160), R * 1.3f});
+    fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 18.0f, rgb(255, 255, 255), R});
+    for (int k = 0; k < 44; k++) {
+        float a = rng.f(0, 6.283f), r = R * std::sqrt(rng.f(0.0f, 1.0f)) * 1.05f; Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
+        fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 3.0f) - r / R * 0.8f, 1.0f, rgb(255, 150, 50), rng.f(26, 70)});
+        fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f), 6.0f, rgb(60, 54, 50), rng.f(28, 56), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
+    }
+    for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
+    fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, rgb(120, 255, 90), R * 0.95f});
+    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f});
+    emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+    emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+    emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
 }
 
 // Radioactive fallout: for FALLOUT_LIFE seconds everything on the ground inside the zone is poisoned, friend and foe alike;
@@ -594,7 +644,11 @@ void Sim::updateFallout() {
             forEachNear(f.pos, f.r, [&](Entity& e) { if (e.kind != EK_RESOURCE && !e.isAir() && dist(e.pos, f.pos) <= f.r) in.push_back(refOf(e)); });
             for (auto r : in) {
                 Entity* e = get(r); if (!e) continue;
-                float dmg = e->isBuilding() ? e->maxHp * 0.006f : std::max(7.0f, e->maxHp * 0.03f);
+                if (e->isBuilding()) {   // radiation only weakens structures: a slow, non-lethal drain that stops at a tenth of their health
+                    if (e->hp > e->maxHp * 0.12f) applyDamage(*e, e->maxHp * 0.0012f * strength, -1, NOREF, nullptr);
+                    continue;
+                }
+                float dmg = std::max(7.0f, e->maxHp * 0.03f);
                 applyDamage(*e, dmg * strength, -1, NOREF, nullptr);
             }
         }
@@ -725,7 +779,11 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
         if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
-        if (e.isAir() && !t.isAir()) { if (e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f); if (t.isBuilding() && t.bt().role != BR_AATURRET && t.bt().weapon < 0) score += 1.5f; }
+        if (e.isAir() && !t.isAir()) {
+            if (e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
+            if (e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
+            else if (t.isBuilding() && t.bt().role != BR_AATURRET && t.bt().weapon < 0) score += 1.5f;
+        }
         if (score < bs) { bs = score; best = &t; }
     });
     return best;
@@ -749,6 +807,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;
         if (e.isAir() && !t.isAir() && e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
+        if (e.isAir() && !t.isAir() && e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
         if (score < bs) { bs = score; best = &t; }
     });
     return best;
@@ -830,6 +889,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
         projs.push_back(p);
         break;
     }
+    case PJ_BOMB: break;   // bombs are released by bomberAttack / dropBomb, never fired at a target
     }
 }
 
@@ -855,6 +915,8 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         if (time - pl.lastNotice > 10.0f) {
             pl.lastNotice = time;
             emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack");
+            for (int q = 0; q < numPlayers; q++)   // human teammates hear about it too (an AI ally being hit)
+                if (q != tgt.owner && !players[q].isAI && players[q].team == pl.team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Your ally's base is under attack" : "Your ally's forces are under attack");
         }
     }
     if (tgt.hp <= 0) {
@@ -890,12 +952,16 @@ void Sim::updateProjectiles() {
         if (!p.alive) continue;
         const Weapon& w = WEAPONS[p.weapon];
         p.life -= SIM_DT;
-        if (w.proj == PJ_SHELL) {
+        if (w.proj == PJ_SHELL || w.proj == PJ_BOMB) {
             p.arcT += SIM_DT / p.arcLen;
             Vec2 start = p.vel;
             Entity* st = get(p.target);
-            if (st) p.dest = st->pos;   // shells track their target: tank cannons don't miss in Zero Hour either
+            if (st && w.proj == PJ_SHELL) p.dest = st->pos;   // shells track their target: tank cannons don't miss in Zero Hour either (bombs just fall)
             p.pos = start + (p.dest - start) * clampf(p.arcT, 0, 1);
+            if (w.proj == PJ_BOMB) {
+                if (p.arcT >= 1.0f) { bombImpact(p); p.alive = false; }
+                continue;
+            }
             if (p.arcT >= 1.0f) {
                 fx.push_back({FX_EXPLODE, p.dest, p.dest, 0, 0.35f, rgb(255, 190, 90), w.splash * TILE + 8});
                 fx.push_back({FX_SMOKE, p.dest, p.dest, 0, 1.2f, rgb(70, 65, 60), 9, Vec2(0, -20)});
@@ -1060,6 +1126,67 @@ void Sim::jetAttack(Entity& e, Entity& t) {
     e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
 }
 
+// A bombing run. The aircraft steers at the target (leading a moving one), and when the middle of a stick of bombs would land on it
+// it releases them one after another along the flight line, then flies straight on for a second before swinging round for another pass.
+void Sim::bomberAttack(Entity& e, Entity& t) {
+    const UnitType& ut = e.ut();
+    Vec2 tp = t.pos;
+    if (t.isUnit()) tp += (t.pos - t.prevPos) * (1.0f / SIM_DT) * 0.9f;
+    Vec2 to = tp - e.pos;
+    float D = to.len();
+    float want = std::atan2(to.y, to.x);
+    float carry = ut.speed * 0.42f;                                   // a bomb keeps the aircraft's forward speed while it falls
+    float release = carry + ut.speed * 0.11f * (BOMB_STICK - 1) * 0.5f;   // distance at which the middle of the stick lands on the target
+    if (e.jetBreak > 0) {
+        e.jetBreak -= SIM_DT;
+        want = e.angle;                                               // straight on over and past the target
+    } else if (e.bombsLeft <= 0 && e.ammo > 0 && D <= release + 8 && D >= release - 40 && std::abs(angDiff(e.angle, want)) < 0.2f) {
+        e.bombsLeft = std::min(BOMB_STICK, e.ammo); e.bombTimer = 0; e.jetBreak = 1.15f;
+        emit(EV_SOUND, e.owner, SND_AIR, e.pos);
+    } else if (D < release - 40 && e.bombsLeft <= 0) {
+        e.jetBreak = 0.8f;                                            // too close or badly lined up: fly through and come round again
+    }
+    const float edge = 3.0f * TILE;
+    if (e.pos.x < edge || e.pos.y < edge || e.pos.x > WORLD_W - edge || e.pos.y > WORLD_H - edge) {
+        Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos;
+        want = std::atan2(c.y, c.x);
+    }
+    float turn = BOMBER_TURN * SIM_DT;
+    e.angle += clampf(angDiff(e.angle, want), -turn, turn);
+    e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (ut.speed * SIM_DT);
+    e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
+}
+
+void Sim::dropBomb(Entity& e, Vec2 at) {
+    Projectile p;
+    p.pos = e.pos; p.prevPos = e.pos; p.vel = e.pos;      // vel keeps the release point (the ground point under the aircraft), like a shell's launch point
+    p.dest = at; p.target = NOREF; p.owner = e.owner; p.shooter = refOf(e);
+    p.weapon = e.ut().faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER;
+    p.arcLen = 0.62f; p.arcT = 0; p.life = p.arcLen + 0.3f;
+    projs.push_back(p);
+}
+
+// A bomb going off: a fireball with secondary bursts along the ground, a shockwave ring, a rising smoke column, flung debris and sparks.
+void Sim::bombImpact(Projectile& p) {
+    const Weapon& w = WEAPONS[p.weapon];
+    Vec2 at = p.dest;
+    float R = w.splash * TILE;
+    splashDamage(at, w.splash, w.dmg, p.owner, p.shooter, w, NOREF);
+    bool cy = p.weapon == W_BOMB_CYBER;
+    Color fire = cy ? rgb(190, 235, 255) : rgb(255, 210, 140), hot = cy ? rgb(120, 220, 255) : rgb(255, 150, 60);
+    fx.push_back({FX_EXPLODE, at, at, 0, 0.75f, fire, R * 1.25f});
+    fx.push_back({FX_RING, at, at, 0, 0.8f, hot, R * 2.3f});
+    fx.push_back({FX_RING, at, at, -0.1f, 0.6f, fire, R * 1.4f});
+    for (int k = 0; k < 4; k++) {
+        float a = rng.f(0, 6.283f), r = R * rng.f(0.35f, 0.95f); Vec2 q = at + Vec2(std::cos(a) * r, std::sin(a) * r * 0.8f);
+        fx.push_back({FX_EXPLODE, q, q, -rng.f(0.05f, 0.4f), 0.65f, hot, R * rng.f(0.5f, 0.85f)});
+    }
+    for (int k = 0; k < 3; k++) fx.push_back({FX_SMOKE, at, at, -rng.f(0.0f, 0.5f), 3.6f, rgb(54, 50, 48), R * rng.f(0.55f, 0.85f), Vec2(rng.f(-12, 12), -rng.f(26, 48))});
+    for (int k = 0; k < 12; k++) fx.push_back({FX_DEBRIS, at, at, 0, rng.f(0.6f, 1.3f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-210, 210), rng.f(-300, -60))});
+    for (int k = 0; k < 5; k++) fx.push_back({FX_SPARK, at, at, 0, rng.f(0.2f, 0.5f), fire, rng.f(3, 6)});
+    emit(EV_SOUND, -1, SND_EXPLODE_L, at);
+}
+
 // ------------------------------------------------------------ unit update
 void Sim::updateUnit(Entity& e) {
     const UnitType& ut = e.ut();
@@ -1088,6 +1215,15 @@ void Sim::updateUnit(Entity& e) {
         e.alt = clampf(e.alt + (parked ? -1.4f : 1.4f) * SIM_DT, 0.0f, 1.0f);
     }
 
+    // bombers: the stick being released leaves the aircraft one bomb at a time
+    if (e.bombsLeft > 0) {
+        e.bombTimer -= SIM_DT;
+        if (e.bombTimer <= 0) {
+            if (e.ammo > 0) { dropBomb(e, e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * (ut.speed * 0.42f)); e.ammo--; }
+            else e.bombsLeft = 1;
+            e.bombsLeft--; e.bombTimer = 0.11f;
+        }
+    }
     // burst continuation (a jet's volley comes in a tight stream: it covers a lot of ground between rounds)
     if (e.burstLeft > 0) {
         e.burstTimer -= SIM_DT;
@@ -1122,7 +1258,7 @@ void Sim::updateUnit(Entity& e) {
             if ((tick + e.gen) % 20 == 0) {
                 Entity* best = nullptr; float bd = 1e18f;
                 for (auto& b : ents) {
-                    if (!b.alive || !b.isBuilding() || b.owner != e.owner || !b.constructed || b.hp >= b.maxHp * 0.995f || time - b.lastDamaged < 4.0f) continue;
+                    if (!b.alive || !b.isBuilding() || b.owner != e.owner || !b.constructed || b.hp >= b.maxHp * 0.995f || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;   // (idle dozers do not drive into radiation)
                     float d = dist2(b.pos, e.pos); if (d < bd) { bd = d; best = &b; }
                 }
                 if (best) { e.order = O_BUILD; e.targetEnt = refOf(*best); e.repathTimer = 0; e.path.clear(); }
@@ -1270,6 +1406,7 @@ void Sim::updateUnit(Entity& e) {
         if (e.isAir()) {
             if (e.ammo <= 0 && ut.ammo > 0) { e.order = O_REARM; break; }
             if (ut.jet) { jetAttack(e, *t); break; }
+            if (ut.bomber && !t->isAir()) { bomberAttack(e, *t); break; }
             Vec2 dv = t->pos - e.pos;
             if (d > w.range - 0.4f) { e.pos += dv.norm() * std::min(dv.len(), ut.speed * SIM_DT); e.angle = std::atan2(dv.y, dv.x); }
             else { e.angle = std::atan2(dv.y, dv.x); tryFire(e, *t); }
@@ -1508,7 +1645,9 @@ void Sim::updatePower() {
 void Sim::updateVision() {
     for (auto& e : ents) {
         if (!e.alive || e.owner < 0) continue;
-        Player& pl = players[e.owner];
+        // allies share what they see: the sight of every unit and structure is written into the map of each member of its team
+        Player* seers[MAX_PLAYERS]; int ns = 0;
+        for (int p = 0; p < numPlayers; p++) if (p == e.owner || players[p].team == players[e.owner].team) seers[ns++] = &players[p];
         float s = e.sight();
         int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y);
         int r = (int)std::ceil(s);
@@ -1517,7 +1656,7 @@ void Sim::updateVision() {
             int y = cy + dy; if (y < 0 || y >= MAP_H) continue;
             for (int dx = -r; dx <= r; dx++) {
                 int x = cx + dx; if (x < 0 || x >= MAP_W) continue;
-                if (dx * dx + dy * dy <= s2) pl.explored[y * MAP_W + x] = 1;
+                if (dx * dx + dy * dy <= s2) for (int k = 0; k < ns; k++) seers[k]->explored[y * MAP_W + x] = 1;
             }
         }
     }
@@ -1567,7 +1706,11 @@ void Sim::checkVictory() {
     if (!anyDied) return;
     int aliveTeam = -1; bool multi = false;
     for (int p = 0; p < numPlayers; p++) if (players[p].alive) { if (aliveTeam < 0) aliveTeam = players[p].team; else if (players[p].team != aliveTeam) multi = true; }
-    if (!multi) { gameOver = true; winnerTeam = aliveTeam; }
+    if (!multi) { gameOver = true; winnerTeam = aliveTeam; return; }
+    // once every human player is out the match is lost, even if a computer-controlled ally still stands
+    int humans = 0, humansAlive = 0;
+    for (int p = 0; p < numPlayers; p++) if (!players[p].isAI) { humans++; if (players[p].alive) humansAlive++; }
+    if (humans > 0 && humansAlive == 0) { gameOver = true; winnerTeam = aliveTeam; }
 }
 
 // ------------------------------------------------------------ main step

@@ -178,6 +178,12 @@ void Game::spawnFromFx() {
             int puffs = 1 + (int)(s / 12);
             for (int i = 0; i < puffs; i++) emitP(f.a.x + r.f(-s * 0.3f, s * 0.3f), f.a.y + r.f(-s * 0.3f, s * 0.3f), r.f(-10, 10), r.f(-30, -12), r.f(1.8f, 3.2f), s * r.f(0.35f, 0.55f), s * r.f(0.9f, 1.4f), rgb(52, 50, 48), PK_SMOKE, (u8)r.range(0, 3), 0, 0.6f, r.f(0, 6), r.f(-0.4f, 0.4f));
             if (s >= 20) emitP(f.a.x, f.a.y, 0, 0, 0.6f, s * 0.35f, s * 2.2f, rgb(255, 196, 130), PK_RING);
+            if (s >= 55 && s < 150) {   // heavy bomb: a rolling dust ring, a fire column and a plume of smoke climbing from the crater
+                for (int i = 0; i < 12; i++) { float an = i * 0.5236f + r.f(-0.15f, 0.15f), sp = r.f(110, 190) * (s / 70.0f + 0.4f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.5f, r.f(0.7f, 1.2f), s * 0.12f, s * 0.42f, rgb(150, 132, 108, 170), PK_DUST, (u8)r.range(0, 2), 0, 3.4f, r.f(0, 6), r.f(-0.5f, 0.5f)); }
+                for (int i = 0; i < 7; i++) emitP(f.a.x + r.f(-s * 0.15f, s * 0.15f), f.a.y - i * s * 0.1f, r.f(-8, 8), -r.f(70, 150), r.f(0.5f, 0.9f), s * r.f(0.2f, 0.34f), s * 0.08f, rgb(255, 170 + r.range(0, 60), 80), PK_FLAME, (u8)r.range(0, 2), -40, 1.2f);
+                for (int i = 0; i < 5; i++) emitP(f.a.x + r.f(-s * 0.2f, s * 0.2f), f.a.y - r.f(0, s * 0.3f), r.f(-10, 10), -r.f(36, 90), r.f(2.2f, 3.6f), s * r.f(0.28f, 0.4f), s * r.f(0.8f, 1.15f), rgb(70, 66, 62, 150), PK_SMOKE, (u8)r.range(0, 3), 0, 0.5f, r.f(0, 6), r.f(-0.3f, 0.3f));
+                for (int i = 0; i < 16; i++) { float an = r.f(0, 6.283f), sp = r.f(160, 300); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.8f - r.f(50, 140), r.f(0.3f, 0.7f), r.f(1.2f, 2.2f), 0.4f, rgb(255, 224, 150), PK_SPARK, 0, 160, 2.6f); }
+            }
             if (s >= 150) {   // tactical nuke: a rising stem, an opening cap, a dust ring, a huge scorch and a flash
                 for (int i = 0; i < 16; i++) emitP(f.a.x + r.f(-s * 0.1f, s * 0.1f), f.a.y + r.f(-s * 0.1f, s * 0.1f), r.f(-6, 6), -r.f(40, 100), r.f(5.0f, 7.5f), s * 0.16f, s * 0.38f, rgb(86, 76, 68, 215), PK_SMOKE, (u8)r.range(0, 3), 0, 0.3f, r.f(0, 6), r.f(-0.2f, 0.2f));
                 for (int i = 0; i < 14; i++) { float an = i * 0.4488f + r.f(-0.1f, 0.1f), sp = r.f(30, 60); emitP(f.a.x, f.a.y - s * 0.3f, std::cos(an) * sp, std::sin(an) * sp * 0.55f - 22, r.f(5.0f, 7.0f), s * 0.2f, s * 0.46f, rgb(96, 82, 70, 200), PK_SMOKE, (u8)r.range(0, 3), 0, 0.5f, r.f(0, 6), r.f(-0.3f, 0.3f)); }
@@ -231,13 +237,13 @@ void Game::drawGroundFx() {
         } else if (f.type == FX_WRECK && f.vel.y > 0.5f) {   // fallen soldier: dark and flat, fading out
             if (!onScreen(f.a.x, f.a.y, 24)) continue;
             Vec2 a = worldToScreen(f.a);
-            int ut = (int)f.b.x, ow = (int)f.b.y;
+            int ut = (int)f.b.x, ow = slotOf((int)f.b.y);
             u8 al = (u8)(235 * clampf((1 - k) * 3.0f, 0, 1));
             g.draw(g.unitBody[ut][ow], a.x, a.y, f.vel.x, 0.92f, rgb(92, 84, 80), al);
         } else if (f.type == FX_WRECK) {
             if (!onScreen(f.a.x, f.a.y, 40)) continue;
             Vec2 a = worldToScreen(f.a);
-            int ut = (int)f.b.x, ow = (int)f.b.y;
+            int ut = (int)f.b.x, ow = slotOf((int)f.b.y);
             u8 al = (u8)(255 * clampf((1 - k) * 5.0f, 0, 1));
             Color cinder = rgb(58, 54, 50);
             g.draw(g.unitBody[ut][ow], a.x, a.y, f.vel.x, 1, cinder, al);

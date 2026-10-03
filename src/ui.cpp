@@ -50,14 +50,22 @@ void Game::addMessage(const char* text, Color c) {
 // ------------------------------------------------------------ game setup
 void Game::startGame() {
     Faction fac[MAX_PLAYERS]; bool ai[MAX_PLAYERS]; int diff[MAX_PLAYERS]; int team[MAX_PLAYERS];
-    int n = 1 + menu.enemies;
     Rng r(seed);
-    fac[0] = menu.playerFaction; ai[0] = false; diff[0] = 1; team[0] = 0;
-    for (int i = 0; i < menu.enemies; i++) {
-        int f = menu.enemyFaction[i];
-        fac[i + 1] = f == 2 ? (Faction)(r.range(0, 1)) : (Faction)f;
-        ai[i + 1] = true; diff[i + 1] = menu.difficulty; team[i + 1] = menu.enemiesAllied ? 1 : 1 + i;
+    int n = 0;
+    fac[n] = menu.playerFaction; ai[n] = false; diff[n] = 1; team[n] = 0; g_colorSlot[n] = 0; n++;
+    if (menu.hasAlly()) {   // a computer-controlled ally on your team: green, with the difficulty chosen for it
+        fac[n] = menu.allyFaction == 2 ? (Faction)r.range(0, 1) : (Faction)menu.allyFaction;
+        ai[n] = true; diff[n] = menu.allyDiff; team[n] = 0; g_colorSlot[n] = 3; n++;
     }
+    int e = 0;
+    for (int i = 0; i < 3 && n < MAX_PLAYERS; i++) {
+        int f = menu.enemyFaction[i];
+        if (f == 3) continue;
+        fac[n] = f == 2 ? (Faction)r.range(0, 1) : (Faction)f;
+        ai[n] = true; diff[n] = menu.enemyDiff[i]; team[n] = menu.enemiesAllied ? 1 : 1 + e; g_colorSlot[n] = 1 + e;
+        n++; e++;
+    }
+    for (int k = n; k < MAX_PLAYERS; k++) g_colorSlot[k] = k;
     g_sim.init(n, fac, ai, diff, team, seed);
     g_ai.init(seed);
     selection.clear();
@@ -70,6 +78,7 @@ void Game::startGame() {
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
     state = GS_PLAYING;
     addMessage("Skirmish started. Build a Supply Hub and power first.", hudText());
+    if (menu.hasAlly()) addMessage("Your ally (green) fights on your side, shares its vision and defends your base.", rgb(150, 235, 165));
 }
 
 // ------------------------------------------------------------ update
@@ -97,7 +106,7 @@ void Game::update(float dt) {
     g_audio.setListener(cam, SCREEN_W, VIEW_H);
     if (g_sim.gameOver && state == GS_PLAYING) {
         state = GS_GAMEOVER; gameOverAt = wallTime;
-        if (!g_brainPath.empty()) { g_brain.games++; g_brain.save(g_brainPath.c_str()); }
+        if (!g_brainPath.empty()) { g_ai.finish(g_sim.winnerTeam); g_brain.games++; g_brain.save(g_brainPath.c_str()); }   // each commander's doctrine learns whether it won
         bool won = g_sim.winnerTeam == g_sim.players[0].team;
         g_audio.play(won ? SND_VICTORY : SND_DEFEAT, Vec2(), true);
     }
@@ -116,8 +125,9 @@ void Game::processEvents() {
         case EV_SUPPLY_EMPTY: if (mine) addMessage("Supply pile depleted", hudDim()); break;
         case EV_MSG: if (mine) addMessage(ev.msg.c_str(), rgb(255, 200, 120)); break;
         case EV_PLAYER_DEAD: {
-            char buf[96]; snprintf(buf, sizeof buf, "%s (%s) has been eliminated", ev.player == 0 ? "You" : "Enemy", ev.msg.c_str());
-            addMessage(buf, ev.player == 0 ? rgb(255, 120, 100) : rgb(150, 240, 150));
+            bool ally = ev.player != g_sim.humanPlayer && !g_sim.enemies(g_sim.humanPlayer, ev.player);
+            char buf[96]; snprintf(buf, sizeof buf, "%s (%s) has been eliminated", ev.player == g_sim.humanPlayer ? "You" : (ally ? "Your ally" : "Enemy"), ev.msg.c_str());
+            addMessage(buf, ev.player == g_sim.humanPlayer || ally ? rgb(255, 120, 100) : rgb(150, 240, 150));
             break;
         }
         default: break;
@@ -423,42 +433,73 @@ void Game::handleEvent(const SDL_Event& e) {
     }
 }
 
+// Setup table: your army, an optional ally, up to three enemy armies (each with its own army and difficulty), the enemy alliance, start.
+enum { MR_YOU = 0, MR_ALLY, MR_E1, MR_E2, MR_E3, MR_TEAMS, MR_START, MR_ROWS };
+static const int MENU_ROW_H = 34;
+// the ally and every enemy take one of four seats: an ally leaves three for enemies, so the third enemy needs a free seat
+static bool menuRowEnabled(const MenuSettings& m, int row) {
+    if (row == MR_E3) return !m.hasAlly();
+    if (row == MR_TEAMS) return m.enemyCount() >= 2;
+    return true;
+}
+static bool menuRowHasDiff(const MenuSettings& m, int row) {
+    if (row == MR_ALLY) return m.hasAlly();
+    if (row >= MR_E1 && row <= MR_E3) return m.enemyFaction[row - MR_E1] != 3 && menuRowEnabled(m, row);
+    return false;
+}
+static void menuChange(MenuSettings& m, int row, int col, int dir) {
+    if (col == 1 && menuRowHasDiff(m, row)) {
+        int& d = row == MR_ALLY ? m.allyDiff : m.enemyDiff[row - MR_E1];
+        d = (d + dir + 4) % 4;
+        return;
+    }
+    switch (row) {
+    case MR_YOU: m.playerFaction = (Faction)((m.playerFaction + 1) % 2); break;
+    case MR_ALLY:
+        m.allyFaction = (m.allyFaction + dir + 4) % 4;
+        if (m.hasAlly()) m.enemyFaction[2] = 3;   // four armies at most: with an ally there are two enemies at most
+        break;
+    case MR_E1: m.enemyFaction[0] = (m.enemyFaction[0] + dir + 3) % 3; break;
+    case MR_E2: m.enemyFaction[1] = (m.enemyFaction[1] + dir + 4) % 4; break;
+    case MR_E3: if (menuRowEnabled(m, row)) m.enemyFaction[2] = (m.enemyFaction[2] + dir + 4) % 4; break;
+    case MR_TEAMS: m.enemiesAllied = !m.enemiesAllied; break;
+    }
+}
+static const int MENU_ARMY_X = -150, MENU_ARMY_W = 220, MENU_DIFF_X = 90, MENU_DIFF_W = 170;   // control columns, relative to the screen centre
+
 void Game::menuEvent(const SDL_Event& e) {
-    const int ROWS = 8;   // faction, enemies, e1, e2, e3, difficulty, teams, start
-    auto change = [&](int row, int dir) {
-        switch (row) {
-        case 0: menu.playerFaction = (Faction)((menu.playerFaction + 1) % 2); break;
-        case 1: menu.enemies = clampi(menu.enemies + dir, 1, 3); break;
-        case 2: case 3: case 4: menu.enemyFaction[row - 2] = (menu.enemyFaction[row - 2] + dir + 3) % 3; break;
-        case 5: menu.difficulty = (menu.difficulty + dir + 4) % 4; break;
-        case 6: menu.enemiesAllied = !menu.enemiesAllied; break;
-        case 7: seed = (u64)SDL_GetTicks() * 2654435761ull + 17; startGame(); break;
-        }
+    auto change = [&](int row, int col, int dir) {
+        if (row == MR_START) { seed = (u64)SDL_GetTicks() * 2654435761ull + 17; startGame(); }
+        else menuChange(menu, row, col, dir);
         g_audio.play(SND_CLICK, Vec2(), true);
     };
+    auto fixFocus = [&]() { if (!menuRowHasDiff(menu, menu.cursor)) menu.col = 0; };
     if (e.type == SDL_KEYDOWN) {
         SDL_Keycode k = e.key.keysym.sym;
-        if (k == SDLK_UP) menu.cursor = (menu.cursor + ROWS - 1) % ROWS;
-        else if (k == SDLK_DOWN) menu.cursor = (menu.cursor + 1) % ROWS;
-        else if (k == SDLK_LEFT) change(menu.cursor, -1);
-        else if (k == SDLK_RIGHT || k == SDLK_SPACE) change(menu.cursor, 1);
-        else if (k == SDLK_RETURN) { if (menu.cursor == 7) change(7, 1); else change(menu.cursor, 1); }
+        if (k == SDLK_UP || k == SDLK_DOWN) {
+            int d = k == SDLK_UP ? -1 : 1;
+            do { menu.cursor = (menu.cursor + d + MR_ROWS) % MR_ROWS; } while (!menuRowEnabled(menu, menu.cursor));
+        }
+        else if (k == SDLK_TAB) { if (menuRowHasDiff(menu, menu.cursor)) menu.col = 1 - menu.col; }
+        else if (k == SDLK_LEFT) change(menu.cursor, menu.col, -1);
+        else if (k == SDLK_RIGHT || k == SDLK_SPACE || k == SDLK_RETURN) change(menu.cursor, menu.col, 1);
         else if (k == SDLK_ESCAPE) quitRequested = true;
-        // skip disabled enemy rows
-        while (menu.cursor >= 2 && menu.cursor <= 4 && menu.cursor - 2 >= menu.enemies) menu.cursor = (k == SDLK_UP) ? menu.cursor - 1 : menu.cursor + 1;
+        fixFocus();
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
         int x = e.button.x, y = e.button.y;
         int oy = menuOffsetY(), cx = SCREEN_W / 2;
-        int rowY0 = 250 + oy, rowH = 34;
-        int row = (y - rowY0) / rowH;
-        if (y >= rowY0 && row >= 0 && row < 7) {
-            if (row >= 2 && row <= 4 && row - 2 >= menu.enemies) return;
+        int rowY0 = 250 + oy;
+        int row = (y - rowY0) / MENU_ROW_H;
+        if (y >= rowY0 && row >= 0 && row < MR_START && menuRowEnabled(menu, row)) {
             menu.cursor = row;
-            if (x >= cx - 260 && x < cx - 130) change(row, -1);
-            else if (x >= cx - 130 && x < cx + 260) change(row, 1);
+            int col = -1, dir = 0;
+            if (x >= cx + MENU_ARMY_X && x < cx + MENU_ARMY_X + MENU_ARMY_W) { col = 0; dir = x < cx + MENU_ARMY_X + MENU_ARMY_W / 2 ? -1 : 1; }
+            else if (x >= cx + MENU_DIFF_X && x < cx + MENU_DIFF_X + MENU_DIFF_W && menuRowHasDiff(menu, row)) { col = 1; dir = x < cx + MENU_DIFF_X + MENU_DIFF_W / 2 ? -1 : 1; }
+            if (col >= 0) { menu.col = col; change(row, col, dir); }
+            fixFocus();
         }
-        if (y >= 520 + oy && y < 560 + oy && x >= cx - 100 && x < cx + 100) { menu.cursor = 7; change(7, 1); }
+        if (y >= 520 + oy && y < 560 + oy && x >= cx - 100 && x < cx + 100) { menu.cursor = MR_START; change(MR_START, 0, 1); }
         if (y >= 572 + oy && y < 604 + oy && x >= cx - 50 && x < cx + 50) quitRequested = true;
     }
 }
@@ -615,31 +656,55 @@ void Game::renderMenu() {
     g.text(cx - g.textW(fdesc) / 2, 170 + oy, fdesc, hudText());
     g.text(cx - g.textW("One map: Lakeside, 4 corner bases, contested supply piles in the middle") / 2, 190 + oy, "One map: Lakeside, 4 corner bases, contested supply piles in the middle", hudDim());
 
-    int rowY0 = 250 + oy, rowH = 34;
-    auto row = [&](int i, const char* label, const char* value, bool enabled) {
-        int y = rowY0 + i * rowH;
-        bool cur = menu.cursor == i;
-        if (cur) g.fill(cx - 260, y - 4, 520, rowH - 4, rgb(255, 255, 255, 22));
-        g.text(cx - 240, y + 4, label, enabled ? hudText() : hudDim(), 2);
-        if (!enabled) { g.text(cx + 70, y + 4, "-", hudDim(), 2); return; }
-        g.text(cx + 10, y + 4, "<", cur ? accent : hudDim(), 2);
-        g.text(cx + 130 - g.textW(value, 2) / 2, y + 4, value, cur ? rgb(255, 255, 255) : hudText(), 2);
-        g.text(cx + 234, y + 4, ">", cur ? accent : hudDim(), 2);
+    int rowY0 = 250 + oy;
+    // seat colours as they will appear in the match: you blue, an ally green, enemies red then yellow (then green when there is no ally)
+    auto seatColor = [&](int row) -> Color {
+        if (row == MR_YOU) return PLAYER_COLOR[0];
+        if (row == MR_ALLY) return PLAYER_COLOR[3];
+        int idx = 0; for (int i = 0; i < row - MR_E1; i++) if (menu.enemyFaction[i] != 3) idx++;
+        return PLAYER_COLOR[1 + idx];
     };
-    static const char* FN[3] = { "Cyber Army", "Clanker Army", "Random" };
+    static const char* FN[4] = { "Cyber Army", "Clanker Army", "Random", "-" };
+    static const char* AN[4] = { "Cyber Army", "Clanker Army", "Random", "None" };
+    static const char* EN[4] = { "Cyber Army", "Clanker Army", "Random", "Off" };
+    (void)FN;
+    // a bracketed control: dim when unfocused, accent arrows and a lit frame when focused
+    auto control = [&](int x0, int w, int y, const char* value, bool focused, bool rowCur, Color tint) {
+        if (focused) { g.fill(x0 - 2, y - 4, w + 4, MENU_ROW_H - 4, rgb(255, 255, 255, 26)); g.box(x0 - 2, y - 4, w + 4, MENU_ROW_H - 4, Color{accent.r, accent.g, accent.b, 200}); }
+        g.text(x0 + 6, y + 4, "<", focused ? accent : hudDim(), 2);
+        g.text(x0 + w / 2 - g.textW(value, 2) / 2, y + 4, value, focused ? rgb(255, 255, 255) : (rowCur ? hudText() : tint), 2);
+        g.text(x0 + w - 18, y + 4, ">", focused ? accent : hudDim(), 2);
+    };
+    g.text(cx + MENU_ARMY_X + MENU_ARMY_W / 2 - g.textW("ARMY") / 2, rowY0 - 17, "ARMY", hudDim());
+    g.text(cx + MENU_DIFF_X + MENU_DIFF_W / 2 - g.textW("DIFFICULTY") / 2, rowY0 - 17, "DIFFICULTY", hudDim());
     char buf[32];
-    row(0, "Your army", FACTION_NAME[menu.playerFaction], true);
-    snprintf(buf, sizeof buf, "%d", menu.enemies); row(1, "Enemies", buf, true);
-    for (int i = 0; i < 3; i++) { snprintf(buf, sizeof buf, "Enemy %d", i + 1); row(2 + i, buf, FN[menu.enemyFaction[i]], i < menu.enemies); }
-    row(5, "Difficulty", DIFF_NAME[menu.difficulty], true);
-    row(6, "Enemy teams", menu.enemiesAllied ? "Allied vs you" : "Free for all", true);
+    for (int i = 0; i < MR_START; i++) {
+        int y = rowY0 + i * MENU_ROW_H;
+        bool en = menuRowEnabled(menu, i), cur = menu.cursor == i;
+        if (cur) g.fill(cx - 260, y - 4, 520, MENU_ROW_H - 4, rgb(255, 255, 255, 14));
+        const char* label = i == MR_YOU ? "You" : (i == MR_ALLY ? "Ally" : (i == MR_TEAMS ? "Teams" : nullptr));
+        if (!label) { snprintf(buf, sizeof buf, "Enemy %d", i - MR_E1 + 1); label = buf; }
+        if (i != MR_TEAMS) { Color sc = seatColor(i); bool seated = i == MR_YOU || (i == MR_ALLY ? menu.hasAlly() : (en && menu.enemyFaction[i - MR_E1] != 3)); g.fillCircle(cx - 246.0f, (float)(y + 10), 5.0f, seated ? sc : rgb(70, 74, 82)); }
+        g.text(cx - 236, y + 4, label, en ? hudText() : hudDim(), 2);
+        if (!en) { g.text(cx + MENU_ARMY_X + MENU_ARMY_W / 2 - 6, y + 4, "-", hudDim(), 2); continue; }
+        if (i == MR_TEAMS) { control(cx + MENU_ARMY_X, MENU_ARMY_W, y, menu.enemiesAllied ? "Enemies allied" : "Free for all", cur, cur, hudText()); continue; }
+        const char* army = i == MR_YOU ? FACTION_NAME[menu.playerFaction] : (i == MR_ALLY ? AN[menu.allyFaction] : EN[menu.enemyFaction[i - MR_E1]]);
+        control(cx + MENU_ARMY_X, MENU_ARMY_W, y, army, cur && menu.col == 0, cur, hudText());
+        if (i == MR_YOU) { g.text(cx + MENU_DIFF_X + MENU_DIFF_W / 2 - g.textW("(you)", 2) / 2, y + 4, "(you)", hudDim(), 2); continue; }
+        if (menuRowHasDiff(menu, i)) control(cx + MENU_DIFF_X, MENU_DIFF_W, y, DIFF_NAME[i == MR_ALLY ? menu.allyDiff : menu.enemyDiff[i - MR_E1]], cur && menu.col == 1, cur, hudText());
+        else g.text(cx + MENU_DIFF_X + MENU_DIFF_W / 2 - 6, y + 4, "-", hudDim(), 2);
+    }
+    {
+        const char* note = menu.hasAlly() ? "Your ally fights on your side, shares its vision with you, and plays at the difficulty set for it. Four armies at most." : "Add an ally to fight beside you. Each army has its own difficulty.";
+        g.text(cx - g.textW(note) / 2, rowY0 + MR_START * MENU_ROW_H - 2, note, hudDim());
+    }
     // start / quit
-    bool cur = menu.cursor == 7;
+    bool cur = menu.cursor == MR_START;
     g.bevelPanel(cx - 100, 520 + oy, 200, 40, cur ? shade(accent, 0.55f) : rgb(50, 58, 70));
     g.text(cx - g.textW("START", 3) / 2, 528 + oy, "START", rgb(255, 255, 255), 3);
     g.bevelPanel(cx - 50, 572 + oy, 100, 32, rgb(50, 58, 70));
     g.text(cx - g.textW("Quit", 2) / 2, 580 + oy, "Quit", hudText(), 2);
-    g.text(cx - g.textW("Arrows to change, Enter to start, Esc to quit") / 2, 616 + oy, "Arrows to change, Enter to start, Esc to quit", hudDim());
+    g.text(cx - g.textW("Up/Down row   Left/Right change   Tab army / difficulty   Enter start   Esc quit") / 2, 616 + oy, "Up/Down row   Left/Right change   Tab army / difficulty   Enter start   Esc quit", hudDim());
 }
 
 void Game::drawShroud() {
@@ -765,9 +830,9 @@ void Game::drawRangeRings() {
     if (placingType < 0 && !areaMode && mouseY < VIEW_H) {
         Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
         if (h && h->isBuilding() && h->constructed && h->bt().weapon >= 0 && std::find(selection.begin(), selection.end(), g_sim.refOf(*h)) == selection.end()) {
-            bool mine = h->owner == g_sim.humanPlayer;
+            bool mine = !g_sim.enemies(g_sim.humanPlayer, h->owner);   // yours or an ally's: green; an enemy's: red
             const BuildType& bt = h->bt();
-            rangeRing(worldToScreen(h->pos), WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, !(mine && pl.lowPower() && bt.power < 0), !mine, false);
+            rangeRing(worldToScreen(h->pos), WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, !(mine && h->owner >= 0 && g_sim.players[h->owner].lowPower() && bt.power < 0), !mine, false);
         }
     }
 }
@@ -885,7 +950,7 @@ void Game::drawEntity(Entity& e) {
             }
         } else {
             g.draw(s, p.x, p.y, 0, 1, tint);
-            if (g.buildingTeam[e.type].tex) { Color tc = PLAYER_COLOR[owner]; if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
+            if (g.buildingTeam[e.type].tex) { Color tc = playerColor(owner); if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
             drawBuildingAnim(e, p, disabled);
             // rotating heads for defenses
             if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
@@ -908,7 +973,7 @@ void Game::drawEntity(Entity& e) {
         return;
     }
     const UnitType& ut = e.ut();
-    const Sprite& body = g.unitBody[e.type][owner];
+    const Sprite& body = g.unitBody[e.type][slotOf(owner)];
     bool air = ut.kind == UK_AIR;
     float alt = air ? e.alt : 0.0f;
     float spd = (e.pos - e.prevPos).len() / SIM_DT;            // px/s over the last tick
@@ -931,7 +996,7 @@ void Game::drawEntity(Entity& e) {
     bool moving = (e.pos - e.prevPos).len2() > 0.01f;
     if (!air && !paused && !disabled && moving) {
         float travelled = ut.kind == UK_INF ? wallTime * 9.0f + e.gen * 0.7f : (e.pos.x + e.pos.y) / 3.0f;
-        bs = &g.unitAnim[e.type][owner][((int)std::floor(travelled)) & 1];
+        bs = &g.unitAnim[e.type][slotOf(owner)][((int)std::floor(travelled)) & 1];
     }
     // vehicles kick up dust: a puff behind the tracks now and then, grey on asphalt and tan on bare ground
     if (!air && ut.kind == UK_VEH && moving && frameDt > 0 && fxRng.f() < 11.0f * frameDt) {
@@ -956,7 +1021,7 @@ void Game::drawEntity(Entity& e) {
         }
     }
     g.draw(*bs, p.x, p.y, e.angle, 1, mod);
-    const Sprite& tur = g.unitTurret[e.type][owner];
+    const Sprite& tur = g.unitTurret[e.type][slotOf(owner)];
     if (tur.tex) {
         // the barrel kicks back for a moment after every shot
         float rec = 0;
@@ -1090,6 +1155,18 @@ void Game::renderWorld() {
             g.fillCircle(s.x, s.y - h, 3.0f, rgb(30, 30, 32));
             g.fillCircle(s.x - 0.8f, s.y - h - 0.8f, 1.3f, rgb(150, 150, 154));
             g.glowAdd(s.x, s.y - h, 6, Color{255, 190, 110, 70});
+        } else if (w.proj == PJ_BOMB) {   // a bomb dropping from altitude: tumbling fat body, fins, a glow on the nose and a shadow closing in on the impact point
+            float t = clampf(p.arcT, 0, 1), h = (1.0f - t * t) * 78.0f;
+            Vec2 gd = (p.dest - p.vel).norm();
+            float sc = 0.7f + 0.5f * t;
+            Color glow = p.weapon == W_BOMB_CYBER ? Color{130, 225, 255, 130} : Color{255, 170, 90, 130};
+            g.drawSized(g.shadowSmall, s.x, s.y + 2, 11 * sc, 6 * sc, 0, rgb(255, 255, 255), (u8)(90 + 90 * t));
+            float bx = s.x, by = s.y - h;
+            g.drawSized(g.fxs.streak, bx - gd.x * 5, by - 6, 4, 16, 1.5708f, rgb(220, 220, 230), (u8)(120 * (1 - t)));
+            g.fillCircle(bx, by, 3.6f, rgb(36, 38, 42));
+            g.fillCircle(bx - 0.9f, by - 0.9f, 1.5f, rgb(128, 132, 140));
+            g.line(bx - 2.6f, by - 4.6f, bx + 2.6f, by - 4.6f, rgb(70, 74, 82));
+            g.glowAdd(bx, by, 7, glow);
         } else if (w.proj == PJ_ROCKET) {
             Vec2 d = p.vel.norm();
             float ang = std::atan2(d.y, d.x);
@@ -1127,8 +1204,9 @@ void Game::renderWorld() {
         Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
         if (h && h->kind != EK_RESOURCE && h->owner != g_sim.humanPlayer) {
             const char* nm = h->isUnit() ? h->ut().name : h->bt().name;
-            char buf[80]; snprintf(buf, sizeof buf, "%s (%s)", nm, h->owner >= 0 ? FACTION_NAME[g_sim.players[h->owner].faction] : "");
-            g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 150, 140));
+            bool foe = g_sim.enemies(g_sim.humanPlayer, h->owner);
+            char buf[96]; snprintf(buf, sizeof buf, "%s (%s%s)", nm, foe || h->owner < 0 ? "" : "ally, ", h->owner >= 0 ? FACTION_NAME[g_sim.players[h->owner].faction] : "");
+            g.text(mouseX + 12, mouseY - 4, buf, foe ? rgb(255, 150, 140) : rgb(150, 235, 165));
         } else if (h && h->kind == EK_RESOURCE) { char buf[40]; snprintf(buf, sizeof buf, "Supplies: $%d", h->amount); g.text(mouseX + 12, mouseY - 4, buf, rgb(240, 220, 150)); }
     }
     SDL_RenderSetClipRect(g.ren, nullptr);
@@ -1153,7 +1231,7 @@ void Game::drawMinimap(int x, int y, int size) {
         int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
         if (e.kind == EK_RESOURCE) { if (rev || ex[ty * MAP_W + tx]) g.fill((int)(x + tx * sc), (int)(y + ty * sc), 2, 2, rgb(230, 200, 90)); continue; }
         if (!rev && e.owner != g_sim.humanPlayer && !ex[ty * MAP_W + tx]) continue;
-        Color c = PLAYER_COLOR[e.owner];
+        Color c = playerColor(e.owner);
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
     }
@@ -1191,7 +1269,7 @@ void Game::renderHud() {
     // alive players
     int ax = SCREEN_W / 2 + 40;
     for (int p = 0; p < g_sim.numPlayers; p++) {
-        const Sprite& fl = g.flag[p];
+        const Sprite& fl = g.flag[slotOf(p)];
         int fx = ax + p * 22;
         if (g_sim.players[p].alive) { g.draw(fl, (float)fx, 4.0f, 0, 0.75f); g.fill(fx - 1, 3, 1, 14, rgb(200, 204, 212)); }
         else { g.draw(fl, (float)fx, 4.0f, 0, 0.75f, rgb(70, 70, 70), 160); g.fill(fx - 1, 3, 1, 14, rgb(90, 90, 96)); g.line((float)fx, 5, (float)fx + 17, 15, rgb(20, 20, 20)); }
@@ -1225,11 +1303,11 @@ void Game::renderHud() {
             g.bevelPanel(INFO_X + 8, hy + 14, 68, 68, shade(base, 0.55f), false);
             if (e->isUnit()) {
                 float psc = (e->ut().jet ? 1.6f : 2.0f) / artScale(e->type);   // the big elite units and the long jets are scaled to sit inside the frame
-                g.draw(g.unitBody[e->type][e->owner], INFO_X + 42, hy + 48, 0, psc);
-                if (g.unitTurret[e->type][e->owner].tex) g.draw(g.unitTurret[e->type][e->owner], INFO_X + 42, hy + 48, 0, psc);
+                g.draw(g.unitBody[e->type][slotOf(e->owner)], INFO_X + 42, hy + 48, 0, psc);
+                if (g.unitTurret[e->type][slotOf(e->owner)].tex) g.draw(g.unitTurret[e->type][slotOf(e->owner)], INFO_X + 42, hy + 48, 0, psc);
             } else {
                 drawFitted(g, g.building[e->type], INFO_X + 42, hy + 48, 60);
-                if (g.buildingTeam[e->type].tex) drawFitted(g, g.buildingTeam[e->type], INFO_X + 42, hy + 48, 60, &g.building[e->type], PLAYER_COLOR[e->owner]);
+                if (g.buildingTeam[e->type].tex) drawFitted(g, g.buildingTeam[e->type], INFO_X + 42, hy + 48, 60, &g.building[e->type], playerColor(e->owner));
             }
             const char* name = e->isUnit() ? e->ut().name : e->bt().name;
             g.text(INFO_X + 86, hy + 16, name, rgb(255, 255, 255), 2);
@@ -1238,7 +1316,8 @@ void Game::renderHud() {
             hpBar(g, INFO_X + 86, hy + 48, 150, e->isBuilding() && !e->constructed ? e->progress : e->hp / e->maxHp, true);
             if (e->isUnit()) {
                 const UnitType& ut = e->ut();
-                if (ut.weapon >= 0) { const Weapon& w = WEAPONS[ut.weapon]; snprintf(buf, sizeof buf, "%s  dmg %d  range %.1f%s%s", w.name, (int)w.dmg, w.range, w.air ? "  AA" : "", w.ground ? "" : "  air only"); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
+                if (ut.bomber) { const Weapon& bw = WEAPONS[ut.faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER]; snprintf(buf, sizeof buf, "%s x%d  dmg %d  blast %.1f  (guns vs air)", bw.name, BOMB_STICK, (int)bw.dmg, bw.splash); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
+                else if (ut.weapon >= 0) { const Weapon& w = WEAPONS[ut.weapon]; snprintf(buf, sizeof buf, "%s  dmg %d  range %.1f%s%s", w.name, (int)w.dmg, w.range, w.air ? "  AA" : "", w.ground ? "" : "  air only"); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.role == UR_HARVESTER) { snprintf(buf, sizeof buf, "Cargo $%d / %d", e->cargo, SUPPLY_PER_TRIP); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.ammo > 0) { snprintf(buf, sizeof buf, "Ammo %d / %d", e->ammo, ut.ammo); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
@@ -1261,7 +1340,7 @@ void Game::renderHud() {
                     int qx = INFO_X + 330, qy = hy + 70;
                     for (int i = 0; i < (int)e->queue.size() && i < 9; i++) {
                         g.bevelPanel(qx + i * 30, qy, 28, 28, shade(base, 0.55f), false);
-                        g.draw(g.unitBody[e->queue[i]][e->owner], qx + i * 30 + 14, qy + 14, 0, 0.8f);
+                        g.draw(g.unitBody[e->queue[i]][slotOf(e->owner)], qx + i * 30 + 14, qy + 14, 0, 0.8f);
                         if (i == 0) hpBar(g, qx, qy + 30, 28, e->queueProgress);
                     }
                     snprintf(buf, sizeof buf, "%s %d%%", UNITS[e->queue[0]].name, (int)(e->queueProgress * 100)); g.text(INFO_X + 330, hy + 104, buf, hudText());
@@ -1297,7 +1376,7 @@ void Game::renderHud() {
             if (i >= 32) break;
             int sx = INFO_X + 10 + (i % 16) * 32, sy = hy + 40 + (i / 16) * 40;
             g.bevelPanel(sx, sy, 30, 30, shade(base, 0.55f), false);
-            g.draw(g.unitBody[e->type][e->owner], sx + 15, sy + 15, 0, 0.85f);
+            g.draw(g.unitBody[e->type][slotOf(e->owner)], sx + 15, sy + 15, 0, 0.85f);
             hpBar(g, sx, sy + 32, 30, e->hp / e->maxHp);
             i++;
         }
@@ -1435,7 +1514,7 @@ void Game::pauseMenuActivate(int row) {
     case 5: {
         closePauseMenu(); paused = false;
         int me = g_sim.humanPlayer, winner = -1;
-        for (int p = 0; p < g_sim.numPlayers; p++) if (p != me && g_sim.players[p].alive) { winner = g_sim.players[p].team; break; }
+        for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.enemies(me, p) && g_sim.players[p].alive) { winner = g_sim.players[p].team; break; }   // an ally does not win the game for you
         g_sim.players[me].alive = false;
         g_sim.gameOver = true; g_sim.winnerTeam = winner;
         break;

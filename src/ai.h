@@ -23,6 +23,12 @@ struct AiPlayer {
     Ref failedTarget; float failedAt = -1000;   // last target a wave broke against
 
     bool useBrain = true;       // false = the original hand-tuned heuristics only (baseline for evaluation)
+    bool smart = true;          // false = the previous generation of commander (baseline for --evalai): no doctrines, nuke evasion, medics, bomber tactics, ally defence
+    int doctrine = DOC_BALANCED;
+    // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
+    struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
+    float lastBombRun = -100, lastAllyHelp = -100, lastNukeDodge = -100, retreatVotes = 0;
+    int dodges = 0, medicsBuilt = 0;   // statistics for the self-play reports
     float waveX[WAVE_F] = {};   // features at launch, for learning from the outcome
     float waveDealt0 = 0;       // enemy value destroyed by this player when the wave launched
     bool waveHasSample = false;
@@ -33,6 +39,7 @@ struct AiPlayer {
     void init(int p, u64 seed);
     void endWave(float remainingValue);
     void think();
+    void dodgeNukes();                  // cheap per-tick check: pull units out of the circle of an incoming enemy nuke
 private:
     bool findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty);
     bool tryBuild(int buildType, Vec2 preferNear, int maxRing = 22);
@@ -46,7 +53,9 @@ private:
 struct AiManager {
     AiPlayer ais[MAX_PLAYERS];
     bool brainEnabled[MAX_PLAYERS] = { true, true, true, true };
+    bool smartEnabled[MAX_PLAYERS] = { true, true, true, true };
     void init(u64 seed);
     void update();
+    void finish(int winnerTeam);        // the match is over: every commander's doctrine learns whether it won
 };
 extern AiManager g_ai;
