@@ -31,6 +31,9 @@ Overclock Program → Ion Lancer and Aegis Titan super-heavy walker).
 Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries.
 Tech structure: Arms Lab (Shell Storm, Recon Flight, Heavy Ordnance → Grenadier and Behemoth).
 
+**Base defenses** (Laser Turret, Patriot Battery, Gun Nest, Rocket Battery) are fortified: 5200 to 6800 hp each (more than a Command Core) and
+heavy-hitting weapons, so a few of them hold a choke point against a large force even though their reach is short. Artillery and long-range rails can still outrange them, and a nuke still flattens them.
+
 **Tech structure powers** (select the Data Center / Arms Lab):
 
 | Button | Key | Effect |
@@ -57,10 +60,12 @@ and to land on the objective of a wave, avoiding targets with a lot of anti-air.
 **Force fire (human players only)** — attack a unit or structure of your own or of your ally on purpose, exactly as you would an enemy: select your units and press the
 **Force Fire** button (key `F`), then click the target, or hold `Ctrl` and right-click it (or attack-move onto it with `A`). Tanks and infantry shoot it, jets and bombers strafe and
 bomb it, turrets can be turned on it (and take it up again whenever it comes back into reach), and area weapons (shells, arcs, bombs, rails, grenades) hurt everything near the
-impact, friends included. While aiming a nuke or a strike power, hold `Ctrl` or press `F` to make the blast hit friendly ground too (the cursor says `NUKE (FRIENDLY FIRE)`).
-Without it nothing ever hurts a friend by accident, and a plain right-click on an ally's unit or structure just moves your selection there. **Your allies never shoot back**: their
+impact, friends included. **Your nukes always hit your allies**: a warhead you launch flattens an ally's units and structures under it exactly as it would an enemy's
+(the computer ally sees it coming and pulls its units out of the circle). Your own army is spared unless you hold `Ctrl` or press `F` while aiming a nuke or a strike power,
+which makes the blast hit your own ground too (the cursor says `NUKE (FRIENDLY FIRE)`). A computer army's nukes never hurt its allies.
+Apart from your nukes nothing ever hurts a friend by accident, and a plain right-click on an ally's unit or structure just moves your selection there. **Your allies never shoot back**: their
 units and the computer ally's commander only ever fight enemies, no unit of anybody's comes to "help" against friendly fire, a computer ally simply gets its units out of the circle
-of a friendly-fire nuke, friendly kills do not count in the statistics, and no "your ally is under attack" alarm goes off. Enemies are unaffected: the game goes on as usual.
+of a nuke you aim at it, friendly kills do not count in the statistics, and no "your ally is under attack" alarm goes off. Enemies are unaffected: the game goes on as usual.
 Computer armies (the AI commander, the learned brain and the AI ally) can never force fire: the simulation drops the flag for any army that is not human. `--rulestest` and
 `--autotest` cover it.
 
@@ -156,13 +161,15 @@ per credit given the enemy's infantry/vehicle/air mix (production choice), and t
 *boom* (an extra income structure, then a larger army), picked by UCB1 from each doctrine's running win rate and rewarded when the match ends, so it
 learns what beats the people it plays. Idle fighters of every AI guard a circle at their rally point, a few guard the mining area, drones patrol a circle over the base between strikes, and haulers are spread across gather circles around the piles near each hub. Weights persist in
 `~/.local/share/onehour/brain.txt` (override with `ONEHOUR_BRAIN`). Difficulty changes reaction time, aggression, how many income structures it raises and
-how soon, whether it dodges nukes, and starting cash (Brutal cheats a little, like Zero Hour's).
+how soon, whether it dodges nukes, and starting cash. **Brutal** cheats hard: $6000 extra at the start, 1.5x income from deliveries and income structures,
+1.6x faster production, construction and research, 25% more damage against its enemies, four dozers and four factories, up to 90 units, nine defenses,
+two nuke ramps from minute 7, an early first wave (2:45) on a low threshold, harassment squads every minute and a 0.3 s reaction to incoming nukes.
 
 Beyond the learned parts the commander plays tactically:
 
 - **Economy**: income structures pay for themselves in under a minute, so it banks for them as soon as it has power and a first army (2 / 3 / 4 of them on Easy / Normal / Hard and Brutal).
 - **Nukes**: it aims at what a warhead really costs the enemy (units and small structures in the blast, a share of large structures' value, minus friendly units in the fallout) and
-  fires only for a big enough pay-off. When an enemy nuke is launched it notices after a delay set by its difficulty (4.5 s Normal, 2 s Hard, 0.5 s Brutal, out of the 7 s flight; Easy never does) and walks its units, haulers
+  fires only for a big enough pay-off. When an enemy nuke is launched it notices after a delay set by its difficulty (4.5 s Normal, 2 s Hard, 0.3 s Brutal, out of the 7 s flight; Easy never does) and walks its units, haulers
   and aircraft out of the circle; afterwards non-attacking units leave radiation zones, rally points move out of them and attack waves avoid targets inside them.
 - **Bombers**: a flight waits until it is loaded, then goes together for the target with the best value (nuke ramps, income structures, supply, power, then production; harvesters;
   clusters of units) minus the flak over it; heavily defended sites are skipped.
@@ -173,7 +180,7 @@ Beyond the learned parts the commander plays tactically:
   plays at the difficulty set for it.
 
 `--evalai N` plays the current commander against the previous generation of the AI (it wins every one of 16 games at Hard, and 8 of 8 at Normal); `--evaldiff N` with
-`ONEHOUR_DA` / `ONEHOUR_DB` checks that the difficulty ladder holds (Normal beats Easy 8-0, Hard beats Normal 8-0, Brutal beats Hard 28-3 with one draw over 32 games on four seeds).
+`ONEHOUR_DA` / `ONEHOUR_DB` checks that the difficulty ladder holds (Normal beats Easy 8-0, Hard beats Normal 8-0, Brutal beats Hard 31-0 with one draw over 32 games on four seeds).
 
 ## Engineering notes
 

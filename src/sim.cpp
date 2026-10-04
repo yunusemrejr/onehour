@@ -24,7 +24,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
         Player& pl = players[p];
         pl.active = true; pl.alive = true; pl.isAI = isAI[p]; pl.difficulty = difficulties[p];
         pl.team = teams[p]; pl.faction = factions[p]; pl.money = START_CASH;
-        if (pl.isAI && pl.difficulty == 3) pl.money += 2000;
+        if (pl.brutal()) pl.money += 6000;
         pl.startIdx = order[p];
         pl.explored.assign(MAP_W * MAP_H, 0);
         StartSpot s = g_map.starts[pl.startIdx];
@@ -700,7 +700,7 @@ void Sim::updateAirlifts() {
     }
 }
 
-// What a detonation does (all of it to enemies of the launcher; friendly units are thrown but never hurt):
+// What a detonation does (all of it to whatever nukeHurts says it hurts; anything else is thrown but never hurt):
 //  * ground units: a lethal core, then falling damage out to the rim (they collapse, as ever)
 //  * aircraft: those inside the fireball fall out of the sky, those in the shock ring beyond it are badly mauled
 //  * small structures (footprint of NUKE_SMALL_AREA tiles or less: turrets, batteries, reactors, barracks, income structures) collapse
@@ -727,7 +727,7 @@ void Sim::nukeBlast(const Nuke& n) {
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (d > R) continue;
         float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
-        bool foe = enemies(n.owner, e->owner) || (n.force && !players[n.owner].isAI && e->owner >= 0);   // a nuke the human aimed at friendly ground flattens friendly ground
+        bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies as well (and the human's own army when forced)
         if (e->isAir()) {
             if (!foe) continue;
             float core = R * NUKE_AIR_KILL;
@@ -857,7 +857,7 @@ void Sim::updateResearch() {
         Player& pl = players[p];
         if (!pl.researching) continue;
         if (!hasRole(p, BR_TECH)) continue;            // paused while the tech structure is down
-        pl.researchProgress += 5 * SIM_DT * (pl.lowPower() ? 0.5f : 1.0f) / PROGRAMS[pl.faction].time;   // called every 5th tick
+        pl.researchProgress += 5 * SIM_DT * (pl.lowPower() ? 0.5f : 1.0f) * pl.buildMul() / PROGRAMS[pl.faction].time;   // called every 5th tick
         if (pl.researchProgress >= 1.0f) {
             pl.researching = false; pl.advTech = true; pl.researchProgress = 1;
             emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(PROGRAMS[pl.faction].name) + " complete: " + PROGRAMS[pl.faction].desc).c_str());
@@ -1074,6 +1074,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
+    if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner)) real *= players[attackerOwner].damageMul();
     tgt.hp -= real;
     tgt.lastDamaged = time;
     if (attacker.valid()) tgt.attacker = attacker;
@@ -1546,7 +1547,7 @@ bool Sim::dodgeDanger(Entity& e) {
     if (e.order == O_MOVE && !e.autoTask) return false;   // the player is moving it: their call
     // an incoming warhead: whatever it would hurt gets out of the circle while there is time
     for (auto& n : nukes) {
-        bool hurts = enemies(n.owner, e.owner) || (n.force && !players[n.owner].isAI);
+        bool hurts = nukeHurts(n, e.owner);
         float left = NUKE_FLIGHT - n.t;
         if (!hurts || n.t < 1.0f || left < 0.3f) continue;
         float R = (NUKE_RADIUS + 1.5f) * TILE;
@@ -2043,7 +2044,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.actionTimer += SIM_DT;
             if (e.actionTimer >= UNLOAD_TIME) {
                 e.actionTimer = 0;
-                players[e.owner].money += e.cargo; players[e.owner].harvested += e.cargo;
+                { int got = (int)(e.cargo * players[e.owner].econMul()); players[e.owner].money += got; players[e.owner].harvested += got; }
                 e.cargo = 0;
                 emit(EV_SOUND, e.owner, SND_SUPPLY, e.pos);
                 Entity* p = get(e.lastPile);
@@ -2072,7 +2073,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.angle = std::atan2(b->pos.y - e.pos.y, b->pos.x - e.pos.x);
             const BuildType& bt = b->bt();
             if (!b->constructed) {
-                b->progress += SIM_DT / bt.buildTime;
+                b->progress += SIM_DT * players[e.owner].buildMul() / bt.buildTime;
                 b->hp = std::max(b->hp, bt.hp * (0.1f + 0.9f * clampf(b->progress, 0, 1)));
                 if (tick % 6 == 0) fx.push_back({FX_SPARK, b->pos + Vec2(rng.f(-bt.w * 14.0f, bt.w * 14.0f), rng.f(-bt.h * 14.0f, bt.h * 14.0f)), Vec2(), 0, 0.2f, rgb(255, 230, 150), 3});
                 if (b->progress >= 1.0f) { finishBuilding(*b); e.order = O_IDLE; e.guardPos = e.pos; }
@@ -2162,7 +2163,7 @@ void Sim::updateBuilding(Entity& b) {
         b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
         if (b.actionTimer >= INCOME_INTERVAL) {
             b.actionTimer -= INCOME_INTERVAL;
-            int amt = pl.faction == F_CYBER ? INCOME_CYBER : INCOME_CLANKER;
+            int amt = (int)((pl.faction == F_CYBER ? INCOME_CYBER : INCOME_CLANKER) * pl.econMul());
             pl.money += amt; pl.mined += amt;
             fx.push_back({FX_SPARK, b.pos, b.pos, 0, 0.6f, rgb(255, 224, 90), 9});
         }
@@ -2196,7 +2197,7 @@ void Sim::updateBuilding(Entity& b) {
         }
         if (!blocked) {
             float rate = (pl.lowPower() ? 0.5f : 1.0f) / ut.buildTime;
-            if (pl.isAI && pl.difficulty == 3) rate *= 1.15f;
+            rate *= pl.buildMul();
             b.queueProgress += SIM_DT * rate;
             if (b.queueProgress >= 1.0f) spawnFromQueue(b);
         }

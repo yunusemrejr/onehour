@@ -147,6 +147,12 @@ struct Player {
     float spentOn[U_COUNT] = {};
     std::vector<u8> explored;   // MAP_W*MAP_H
     bool lowPower() const { return powerUsed > powerMade; }
+    // Brutal computer armies play with a commander's edge: a bigger war chest, richer income, faster factories and dozers,
+    // and harder-hitting weapons (no other difficulty and no human army gets any of it)
+    bool brutal() const { return isAI && difficulty >= 3; }
+    float econMul() const { return brutal() ? 1.5f : 1.0f; }      // supply deliveries and income structures
+    float buildMul() const { return brutal() ? 1.6f : 1.0f; }     // unit production and construction speed
+    float damageMul() const { return brutal() ? 1.25f : 1.0f; }   // damage dealt to enemies
 };
 
 enum EventType { EV_SOUND = 0, EV_MSG, EV_BUILD_DONE, EV_UNIT_READY, EV_UNDER_ATTACK, EV_NOFUNDS, EV_LOWPOWER, EV_PLAYER_DEAD, EV_SUPPLY_EMPTY };
@@ -204,6 +210,9 @@ struct Sim {
     Ref refOf(const Entity& e) const { return Ref{ (i32)(&e - &ents[0]), e.gen }; }
     Ref refOf(int idx) const { return Ref{ idx, ents[idx].gen }; }
     bool enemies(int a, int b) const { return a >= 0 && b >= 0 && a != b && players[a].team != players[b].team; }
+    // Whom a warhead hurts: the launcher's enemies always; a human's nuke also every ally caught in it (only humans can do that),
+    // and the human's own army too when the human aimed it as force fire.
+    bool nukeHurts(const Nuke& n, int owner) const { return enemies(n.owner, owner) || (owner >= 0 && n.owner >= 0 && !players[n.owner].isAI && (owner != n.owner || n.force)); }
 
     // creation
     Ref spawnUnit(int type, int owner, Vec2 pos);

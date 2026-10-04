@@ -222,9 +222,9 @@ void AiPlayer::dodgeNukes() {
     if (!smart || S.nukes.empty()) return;
     Player& pl = S.players[player];
     if (pl.difficulty < 1 || (S.tick & 3) != (u32)(player & 3)) return;
-    float notice = pl.difficulty >= 3 ? 0.5f : (pl.difficulty == 2 ? 2.0f : 4.5f);   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
+    float notice = pl.difficulty >= 3 ? 0.3f : (pl.difficulty == 2 ? 2.0f : 4.5f);   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
     for (auto& n : S.nukes) {
-        bool hurts = S.enemies(player, n.owner) || (n.force && n.owner != player);   // (a human ally's friendly-fire nuke: get out of the way, never hit back)
+        bool hurts = S.nukeHurts(n, player);   // (a human ally's nuke hurts us too: get out of the way, never hit back)
         if (!hurts || n.t < notice || n.t > Sim::NUKE_FLIGHT - 0.5f) continue;
         float safe = (NUKE_RADIUS + 2.0f) * TILE;
         for (auto& e : S.ents) {
@@ -246,7 +246,7 @@ void AiPlayer::think() {
     Sim& S = g_sim;
     Player& pl = S.players[player];
     if (S.time < nextThink) return;
-    float cadence = pl.difficulty >= 2 ? 0.5f : (pl.difficulty == 1 ? 0.8f : 1.3f);
+    float cadence = pl.difficulty >= 3 ? 0.35f : (pl.difficulty == 2 ? 0.5f : (pl.difficulty == 1 ? 0.8f : 1.3f));
     nextThink = S.time + cadence;
     int base = firstBuildOf(pl.faction);
     int ubase = firstUnitOf(pl.faction);
@@ -371,13 +371,13 @@ void AiPlayer::think() {
 
     // ---------- economy
     int hubs = (int)supplyHubs.size();
-    int wantHarv = std::min(6, hubs * 3);
+    int wantHarv = pl.brutal() ? std::min(8, hubs * 4) : std::min(6, hubs * 3);
     int queuedHarv = 0;
     for (auto* h : supplyHubs) for (int t : h->queue) if (UNITS[t].role == UR_HARVESTER) queuedHarv++;
     if (harvesters + queuedHarv < wantHarv) {
         for (auto* h : supplyHubs) if (h->constructed && h->queue.empty()) { S.cmdTrain(S.refOf(*h), ubase + 1); break; }
     }
-    int wantDozers = pl.difficulty >= 2 ? 3 : 2;
+    int wantDozers = pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2);
     int queuedDozer = 0;
     if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER) queuedDozer++;
     if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200)) S.cmdTrain(S.refOf(*hq), ubase + 0);
@@ -426,7 +426,7 @@ void AiPlayer::think() {
         // income structures pay for themselves in well under a minute: a smart commander raises them as soon as it has power and a first army
         if (!built && smart && incomes < style.incomes && minutes > style.incomeFrom && powerPlants > 0 && !barracks.empty() && !factories.empty()) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
         // defenses scale with time and difficulty
-        int wantTurrets = std::min(pl.difficulty >= 3 ? 7 : (pl.difficulty == 2 ? 5 : 3), (int)(minutes / (pl.difficulty >= 2 ? 2.0f : 3.0f)));
+        int wantTurrets = std::min(pl.difficulty >= 3 ? 9 : (pl.difficulty == 2 ? 5 : 3), (int)(minutes / (pl.difficulty >= 3 ? 1.5f : (pl.difficulty == 2 ? 2.0f : 3.0f))));
         if (smart) wantTurrets = (int)(wantTurrets * style.def + 0.5f);
         // anti-air follows the enemy's air power (bombers are no joke): batteries go beside the structures most worth protecting
         if (!built && smart && minutes > 3.0f && pl.difficulty >= 1) {
@@ -451,10 +451,10 @@ void AiPlayer::think() {
         }
         if (!built && techs == 0 && minutes > (pl.difficulty >= 2 ? 4.0f : 6.0f) * style.tech && pl.money > 2600) built = tryBuild(base + BR_TECH, pl.basePos);
         if (!built && airfields.empty() && minutes > (pl.difficulty >= 2 ? 6.0f : 9.0f) * style.air && pl.money > 2000) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
-        if (!built && factories.size() < 2 && minutes > 7 && pl.money > 4500) built = tryBuild(base + BR_FACTORY, pl.basePos);
+        if (!built && factories.size() < 2 && minutes > (pl.brutal() ? 4 : 7) && pl.money > (pl.brutal() ? 3000 : 4500)) built = tryBuild(base + BR_FACTORY, pl.basePos);
         // a smart commander with money piling up spends it on more production and a second airfield for the air doctrine
-        if (!built && smart && !threat && pl.money > 6500 && minutes > 5) {
-            if (factories.size() < (pl.difficulty >= 2 ? 3u : 2u)) built = tryBuild(base + BR_FACTORY, pl.basePos);
+        if (!built && smart && !threat && pl.money > (pl.brutal() ? 4500 : 6500) && minutes > 5) {
+            if (factories.size() < (pl.difficulty >= 3 ? 4u : (pl.difficulty == 2 ? 3u : 2u))) built = tryBuild(base + BR_FACTORY, pl.basePos);
             else if (barracks.size() < 3) built = tryBuild(base + BR_BARRACKS, pl.basePos);
             else if (doctrine == DOC_AIR && airfields.size() < 2 && techs > 0) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
         }
@@ -476,8 +476,8 @@ void AiPlayer::think() {
             }
         }
         // steady income: oil wells / bitcoin datacenters, then nuke ramps once the economy is comfortable
-        if (!built && incomes < (pl.difficulty >= 2 ? 3 : 2) && minutes > (pl.difficulty >= 2 ? 3.0f : 5.0f) && pl.money > 2200 && powerPlants > 0) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
-        if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 2 ? 9.0f : 13.0f) * style.nuke && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
+        if (!built && incomes < (pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2)) && minutes > (pl.difficulty >= 2 ? 3.0f : 5.0f) && pl.money > 2200 && powerPlants > 0) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
+        if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 3 ? 7.0f : (pl.difficulty == 2 ? 9.0f : 13.0f)) * style.nuke && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
         if (!built && barracks.size() < 2 && minutes > 10 && pl.money > 3500) built = tryBuild(base + BR_BARRACKS, pl.basePos);
         // repair
         if (!built && !damaged.empty()) S.cmdAssist({S.refOf(*dz)}, S.refOf(*damaged[0]));
@@ -495,13 +495,14 @@ void AiPlayer::think() {
     if (!hq && dozers > 0 && S.countRole(player, BR_HQ, false) == 0) reserve = std::max(reserve, BUILDS[base + BR_HQ].cost + 200);   // bank the price of a new Command Core
     if (harvesters + queuedHarv < 2 && hubs > 0) reserve = std::max(reserve, 900);
     // save up for a nuke ramp once the tech structure stands
-    if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 2 ? 8.0f : 12.0f) && !threat) reserve = std::max(reserve, 5300);
+    if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 3 ? 6.5f : (pl.difficulty == 2 ? 8.0f : 12.0f)) && !threat) reserve = std::max(reserve, 5300);
     // a smart commander banks the price of the next income structure before spending on units
     if (smart && !threat && incomes < style.incomes && minutes > style.incomeFrom && powerPlants > 0 && !barracks.empty() && !factories.empty() && dz) reserve = std::max(reserve, BUILDS[base + BR_INCOME].cost + 250);
     // early game: economy and structures first, a modest guard force, then ramp
-    float rampStart = pl.difficulty >= 3 ? 1.5f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 3.0f : 4.0f));
+    float rampStart = pl.difficulty >= 3 ? 1.0f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 3.0f : 4.0f));
     int armyCap;
-    if (pl.difficulty >= 2) armyCap = minutes < rampStart ? 6 : (minutes < rampStart + 2.5f ? 14 : (minutes < rampStart + 5 ? 26 : 60));
+    if (pl.difficulty >= 3) armyCap = minutes < rampStart ? 8 : (minutes < rampStart + 2.5f ? 18 : (minutes < rampStart + 5 ? 34 : 90));
+    else if (pl.difficulty >= 2) armyCap = minutes < rampStart ? 6 : (minutes < rampStart + 2.5f ? 14 : (minutes < rampStart + 5 ? 26 : 60));
     else armyCap = minutes < rampStart ? 4 : (minutes < rampStart + 2.5f ? 9 : (minutes < rampStart + 5 ? 16 : (pl.difficulty == 0 ? 24 : 40)));
     if (smart) armyCap = (int)(armyCap * style.army + 0.5f);
     int queuedArmy = 0;
@@ -563,7 +564,7 @@ void AiPlayer::think() {
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner == player && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;
             if (score > bestScore) { bestScore = score; bestPos = c->pos; }
         }
-        if (bestScore >= (pl.difficulty >= 2 ? 3200.0f : 4000.0f)) S.cmdNuke(player, bestPos);
+        if (bestScore >= (pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f))) S.cmdNuke(player, bestPos);
     } else if (!smart && ramps > 0 && S.nukesReady(player) > 0) {
         // legacy: fire at the densest cluster of enemy structures we know about
         Vec2 bestPos; float bestScore = 0;
@@ -595,9 +596,9 @@ void AiPlayer::think() {
 
     // ---------- army
     float waveThreshold = 3200.0f + minutes * 320.0f;
-    if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.75f;
+    if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.6f;
     waveThreshold = std::min(waveThreshold * style.thr, 11000.0f);
-    float firstWaveAt = (pl.difficulty >= 3 ? 210.0f : (pl.difficulty == 2 ? 270.0f : (pl.difficulty == 1 ? 360.0f : 480.0f))) * style.first;
+    float firstWaveAt = (pl.difficulty >= 3 ? 165.0f : (pl.difficulty == 2 ? 270.0f : (pl.difficulty == 1 ? 360.0f : 480.0f))) * style.first;
 
     // medics keep up with the army (the healer's own AI handles the last few tiles: it drifts to wounded friends)
     if (smart && !medics.empty()) {
@@ -735,13 +736,13 @@ void AiPlayer::think() {
             }
         }
         // harassment: hard AIs send a small fast squad after enemy harvesters
-        if (pl.difficulty >= 2 && minutes > 4 && S.time - lastHarass > 90 && armyCount >= 5) {
+        if (pl.difficulty >= 2 && minutes > (pl.brutal() ? 3 : 4) && S.time - lastHarass > (pl.brutal() ? 55 : 90) && armyCount >= 5) {
             Entity* h = nullptr; float bd = 1e18f;
             for (auto& e : S.ents) if (e.alive && e.isUnit() && S.enemies(player, e.owner) && e.ut().role == UR_HARVESTER && S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) { float d = dist2(e.pos, pl.basePos); if (d < bd) { bd = d; h = &e; } }
             if (h) {
                 lastHarass = S.time;
                 std::vector<Ref> squad;
-                for (auto r : army) { Entity* e = S.get(r); if (e && e->ut().kind == UK_VEH && e->ut().speed >= 70) { squad.push_back(r); if (squad.size() >= 2) break; } }
+                for (auto r : army) { Entity* e = S.get(r); if (e && e->ut().kind == UK_VEH && e->ut().speed >= 70) { squad.push_back(r); if ((int)squad.size() >= (pl.brutal() ? 4 : 2)) break; } }
                 if (!squad.empty()) S.cmdAttack(squad, S.refOf(*h));
             }
         }

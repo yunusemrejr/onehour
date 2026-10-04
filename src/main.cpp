@@ -578,11 +578,12 @@ static bool rulesTest(u64 seed) {
         float v0 = hpOf(vict);
         g_sim.cmdAttack({ai1}, vict, true); run(10);
         if (hpOf(vict) < v0) return fail("a computer army attacked its human ally on purpose");
-        // a forced nuke flattens friendly ground, a normal one does not
+        // a human's nuke always flattens the allies under it; the human's own army only when it is forced
         Vec2 gz = g_map.nearestFree(mid + Vec2(500, 300), 30);
-        Ref bystander = g_sim.spawnUnit(tankMe, 0, gz);
+        Ref bystander = g_sim.spawnUnit(tankMe, 0, gz), allyTank = g_sim.spawnUnit(tankMe, 1, g_map.nearestFree(gz + Vec2(60, 0), 30));
         g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, false}); for (int t = 0; t < 2; t++) { g_sim.step(); g_sim.events.clear(); }   // (lingering fallout hurts everyone: look at the blast itself)
         if (!g_sim.get(bystander) || hpOf(bystander) < g_sim.get(bystander)->maxHp) return fail("an ordinary nuke hurt my own tank");
+        if (hpOf(allyTank) > 0) return fail("my nuke spared the ally's tank under it");
         g_sim.fallouts.clear();
         g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, true}); run(1);
         if (hpOf(bystander) > 0) return fail("a forced nuke spared my own tank");
