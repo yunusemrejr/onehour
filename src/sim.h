@@ -43,6 +43,18 @@ struct Entity {
     float orbit = 0;        // aircraft loiter phase
     float alt = 1;          // aircraft altitude 0 (parked on the pad) .. 1 (airborne); visual only
     float jetBreak = 0;     // jets and bombers: seconds left of the breakaway after a pass
+    u8 jetMode = 0;         // what the breakaway does: 0 peel away from the target, 1 extend straight out (target inside the turn circle)
+    float airspeed = 0;     // fixed-wing aircraft: current speed along the heading (px/s)
+    Vec2 loiter;            // aircraft: the spot it circles (fixed-wing) or hovers over while it waits in the air
+    float loiterUntil = -1; // sim time it stops waiting there and flies home (-1 = never sent anywhere)
+    bool autoTask = false;  // the current attack / move was the unit's own idea (helping a friend, answering fire, getting out of danger),
+                            // not the player's: it gives up beyond its leash and goes back to its post afterwards
+    float evadeUntil = -1;  // a unit that backed away from danger holds its new spot until this time instead of walking straight back
+    float squeezeUntil = 0; // a ground unit that wants to move but is jammed (a one-lane gap, a unit standing in the way) slips past other units until then
+    Vec2 progPos;           // where it was at the last progress check (once a second)
+    Order resumeOrder = O_IDLE;   // what a unit that ducked out of a nuke's circle goes back to once the danger has passed
+    Order resumePost = O_IDLE;
+    Vec2 resumeTarget;
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
@@ -286,7 +298,19 @@ private:
     Entity* findAirfield(Entity& a);
     void deathFx(Entity& e);
     Vec2 padSlot(const Entity& airfield, const Entity& craft) const;
-    void flyTo(Entity& e, Vec2 dest, float speed);       // aircraft: straight slide, jets: turn-limited and slowing as they close in
+    void flyTo(Entity& e, Vec2 dest, float speed);       // aircraft: straight slide (helicopters), fixed-wing: final approach to a spot (the pad)
+    float airTurnRate(const Entity& e) const;            // fixed-wing: g-limited turn rate at the current airspeed
+    void airSteer(Entity& e, float want, float wantSpeed, bool keepOnMap = true);   // fixed-wing: bank toward a heading, throttle toward a speed, fly on
+    void airLoiter(Entity& e, Vec2 center, float radius, float speedFrac);         // circle a spot (helicopters hover over it)
+    void airDogfight(Entity& e, Entity& t);              // fixed-wing air-to-air: lead pursuit, corner speed, extend and re-engage
+    void runOrder(Entity& e, const UnitType& ut);         // carry out the unit's current order for one tick (the body of updateUnit)
+    bool autonomy(Entity& e);                            // a unit left on its own: dodge danger, answer fire, help friends (true = took a new order)
+    bool dodgeDanger(Entity& e);                         // out of an incoming nuke's circle and out of fallout
+    void retreatFrom(Entity& e, Vec2 threat, float tiles);   // back away a little from a threat (toward friends), keeping its post
+    void autoEngage(Entity& e, Entity& t);               // go after a target on its own initiative (leashed to its post)
+    float fightOdds(Entity& e, Entity& foe);             // > 1: the unit and the friends around it win the local fight against foe's side
+    Vec2 postOf(const Entity& e) const;                  // where a unit left on its own belongs (its guard slot / zone / where it stood)
+    void moveAside(Entity& e, Vec2 dest, float holdFor);  // an internal (autonomous) move that keeps the unit's post and zone
     void jetAttack(Entity& e, Entity& t);                // fixed-wing strafing pass: dive on the target, fire, break away, come round again
     void bomberAttack(Entity& e, Entity& t);             // bombing run: line up on the target, release a stick of bombs, fly on, loop back
     void dropBomb(Entity& e, Vec2 at);                   // one bomb falls from the aircraft toward the ground point 'at'

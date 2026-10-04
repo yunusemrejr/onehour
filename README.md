@@ -54,11 +54,31 @@ reaches it on its way in shoots at it (1100 hp, a few Patriot Batteries bring it
 The enemy is told when an airlift is on its way, and the drop circle is public. The computer commander uses it to reinforce a base under attack
 and to land on the objective of a wave, avoiding targets with a lot of anti-air. `--droptest` covers the call, the load, the parachute descent and the shoot-down.
 
-**Force fire (human players only)** — hold `Ctrl` and right-click (or attack-move with `A`) a unit or structure of your own or of your ally to attack it on purpose, exactly as you
-would an enemy: tanks shoot it, jets and bombers strafe and bomb it, turrets can be turned on it, and area weapons (shells, arcs, bombs, rails, grenades) hurt everything near
-the impact, friends included. `Ctrl` while placing a power or nuke target makes the blast hit friendly ground too (the cursor says `FORCE FIRE` / `NUKE (FRIENDLY FIRE)`).
-Without `Ctrl` nothing ever hurts a friend by accident. Computer armies (the AI commander, the learned brain and the AI ally) can never do this: the simulation drops the flag
-for any army that is not human. `--rulestest` covers it.
+**Force fire (human players only)** — attack a unit or structure of your own or of your ally on purpose, exactly as you would an enemy: select your units and press the
+**Force Fire** button (key `F`), then click the target, or hold `Ctrl` and right-click it (or attack-move onto it with `A`). Tanks and infantry shoot it, jets and bombers strafe and
+bomb it, turrets can be turned on it (and take it up again whenever it comes back into reach), and area weapons (shells, arcs, bombs, rails, grenades) hurt everything near the
+impact, friends included. While aiming a nuke or a strike power, hold `Ctrl` or press `F` to make the blast hit friendly ground too (the cursor says `NUKE (FRIENDLY FIRE)`).
+Without it nothing ever hurts a friend by accident, and a plain right-click on an ally's unit or structure just moves your selection there. **Your allies never shoot back**: their
+units and the computer ally's commander only ever fight enemies, no unit of anybody's comes to "help" against friendly fire, a computer ally simply gets its units out of the circle
+of a friendly-fire nuke, friendly kills do not count in the statistics, and no "your ally is under attack" alarm goes off. Enemies are unaffected: the game goes on as usual.
+Computer armies (the AI commander, the learned brain and the AI ally) can never force fire: the simulation drops the flag for any army that is not human. `--rulestest` and
+`--autotest` cover it.
+
+**Units on their own** — a unit that is not carrying out one of your orders (standing idle, holding the spot it stopped on, guarding an area, or busy with something it picked
+itself) looks after itself and its friends twice a second:
+
+- **Answers fire from beyond its reach or its guard zone**: shot by something it can hit (artillery out-ranging it, a sniper's spotter, a raider just outside the guard circle),
+  it goes after the shooter when it and the friends around it would win the local fight, even well outside a small guard zone.
+- **Backs away from danger it cannot fight**: hit by something it cannot hit back (a tank bombed from the air, a rifleman strafed by a jet), or losing a fight away from your
+  base, it pulls back a few tiles toward its friends and holds there for a while. A badly hurt soldier or vehicle drives over to a nearby medic; a badly hurt aircraft under fire
+  flies home and is patched up on its pad (aircraft parked on their pad are repaired, about 3% of their health a second).
+- **Helps friends**: when one of your or your ally's units or structures nearby is hit by an enemy, idle and guarding units (within about 9 tiles of their post, more for a guard
+  zone) and aircraft (about 16 tiles around their airfield, rally point or patrol circle) go after the attacker.
+- **Gets out of a nuke's circle and out of radiation** (your units; the computer commanders move their own): seeing a warhead coming, units leave the blast circle, haulers and
+  dozers included, and pick their work up again once it has landed; idle units walk out of fallout, guards do not walk back into a poisoned slot, and haulers prefer clean piles.
+- Whatever it takes on itself stays **leashed** to its post (about 12 tiles for ground units, 20 for aircraft) and it **returns** there afterwards. Any order you give replaces it.
+
+Units jammed in a one-tile gap between structures (two haulers head-on, a soldier standing in a lane) now slip past each other instead of shoving forever.
 
 **Snipers** — both armies train one at the Barracks / Command Post once the tech structure stands: the **Ghost Sniper** (Cyber, needle rifle) and the **Sniper** (Clanker, rifle).
 $550, fragile, long sight, 11.5 tile range: they kill any infantryman in a couple of shots and can shoot nothing else, not vehicles, structures, aircraft or other snipers. Only
@@ -69,6 +89,16 @@ tank or a drone. The AI builds them against infantry-heavy enemies.
 (Specter Jet / Talon Jet: $2400, 1500 / 1550 hp, 560 / 540 px/s, 10 passes a sortie). Both kinds hit air and ground: the bombers carpet-bomb the ground and shoot aircraft down with
 their guns, the jets use heavy plasma lances / homing Sidewinders on everything (about 85-100% against structures) and fight aircraft on the turn.
 
+**Flight** — the jets and the Wraith Drone (a flying wing) are **fixed-wing aircraft** and fly like aeroplanes: they hold an airspeed between a stall speed (36% of their top speed)
+and their top speed, accelerate and brake at finite rates, and turn under a g-limit, so the slower they fly the tighter they turn (up to twice their turn rate at top speed). They
+**never stand still in the air**: an aircraft waiting somewhere circles the spot, and only the final approach to the pad is flown below the stall speed. Sent somewhere with a
+move order, aircraft circle there for a minute (picking off what they see) before flying home; after a kill they look around for a few seconds for more. The Vulture Gunship
+is a helicopter and hovers. **Dogfights**: a fixed-wing fighter flies lead pursuit, pulls round at its corner speed (where it turns tightest) whenever the target is off its
+nose, slows to the target's pace when tucked in behind it, extends straight out when the target sits inside its turn circle behind the wing and comes round again, and fires
+whenever the target is inside its weapon cone (wide for homing missiles, narrow for lasers). It stays on the target after a burst instead of breaking away, so a jet out-turns
+and shoots down bombers and helicopters, two jets fight each other properly, and an aircraft being shot at by another one turns on it. Aircraft near the map edge pull round
+toward the middle in time, and a plane that loses its airfield on final approach goes round again.
+
 **Bombers** — the Wraith Drone and the Vulture Gunship are bombers. Against anything on the ground they fly real bombing runs: they line up on the
 target (leading a moving one), release a stick of four heavy bombs a few tens of pixels apart along the flight line, fly straight on for a second and
 swing round for another pass (12 / 16 bombs per sortie, reloaded in under half a second per bomb on the pad). A bomb splashes two tiles, hits
@@ -78,9 +108,9 @@ Against aircraft they keep using their guns. They are fragile on purpose (520 / 
 
 **Supersonic jets** — the Drone Pad and the Airstrip each build a second aircraft once the tech structure stands: the **Specter Jet**
 (Cyber, stealth delta, plasma lances) and the **Talon Jet** (Clanker, swept-wing fighter-bomber, homing Sidewinders). They are the
-fastest units in the game (about 550 px/s, 16 tiles a second) and fly like fixed-wing aircraft: no hovering, a finite turn rate (a turn
-circle of ~165 px), strafing passes that dive on the target, fire a stream of rounds, break away and come round again, six passes
-per sortie. They are fragile, shred aircraft and light vehicles, are poor against structures, take off from and land on the pad, and
+fastest units in the game (about 550 px/s, 16 tiles a second) and fly like fixed-wing aircraft (see Flight above): no hovering, a turn
+circle of ~165 px at full speed and much tighter at corner speed, strafing passes that dive on the target, fire a stream of rounds, break
+away and come round again. They are fragile, shred aircraft and light vehicles, are poor against structures, take off from and land on the pad, and
 leave afterburner flames and vapour trails behind. Idle jets scramble against anything that comes within 11 tiles of their field.
 
 **Rebuilding a base** — the Command Core / Command Post is no longer unique: any dozer can found a new one ($3000, 45 s) from its build menu
@@ -98,8 +128,9 @@ switches powered defenses off, exactly the pressure Zero Hour puts on you.
 | Input | Action |
 | --- | --- |
 | Left click / drag | select (double-click: every unit of that type on screen, Tab: army on screen) |
-| Right click | move, attack, gather, repair/continue construction, set rally point (also on the minimap) |
+| Right click | move, attack, gather, repair/continue construction, set rally point (also on the minimap); on an ally's unit or structure: move there |
 | A + click | attack-move, S: stop |
+| F, then click (or Ctrl + right click) | **force fire**: attack any unit or structure on purpose, your own and your allies' included (they never shoot back). F or Ctrl while aiming a nuke or strike: friendly fire |
 | G, then click or drag | **guard an area**: fighters hold spread-out posts in the circle and engage what enters it (chasing only while the target stays inside), aircraft patrol it and return to rearm; **gather in an area**: haulers search the circle for supply piles and work them until it is empty. Any move/stop order cancels it. |
 | Select a turret / battery, or hover any defense | shows the area it covers (ground, air, or both; grey when unpowered; enemy defenses in red). The range also follows the cursor while you place a defense |
 | Ctrl+0–9 / 0–9 | assign / recall control group (Alt+#: jump to it) |
@@ -169,7 +200,7 @@ Beyond the learned parts the commander plays tactically:
   headless; `--train N` self-plays N games to train the AI brain, `--eval N` pits the learned AI against the plain heuristic AI;
   `--soundcheck` prints statistics for the synthesized sounds; `--hqtest` rebuilds a lost Command Core (human dozer and AI), `--jettest` flies
   the jets (speed, banking, strafing, rearming), `--econtest` and `--areatest` cover income structures, nukes and area orders, and `--bench [N]`
-  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
+  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
 **Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura

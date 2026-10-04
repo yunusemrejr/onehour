@@ -73,6 +73,7 @@ struct UnitType {
     int jet;            // 1 = supersonic fighter: fixed-wing strafing passes with a limited turn rate instead of hovering
     int bomber;         // 1 = carries bombs: flies bombing runs over ground targets (sticks of heavy bombs), uses its gun on aircraft
     int sniper;         // 1 = sniper: shoots only infantry (never another sniper) and can only be spotted and hit by vehicles and aircraft
+    int heli;           // 1 = helicopter: hovers and turns on the spot; every other aircraft is fixed-wing and never stands still in the air
 };
 
 struct BuildType {
@@ -130,7 +131,13 @@ static const float BOMBER_TURN = 2.3f;        // rad/s: a bomber swings a wide c
 static const int   BOMB_STICK = 4;            // bombs released in one pass, a few tens of pixels apart along the flight line
 static const int   W_NEEDLE = 27, W_SNIPER_RIFLE = 28;   // the snipers' rifles
 static const int   W_BOMB_CYBER = 25, W_BOMB_CLANKER = 26;   // WEAPONS indices of the two armies' bombs
-static const float JET_TURN = 3.4f;           // rad/s: a supersonic jet at 560 px/s swings a turn circle of about 165 px
+static const float JET_TURN = 3.4f;           // rad/s at top speed: a supersonic jet at 560 px/s swings a turn circle of about 165 px
+// fixed-wing flight (jets and the Wraith flying wing): the turn is g-limited, so a slower aircraft turns tighter (up to AIR_TURN_MAX x its
+// turn rate at top speed); below AIR_STALL x top speed it would stall, so only the final approach to the pad is flown slower than that
+static const float AIR_STALL = 0.36f;
+static const float AIR_TURN_MAX = 2.0f;
+static const float AIR_LOITER_TIME = 60.0f;   // seconds an aircraft circles (or hovers over) a spot it was sent to before it flies home
+static const float AIR_PAD_REPAIR = 0.03f;    // fraction of max health an aircraft parked on its pad gets back per second
 
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures
 int firstBuildOf(Faction f);

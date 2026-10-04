@@ -274,6 +274,9 @@ Vec2 Sim::unitExit(const Entity& b) const {
 }
 
 // ------------------------------------------------------------ commands
+// any direct order (from the player or the computer commander) replaces whatever the unit was doing on its own initiative
+static void takeOrder(Entity& e) { e.autoTask = false; e.resumeOrder = O_IDLE; e.evadeUntil = -1; e.jetBreak = 0; }
+
 static void formationOffsets(const std::vector<Entity*>& units, Vec2 dest, std::vector<Vec2>& out) {
     int n = (int)units.size();
     out.assign(n, Vec2());
@@ -309,7 +312,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     formationOffsets(ground, dest, offs);
     for (size_t i = 0; i < ground.size(); i++) {
         Entity& e = *ground[i];
-        e.zoneR = 0; e.leashed = false;
+        e.zoneR = 0; e.leashed = false; takeOrder(e); e.forceTarget = NOREF;
         Vec2 d = g_map.nearestFree(Vec2(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE)), 6);
         e.order = attackMove && e.weapon() >= 0 ? O_ATTACKMOVE : O_MOVE;
         e.postOrder = O_IDLE;
@@ -317,7 +320,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         requestPath(e, d);
     }
     for (auto* a : air) {
-        a->zoneR = 0; a->leashed = false;
+        a->zoneR = 0; a->leashed = false; takeOrder(*a); a->forceTarget = NOREF; a->loiterUntil = -1;
         if (a->ammo <= 0 && a->ut().ammo > 0) { a->targetEnt = NOREF; a->order = O_REARM; continue; }
         a->order = attackMove ? O_ATTACKMOVE : O_MOVE; a->postOrder = O_IDLE;
         a->target = dest; a->targetEnt = NOREF; a->engaged = NOREF;
@@ -333,12 +336,15 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         Entity* e = get(r);
         if (!e || e == t) continue;
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
-        if (e->isBuilding()) {   // a turret or battery can be turned on a friendly target too
-            if (ff && e->constructed && e->bt().weapon >= 0) { e->forceTarget = target; e->engaged = target; }
+        if (e->isBuilding()) {   // a turret or battery takes the target the player points at (a friendly one too, with force fire)
+            if (!e->constructed || e->bt().weapon < 0) continue;
+            e->forceTarget = ff ? target : NOREF;
+            if (canTarget(*e, *t)) e->engaged = target;
             continue;
         }
         if (!e->isUnit()) continue;
         e->forceTarget = ff ? target : NOREF;
+        takeOrder(*e); e->loiterUntil = -1;
         const UnitType& ut = e->ut();
         if (ut.role == UR_DOZER) {
             if (t->isBuilding() && t->owner == e->owner) { cmdAssist({r}, target); continue; }
@@ -359,7 +365,7 @@ void Sim::cmdStop(const std::vector<Ref>& sel) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit()) continue;
-        e->zoneR = 0; e->leashed = false;
+        e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF; e->loiterUntil = -1;
         if (e->isAir() && e->ammo <= 0 && e->ut().ammo > 0) { e->order = O_REARM; e->targetEnt = NOREF; continue; }
         e->order = O_IDLE; e->postOrder = O_IDLE; e->targetEnt = NOREF; e->engaged = NOREF; e->path.clear(); e->guardPos = e->pos;
     }
@@ -371,7 +377,7 @@ void Sim::cmdHarvest(const std::vector<Ref>& sel, Ref pile) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->ut().role != UR_HARVESTER) continue;
-        e->zoneR = 0;
+        e->zoneR = 0; takeOrder(*e);
         e->lastPile = pile; e->targetEnt = pile; e->actionTimer = 0;
         e->order = e->cargo > 0 ? O_RETURN : O_HARVEST;
         e->repathTimer = 0;
@@ -388,7 +394,7 @@ void Sim::cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
     int n = (int)us.size();
     for (int k = 0; k < n; k++) {
         Entity& e = *us[k];
-        e.zone = center; e.zoneR = radius; e.leashed = false;
+        e.zone = center; e.zoneR = radius; e.leashed = false; takeOrder(e); e.forceTarget = NOREF; e.loiterUntil = -1;
         e.engaged = NOREF; e.targetEnt = NOREF; e.postOrder = O_IDLE; e.actionTimer = 0;
         // sunflower spread so a group fills the circle instead of piling on the centre
         float a = k * 2.39996f, rr = radius * 0.6f * std::sqrt((k + 0.5f) / n);
@@ -412,6 +418,7 @@ void Sim::cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius) 
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->ut().role != UR_HARVESTER) continue;
+        takeOrder(*e);
         e->zone = center; e->zoneR = radius; e->targetEnt = NOREF; e->lastPile = NOREF; e->actionTimer = 0;
         e->order = e->cargo > 0 ? O_RETURN : O_HARVEST;
         e->path.clear(); e->repathTimer = 0;
@@ -432,6 +439,9 @@ bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     if (!canAfford(p, b.cost)) { emit(EV_NOFUNDS, p, SND_NOFUNDS, d->pos, "Insufficient funds"); return false; }
     players[p].money -= b.cost;
     Ref site = placeBuilding(buildType, p, tx, ty, false);
+    d = get(dozer);   // (placing may grow the entity array)
+    if (!d) return true;
+    takeOrder(*d);
     d->order = O_BUILD; d->targetEnt = site; d->engaged = NOREF; d->repathTimer = 0; d->actionTimer = 0;
     emit(EV_SOUND, p, SND_PLACE, d->pos);
     return true;
@@ -443,6 +453,7 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->ut().role != UR_DOZER || e->owner != b->owner) continue;
+        takeOrder(*e);
         e->order = O_BUILD; e->targetEnt = building; e->repathTimer = 0; e->actionTimer = 0;
     }
 }
@@ -631,7 +642,11 @@ void Sim::releaseUnit(Airlift& a) {
     float face = std::atan2(dir.y, dir.x);
     e.angle = e.turret = face;
     if (ut.kind == UK_AIR) {
-        e.alt = 1;
+        e.alt = 1; e.airspeed = ut.speed * 0.6f;   // already flying when it leaves the cargo bay, a little inside the map, turned toward the drop zone
+        const float m = 3.0f * TILE;
+        e.pos = e.prevPos = e.lastPos = Vec2(clampf(from.x, m, WORLD_W - m), clampf(from.y, m, WORLD_H - m));
+        Vec2 tt = target - e.pos;
+        if (tt.len() > 2.0f * TILE) e.angle = e.turret = std::atan2(tt.y, tt.x);
         cmdGuardArea({r}, target, 9.0f * TILE);
     } else {
         e.dropFrom = from; e.dropTo = to;
@@ -857,7 +872,7 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
     e.stuckTimer = 0; e.lastPos = e.pos;
     if (e.isAir()) { e.path.push_back(dest); return true; }
     bool ok = g_map.findPath(e.pos, dest, e.path);
-    if (e.path.empty()) e.path.push_back(dest);
+    if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4));   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
     return ok;
 }
 
@@ -958,7 +973,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
         if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t)) return;
         float d = distToEntity(e.pos, t) / TILE;
         if (d < wp.minRange) return;
-        bool inZone = distToEntity(e.zone, t) <= e.zoneR;
+        bool inZone = distToEntity(e.zone, t) <= e.zoneR + (e.isAir() ? 4.0f : 2.0f) * TILE;   // a little beyond the circle counts too
         if (!inZone && d > wp.range + 0.3f) return;
         float score = d - 2.5f * wp.mult[t.armor()];
         if (t.isUnit() && t.weapon() >= 0) score -= 1.5f;
@@ -1062,15 +1077,16 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     tgt.hp -= real;
     tgt.lastDamaged = time;
     if (attacker.valid()) tgt.attacker = attacker;
-    // credit the attacking unit type with the value it chewed through (for adaptive AI composition)
-    if (attackerOwner >= 0 && tgt.owner >= 0 && attackerOwner != tgt.owner) {
+    // credit the attacking unit type with the value it chewed through (for adaptive AI composition; friendly fire earns nothing)
+    bool foe = attackerOwner >= 0 && tgt.owner >= 0 && enemies(attackerOwner, tgt.owner);
+    if (foe) {
         const Entity* a = get(attacker);
         if (a && a->isUnit()) {
             float tv = tgt.isUnit() ? UNITS[tgt.type].cost : BUILDS[tgt.type].cost * 0.5f;
             players[attackerOwner].valueDealt[a->type] += tv * std::min(real, std::max(tgt.hp + real, 0.0f)) / tgt.maxHp;
         }
     }
-    if (tgt.owner >= 0 && attackerOwner >= 0 && attackerOwner != tgt.owner) {
+    if (foe) {   // (a human's force fire on an ally raises no alarm)
         Player& pl = players[tgt.owner];
         // "base under attack" style notice, throttled per player (state lives in Player so a new game starts clean)
         if (time - pl.lastNotice > 10.0f) {
@@ -1081,7 +1097,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         }
     }
     if (tgt.hp <= 0) {
-        if (attackerOwner >= 0 && attackerOwner != tgt.owner) {
+        if (foe) {
             if (tgt.isBuilding()) players[attackerOwner].structuresKilled++; else players[attackerOwner].unitsKilled++;
         }
         destroy(tgt, true);
@@ -1199,11 +1215,14 @@ void Sim::updateStorms() {
 
 // ------------------------------------------------------------ economy helpers
 static bool predSupply(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_SUPPLY; }
-static bool predPile(const Entity& e, void*) { return e.kind == EK_RESOURCE && e.amount > 0; }
-static bool predAirfield(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_AIRFIELD; }
+static bool predPile(const Entity& e, void* ctx) { return e.kind == EK_RESOURCE && e.amount > 0 && !(ctx && ((const Sim*)ctx)->inFallout(e.pos)); }   // (haulers do not drive into radiation)
+static bool predAirfield(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.alive && e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_AIRFIELD; }   // (alive: never the ruins of a destroyed pad)
 
 Entity* Sim::findSupplyBuilding(Entity& h) { int o = h.owner; return nearestEntity(h.pos, 1e9f, predSupply, &o); }
-Entity* Sim::findPile(Entity& h, float maxDist) { return nearestEntity(h.pos, maxDist, predPile, nullptr); }
+Entity* Sim::findPile(Entity& h, float maxDist) {
+    Entity* p = nearestEntity(h.pos, maxDist, predPile, this);
+    return p ? p : nearestEntity(h.pos, maxDist, predPile, nullptr);   // only radioactive piles left: better than standing idle
+}
 Entity* Sim::findZonePile(Entity& h) {
     Entity* best = nullptr; float bd = 1e18f;
     for (auto& e : ents) {
@@ -1211,6 +1230,7 @@ Entity* Sim::findZonePile(Entity& h) {
         if (dist(e.pos, h.zone) > h.zoneR + TILE * 0.5f) continue;
         if (!exploredRaw(h.owner, clampi(e.tx, 0, MAP_W - 1), clampi(e.ty, 0, MAP_H - 1))) continue;   // haulers only work what their side has seen
         float d = dist2(h.pos, e.pos);
+        if (inFallout(e.pos)) d += 1e12f;   // radioactive piles come last
         if (d < bd) { bd = d; best = &e; }
     }
     return best;
@@ -1243,54 +1263,138 @@ Vec2 Sim::padSlot(const Entity& h, const Entity& e) const {
     return h.pos + Vec2((slot - 1.5f) * 30, 0);
 }
 
+// Fixed-wing aircraft (the jets and the Wraith flying wing) fly like aeroplanes: they hold an airspeed between their stall speed and their
+// top speed, speed up and brake at finite rates, and turn under a g-limit (the slower they fly, the tighter they turn). They never hover:
+// an aircraft waiting in the air circles, and only the final approach to the pad is flown slower than the stall speed. The Vulture
+// Gunship is a helicopter and hovers.
+static inline bool fixedWing(const UnitType& ut) { return ut.kind == UK_AIR && !ut.heli; }
+static inline float wrapAngle(float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; }
+static inline float baseTurn(const UnitType& ut) { return ut.jet ? JET_TURN : BOMBER_TURN; }   // turn rate at top speed
+
+float Sim::airTurnRate(const Entity& e) const {
+    const UnitType& ut = e.ut();
+    float base = baseTurn(ut);
+    return std::min(base * AIR_TURN_MAX, base * ut.speed / std::max(1.0f, e.airspeed));
+}
+
+void Sim::airSteer(Entity& e, float want, float wantSpeed, bool keepOnMap) {
+    const UnitType& ut = e.ut();
+    float vmin = ut.heli ? 0.0f : ut.speed * AIR_STALL;
+    if (keepOnMap) {   // about to leave the map within about one turn: pull round toward the middle, tightly
+        float look = e.airspeed / airTurnRate(e) * 1.3f + 40.0f;
+        Vec2 ahead = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * look;
+        if (ahead.x < 8 || ahead.y < 8 || ahead.x > WORLD_W - 8 || ahead.y > WORLD_H - 8) {
+            Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos; want = std::atan2(c.y, c.x);
+            wantSpeed = std::min(wantSpeed, ut.speed * 0.5f);
+        }
+    }
+    wantSpeed = clampf(wantSpeed, vmin, ut.speed);
+    if (ut.heli) e.airspeed = wantSpeed;
+    else if (e.airspeed < wantSpeed) e.airspeed = std::min(wantSpeed, e.airspeed + ut.speed * 1.1f * SIM_DT);   // throttle up
+    else e.airspeed = std::max(wantSpeed, e.airspeed - ut.speed * 1.6f * SIM_DT);                            // airbrakes
+    float turn = airTurnRate(e) * SIM_DT;
+    e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want), -turn, turn));
+    e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (e.airspeed * SIM_DT);
+    e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
+}
+
 void Sim::flyTo(Entity& e, Vec2 dest, float speed) {
+    const UnitType& ut = e.ut();
     Vec2 d = dest - e.pos;
     float l = d.len();
-    if (!e.ut().jet) {
+    if (!fixedWing(ut)) {
         if (l > 3) { e.pos += d.norm() * std::min(l, speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
+        e.airspeed = l > 3 ? speed : 0;
         return;
     }
-    // a fixed-wing craft cannot turn on the spot: swing at JET_TURN and bleed speed in proportion to the distance left,
-    // which keeps the turn circle (speed / JET_TURN) under half the distance, so it always spirals in instead of orbiting the spot
-    if (l < 4) return;
+    // final approach: bleed speed in proportion to the distance left, which keeps the turn circle well under half the distance,
+    // so the craft always spirals in onto the spot instead of orbiting it
+    if (l < 3) { e.airspeed = 0; return; }
     float want = std::atan2(d.y, d.x);
-    float v = std::max(36.0f, std::min(speed, l * 1.6f));
-    float turn = JET_TURN * SIM_DT * (l < 120 ? 2.0f : 1.0f);
-    e.angle += clampf(angDiff(e.angle, want), -turn, turn);
-    if (l < 14) { float a = angDiff(e.angle, want); e.angle += a * 0.5f; }
-    Vec2 step(std::cos(e.angle) * v * SIM_DT, std::sin(e.angle) * v * SIM_DT);
+    if (l > 260) { airSteer(e, want, speed); return; }
+    float vt = std::max(30.0f, std::min(speed, l * 1.6f));
+    if (e.airspeed > vt) e.airspeed = std::max(vt, e.airspeed - ut.speed * 1.6f * SIM_DT);
+    else e.airspeed = std::min(vt, e.airspeed + ut.speed * 1.1f * SIM_DT);
+    float turn = airTurnRate(e) * SIM_DT;
+    e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want), -turn, turn));
+    if (l < 14) e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want) * 0.5f, -turn, turn));
+    Vec2 step(std::cos(e.angle) * e.airspeed * SIM_DT, std::sin(e.angle) * e.airspeed * SIM_DT);
     e.pos += step.len() >= l ? d : step;
 }
 
+// Waiting in the air: a fixed-wing craft circles the spot at a relaxed speed (the circle is never tighter than it can fly), a helicopter
+// hovers over it.
+void Sim::airLoiter(Entity& e, Vec2 c, float R, float speedFrac) {
+    const UnitType& ut = e.ut();
+    if (!fixedWing(ut)) { flyTo(e, Vec2(clampf(c.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(c.y, 2.0f * TILE, WORLD_H - 2.0f * TILE)), ut.speed * 0.6f); return; }
+    float v = ut.speed * speedFrac;
+    float rTurn = v / std::min(baseTurn(ut) * AIR_TURN_MAX, baseTurn(ut) * ut.speed / v);
+    R = std::min(std::max(R, rTurn * 1.5f + 12.0f), WORLD_H * 0.3f);
+    float m = R + rTurn * 1.3f + 48.0f;   // the whole circle stays far enough inside the map that the edge look-ahead never fires on it
+    c = Vec2(clampf(c.x, m, WORLD_W - m), clampf(c.y, m, WORLD_H - m));
+    Vec2 r = e.pos - c; float l = r.len();
+    if (l > R * 2.5f) { airSteer(e, std::atan2(-r.y, -r.x), ut.speed * std::max(speedFrac, 0.85f)); return; }   // still on the way there
+    float phi = l > 1 ? std::atan2(r.y, r.x) : e.angle;
+    Vec2 aim = c + Vec2(std::cos(phi + 0.75f), std::sin(phi + 0.75f)) * R;   // a carrot on the circle a little ahead: converges onto the circle and flies it anticlockwise
+    airSteer(e, std::atan2(aim.y - e.pos.y, aim.x - e.pos.x), v);
+}
+
+// Air-to-air with a fixed-wing fighter. It flies lead pursuit (aims where the target will be when the shot arrives), pulls round at its
+// corner speed (the slowest safe speed, where it turns tightest) whenever the target is off its nose, slows to the target's pace when it
+// is tucked in behind it, and extends straight out for a moment when the target sits inside its turn circle behind the wing, coming
+// round again from further out. It fires whenever the target is in range inside its weapon cone (wide for homing missiles, narrow for
+// guns and lasers) and stays on the target after a burst instead of breaking away: that is how it out-turns helicopters and drones.
+void Sim::airDogfight(Entity& e, Entity& t) {
+    const UnitType& ut = e.ut();
+    const Weapon& w = WEAPONS[ut.weapon];
+    Vec2 tv = (t.pos - t.prevPos) * (1.0f / SIM_DT);
+    if (tv.len2() > 1500.0f * 1500.0f) tv = Vec2();
+    float D = dist(e.pos, t.pos);
+    float shot = w.projSpeed > 0 ? w.projSpeed : 1800.0f;
+    Vec2 aim = t.pos + tv * clampf(D / shot, 0.0f, 0.45f);
+    Vec2 to = aim - e.pos;
+    float want = std::atan2(to.y, to.x);
+    float off = std::abs(angDiff(e.angle, want));
+    float d = distToEntity(e.pos, t) / TILE;
+    float cone = w.proj == PJ_ROCKET ? 0.9f : 0.55f;
+    float v = ut.speed;
+    float rTurn = std::max(e.airspeed, 1.0f) / airTurnRate(e);
+    if (e.jetBreak > 0) {
+        e.jetBreak -= SIM_DT;
+        want = e.angle;                                                       // extending: straight out at full power
+    } else {
+        if (off > 0.45f) v = ut.speed * 0.5f;                                  // corner speed: the tightest turn the airframe can pull
+        else if (D < 2.5f * TILE) v = std::max(ut.speed * 0.5f, std::min(ut.speed, tv.len() * 1.1f));   // tucked in behind: do not overshoot
+        if (off > 1.9f && D < rTurn * 1.3f) { e.jetBreak = 0.6f; e.jetMode = 1; }
+        else if (d <= w.range + 0.1f && off < cone && e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; if (ut.jet) emit(EV_SOUND, e.owner, SND_JET, e.pos); }
+    }
+    airSteer(e, want, v);
+}
+
+// Ground attack with a jet: strafing passes. It dives on the target and fires when lined up, then peels away from the defences and
+// comes round again; a target it cannot line up on (inside its turn circle) makes it extend straight out for a fresh run.
 void Sim::jetAttack(Entity& e, Entity& t) {
+    if (t.isAir()) { airDogfight(e, t); return; }
     const UnitType& ut = e.ut();
     const Weapon& w = WEAPONS[ut.weapon];
     Vec2 to = t.pos - e.pos;
     float d = distToEntity(e.pos, t) / TILE;
     float want = std::atan2(to.y, to.x);
+    float off = std::abs(angDiff(e.angle, want));
+    float v = ut.speed;
     if (e.jetBreak > 0) {
         e.jetBreak -= SIM_DT;
-        want = std::atan2(-to.y, -to.x);                   // peel away: turn back out of range instead of flying through the defences
-    } else if (d <= w.range && std::abs(angDiff(e.angle, want)) < (t.isAir() ? 0.9f : 0.3f)) {   // (a dogfight is fought on the turn: a fighter fires inside a wide cone at another aircraft)
-        if (e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; e.jetBreak = t.isAir() ? 0.5f : 1.25f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
+        want = e.jetMode == 1 ? e.angle : std::atan2(-to.y, -to.x);          // extend straight out, or peel away from the target's defences
+    } else if (d <= w.range && off < 0.3f) {
+        if (e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; e.jetBreak = 1.25f; e.jetMode = 0; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
     } else if (d < 2.0f && e.cooldown > 0) {
-        e.jetBreak = 0.9f;                                 // arrived with the guns still cooling: peel off and come round again
+        e.jetBreak = 0.9f; e.jetMode = 0;                                     // arrived with the guns still cooling: peel off and come round again
     } else if (d < w.range + 5.0f) {
-        // close to the target but not lined up: a target inside the jet's own turn circle would be circled forever, so give up
-        // on the turn after a moment, fly out straight and make a fresh run from far enough away
+        if (off > 0.5f) v = ut.speed * 0.6f;                                  // pull round hard onto the target
         e.stuckTimer += SIM_DT;
-        if (e.stuckTimer > 1.1f) { e.jetBreak = 1.0f; e.stuckTimer = 0; }
+        if (e.stuckTimer > 1.1f) { e.jetBreak = 0.8f; e.jetMode = 1; e.stuckTimer = 0; }
     } else e.stuckTimer = 0;
-    // stay over the map: near an edge, the breakaway curves back toward the middle
-    const float edge = 3.5f * TILE;
-    if (e.pos.x < edge || e.pos.y < edge || e.pos.x > WORLD_W - edge || e.pos.y > WORLD_H - edge) {
-        Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos;
-        want = std::atan2(c.y, c.x);
-    }
-    float turn = JET_TURN * SIM_DT;
-    e.angle += clampf(angDiff(e.angle, want), -turn, turn);
-    e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (ut.speed * SIM_DT);
-    e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
+    airSteer(e, want, v);
 }
 
 // A bombing run. The aircraft steers at the target (leading a moving one), and when the middle of a stick of bombs would land on it
@@ -1317,15 +1421,7 @@ void Sim::bomberAttack(Entity& e, Entity& t) {
         e.stuckTimer += SIM_DT;
         if (e.stuckTimer > 1.6f) { e.jetBreak = 1.0f; e.stuckTimer = 0; }
     } else e.stuckTimer = 0;
-    const float edge = 3.0f * TILE;
-    if (e.pos.x < edge || e.pos.y < edge || e.pos.x > WORLD_W - edge || e.pos.y > WORLD_H - edge) {
-        Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos;
-        want = std::atan2(c.y, c.x);
-    }
-    float turn = BOMBER_TURN * SIM_DT;
-    e.angle += clampf(angDiff(e.angle, want), -turn, turn);
-    e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (ut.speed * SIM_DT);
-    e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
+    airSteer(e, want, ut.speed);
 }
 
 void Sim::dropBomb(Entity& e, Vec2 at) {
@@ -1359,6 +1455,212 @@ void Sim::bombImpact(Projectile& p) {
     emit(EV_SOUND, -1, SND_EXPLODE_L, at);
 }
 
+// ------------------------------------------------------------ units left on their own
+// A unit that is not carrying out a player's order (idle, holding its post, guarding an area, or busy with something it picked itself)
+// looks around twice a second:
+//  * danger it cannot fight: being shot by something it cannot hit back (aircraft for a rifleman, a sniper it cannot see), or losing a
+//    fight away from its base -> it backs off a few tiles toward its friends and holds there for a while; a badly hurt aircraft flies
+//    home to its pad to be patched up; a badly hurt soldier or vehicle goes to a medic
+//  * fire from beyond its guard zone or its reach, by something it can hit in a fight it can win -> it goes after the shooter
+//  * a friend (its own or an ally's unit or structure) hit by an enemy nearby -> it goes to help
+// Units of human players also get out of an incoming nuke's circle and out of radiation, whatever they are doing unless the player is
+// moving them (the computer commander moves its own units, see AiPlayer::dodgeNukes), and pick their work up again afterwards.
+// Whatever a unit takes on by itself stays leashed to its post (guard slot, zone, the spot it stood on) and it returns there afterwards.
+// Only enemies count: a human's force fire on a friend never makes anybody shoot back or come to help against it.
+static const float AUTO_LEASH = 12.0f;    // tiles a ground unit may stray from its post on its own initiative
+static const float AIR_LEASH = 20.0f;     // the same for aircraft
+static const float HELP_R = 9.0f;         // tiles around an idle ground unit's post in which it answers a friend's call
+static const float AIR_HELP_R = 16.0f;    // the same for aircraft (around their pad, rally point or patrol circle)
+
+static float dpsVs(const Entity& s, const Entity& t) {
+    int wi = s.weapon(); if (wi < 0) return 0;
+    const Weapon& w = WEAPONS[wi];
+    if (w.cooldown <= 0) return 0;
+    return w.dmg * w.mult[t.armor()] * std::max(1, w.burst) / w.cooldown;
+}
+
+Vec2 Sim::postOf(const Entity& e) const {
+    if (e.zoneR > 0) return e.zone;
+    if (e.isAir()) {
+        if (e.loiterUntil > time) return e.loiter;
+        const Entity* h = get(e.home);
+        if (h) return h->hasRally ? h->rally : h->pos;
+        return e.loiterUntil >= 0 ? e.loiter : e.pos;
+    }
+    return e.guardPos;
+}
+
+// Lanchester-style estimate of the local fight around a shooter: how long the foe's side needs to kill this unit against how long this
+// unit and its friends need to kill the foe (> 1: we win). Splash, armour piercing and movement are ignored; it only has to tell a fight
+// worth taking from a hopeless one.
+float Sim::fightOdds(Entity& e, Entity& foe) {
+    float ours = 0, theirs = 0;
+    forEachNear(e.pos, 5.0f * TILE, [&](Entity& f) {
+        if (f.kind == EK_RESOURCE || f.owner < 0 || enemies(e.owner, f.owner) || f.fall > 0) return;
+        if (f.isBuilding() && (!f.constructed || (players[f.owner].lowPower() && f.bt().power < 0))) return;
+        if (f.isUnit() && f.ut().role != UR_COMBAT) return;
+        int fw = f.weapon();
+        if (fw < 0 || !canTarget(f, foe)) return;
+        float inRange = distToEntity(f.pos, foe) <= (WEAPONS[fw].range + 0.5f) * TILE ? 1.0f : (f.isUnit() ? 0.6f : 0.0f);
+        ours += dpsVs(f, foe) * inRange;
+    });
+    forEachNear(foe.pos, 5.0f * TILE, [&](Entity& g) {
+        if (g.kind == EK_RESOURCE || !enemies(e.owner, g.owner) || g.fall > 0) return;
+        if (g.isBuilding() && (!g.constructed || (players[g.owner].lowPower() && g.bt().power < 0))) return;
+        if (!canTarget(g, e)) return;
+        theirs += dpsVs(g, e);
+    });
+    if (theirs <= 0) return 10.0f;
+    if (ours <= 0) return 0.0f;
+    return (e.hp / theirs) / (foe.hp / ours);
+}
+
+void Sim::autoEngage(Entity& e, Entity& t) {
+    e.order = O_ATTACK; e.targetEnt = refOf(t); e.engaged = NOREF; e.autoTask = true; e.leashed = false; e.repathTimer = 0;
+    e.postOrder = e.zoneR > 0 ? O_GUARDAREA : (e.isAir() ? O_IDLE : O_GUARDPOS);
+    if (!e.isAir()) e.path.clear();
+}
+
+void Sim::moveAside(Entity& e, Vec2 dest, float holdFor) {
+    dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
+    if (!e.isAir()) dest = g_map.nearestFree(dest, 6);
+    e.order = O_MOVE; e.target = dest; e.engaged = NOREF; e.autoTask = true; e.leashed = false; e.postOrder = O_IDLE; e.actionTimer = 0;
+    e.evadeUntil = time + holdFor;
+    if (!e.isAir()) requestPath(e, dest);
+}
+
+void Sim::retreatFrom(Entity& e, Vec2 threat, float tiles) {
+    Vec2 away = e.pos - threat; float l = away.len();
+    away = l > 1 ? away * (1.0f / l) : Vec2(-std::cos(e.angle), -std::sin(e.angle));
+    Vec2 home = (players[e.owner].basePos - e.pos).norm();
+    Vec2 dir = (away + home * 0.45f).norm();
+    if (dir.len2() < 0.01f) dir = away;
+    Vec2 dest = e.pos + dir * (tiles * TILE);
+    if (inFallout(dest)) dest = e.pos + away * (tiles * TILE);
+    if (e.zoneR <= 0) e.guardPos = dest;   // an idle unit makes its new spot its post; a zone guard goes back to its slot later
+    moveAside(e, dest, 6.0f);
+    e.targetEnt = NOREF;
+}
+
+bool Sim::dodgeDanger(Entity& e) {
+    if (e.order == O_MOVE && !e.autoTask) return false;   // the player is moving it: their call
+    // an incoming warhead: whatever it would hurt gets out of the circle while there is time
+    for (auto& n : nukes) {
+        bool hurts = enemies(n.owner, e.owner) || (n.force && !players[n.owner].isAI);
+        float left = NUKE_FLIGHT - n.t;
+        if (!hurts || n.t < 1.0f || left < 0.3f) continue;
+        float R = (NUKE_RADIUS + 1.5f) * TILE;
+        if (dist(e.pos, n.pos) > R) continue;
+        if (e.order == O_MOVE && dist(e.target, n.pos) > R) return false;   // already on its way out
+        Vec2 away = e.pos - n.pos; float l = away.len();
+        if (l < 4) { away = players[e.owner].basePos - n.pos; l = away.len(); }
+        away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
+        Vec2 dest = n.pos + away * (R + 2.5f * TILE);
+        if (dest.x < TILE || dest.y < TILE || dest.x > WORLD_W - TILE || dest.y > WORLD_H - TILE) {   // the map edge is in the way: run along it
+            Vec2 side(-away.y, away.x);
+            Vec2 c(WORLD_W * 0.5f, WORLD_H * 0.5f);
+            if ((side.x * (c.x - n.pos.x) + side.y * (c.y - n.pos.y)) < 0) side = side * -1.0f;
+            dest = n.pos + side * (R + 2.5f * TILE);
+        }
+        if (e.order != O_IDLE && e.order != O_GUARDPOS && e.order != O_MOVE && e.order != O_REARM) {   // pick the work up again afterwards
+            e.resumeOrder = e.order; e.resumePost = e.postOrder; e.resumeTarget = e.target;
+        }
+        Ref keep = e.targetEnt;
+        if (e.zoneR <= 0 && e.isUnit() && !e.isAir() && e.ut().role != UR_HARVESTER) e.guardPos = dest;
+        moveAside(e, dest, left + 1.0f);
+        if (e.resumeOrder != O_IDLE) e.targetEnt = keep;
+        return true;
+    }
+    // radiation: walk out of it (aircraft fly over it unharmed)
+    if (!e.isAir() && (e.order == O_IDLE || e.order == O_GUARDPOS || e.order == O_GUARDAREA) && inFallout(e.pos, TILE * 0.5f)) {
+        for (auto& f : fallouts) {
+            if (dist(e.pos, f.pos) > f.r + TILE * 0.5f) continue;
+            Vec2 away = e.pos - f.pos; float l = away.len();
+            away = l > 1 ? away * (1.0f / l) : (players[e.owner].basePos - f.pos).norm();
+            Vec2 dest = f.pos + away * (f.r + 2.0f * TILE);
+            if (e.zoneR <= 0) e.guardPos = dest;
+            moveAside(e, dest, 4.0f);
+            e.targetEnt = NOREF;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Sim::autonomy(Entity& e) {
+    const UnitType& ut = e.ut();
+    if (e.fall > 0 || e.disabledUntil > time || e.owner < 0) return false;
+    if (!players[e.owner].isAI && dodgeDanger(e)) return true;
+    bool onOwn = e.order == O_IDLE || e.order == O_GUARDPOS || e.order == O_GUARDAREA || ((e.order == O_ATTACK || e.order == O_MOVE) && (e.autoTask || e.leashed));
+    if (!onOwn) return false;
+    bool combat = ut.role == UR_COMBAT && ut.weapon >= 0;
+    Entity* att = get(e.attacker);
+    bool foeHit = e.lastDamaged > 0 && time - e.lastDamaged < 1.2f && att && att->owner >= 0 && enemies(e.owner, att->owner) && att->fall <= 0;
+    if (e.isAir()) {
+        if (!combat) return false;
+        if (foeHit && e.hp < e.maxHp * 0.3f && get(e.home) && e.order != O_REARM) {   // badly hurt and still under fire: home to be patched up
+            e.order = O_REARM; e.targetEnt = NOREF; e.autoTask = true; e.leashed = false; return true;
+        }
+        if (ut.ammo > 0 && e.ammo <= 0) return false;
+        if (foeHit && att->isAir() && canTarget(e, *att) && e.targetEnt != refOf(*att) && dist(e.pos, att->pos) < 9.0f * TILE) { autoEngage(e, *att); return true; }   // turn on the aircraft shooting at us
+        if (e.order == O_ATTACK || e.order == O_MOVE) return false;
+        if (foeHit && canTarget(e, *att) && distToEntity(postOf(e), *att) < AIR_LEASH * TILE) { autoEngage(e, *att); return true; }
+        // a friend in trouble near our post
+        Vec2 post = postOf(e); float R = (e.zoneR > 0 ? e.zoneR / TILE + 6.0f : AIR_HELP_R) * TILE;
+        Entity* best = nullptr; float bd = 1e18f;
+        forEachNear(post, R, [&](Entity& f) {
+            if (&f == &e || f.kind == EK_RESOURCE || f.owner < 0 || enemies(e.owner, f.owner) || f.lastDamaged <= 0 || time - f.lastDamaged > 1.5f) return;
+            Entity* a = get(f.attacker);
+            if (!a || a->owner < 0 || !enemies(e.owner, a->owner) || a->fall > 0 || !canTarget(e, *a)) return;
+            if (!a->isAir() && ut.jet && aaCover(*a, e.owner) >= 4.0f) return;   // not into a wall of flak
+            float d = dist2(e.pos, a->pos); if (d < bd) { bd = d; best = a; }
+        });
+        if (best) { autoEngage(e, *best); return true; }
+        return false;
+    }
+    bool nearHome = false;   // defending the base: no backing off from a fight it can answer
+    forEachNear(e.pos, 6.0f * TILE, [&](Entity& b) { if (!nearHome && b.isBuilding() && b.owner >= 0 && !enemies(e.owner, b.owner)) nearHome = true; });
+    if (!combat) {   // dozers, haulers and medics standing about: step away from whatever shoots at them
+        if (foeHit && e.order == O_IDLE && time > e.evadeUntil) { retreatFrom(e, att->pos, 4.0f); return true; }
+        return false;
+    }
+    const Weapon& w = WEAPONS[ut.weapon];
+    Vec2 post = postOf(e);
+    float leash = (e.zoneR > 0 ? e.zoneR : 0.0f) + AUTO_LEASH * TILE;
+    if (foeHit) {
+        bool can = canTarget(e, *att);
+        float d = distToEntity(e.pos, *att) / TILE;
+        float odds = can ? fightOdds(e, *att) : 0.0f;
+        if (!can || (odds < 0.5f && e.hp < e.maxHp * 0.75f && !nearHome)) {
+            if (time > e.evadeUntil && !(e.order == O_ATTACK && can && d <= w.range)) { retreatFrom(e, att->pos, 4.5f); return true; }
+        } else if (odds >= 0.8f && d > w.range + 0.15f && e.targetEnt != refOf(*att) && distToEntity(post, *att) < leash) {
+            autoEngage(e, *att); return true;   // shot at from beyond its reach or its zone: go and get the shooter
+        }
+    }
+    if (e.order == O_ATTACK || e.order == O_MOVE) return false;
+    // badly hurt and out of the fight for a moment: over to a medic
+    if (e.hp < e.maxHp * 0.35f && time - e.lastDamaged > 2.0f) {
+        Entity* med = nullptr; float bd = 14.0f * TILE;
+        forEachNear(e.pos, bd, [&](Entity& m) {
+            if (!m.isUnit() || m.ut().role != UR_HEALER || m.owner < 0 || enemies(e.owner, m.owner)) return;
+            float d = dist(m.pos, e.pos); if (d < bd) { bd = d; med = &m; }
+        });
+        if (med && bd > HEAL_RADIUS * TILE * 0.6f) { moveAside(e, med->pos + (e.pos - med->pos).norm() * (TILE * 1.5f), 8.0f); return true; }
+    }
+    // a friend in trouble nearby
+    float R = e.zoneR > 0 ? e.zoneR + 6.0f * TILE : HELP_R * TILE;
+    Entity* best = nullptr; float bd = 1e18f;
+    forEachNear(post, R, [&](Entity& f) {
+        if (&f == &e || f.kind == EK_RESOURCE || f.owner < 0 || enemies(e.owner, f.owner) || f.lastDamaged <= 0 || time - f.lastDamaged > 1.5f) return;
+        Entity* a = get(f.attacker);
+        if (!a || a->owner < 0 || !enemies(e.owner, a->owner) || a->fall > 0 || !canTarget(e, *a)) return;
+        if (distToEntity(post, *a) > R + (w.range + 1.0f) * TILE || inFallout(a->pos)) return;
+        float d = dist2(e.pos, a->pos); if (d < bd) { bd = d; best = a; }
+    });
+    if (best && fightOdds(e, *best) >= 0.6f) { autoEngage(e, *best); return true; }
+    return false;
+}
+
 // ------------------------------------------------------------ unit update
 void Sim::updateUnit(Entity& e) {
     const UnitType& ut = e.ut();
@@ -1373,7 +1675,7 @@ void Sim::updateUnit(Entity& e) {
         float r = std::max(10.0f, e.radius() * 1.6f);
         fx.push_back({FX_RING, e.pos, e.pos, 0, 0.5f, rgb(214, 196, 160), r * 1.6f});
         fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 1.4f, rgb(150, 138, 118), r, Vec2(rng.f(-6, 6), -9)});
-        if (e.dropGo) { e.dropGo = false; e.order = O_ATTACKMOVE; e.postOrder = O_IDLE; e.target = e.dropGoal; requestPath(e, e.dropGoal); }
+        if (e.dropGo) { e.dropGo = false; e.order = ut.weapon >= 0 ? O_ATTACKMOVE : O_MOVE; e.postOrder = O_IDLE; e.target = g_map.nearestFree(e.dropGoal, 6); requestPath(e, e.target); }
         return;
     }
     if (e.cooldown > 0) e.cooldown -= SIM_DT;
@@ -1415,7 +1717,7 @@ void Sim::updateUnit(Entity& e) {
         e.burstTimer -= SIM_DT;
         if (e.burstTimer <= 0) {
             Entity* t = get(e.targetEnt.valid() ? e.targetEnt : e.engaged);
-            if (t && canTarget(e, *t)) fireWeapon(e, *t, WEAPONS[ut.weapon]);
+            if (t && canTarget(e, *t) && distToEntity(e.pos, *t) <= (WEAPONS[ut.weapon].range + (e.isAir() ? 3.0f : 0.6f)) * TILE) fireWeapon(e, *t, WEAPONS[ut.weapon]);
             e.burstLeft--; e.burstTimer = ut.jet ? 0.07f : 0.14f;
         }
     }
@@ -1427,6 +1729,30 @@ void Sim::updateUnit(Entity& e) {
     if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && !g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y)))
         e.pos = g_map.nearestFree(e.pos, 14);
 
+    // jammed: it has somewhere to go but hardly moved in the last second (two units head-on in a one-tile lane between structures,
+    // a soldier standing in a gap): for a couple of seconds it slips past other units instead of shoving against them
+    if (!e.isAir() && (tick + e.gen) % 20 == 0) {
+        bool going = e.pathIdx < e.path.size();
+        if (going && dist(e.pos, e.progPos) < ut.speed * 0.3f) e.squeezeUntil = time + 2.0f;
+        e.progPos = e.pos;
+    }
+    // a unit that ducked out of a nuke's circle picks its work up again once the warhead has landed
+    if (e.order == O_IDLE && e.resumeOrder != O_IDLE && time >= e.evadeUntil) {
+        e.order = e.resumeOrder; e.postOrder = e.resumePost; e.target = e.resumeTarget; e.resumeOrder = O_IDLE; e.autoTask = false;
+        e.path.clear(); e.pathIdx = 0; e.repathTimer = 0; e.actionTimer = 0;
+        if (e.order == O_ATTACKMOVE && !e.isAir()) requestPath(e, e.target);
+    }
+    // left on its own, it looks after itself and its friends twice a second
+    static const bool noAuto = getenv("ONEHOUR_NOAUTO") != nullptr;   // (diagnostics: plain units, as before they looked after themselves)
+    if (!noAuto && (tick + e.gen) % 10 == 0) autonomy(e);   // (a new order is carried out this very tick: an aircraft never skips a beat)
+    const Vec2 before = e.pos;
+    runOrder(e, ut);
+    // a fixed-wing aircraft whose order changed this tick (a target lost, a spot reached, a new order) still flies on: it never hangs in the air
+    if (e.isAir() && fixedWing(ut) && e.alive && e.pos.x == before.x && e.pos.y == before.y && e.airspeed > 0 && e.disabledUntil <= time)
+        airSteer(e, e.angle, std::max(e.airspeed, ut.speed * AIR_STALL));
+}
+
+void Sim::runOrder(Entity& e, const UnitType& ut) {
     switch (e.order) {
     case O_IDLE: {
         if (ut.role == UR_HEALER) {   // drift toward the nearest wounded friendly unit
@@ -1453,22 +1779,35 @@ void Sim::updateUnit(Entity& e) {
         }
         if (ut.weapon < 0) break;
         if (e.isAir()) {
-            // hover home
+            // between sorties a loaded aircraft waits where it was last sent (for a while) or at its airfield's rally point, circling
+            // there (fixed-wing) or hovering (helicopters); otherwise it lands on its pad, where it is rearmed and patched up
             Entity* h = get(e.home);
             if (!h) { h = findAirfield(e); if (h) e.home = refOf(*h); }
-            if (h) {
-                int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
-                Vec2 pad = padSlot(*h, e);
-                if (h->hasRally && e.ammo >= ut.ammo) pad = h->rally + Vec2((slot - 1.5f) * 34, 0);   // loaded aircraft wait at the rally point, empty ones return to the pad
-                Vec2 d = pad - e.pos;
-                flyTo(e, pad, ut.speed * 0.6f);
-                if (ut.jet && d.len() < 14 && pad.y == padSlot(*h, e).y && pad.x == padSlot(*h, e).x) e.angle += angDiff(e.angle, -1.5708f) * 0.2f;   // parked jets face up the runway
-                if (e.ammo < ut.ammo && d.len() < 8) { e.actionTimer += SIM_DT; if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo++; } }
+            bool loaded = ut.ammo <= 0 || e.ammo >= ut.ammo;
+            int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
+            if (!h && e.hp < e.maxHp && (tick + e.gen) % 10 == 0) {   // nowhere to land and hurt: circle over a friendly medic
+                Entity* med = nullptr; float bd = 16.0f * TILE;
+                forEachNear(e.pos, bd, [&](Entity& m) { if (m.isUnit() && m.ut().role == UR_HEALER && m.owner >= 0 && !enemies(e.owner, m.owner)) { float dd = dist(m.pos, e.pos); if (dd < bd) { bd = dd; med = &m; } } });
+                if (med) { e.loiter = med->pos; e.loiterUntil = time + 2.0f; }
             }
-            if (e.ammo > 0) {
+            if (!h && e.loiterUntil <= time) { if (e.loiterUntil < 0) e.loiter = e.pos; e.loiterUntil = time + 2.0f; }   // nowhere to land: circle where it is
+            if (e.loiterUntil > time && (e.ammo > 0 || ut.ammo <= 0 || !h)) airLoiter(e, e.loiter, (!h && e.hp < e.maxHp) ? 0.0f : (2.6f + slot * 0.35f) * TILE, 0.55f);   // (hurt and homeless: the tightest circle, over a medic if there is one)
+            else if (h && h->hasRally && loaded) airLoiter(e, h->rally + (fixedWing(ut) ? Vec2() : Vec2((slot - 1.5f) * 34, 0)), (2.6f + slot * 0.35f) * TILE, 0.55f);
+            else if (h) {
+                Vec2 pad = padSlot(*h, e);
+                float dp = dist(pad, e.pos);
+                flyTo(e, pad, ut.speed * 0.6f);
+                if (fixedWing(ut) && dp < 14) { float tr = baseTurn(ut) * AIR_TURN_MAX * SIM_DT; e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, -1.5708f) * 0.2f, -tr, tr)); }   // parked planes face up the runway
+                if (dp < 8) {
+                    if (dp < 4) e.airspeed = 0;   // down on the pad
+                    if (e.ammo < ut.ammo) { e.actionTimer += SIM_DT; if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo++; } }
+                    if (e.hp < e.maxHp) e.hp = std::min(e.maxHp, e.hp + e.maxHp * AIR_PAD_REPAIR * SIM_DT);
+                }
+            }
+            if (e.ammo > 0 || ut.ammo <= 0) {
                 Entity* t = nullptr;
                 if ((tick + e.gen) % 6 == 0) t = acquireTarget(e, ut.sight);
-                if (t) { e.order = O_ATTACK; e.postOrder = O_IDLE; e.targetEnt = refOf(*t); }
+                if (t) { e.order = O_ATTACK; e.postOrder = O_IDLE; e.targetEnt = refOf(*t); e.autoTask = true; }
             }
             break;
         }
@@ -1481,7 +1820,7 @@ void Sim::updateUnit(Entity& e) {
                 else if (ut.role == UR_COMBAT) {
                     // guard: chase nearby threats a short way, then come back
                     t = acquireTarget(e, ut.sight);
-                    if (t) { e.order = O_ATTACK; e.postOrder = O_GUARDPOS; e.targetEnt = refOf(*t); e.repathTimer = 0; t = nullptr; }
+                    if (t) { e.order = O_ATTACK; e.postOrder = O_GUARDPOS; e.targetEnt = refOf(*t); e.repathTimer = 0; e.autoTask = true; t = nullptr; }
                 }
             }
         }
@@ -1489,6 +1828,7 @@ void Sim::updateUnit(Entity& e) {
         break;
     }
     case O_GUARDPOS: {
+        if (inFallout(e.guardPos) && !inFallout(e.pos)) { e.order = O_IDLE; e.guardPos = e.pos; e.path.clear(); break; }   // its post is poisoned: hold here
         if (!e.isAir() && e.pathIdx >= e.path.size()) requestPath(e, e.guardPos);
         moveAlong(e, ut.speed);
         if (e.pathIdx >= e.path.size() || dist(e.pos, e.guardPos) < 10) { e.order = O_IDLE; e.path.clear(); }
@@ -1502,13 +1842,15 @@ void Sim::updateUnit(Entity& e) {
         if (e.zoneR <= 0) { e.order = O_IDLE; e.guardPos = e.pos; break; }
         const Weapon& w = WEAPONS[ut.weapon];
         if (e.isAir()) {
-            // loiter in a slow circle over the zone, strike whatever enters it
-            float orbR = ut.jet ? std::max(e.zoneR * 0.55f, 4.0f * TILE) : e.zoneR * 0.45f;
-            e.orbit += SIM_DT * ut.speed * (ut.jet ? 0.5f : 0.4f) / std::max(48.0f, orbR);
-            Vec2 wp = e.zone + Vec2(std::cos(e.orbit), std::sin(e.orbit)) * orbR;
-            Vec2 d = wp - e.pos; float l = d.len();
-            if (ut.jet) flyTo(e, wp, ut.speed * 0.8f);
-            else if (l > 2) { e.pos += d.norm() * std::min(l, ut.speed * SIM_DT * (l > 140 ? 1.0f : 0.55f)); e.angle = std::atan2(d.y, d.x); }
+            // patrol the zone in a wide circle (a helicopter flies a slow orbit of waypoints), strike whatever enters it
+            if (fixedWing(ut)) airLoiter(e, e.zone, ut.jet ? std::max(e.zoneR * 0.55f, 4.0f * TILE) : std::max(e.zoneR * 0.45f, 3.0f * TILE), ut.jet ? 0.62f : 0.6f);
+            else {
+                float orbR = e.zoneR * 0.45f;
+                e.orbit += SIM_DT * ut.speed * 0.4f / std::max(48.0f, orbR);
+                Vec2 wp = e.zone + Vec2(std::cos(e.orbit), std::sin(e.orbit)) * orbR;
+                Vec2 d = wp - e.pos; float l = d.len();
+                if (l > 2) { e.pos += d.norm() * std::min(l, ut.speed * SIM_DT * (l > 140 ? 1.0f : 0.55f)); e.angle = std::atan2(d.y, d.x); }
+            }
             if ((tick + e.gen) % 4 == 0) {
                 Entity* t = acquireZoneTarget(e);
                 if (t) { e.order = O_ATTACK; e.postOrder = O_GUARDAREA; e.targetEnt = refOf(*t); e.leashed = true; e.repathTimer = 0; }
@@ -1527,7 +1869,8 @@ void Sim::updateUnit(Entity& e) {
             }
             e.engaged = NOREF;
         }
-        // nothing to shoot: return to the slot
+        // nothing to shoot: return to the slot (unless it just backed off from danger, or the slot lies in radiation)
+        if (time < e.evadeUntil || (inFallout(e.guardPos) && !inFallout(e.pos))) { e.path.clear(); break; }
         if (dist(e.pos, e.guardPos) > 14) {
             if (e.pathIdx >= e.path.size()) requestPath(e, e.guardPos);
             moveAlong(e, ut.speed);
@@ -1544,19 +1887,31 @@ void Sim::updateUnit(Entity& e) {
     }
     case O_MOVE: case O_ATTACKMOVE: {
         if (e.isAir()) {
+            // a fixed-wing craft has arrived once it passes within its own turn circle of the spot; it then waits there (circling)
             Vec2 d = e.target - e.pos;
-            if (d.len() < 6) { e.order = O_IDLE; e.postOrder = O_IDLE; break; }
-            if (ut.jet) flyTo(e, e.target, ut.speed);
+            bool fw = fixedWing(ut);
+            float arrive = fw ? std::max(48.0f, 1.3f * e.airspeed / airTurnRate(e)) : 6.0f;
+            if (d.len() < arrive) {
+                e.order = O_IDLE; e.postOrder = O_IDLE;
+                if (!e.autoTask) { e.loiter = e.target; e.loiterUntil = time + AIR_LOITER_TIME; }
+                e.autoTask = false;
+                break;
+            }
+            if (fw) airSteer(e, std::atan2(d.y, d.x), d.len() < 5 * TILE ? ut.speed * 0.7f : ut.speed);
             else { e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
         } else {
             if (e.path.empty()) requestPath(e, e.target);
             moveAlong(e, ut.speed);
-            if (e.pathIdx >= e.path.size()) { e.order = O_IDLE; e.guardPos = e.pos; e.path.clear(); break; }
+            if (e.pathIdx >= e.path.size()) {
+                if (e.autoTask && e.zoneR > 0 && ut.role == UR_COMBAT && e.resumeOrder == O_IDLE) e.order = O_GUARDAREA;   // backed off: guard the zone from here for now
+                else { e.order = O_IDLE; if (!e.autoTask) e.guardPos = e.pos; }
+                e.autoTask = false; e.path.clear(); break;
+            }
             // stuck detection
             e.stuckTimer += SIM_DT;
             if (e.stuckTimer > 1.5f) {
                 if (dist(e.pos, e.lastPos) < ut.speed * 0.25f) {
-                    if (dist(e.pos, e.target) < TILE * 1.5f) { e.order = O_IDLE; e.guardPos = e.pos; e.path.clear(); break; }
+                    if (dist(e.pos, e.target) < TILE * 1.5f) { e.order = (e.autoTask && e.zoneR > 0 && ut.role == UR_COMBAT && e.resumeOrder == O_IDLE) ? O_GUARDAREA : O_IDLE; if (!e.autoTask) e.guardPos = e.pos; e.autoTask = false; e.path.clear(); break; }
                     requestPath(e, e.target);
                 }
                 e.stuckTimer = 0; e.lastPos = e.pos;
@@ -1576,11 +1931,12 @@ void Sim::updateUnit(Entity& e) {
         Entity* t = get(e.targetEnt);
         if (!t || !canTarget(e, *t)) {
             e.targetEnt = NOREF;
+            if (e.isAir() && e.zoneR <= 0 && (e.ammo > 0 || ut.ammo <= 0) && e.postOrder != O_ATTACKMOVE) { e.loiter = e.pos; e.loiterUntil = std::max(e.loiterUntil, time + 8.0f); }   // look around for more before heading home
             if (e.postOrder == O_ATTACKMOVE) { e.order = O_ATTACKMOVE; requestPath(e, e.target); }
             else if (e.postOrder == O_GUARDPOS) { e.order = O_GUARDPOS; e.path.clear(); }
             else if (e.postOrder == O_GUARDAREA && e.zoneR > 0) { e.order = O_GUARDAREA; e.path.clear(); e.engaged = NOREF; }
-            else { e.order = O_IDLE; e.guardPos = e.pos; }
-            e.postOrder = O_IDLE; e.leashed = false;
+            else { e.order = O_IDLE; if (!e.autoTask || e.isAir()) e.guardPos = e.pos; }
+            e.postOrder = O_IDLE; e.leashed = false; e.autoTask = false;
             break;
         }
         const Weapon& w = WEAPONS[ut.weapon];
@@ -1589,10 +1945,25 @@ void Sim::updateUnit(Entity& e) {
         if (e.leashed && e.zoneR > 0 && d > w.range + 0.15f && distToEntity(e.zone, *t) > e.zoneR + TILE * 1.5f) {
             e.order = O_GUARDAREA; e.targetEnt = NOREF; e.path.clear(); e.postOrder = O_IDLE; e.leashed = false; break;
         }
+        // a fight it picked itself does not drag it far from its post (aircraft: from where they patrol or wait)
+        if (e.autoTask && d > w.range + 0.15f) {
+            Vec2 post = postOf(e);
+            float far = e.isAir() ? (e.zoneR + AIR_LEASH * TILE) : (e.zoneR + AUTO_LEASH * TILE);
+            if (distToEntity(post, *t) > far + (e.isAir() ? 0.0f : w.range * TILE) || (!e.isAir() && dist(e.pos, post) > far)) {
+                e.targetEnt = NOREF; e.autoTask = false; e.leashed = false; e.path.clear();
+                if (e.zoneR > 0) e.order = O_GUARDAREA;
+                else if (e.isAir() || e.postOrder != O_GUARDPOS) e.order = O_IDLE;
+                else e.order = O_GUARDPOS;
+                e.postOrder = O_IDLE;
+                break;
+            }
+        }
         if (e.isAir()) {
             if (e.ammo <= 0 && ut.ammo > 0) { e.order = O_REARM; break; }
+            if (e.autoTask && e.loiterUntil > time) e.loiterUntil = std::max(e.loiterUntil, time + 4.0f);   // a fight picked up while waiting somewhere keeps it there
             if (ut.jet) { jetAttack(e, *t); break; }
             if (ut.bomber && !t->isAir()) { bomberAttack(e, *t); break; }
+            if (fixedWing(ut)) { airDogfight(e, *t); break; }
             Vec2 dv = t->pos - e.pos;
             if (d > w.range - 0.4f) { e.pos += dv.norm() * std::min(dv.len(), ut.speed * SIM_DT); e.angle = std::atan2(dv.y, dv.x); }
             else { e.angle = std::atan2(dv.y, dv.x); tryFire(e, *t); }
@@ -1728,10 +2099,13 @@ void Sim::updateUnit(Entity& e) {
         Vec2 d = pad - e.pos;
         if (d.len() > 4) flyTo(e, pad, ut.speed);
         else {
-            if (ut.jet) e.angle += angDiff(e.angle, -1.5708f) * 0.25f;
+            e.airspeed = 0;   // down on the pad
+            if (fixedWing(ut)) { float tr = baseTurn(ut) * AIR_TURN_MAX * SIM_DT; e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, -1.5708f) * 0.25f, -tr, tr)); }
             e.actionTimer += SIM_DT;
             if (e.actionTimer >= REARM_TIME) { e.actionTimer = 0; e.ammo = std::min(ut.ammo, e.ammo + 1); }
-            if (e.ammo >= ut.ammo) {
+            if (e.hp < e.maxHp) e.hp = std::min(e.maxHp, e.hp + e.maxHp * AIR_PAD_REPAIR * SIM_DT);
+            if (e.ammo >= ut.ammo && (e.hp >= e.maxHp * 0.6f || !e.autoTask)) {   // (back for repairs on its own: it waits to be patched up)
+                e.autoTask = false;
                 Entity* t = get(e.targetEnt);
                 if (t && canTarget(e, *t)) e.order = O_ATTACK;
                 else if (e.zoneR > 0) { e.order = O_GUARDAREA; e.targetEnt = NOREF; e.postOrder = O_IDLE; e.leashed = false; }
@@ -1798,7 +2172,12 @@ void Sim::updateBuilding(Entity& b) {
         const Weapon& w = WEAPONS[bt.weapon];
         if (!t || !canTarget(b, *t) || distToEntity(b.pos, *t) > (w.range + 0.2f) * TILE) {
             t = nullptr; b.engaged = NOREF;
-            if ((tick + b.gen) % 3 == 0) { t = acquireTarget(b, w.range); if (t) b.engaged = refOf(*t); }
+            if ((tick + b.gen) % 3 == 0) {
+                Entity* f = get(b.forceTarget);   // a friendly target the human turned this turret on: taken up again whenever it is in reach
+                if (f && canTarget(b, *f) && distToEntity(b.pos, *f) <= w.range * TILE && distToEntity(b.pos, *f) >= w.minRange * TILE) t = f;
+                else t = acquireTarget(b, w.range);
+                if (t) b.engaged = refOf(*t);
+            }
         }
         if (t) tryFire(b, *t);
         // burst continuation for structures
@@ -1867,6 +2246,7 @@ void Sim::separateUnits() {
                 if (j == i) continue;
                 Entity& b = ents[j];
                 if (!b.alive || !b.isUnit() || b.isAir() != air || b.fall > 0) continue;
+                if (!air && (a.squeezeUntil > time || b.squeezeUntil > time)) continue;   // a jammed unit slips past
                 float rr = ra + b.radius();
                 Vec2 d = a.pos - b.pos;
                 float l2 = d.len2();
@@ -1876,6 +2256,10 @@ void Sim::separateUnits() {
                 float wgt = ((b.order == O_IDLE || b.order == O_GUARDAREA) && a.order != O_IDLE && a.order != O_GUARDAREA) ? 0.4f : 0.8f;  // movers push idlers aside
                 push += d * (overlap * wgt * 9.0f / l);
             }
+        }
+        if (air && !a.ut().heli) {   // planes in the air only drift apart sideways: the push never slows or stops a fixed-wing craft
+            Vec2 n(-std::sin(a.angle), std::cos(a.angle));
+            push = n * (push.x * n.x + push.y * n.y);
         }
         if (push.len2() > 0.01f) {
             Vec2 np = a.pos + push * SIM_DT * 14.0f;

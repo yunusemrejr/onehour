@@ -3,7 +3,7 @@
 
 Game g_game;
 
-enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP };
+enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE };
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -17,6 +17,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_ATTACKMOVE: return "A";
     case BK_STOP: return "S";
     case BK_AREA: return "G";
+    case BK_FORCE: return "F";
     }
     return nullptr;
 }
@@ -73,7 +74,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; powerMode = false; nukeMode = false; dropMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -251,7 +252,7 @@ Entity* Game::selectedBuilding() const {
 int Game::selectionOwner() const { return g_sim.humanPlayer; }
 
 // Ctrl held = "force fire": the click may target your own or an ally's units and structures (and powers/nukes hit friendly ground too).
-static bool forceFireKey() { return (SDL_GetModState() & KMOD_CTRL) != 0; }
+static bool forceFireKey() { return (SDL_GetModState() & KMOD_CTRL) != 0 || (g_game.forceLatch && (g_game.nukeMode || g_game.powerMode)); }   // (the F toggle only counts while aiming a nuke or strike)
 
 void Game::issueRightClick(Vec2 w) {
     if (selection.empty()) return;
@@ -262,8 +263,12 @@ void Game::issueRightClick(Vec2 w) {
         if (!sel.empty()) { g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); }
         return;
     }
-    if (t && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE) {
-        if (g_sim.enemies(g_sim.humanPlayer, t->owner)) { g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); }
+    if (t && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE && g_sim.enemies(g_sim.humanPlayer, t->owner)) {
+        g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+        return;
+    }
+    if (t && t->owner >= 0 && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE && !selectedBuilding()) {   // an ally: go to it (Ctrl or Force Fire to attack it)
+        g_sim.cmdMove(selection, t->pos, false); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
     if (t && t->kind == EK_RESOURCE && selectionHasRole(UR_HARVESTER)) { g_sim.cmdHarvest(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
@@ -272,6 +277,18 @@ void Game::issueRightClick(Vec2 w) {
     if (b) { g_sim.cmdSetRally(g_sim.refOf(*b), w); g_audio.play(SND_CLICK, Vec2(), true); return; }
     g_sim.cmdMove(selection, w, false);
     g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+}
+
+// Force Fire button: attack whatever unit or structure is under the click on purpose, your own and your allies' included
+bool Game::issueForceFire(Vec2 w) {
+    Entity* t = pickEntity(w, false);
+    if (!t || t->kind == EK_RESOURCE || t->owner < 0) return false;
+    std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
+    for (auto r : selection) if (r != tr) sel.push_back(r);
+    if (sel.empty()) return false;
+    g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner));
+    g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+    return true;
 }
 
 void Game::issueAttackMove(Vec2 w) {
@@ -356,6 +373,7 @@ void Game::buildButtons() {
     for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; }
     bool haul = selectionHasRole(UR_HARVESTER);
     if (combat) add(BK_ATTACKMOVE, 0, true, "Attack Move", "Attack-move: engage everything on the way  [A]");
+    if (combat) add(BK_FORCE, 0, true, "Force Fire", "Force fire: click any unit or structure, your own or an ally's included, to attack it on purpose (or hold Ctrl and right-click). Allies never shoot back  [F]");
     if (combat || haul) add(BK_AREA, 0, true, combat && haul ? "Guard/Gather" : (haul ? "Gather Area" : "Guard Area"),
                             haul && !combat ? "Gather Area: haulers search a circle you pick for supplies and collect them  [G]"
                                             : "Guard Area: pick a circle (click, or drag to size it); units protect it, aircraft patrol it  [G]");
@@ -363,7 +381,7 @@ void Game::buildButtons() {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; powerMode = false; nukeMode = false; dropMode = false; rallyMode = false; areaMode = false; areaDrag = false;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; rallyMode = false; areaMode = false; areaDrag = false;
 }
 
 void Game::clickButton(const Button& b) {
@@ -390,7 +408,8 @@ void Game::cmdSelection(int kind, int id) {
     case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
-    case BK_ATTACKMOVE: attackMoveMode = true; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_ATTACKMOVE: attackMoveMode = true; forceMode = false; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_FORCE: cancelModes(); forceMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_AREA: areaMode = true; areaDrag = false; placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_STOP: g_sim.cmdStop(selection); g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_CANCEL: placingType = -1; break;
@@ -408,8 +427,9 @@ void Game::hotkey(SDL_Keycode k, u16 mod) {
         return;
     }
     // command hotkeys matched against the current button set
-    buildButtons();
     char c = (char)toupper((int)k);
+    if ((nukeMode || powerMode) && c == 'F') { forceLatch = !forceLatch; g_audio.play(SND_CLICK, Vec2(), true); addMessage(forceLatch ? "Friendly fire ON: the blast hits your own and allied units too" : "Friendly fire off", rgb(255, 150, 110)); return; }
+    buildButtons();
     for (auto& b : buttons) {
         const char* hk = kindHotkey(b.kind, b.id);
         if (hk && hk[0] == c) { clickButton(b); return; }
@@ -534,7 +554,7 @@ void Game::gameEvent(const SDL_Event& e) {
         SDL_Keycode k = e.key.keysym.sym;
         u16 mod = e.key.keysym.mod;
         if (k == SDLK_ESCAPE) {
-            if (placingType >= 0 || attackMoveMode || powerMode || nukeMode || dropMode || rallyMode || areaMode) cancelModes();
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || rallyMode || areaMode) cancelModes();
             else if (showHelp) showHelp = false;
             else openPauseMenu();
             return;
@@ -576,8 +596,8 @@ void Game::gameEvent(const SDL_Event& e) {
                 Vec2 wp((mouseX - MINIMAP_X) * (float)WORLD_W / MINIMAP_SIZE, (mouseY - MINIMAP_Y) * (float)WORLD_H / MINIMAP_SIZE);
                 if (areaMode) applyArea(wp, AREA_DEFAULT_R);
                 else if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
-                else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) powerMode = false; }
-                else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp, forceFireKey())) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
+                else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) { powerMode = false; forceLatch = false; } }
+                else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp, forceFireKey())) { nukeMode = false; forceLatch = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
                 else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else cam = Vec2(clampf(wp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(wp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 return;
@@ -604,17 +624,18 @@ void Game::gameEvent(const SDL_Event& e) {
                 else g_audio.play(SND_CANT, Vec2(), true);
                 return;
             }
-            if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) powerMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
-            if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w, forceFireKey())) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
+            if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) { powerMode = false; forceLatch = false; } else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w, forceFireKey())) { nukeMode = false; forceLatch = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; forceLatch = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
             if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (attackMoveMode) { issueAttackMove(w); attackMoveMode = false; return; }
+            if (forceMode) { if (issueForceFire(w)) forceMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (rallyMode) { Entity* b = selectedBuilding(); if (b) g_sim.cmdSetRally(g_sim.refOf(*b), w); rallyMode = false; return; }
             if (areaMode) { areaDrag = true; areaStart = w; areaRadius = 0; return; }
             dragging = true; dragStart = w; dragNow = w;
             return;
         }
         if (btn == SDL_BUTTON_RIGHT) {
-            if (placingType >= 0 || attackMoveMode || powerMode || nukeMode || dropMode || rallyMode || areaMode) { cancelModes(); return; }
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || rallyMode || areaMode) { cancelModes(); return; }
             issueRightClick(w);
             return;
         }
@@ -1253,9 +1274,16 @@ void Game::renderWorld() {
     // cursor hints
     if (areaMode) {}
     else if (attackMoveMode) g.text(mouseX + 12, mouseY - 4, "ATTACK", rgb(255, 90, 80));
+    else if (forceMode) {
+        Entity* h = mouseY < VIEW_H ? pickEntity(screenToWorld(mouseX, mouseY), false) : nullptr;
+        char buf[96];
+        if (h && h->kind != EK_RESOURCE && h->owner >= 0) snprintf(buf, sizeof buf, "FORCE FIRE: %s%s", h->isUnit() ? h->ut().name : h->bt().name, h->owner == g_sim.humanPlayer ? " (yours)" : g_sim.enemies(g_sim.humanPlayer, h->owner) ? "" : " (ally)");
+        else snprintf(buf, sizeof buf, "FORCE FIRE: pick a unit or structure");
+        g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 120, 90));
+    }
     else if (nukeMode) g.text(mouseX + 12, mouseY - 4, forceFireKey() ? "NUKE (FRIENDLY FIRE)" : "NUKE", rgb(255, 100, 70));
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
-    else if (powerMode) g.text(mouseX + 12, mouseY - 4, POWERS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
+    else if (powerMode) { char buf[96]; snprintf(buf, sizeof buf, "%s%s", POWERS[g_sim.players[g_sim.humanPlayer].faction].name, forceFireKey() ? " (FRIENDLY FIRE)" : ""); g.text(mouseX + 12, mouseY - 4, buf, forceFireKey() ? rgb(255, 120, 90) : hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
     else if (rallyMode) g.text(mouseX + 12, mouseY - 4, "RALLY", rgb(120, 255, 120));
     else if (mouseY < VIEW_H) {
         Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
@@ -1449,7 +1477,7 @@ void Game::renderHud() {
         }
     } else {
         g.text(INFO_X + 10, hy + 14, "No selection", hudDim(), 2);
-        g.text(INFO_X + 10, hy + 40, "Left-click / drag: select    Right-click: move, attack, gather, repair   Ctrl+right-click: force fire on own / allies", hudDim());
+        g.text(INFO_X + 10, hy + 40, "Left-click / drag: select    Right-click: move, attack, gather, repair   F / Ctrl+right-click: force fire on own / allies", hudDim());
         g.text(INFO_X + 10, hy + 52, "A: attack-move   S: stop   Tab: select army on screen   Ctrl+#: group", hudDim());
         g.text(INFO_X + 10, hy + 64, "Arrows/edge/middle-drag/wheel: scroll   Home: base   Space: pause   +/-: speed", hudDim());
         g.text(INFO_X + 10, hy + 76, "Select a Dozer to build structures; select a structure to train units", hudDim());
@@ -1493,8 +1521,8 @@ void Game::renderHud() {
     }
     if (showHelp) {
         int hx = SCREEN_W / 2 - 312, hy0 = std::max(30, VIEW_H / 2 - 170);
-        g.fill(hx, hy0, 624, 300, rgb(8, 10, 14, 235));
-        g.box(hx, hy0, 624, 300, accent);
+        g.fill(hx, hy0, 624, 316, rgb(8, 10, 14, 235));
+        g.box(hx, hy0, 624, 316, accent);
         g.text(hx + 16, hy0 + 12, "ONE HOUR - controls", rgb(255, 255, 255), 2);
         const char* lines[] = {
             "Left click / drag box      select units (double-click: all of that type on screen)",
@@ -1506,7 +1534,8 @@ void Game::renderHud() {
             "Arrows, screen edge, middle-drag, wheel: scroll     Home: your base",
             "Dozer selected             build menu; click the ground to place, Shift for several",
             "Structure selected         train units; right-click ground for rally; Del sells",
-            "Ctrl + right-click / A     force fire on your own or an ally's unit or structure (Ctrl+click a power/nuke target hits friendly ground too)",
+            "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
+            "F or Ctrl while aiming     a nuke or strike power hits friendly ground too",
             "Tech structure            X strike, V map scan (30s), R Advanced Program: unlocks elite units",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",
             "",

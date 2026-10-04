@@ -224,7 +224,8 @@ void AiPlayer::dodgeNukes() {
     if (pl.difficulty < 1 || (S.tick & 3) != (u32)(player & 3)) return;
     float notice = pl.difficulty >= 3 ? 0.5f : (pl.difficulty == 2 ? 2.0f : 4.5f);   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
     for (auto& n : S.nukes) {
-        if (!S.enemies(player, n.owner) || n.t < notice || n.t > Sim::NUKE_FLIGHT - 0.5f) continue;
+        bool hurts = S.enemies(player, n.owner) || (n.force && n.owner != player);   // (a human ally's friendly-fire nuke: get out of the way, never hit back)
+        if (!hurts || n.t < notice || n.t > Sim::NUKE_FLIGHT - 0.5f) continue;
         float safe = (NUKE_RADIUS + 2.0f) * TILE;
         for (auto& e : S.ents) {
             if (!e.alive || e.owner != player || !e.isUnit()) continue;

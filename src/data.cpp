@@ -57,7 +57,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Brute Tank",     "T", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 900, 74,  900,  12, 7, 14, 12, 0, BR_FACTORY,  -1,         "Diesel main battle tank, 120mm cannon" },
     { "Gatling Tank",   "A", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 580, 80,  800,  11, 7, 12, 13, 0, BR_FACTORY,  -1,         "Gatling gun, anti-infantry and anti-air" },
     { "Rocket Launcher","M", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 450, 60,  1100, 16, 8, 13, 14, 0, BR_FACTORY,  B_K_TECH,   "Long range rocket artillery" },
-    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   560, 300, 850,  12, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber: drops sticks of heavy bombs on ground targets (16 a sortie), rockets for aircraft", 0, 0, 1 },
+    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   560, 300, 850,  12, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber helicopter: drops sticks of heavy bombs on ground targets (16 a sortie), rockets for aircraft", 0, 0, 1, 0, 1 },
     { "Grenadier",      "B", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   170, 48,  700,  12, 7, 6,  21, 0, BR_BARRACKS, B_K_TECH,   "Elite lobber, splash grenades crack infantry and bunkers", 1 },
     { "Behemoth",       "N", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 2000, 52, 2300, 26, 8, 17, 22, 0, BR_FACTORY,  B_K_TECH,   "Super-heavy tank, twin 150mm shells with splash", 1 },
     { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   1550, 540, 2400, 24, 11, 12, 24, 10, BR_AIRFIELD, B_K_TECH,  "Powerful supersonic fighter-bomber: homing Sidewinders, 10 strafing passes, tough, kills aircraft and ground targets alike", 0, 1 },

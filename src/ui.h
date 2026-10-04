@@ -37,6 +37,8 @@ struct Game {
     bool midDrag = false; Vec2 midStart;
     int placingType = -1;           // build type being placed
     bool attackMoveMode = false;
+    bool forceMode = false;         // Force Fire button: the next click attacks whatever is under it, your own or an ally's units and structures included
+    bool forceLatch = false;        // F while aiming a nuke or strike power: the blast hits friendly ground too (same as holding Ctrl)
     bool powerMode = false;
     bool nukeMode = false;          // picking a nuke target
     bool dropMode = false;          // picking a paradrop zone
@@ -107,6 +109,7 @@ private:
     void selectBox(Vec2 a, Vec2 b, bool add);
     void selectSameType(Entity* e);
     void issueAttackMove(Vec2 world);
+    bool issueForceFire(Vec2 world);   // Force Fire button: attack the unit or structure under the click on purpose (friends included)
     void cleanSelection();
     struct Button { int x, y, w, h; int kind; int id; bool enabled; const char* label; std::string tip; };
     std::vector<Button> buttons;
