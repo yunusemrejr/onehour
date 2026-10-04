@@ -72,7 +72,7 @@ const BuildType BUILDS[B_COUNT] = {
     { "Barracks",        "B", F_CYBER, BR_BARRACKS, 1800, 500,  12, 3, 2, -1, 7,  -1, -1,        "Trains infantry" },
     { "Assembly Plant",  "F", F_CYBER, BR_FACTORY,  2800, 2000, 25, 4, 3, -3, 7,  -1, B_C_POWER, "Builds vehicles" },
     { "Drone Pad",       "A", F_CYBER, BR_AIRFIELD, 3400, 1000, 20, 5, 3, -2, 8,  -1, B_C_FACTORY,"Builds and rearms Wraith Drones" },
-    { "Data Center",     "E", F_CYBER, BR_TECH,     2000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank; EMP Strike, Orbital Scan, Overclock" },
+    { "Data Center",     "E", F_CYBER, BR_TECH,     2000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank; EMP Strike, Orbital Scan, Airlift Drop, Overclock" },
     { "Laser Turret",    "L", F_CYBER, BR_TURRET,   1300, 1000, 14, 1, 1, -3, 8,  7,  B_C_POWER, "Heavy ground defense laser, needs power" },
     { "Patriot Battery", "T", F_CYBER, BR_AATURRET, 1700, 1200, 16, 2, 2, -3, 9,  8,  B_C_POWER, "Heavy missile defense, brutal against air, good on ground" },
     { "Bitcoin Datacenter","M", F_CYBER, BR_INCOME,  1600, 1600, 22, 3, 2, -5, 7, -1, B_C_POWER, "Mines $450 every 5s (max 4), half rate on low power" },
@@ -84,7 +84,7 @@ const BuildType BUILDS[B_COUNT] = {
     { "Barracks",        "B", F_CLANKER, BR_BARRACKS, 2000, 500,  12, 3, 2, -1, 7,  -1, -1,        "Trains infantry" },
     { "War Factory",     "F", F_CLANKER, BR_FACTORY,  3000, 2000, 25, 4, 3, -3, 7,  -1, B_K_POWER, "Builds vehicles" },
     { "Airstrip",        "A", F_CLANKER, BR_AIRFIELD, 3600, 1000, 20, 5, 3, -2, 8,  -1, B_K_FACTORY,"Builds and rearms Vulture Gunships" },
-    { "Arms Lab",        "E", F_CLANKER, BR_TECH,     2200, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher; Shell Storm, Recon Flight, Ordnance" },
+    { "Arms Lab",        "E", F_CLANKER, BR_TECH,     2200, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher; Shell Storm, Recon Flight, Paradrop, Ordnance" },
     { "Gun Nest",        "N", F_CLANKER, BR_TURRET,   1600, 900,  14, 1, 1, -1, 8,  16, -1,        "Machine gun bunker, ground and light air" },
     { "Rocket Battery",  "T", F_CLANKER, BR_AATURRET, 1400, 1200, 16, 2, 2, -3, 9,  17, B_K_POWER, "Rocket defense, ground and air" },
     { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
@@ -102,6 +102,23 @@ const ScanType SCANS[F_COUNT] = {
 const ProgramType PROGRAMS[F_COUNT] = {
     { "Overclock Program", "Unlocks Ion Lancer and Aegis Titan", 2500, 45.0f },
     { "Heavy Ordnance",    "Unlocks Grenadier and Behemoth",     2500, 45.0f },
+};
+
+const DropType DROPS[F_COUNT] = {
+    { "Airlift Drop", "A stealth cargo plane drops 15 troopers, 7 vehicles and 4 aircraft on parachutes anywhere you choose (5 min cooldown)", 300.0f, 4.5f },
+    { "Paradrop",     "A cargo plane drops 15 infantry, 7 vehicles and 4 aircraft on parachutes anywhere you choose (5 min cooldown)",          300.0f, 4.5f },
+};
+const int DROP_INF_TYPES[F_COUNT][DROP_INF] = {
+    { U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF3, U_C_INF3, U_C_INF3 },
+    { U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF3, U_K_INF3, U_K_INF3 },
+};
+const int DROP_VEH_TYPES[F_COUNT][DROP_VEH] = {
+    { U_C_TANK, U_C_TANK, U_C_TANK, U_C_VOLT, U_C_VOLT, U_C_RAIL, U_C_MEDIC },
+    { U_K_TANK, U_K_TANK, U_K_TANK, U_K_GATLING, U_K_GATLING, U_K_MLRS, U_K_MEDIC },
+};
+const int DROP_AIR_TYPES[F_COUNT][DROP_AIR] = {
+    { U_C_AIR, U_C_AIR, U_C_JET, U_C_JET },
+    { U_K_AIR, U_K_AIR, U_K_JET, U_K_JET },
 };
 
 int firstUnitOf(Faction f) { return f == F_CYBER ? U_C_DOZER : U_K_DOZER; }

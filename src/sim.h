@@ -59,6 +59,10 @@ struct Entity {
     float burstTimer = 0;
     int bombsLeft = 0;      // bombers: bombs still to drop from the stick being released
     float bombTimer = 0;
+    float fall = 0;         // paradrop: seconds of parachute descent left (the unit glides from dropFrom to dropTo, cannot act and cannot be hit)
+    float fallTime = 1;
+    Vec2 dropFrom, dropTo;
+    Vec2 dropGoal; bool dropGo = false;   // attack-move here once landed
     // building
     int tx = 0, ty = 0;     // top-left tile
     bool constructed = true;
@@ -112,6 +116,7 @@ struct Player {
     int powerMade = 0, powerUsed = 0;
     float powerReady = 0;       // sim time when the strike power is available
     float scanReady = 0;        // sim time when the map scan is available
+    float dropReady = 0;        // sim time when the paradrop is available
     float revealUntil = -1;     // the whole map is visible until this sim time
     bool advTech = false;       // Advanced Program researched: special units unlocked
     bool researching = false;
@@ -152,6 +157,22 @@ struct Sim {
     struct Nuke { Vec2 from, pos; int owner; float t; };
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
+    // paradrop: a cargo plane crosses the map over the target and releases its load on parachutes (it can be shot down by anti-air)
+    struct Airlift {
+        Vec2 pos, prevPos, dir, target;
+        int owner = -1;
+        float hp = 0, maxHp = 0;
+        float t = 0;
+        std::vector<int> load;      // unit types in release order
+        size_t next = 0;            // next unit to release
+        float releaseAt = 0;        // distance along the track from the target at which the next unit leaves the plane
+        bool attackOn = false;      // landed troops attack-move to the target (computer players)
+        std::vector<Vec2> spots;    // landing spots already taken
+        float lastHit = -100;
+    };
+    std::vector<Airlift> airlifts;
+    static constexpr float AIRLIFT_SPEED = 270.0f;
+    static constexpr float AIRLIFT_HP = 1100.0f;
     static constexpr float FALLOUT_LIFE = 80.0f;
     struct Fallout { Vec2 pos; float r; float t; float tick; };
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
@@ -192,6 +213,7 @@ struct Sim {
     void cmdSell(Ref building);
     bool cmdPower(int player, Vec2 pos);
     bool cmdNuke(int player, Vec2 pos);       // fires one ready Nuke Ramp at pos
+    bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
     bool atIncomeLimit(int player, int buildType) const;
@@ -236,6 +258,9 @@ private:
     void updateFx();
     void updateStorms();
     void updateNukes();
+    void updateAirlifts();
+    void releaseUnit(Airlift& a);
+    Vec2 landingSpot(Airlift& a, float spacing);
     void updateFallout();
     void updateResearch();
     void separateUnits();

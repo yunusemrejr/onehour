@@ -24,7 +24,7 @@ column, Enter starts.
 
 **Cyber Army** — electric and optical. Pulse rifles, laser troopers, shock troopers, Photon Tanks,
 Volt Walkers (arc lightning, anti-infantry/anti-air), Railgun Tanks (long range, pierces a line),
-Wraith Drones, Laser Turrets and Patriot Batteries. Tech structure: Data Center (EMP Strike, Orbital Scan,
+Wraith Drones, Laser Turrets and Patriot Batteries. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop,
 Overclock Program → Ion Lancer sniper and Aegis Titan super-heavy walker).
 
 **Clanker Army** — diesel and gunpowder. Riflemen, RPG troopers, heavy gunners, Brute Tanks,
@@ -37,11 +37,22 @@ Tech structure: Arms Lab (Shell Storm, Recon Flight, Heavy Ordnance → Grenadie
 | --- | --- | --- |
 | Strike (EMP Strike / Shell Storm) | X | call a strike on a circle of your choice (3 min cooldown); also on the Command Core/Post |
 | Scan (Orbital Scan / Recon Flight) | V | the whole map and every enemy on it is visible for 30 s (3.5 min cooldown) |
+| Paradrop (Airlift Drop / Paradrop) | P | a cargo plane drops a free force on parachutes wherever you click (5 min cooldown, see below) |
 | Advanced Program | R | $2500, 45 s (half speed on low power): unlocks the army's two elite units for good |
 
 Team colours: every unit type has its own tone (graphite, cobalt, ceramic and teal for Cyber; olive, sand, brick and iron for
 Clanker), a small jewel-like dot in the owner's colour marks each unit, and every finished structure flies its owner's own flag
 (rectangle+chevron, swallowtail+roundel, pennant, burgee+cross) from a mast on the roof.
+
+**Paradrop** — select the Data Center / Arms Lab and press `P` (or click the button), then click the map or minimap. A cargo plane flies in from the map
+edge along the line from your base through the drop zone and, as it crosses the circle, releases **15 infantry, 7 vehicles and 4 aircraft** (Cyber: 7 Troopers,
+5 Laser Troopers, 3 Shock Troopers, 3 Photon Tanks, 2 Volt Walkers, a Railgun Tank, a Medic Rig, 2 Wraith Drones and 2 Specter Jets; Clanker: the matching
+Riflemen, RPG Troopers, Gunners, Brute Tanks, Gatling Tanks, Rocket Launcher, Field Medic, Vulture Gunships and Talon Jets). The soldiers and vehicles hang
+under parachutes for a few seconds (they cannot be hit or act until they land) and the aircraft take up guard over the zone. The load is free, the power
+recharges for **5 minutes** (first available at 2:30), and it needs a standing tech structure. The plane is not invulnerable: every anti-air gun that
+reaches it on its way in shoots at it (1100 hp, a few Patriot Batteries bring it down) and a plane lost before the drop takes its whole load with it.
+The enemy is told when an airlift is on its way, and the drop circle is public. The computer commander uses it to reinforce a base under attack
+and to land on the objective of a wave, avoiding targets with a lot of anti-air. `--droptest` covers the call, the load, the parachute descent and the shoot-down.
 
 **Bombers** — the Wraith Drone and the Vulture Gunship are bombers. Against anything on the ground they fly real bombing runs: they line up on the
 target (leading a moving one), release a stick of four heavy bombs a few tens of pixels apart along the flight line, fly straight on for a second and
@@ -143,7 +154,7 @@ Beyond the learned parts the commander plays tactically:
   headless; `--train N` self-plays N games to train the AI brain, `--eval N` pits the learned AI against the plain heuristic AI;
   `--soundcheck` prints statistics for the synthesized sounds; `--hqtest` rebuilds a lost Command Core (human dozer and AI), `--jettest` flies
   the jets (speed, banking, strafing, rearming), `--econtest` and `--areatest` cover income structures, nukes and area orders, and `--bench [N]`
-  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
+  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
 **Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura

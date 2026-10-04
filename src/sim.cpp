@@ -10,7 +10,7 @@ static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
-    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); fallouts.clear();
+    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); fallouts.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -37,7 +37,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
         spawnUnit(firstUnitOf(pl.faction) + 0, p, g_map.nearestFree(dz));
     }
     for (auto& s : g_map.supplies) spawnResource(s.tx, s.ty, s.amount);
-    for (int p = 0; p < numPlayers; p++) { players[p].powerReady = 120.0f; players[p].scanReady = 90.0f; } // powers unlock a couple of minutes in (and need the tech structure)
+    for (int p = 0; p < numPlayers; p++) { players[p].powerReady = 120.0f; players[p].scanReady = 90.0f; players[p].dropReady = 150.0f; } // powers unlock a couple of minutes in (and need the tech structure)
     rebuildGrid();
     updateVision();
     updatePower();
@@ -532,6 +532,131 @@ bool Sim::cmdNuke(int player, Vec2 pos) {
     return true;
 }
 
+// ------------------------------------------------------------ paradrop
+// A cargo plane crosses the map along the line from the owner's base through the target and releases its load while it flies over:
+// infantry and vehicles hang under parachutes for a few seconds (they cannot be hit or act until they land), the aircraft simply
+// leave the cargo bay and take up guard over the zone. Anti-air that covers the plane's track can shoot it down, and the load with it.
+bool Sim::cmdParadrop(int player, Vec2 pos, bool attackOn) {
+    if (player < 0 || player >= numPlayers) return false;
+    Player& pl = players[player];
+    if (!pl.alive || time < pl.dropReady || !hasRole(player, BR_TECH)) return false;
+    const DropType& dt = DROPS[pl.faction];
+    pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
+    pl.dropReady = time + dt.cooldown;
+    Airlift a;
+    a.owner = player; a.target = pos; a.attackOn = attackOn;
+    a.hp = a.maxHp = AIRLIFT_HP;
+    Vec2 d = pos - pl.basePos;
+    Vec2 dir = d.len() > 6.0f * TILE ? d.norm() : (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - pos).norm();
+    if (dir.len2() < 0.5f) dir = Vec2(1, 0);
+    a.dir = dir;
+    // the plane comes in from beyond the map edge, at least a few hundred pixels before the target
+    float s = 1e9f;
+    if (dir.x > 1e-4f) s = std::min(s, (pos.x + 160.0f) / dir.x); else if (dir.x < -1e-4f) s = std::min(s, (pos.x - WORLD_W - 160.0f) / dir.x);
+    if (dir.y > 1e-4f) s = std::min(s, (pos.y + 160.0f) / dir.y); else if (dir.y < -1e-4f) s = std::min(s, (pos.y - WORLD_H - 160.0f) / dir.y);
+    s = clampf(s, 560.0f, 3200.0f);
+    a.pos = a.prevPos = pos - dir * s;
+    // release order: vehicles spread through the infantry, the aircraft leave last
+    int vi = 0, ii = 0;
+    for (int k = 0; k < DROP_INF + DROP_VEH; k++) {
+        if ((k % 3 == 0 && vi < DROP_VEH) || ii >= DROP_INF) a.load.push_back(DROP_VEH_TYPES[pl.faction][vi++]);
+        else a.load.push_back(DROP_INF_TYPES[pl.faction][ii++]);
+    }
+    for (int k = 0; k < DROP_AIR; k++) a.load.push_back(DROP_AIR_TYPES[pl.faction][k]);
+    float span = 0;
+    for (int t : a.load) span += (UNITS[t].kind == UK_AIR ? 0.12f : (UNITS[t].kind == UK_VEH ? 0.09f : 0.045f)) * AIRLIFT_SPEED;
+    a.releaseAt = -span * 0.5f;   // the stick is centred on the target
+    airlifts.push_back(a);
+    emit(EV_SOUND, player, SND_AIR, a.pos);
+    emit(EV_MSG, player, SND_NONE, pos, (std::string(dt.name) + " inbound").c_str());
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY AIRLIFT DETECTED");
+    return true;
+}
+
+Vec2 Sim::landingSpot(Airlift& a, float spacing) {
+    float R = DROPS[players[a.owner].faction].radius * TILE;
+    Vec2 fallback; bool have = false;
+    for (int k = 0; k < 32; k++) {
+        float ang = rng.f(0, 6.2832f), r = R * std::sqrt(rng.f());
+        Vec2 p = a.target + Vec2(std::cos(ang), std::sin(ang)) * r;
+        if (!g_map.passable(tileOf(p.x), tileOf(p.y))) continue;
+        if (!have) { fallback = p; have = true; }
+        bool ok = true;
+        for (auto& q : a.spots) if (dist(p, q) < spacing) { ok = false; break; }
+        if (ok) { a.spots.push_back(p); return p; }
+    }
+    Vec2 p = have ? fallback : g_map.nearestFree(a.target, 10);
+    a.spots.push_back(p);
+    return p;
+}
+
+void Sim::releaseUnit(Airlift& a) {
+    int type = a.load[a.next++];
+    const UnitType& ut = UNITS[type];
+    a.releaseAt += (ut.kind == UK_AIR ? 0.12f : (ut.kind == UK_VEH ? 0.09f : 0.045f)) * AIRLIFT_SPEED;
+    Vec2 from(clampf(a.pos.x, 8, WORLD_W - 8), clampf(a.pos.y, 8, WORLD_H - 8));
+    Vec2 dir = a.dir; int owner = a.owner; Vec2 target = a.target; bool attackOn = a.attackOn;
+    Vec2 to = ut.kind == UK_AIR ? target : landingSpot(a, ut.kind == UK_VEH ? 34.0f : 20.0f);
+    Ref r = spawnUnit(type, owner, from);
+    Entity& e = ents[r.idx];
+    e.pos = e.prevPos = e.lastPos = from;
+    float face = std::atan2(dir.y, dir.x);
+    e.angle = e.turret = face;
+    if (ut.kind == UK_AIR) {
+        e.alt = 1;
+        cmdGuardArea({r}, target, 9.0f * TILE);
+    } else {
+        e.dropFrom = from; e.dropTo = to;
+        e.fall = e.fallTime = ut.kind == UK_VEH ? 3.4f : 2.6f;
+        e.guardPos = to;
+        if (attackOn) { e.dropGo = true; e.dropGoal = target; }
+    }
+}
+
+void Sim::updateAirlifts() {
+    for (size_t i = 0; i < airlifts.size();) {
+        Airlift& a = airlifts[i];
+        a.t += SIM_DT;
+        a.prevPos = a.pos;
+        a.pos += a.dir * (AIRLIFT_SPEED * SIM_DT);
+        // anti-air on the track: every gun that can hit aircraft and reaches the plane damages it
+        float dps = 0;
+        forEachNear(a.pos, 12.0f * TILE, [&](Entity& g) {
+            if (g.kind == EK_RESOURCE || !enemies(a.owner, g.owner)) return;
+            if (g.isBuilding() && (!g.constructed || players[g.owner].lowPower())) return;
+            if (g.isUnit() && (g.fall > 0 || (g.isAir() && g.ammo <= 0 && g.ut().ammo > 0))) return;
+            if (g.disabledUntil > time) return;
+            int w = g.weapon();
+            if (w < 0 || !WEAPONS[w].air || WEAPONS[w].cooldown <= 0) return;
+            const Weapon& wp = WEAPONS[w];
+            if (dist(g.pos, a.pos) - g.radius() > wp.range * TILE) return;
+            dps += wp.dmg * wp.mult[AR_AIR] * wp.burst / wp.cooldown;
+            if ((tick + (u32)(&g - &ents[0])) % 6 == 0) fx.push_back({FX_BEAM, g.pos, a.pos, 0, 0.12f, wp.color, 2});
+        });
+        if (dps > 0) { a.hp -= dps * SIM_DT; a.lastHit = time; }
+        if (a.hp <= 0) {   // shot down: the load goes with it
+            Vec2 p = a.pos;
+            fx.push_back({FX_EXPLODE, p, p, 0, 1.2f, rgb(255, 190, 90), 70.0f});
+            fx.push_back({FX_EXPLODE, p + Vec2(24, 6), p + Vec2(24, 6), -0.15f, 0.9f, rgb(255, 150, 60), 44.0f});
+            fx.push_back({FX_EXPLODE, p + Vec2(-26, -4), p + Vec2(-26, -4), -0.3f, 0.9f, rgb(255, 150, 60), 40.0f});
+            fx.push_back({FX_RING, p, p, 0, 0.9f, rgb(255, 214, 150), 110.0f});
+            fx.push_back({FX_SMOKE, p, p, 0, 4.0f, rgb(44, 42, 40), 40.0f, Vec2(rng.f(-10, 10), -20)});
+            for (int k = 0; k < 14; k++) fx.push_back({FX_DEBRIS, p, p, 0, rng.f(0.7f, 1.6f), rgb(84, 84, 86), rng.f(2, 5), Vec2(rng.f(-200, 200), rng.f(-220, -30))});
+            emit(EV_SOUND, -1, SND_EXPLODE_L, p);
+            emit(EV_MSG, a.owner, SND_ATTACKED, p, "Paradrop plane shot down");
+            for (int q = 0; q < numPlayers; q++) if (enemies(a.owner, q)) emit(EV_MSG, q, SND_NONE, p, "Enemy airlift shot down");
+            airlifts.erase(airlifts.begin() + i);
+            continue;
+        }
+        float rel = (a.pos.x - a.target.x) * a.dir.x + (a.pos.y - a.target.y) * a.dir.y;
+        int guard = 0;
+        while (a.next < a.load.size() && rel >= a.releaseAt && guard++ < 6) releaseUnit(a);
+        bool gone = a.pos.x < -260 || a.pos.y < -260 || a.pos.x > WORLD_W + 260 || a.pos.y > WORLD_H + 260;
+        if ((gone && a.t > 3.0f) || a.t > 60.0f) { airlifts.erase(airlifts.begin() + i); continue; }
+        i++;
+    }
+}
+
 // What a detonation does (all of it to enemies of the launcher; friendly units are thrown but never hurt):
 //  * ground units: a lethal core, then falling damage out to the rim (they collapse, as ever)
 //  * aircraft: those inside the fireball fall out of the sky, those in the shock ring beyond it are badly mauled
@@ -743,6 +868,7 @@ void Sim::moveAlong(Entity& e, float speed) {
 // ------------------------------------------------------------ combat
 bool Sim::canTarget(const Entity& e, const Entity& t) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
+    if (t.fall > 0) return false;   // still under the parachute
     if (!enemies(e.owner, t.owner)) return false;
     int w = e.weapon();
     if (w < 0) return false;
@@ -895,7 +1021,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
 }
 
 void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w) {
-    if (!tgt.alive || tgt.kind == EK_RESOURCE) return;
+    if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0) return;
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
@@ -1200,6 +1326,20 @@ void Sim::bombImpact(Projectile& p) {
 // ------------------------------------------------------------ unit update
 void Sim::updateUnit(Entity& e) {
     const UnitType& ut = e.ut();
+    if (e.fall > 0) {   // parachute descent: glide from the plane to the landing spot, easing out as the canopy flares
+        e.fall -= SIM_DT;
+        if (e.fall > 0) {
+            float u = 1.0f - e.fall / e.fallTime, k = 1.0f - (1.0f - u) * (1.0f - u);
+            e.pos = e.dropFrom + (e.dropTo - e.dropFrom) * k;
+            return;
+        }
+        e.fall = 0; e.pos = e.dropTo; e.guardPos = e.pos; e.path.clear(); e.pathIdx = 0; e.stuckTimer = 0; e.lastPos = e.pos;
+        float r = std::max(10.0f, e.radius() * 1.6f);
+        fx.push_back({FX_RING, e.pos, e.pos, 0, 0.5f, rgb(214, 196, 160), r * 1.6f});
+        fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 1.4f, rgb(150, 138, 118), r, Vec2(rng.f(-6, 6), -9)});
+        if (e.dropGo) { e.dropGo = false; e.order = O_ATTACKMOVE; e.postOrder = O_IDLE; e.target = e.dropGoal; requestPath(e, e.dropGoal); }
+        return;
+    }
     if (e.cooldown > 0) e.cooldown -= SIM_DT;
     if (e.disabledUntil > time) return;
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
@@ -1680,7 +1820,7 @@ void Sim::updateVision() {
 void Sim::separateUnits() {
     for (int i = 0; i < (int)ents.size(); i++) {
         Entity& a = ents[i];
-        if (!a.alive || !a.isUnit()) continue;
+        if (!a.alive || !a.isUnit() || a.fall > 0) continue;
         bool air = a.isAir();
         float ra = a.radius();
         int cx = clampi((int)(a.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(a.pos.y / GRID_CELL), 0, GRID_H - 1);
@@ -1690,7 +1830,7 @@ void Sim::separateUnits() {
             for (int j : grid[gy * GRID_W + gx]) {
                 if (j == i) continue;
                 Entity& b = ents[j];
-                if (!b.alive || !b.isUnit() || b.isAir() != air) continue;
+                if (!b.alive || !b.isUnit() || b.isAir() != air || b.fall > 0) continue;
                 float rr = ra + b.radius();
                 Vec2 d = a.pos - b.pos;
                 float l2 = d.len2();
@@ -1745,6 +1885,7 @@ void Sim::step() {
     updateProjectiles();
     updateStorms();
     updateNukes();
+    updateAirlifts();
     updateFallout();
     separateUnits();
     updateFx();

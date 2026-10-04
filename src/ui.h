@@ -39,6 +39,7 @@ struct Game {
     bool attackMoveMode = false;
     bool powerMode = false;
     bool nukeMode = false;          // picking a nuke target
+    bool dropMode = false;          // picking a paradrop zone
     bool rallyMode = false;
     bool areaMode = false;          // picking the circle a selection should guard / gather in
     bool areaDrag = false; Vec2 areaStart; float areaRadius = 0;
@@ -96,6 +97,7 @@ private:
     void pauseMenuActivate(int row);
     void cancelModes();
     void drawNukes();
+    void drawAirlifts();
     void scroll(float dt);
     Vec2 screenToWorld(int sx, int sy) const { return Vec2(sx + cam.x, sy + cam.y); }
     Vec2 worldToScreen(Vec2 w) const { return Vec2(w.x - cam.x, w.y - cam.y); }

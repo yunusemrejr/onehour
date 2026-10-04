@@ -288,6 +288,10 @@ void Gfx::buildUnits() {
             if (artUnitTurret(tc, t, team)) { unitTurret[t][p] = fromCanvasSmooth(tc, ART_SIZE / 2, ART_SIZE / 2); unitTurret[t][p].dscale = UNIT_SCALE * artScale(t); }
         }
     }
+    for (int p = 0; p < MAX_PLAYERS; p++) {
+        for (int f = 0; f < F_COUNT; f++) { Canvas c(ART_SIZE, ART_SIZE); artCargoPlane(c, PLAYER_COLOR[p], f == F_CYBER); cargoPlane[p][f] = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); cargoPlane[p][f].dscale = UNIT_SCALE; }
+        Canvas c(ART_SIZE, ART_SIZE); artChute(c, PLAYER_COLOR[p]); chute[p] = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); chute[p].dscale = UNIT_SCALE;
+    }
     { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, false); rotorDisc = fromCanvasSmooth(c, 32, 32); rotorDisc.dscale = UNIT_SCALE; }
     { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, true); rotorBlades = fromCanvasSmooth(c, 32, 32); rotorBlades.dscale = UNIT_SCALE; }
 }

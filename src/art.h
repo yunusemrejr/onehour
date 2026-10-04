@@ -15,3 +15,6 @@ void artRotor(Canvas& c, bool blades);
 void artTurretHead(Canvas& c, int idx);
 // On-screen size multiplier of a unit type relative to UNIT_SCALE (the elite vehicles are visibly larger than the line units).
 float artScale(int type);
+// Paradrop cargo plane (faction look, owner colour) and parachute canopy, both 64x64.
+void artCargoPlane(Canvas& c, Color team, bool cyber);
+void artChute(Canvas& c, Color team);

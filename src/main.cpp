@@ -608,6 +608,89 @@ static bool jetTest(u64 seed) {
 }
 
 
+// Paradrop: a cargo plane releases 15 infantry, 7 vehicles and 4 aircraft on parachutes over the chosen spot, the power recharges for 5 minutes, and anti-air can shoot the plane down.
+static bool dropTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "droptest: %s\n", m); return false; };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        Player& pl = g_sim.players[0]; pl.money = 100000;
+        std::fill(pl.explored.begin(), pl.explored.end(), 1);
+        int bb = firstBuildOf(fac[0]);
+        Vec2 target = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 20);
+        if (g_sim.cmdParadrop(0, target)) return fail("paradrop worked without a tech structure");
+        Vec2 b0 = pl.basePos;
+        for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (!g_sim.hasBuilding(0, bb + BR_TECH) && g_sim.canPlace(0, bb + BR_TECH, tx, ty)) g_sim.placeBuilding(bb + BR_TECH, 0, tx, ty, true); }
+        if (!g_sim.hasBuilding(0, bb + BR_TECH)) return fail("could not place the tech structure");
+        if (g_sim.cmdParadrop(0, target)) return fail("paradrop worked before its initial delay");
+        pl.dropReady = 0;
+        int before = g_sim.countUnits(0), beforeAir = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) beforeAir++;
+        if (!g_sim.cmdParadrop(0, target)) return fail("paradrop refused");
+        if (g_sim.cmdParadrop(0, target)) return fail("paradrop ignored its cooldown");
+        if (std::abs((pl.dropReady - g_sim.time) - 300.0f) > 0.5f) return fail("cooldown is not five minutes");
+        if (g_sim.airlifts.size() != 1) return fail("no cargo plane");
+        bool sawFall = false; int maxFalling = 0;
+        for (int t = 0; t < 20 * 45 && !g_sim.airlifts.empty(); t++) {
+            g_sim.step(); g_sim.events.clear();
+            int falling = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.fall > 0) falling++;
+            if (falling) sawFall = true;
+            maxFalling = std::max(maxFalling, falling);
+        }
+        if (!g_sim.airlifts.empty()) return fail("the plane never left the map");
+        if (!sawFall) return fail("nobody hung under a parachute");
+        for (int t = 0; t < 20 * 6; t++) { g_sim.step(); g_sim.events.clear(); }
+        int inf = 0, veh = 0, air = 0;
+        for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit()) {
+            if (e.fall > 0) return fail("a unit is still falling");
+            if (e.ut().kind == UK_INF) inf++; else if (e.ut().kind == UK_VEH) veh++; else air++;
+            if (e.isAir() || e.ut().role == UR_DOZER) continue;
+            if (!g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y))) return fail("a paratrooper landed on blocked ground");
+            if (dist(e.pos, target) > (DROPS[fac[0]].radius + 6.0f) * TILE && dist(e.pos, g_sim.players[0].basePos) > 10 * TILE) return fail("a paratrooper landed far from the drop zone");
+        }
+        if (inf != DROP_INF || veh != DROP_VEH + 1 /* the starting dozer */ || air - beforeAir != DROP_AIR) { fprintf(stderr, "droptest: landed %d infantry %d vehicles %d aircraft\n", inf, veh, air - beforeAir); return fail("wrong load"); }
+        if (g_sim.countUnits(0) - before != DROP_INF + DROP_VEH + DROP_AIR) return fail("wrong unit count");
+        printf("droptest drop %s: ok (%d infantry, %d vehicles, %d aircraft, up to %d on the silk at once)\n", FACTION_NAME[fac[0]], inf, veh - 1, air - beforeAir, maxFalling);
+    }
+    // anti-air on the approach brings the plane down with its load
+    {
+        Faction fac[2] = { F_CLANKER, F_CYBER };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + 5);
+        Player& pl = g_sim.players[0]; pl.money = 100000; pl.dropReady = 0;
+        std::fill(pl.explored.begin(), pl.explored.end(), 1);
+        int bb0 = firstBuildOf(F_CLANKER), bb1 = firstBuildOf(F_CYBER);
+        Vec2 b0 = pl.basePos;
+        for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
+        Vec2 target = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 20);
+        Vec2 dir = (target - b0).norm(), perp(-dir.y, dir.x);
+        int placed = 0;
+        for (int k = 0; k < 40 && placed < 8; k++) {
+            Vec2 c = target - dir * (11.0f * TILE) + perp * ((k % 5 - 2) * 3.0f * TILE) - dir * ((k / 5) * 2.0f * TILE);
+            int tx = tileOf(c.x), ty = tileOf(c.y);
+            bool free = true; for (int j = 0; j < BUILDS[bb1 + BR_AATURRET].h; j++) for (int i = 0; i < BUILDS[bb1 + BR_AATURRET].w; i++) if (!g_map.buildable(tx + i, ty + j)) free = false;
+            if (free) { g_sim.placeBuilding(bb1 + BR_AATURRET, 1, tx, ty, true); placed++; }   // (out in the open: no base needed)
+        }
+        g_sim.updatePowerPublic();
+        for (int k = 0; k < 40 && g_sim.players[1].lowPower(); k++) {
+            Vec2 c = g_sim.players[1].basePos + Vec2((k % 7 - 3) * 3.0f * TILE, (k / 7 + 4) * 3.0f * TILE);
+            int tx = tileOf(c.x), ty = tileOf(c.y);
+            bool free = true; for (int j = 0; j < BUILDS[bb1 + BR_POWER].h; j++) for (int i = 0; i < BUILDS[bb1 + BR_POWER].w; i++) if (!g_map.buildable(tx + i, ty + j)) free = false;
+            if (free) { g_sim.placeBuilding(bb1 + BR_POWER, 1, tx, ty, true); g_sim.updatePowerPublic(); }
+        }
+        if (placed < 6) return fail("could not set the anti-air screen up");
+        if (g_sim.players[1].lowPower()) return fail("the screen has no power");
+        int before = g_sim.countUnits(0);
+        if (!g_sim.cmdParadrop(0, target)) return fail("paradrop refused (flak test)");
+        for (int t = 0; t < 20 * 45 && !g_sim.airlifts.empty(); t++) { g_sim.step(); g_sim.events.clear(); }
+        for (int t = 0; t < 20 * 5; t++) { g_sim.step(); g_sim.events.clear(); }
+        int got = g_sim.countUnits(0) - before;
+        if (got >= DROP_INF + DROP_VEH + DROP_AIR) return fail("the whole load got through a wall of flak");
+        printf("droptest flak: ok (the plane was shot down, %d of %d units got out)\n", got, DROP_INF + DROP_VEH + DROP_AIR);
+    }
+    return true;
+}
+
 // Medics heal everything near them, idle dozers mend damaged structures by themselves, nukes flatten a wide area and leave radiation behind.
 static bool supportTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "supporttest: %s\n", m); return false; };
@@ -986,6 +1069,17 @@ static bool uiTest() {
         if (g_sim.players[0].money != 9000 - PROGRAMS[F_CLANKER].cost) return fail("research cost not charged");
         key(SDLK_v);
         if (!g_sim.revealed(0)) return fail("V did not start the scan");
+        g_sim.players[0].dropReady = 0;
+        key(SDLK_p);
+        if (!g_game.dropMode) return fail("P did not arm the paradrop");
+        { Vec2 tgt = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f); g_game.cam = Vec2(clampf(tgt.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(tgt.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); frames(1); click((int)(tgt.x - g_game.cam.x), (int)(tgt.y - g_game.cam.y), SDL_BUTTON_LEFT); }
+        if (g_game.dropMode || g_sim.airlifts.size() != 1) return fail("clicking the map did not launch the paradrop");
+        if (g_sim.players[0].dropReady < g_sim.time + 299.0f) return fail("paradrop cooldown not started");
+        key(SDLK_p);
+        if (g_game.dropMode) return fail("P armed the paradrop during its cooldown");
+        for (int i = 0; i < 60 * 14; i++) frames(1);   // the plane crosses the map and the troops land (renders every frame: the plane, parachutes and drop circle)
+        g_game.cam = Vec2(clampf(te->pos.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(te->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+        g_game.selection.clear(); g_game.selection.push_back(tech);
         frames(30);   // shroud-free path, HUD scan label, tech panel
         for (int i = 0; i < 60 * 50 && !g_sim.players[0].advTech; i++) frames(1);
         if (!g_sim.players[0].advTech) return fail("research did not complete");
@@ -1247,7 +1341,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 17);
+            int c = rng.range(0, 18);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -1268,6 +1362,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 15: g_sim.cmdScan(0); break;
             case 16: g_sim.cmdResearch(0); break;
             case 17: { int bt = rng.range(0, B_COUNT - 1); g_sim.canPlace(0, bt, rng.range(-5, MAP_W + 5), rng.range(-5, MAP_H + 5)); g_sim.unitAvailable(0, rng.range(0, U_COUNT - 1)); g_sim.buildAvailable(0, bt); break; }
+            case 18: g_sim.players[0].dropReady = std::min(g_sim.players[0].dropReady, g_sim.time + 3.0f); g_sim.cmdParadrop(0, where()); break;
             }
         }
         g_sim.step(); g_ai.update(); g_sim.events.clear();
@@ -1312,6 +1407,7 @@ int main(int argc, char** argv) {
         else if (a == "--scenario") { g_map.generate(); return scenarioTest(seed) ? 0 : 1; }
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
+        else if (a == "--droptest") { g_map.generate(); return dropTest(seed) ? 0 : 1; }
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
         else if (a == "--airmatrix") { g_map.generate(); return airMatrixTest(seed) ? 0 : 1; }
         else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
@@ -1525,6 +1621,22 @@ int main(int argc, char** argv) {
                 g_game.cam = Vec2(clampf(c.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 g_game.selection.clear(); g_game.selection.push_back(bm[0]);
                 printf("bombs showcase: %d structures placed, %zu projectiles, %zu fx, %zu particles\n", placed, g_sim.projs.size(), g_sim.fx.size(), g_game.parts.size());
+            }
+            if (getenv("ONEHOUR_DROP")) {   // showcase: a paradrop over the middle of the map (ONEHOUR_DROP=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera against the plane's heading)
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                Faction f0 = g_sim.players[0].faction; int bb0 = firstBuildOf(f0);
+                Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
+                for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(bp.x) + dx, ty = tileOf(bp.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
+                g_sim.players[0].dropReady = 0;
+                Vec2 tgt = g_map.nearestFree(bp + (ep - bp) * 0.45f, 40);
+                if (!g_sim.cmdParadrop(0, tgt)) fprintf(stderr, "drop showcase: the call was refused\n");
+                int n = atoi(getenv("ONEHOUR_DROP")); if (n < 1) n = 100;
+                float back = getenv("ONEHOUR_CAMBACK") ? (float)atof(getenv("ONEHOUR_CAMBACK")) : 0.0f;
+                Vec2 dir = g_sim.airlifts.empty() ? Vec2(1, 0) : g_sim.airlifts[0].dir;
+                Vec2 look = tgt - dir * back;
+                g_game.cam = Vec2(clampf(look.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(look.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                printf("drop showcase: %zu planes in the air, %d units\n", g_sim.airlifts.size(), g_sim.countUnits(0));
             }
             if (getenv("ONEHOUR_NUKEDMG")) {   // showcase: an enemy base under a nuke (ONEHOUR_NUKEDMG=N ticks after the blast)
                 Faction f1 = g_sim.players[1].faction; int bb1 = firstBuildOf(f1);

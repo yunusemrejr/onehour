@@ -575,6 +575,22 @@ void AiPlayer::think() {
         if (bestScore >= 3500.0f) S.cmdNuke(player, bestPos);
     }
 
+    // ---------- paradrop: reinforce a base under attack, or land on the objective of a wave that is under way (never into a wall of flak)
+    if (techs > 0 && pl.difficulty >= 1 && S.time >= pl.dropReady && S.time > 150.0f) {
+        Vec2 at; bool go = false;
+        if (threat && threatCount >= 3 && dist(threat->pos, pl.basePos) < 26 * TILE) {
+            Vec2 d = threat->pos - pl.basePos; float l = std::max(1.0f, d.len());
+            at = pl.basePos + d * (std::min(l, 7.0f * TILE) / l); go = true;
+        } else if (attacking && !threat) {
+            Entity* tgt = S.get(attackTarget);
+            if (tgt && S.aaCover(*tgt, player) <= 3.0f) {
+                Vec2 d = pl.basePos - tgt->pos; Vec2 n = d.norm();
+                at = tgt->pos + n * (5.0f * TILE); go = true;
+            }
+        }
+        if (go && S.cmdParadrop(player, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] PARADROP at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
+    }
+
     // ---------- army
     float waveThreshold = 3200.0f + minutes * 320.0f;
     if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.75f;

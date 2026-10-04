@@ -102,6 +102,14 @@ extern const ScanType SCANS[F_COUNT];
 struct ProgramType { const char* name; const char* desc; int cost; float time; };
 extern const ProgramType PROGRAMS[F_COUNT];
 
+// Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes
+static const int DROP_INF = 15, DROP_VEH = 7, DROP_AIR = 4;
+struct DropType { const char* name; const char* desc; float cooldown; float radius; };   // radius: tiles around the target the troops land in
+extern const DropType DROPS[F_COUNT];
+extern const int DROP_INF_TYPES[F_COUNT][DROP_INF];
+extern const int DROP_VEH_TYPES[F_COUNT][DROP_VEH];
+extern const int DROP_AIR_TYPES[F_COUNT][DROP_AIR];
+
 static const int START_CASH = 10000;
 static const int SUPPLY_PER_TRIP = 300;
 static const float HARVEST_TIME = 3.0f;   // seconds at pile

@@ -631,6 +631,58 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }
 
+// Cargo plane of the paradrop (not a unit type: a transport that crosses the map and releases its load). Faces +x, 64x64 canvas, wingspan 56.
+void artCargoPlane(Canvas& c, Color team, bool cy) {
+    setTone(-1);
+    Art A(c, team);
+    Color hull = cy ? shade(CYH, 1.05f) : shade(CKH, 1.0f), pan = cy ? shade(CYP, 1.05f) : shade(CKH, 1.2f), dark = cy ? CYD : CKD, acc = cy ? CYG : CKY;
+    // high swept wings, tailplanes
+    for (int s = -1; s <= 1; s += 2) {
+        auto Y = [&](float y) { return 32 + s * (y - 32); };
+        A.poly({ {39, Y(27)}, {34, Y(4)}, {25.5f, Y(4)}, {24, Y(27)} }, hull, 2.4f, 0.55f);
+        A.poly({ {37, Y(26)}, {33.5f, Y(8)}, {28, Y(8)}, {26.5f, Y(26)} }, pan, 1.6f, 0.4f);
+        A.line(30, Y(27), 29.5f, Y(5), 0.7f, rgba(dark, 140));
+        A.poly({ {14, Y(28)}, {10.5f, Y(14.5f)}, {5.5f, Y(14.5f)}, {7.5f, Y(28)} }, hull, 1.8f, 0.5f);
+        // two engines per wing
+        for (int k = 0; k < 2; k++) {
+            float ey = Y(32 + (k ? 21.0f : 11.0f)), ex = k ? 33.0f : 37.0f;
+            A.cap(ex - 6, ey, ex + 5, ey, 2.4f, shade(dark, 1.6f), 1.6f, 0.55f);
+            if (cy) { A.dot(ex - 7.2f, ey, 1.7f, acc); A.glow(ex - 8.5f, ey, 6, rgba(acc, 190)); }
+            else { A.circle(ex + 6.4f, ey, 4.4f, rgba(rgb(210, 214, 220), 70), 1, 0); A.dot(ex + 5.4f, ey, 1.0f, dark); }
+        }
+    }
+    // fuselage with a glazed nose, loading ramp and a fin
+    A.cap(8, 32, 55, 32, 6.0f, hull, 3.4f, 0.6f);
+    A.ell(57.5f, 32, 5.5f, 4.2f, shade(hull, 1.08f), 2.2f, 0.5f);
+    A.ell(55.5f, 32, 3.4f, 2.7f, rgb(60, 92, 112), 1.8f, 0.7f); A.ell(54.7f, 31, 1.7f, 0.9f, rgba(rgb(200, 230, 245), 180), 1, 0);
+    A.cap(15, 32, 45, 32, 4.4f, pan, 2.2f, 0.4f);
+    for (int i = 0; i < 4; i++) A.line(19 + i * 7, 27.6f, 19 + i * 7, 36.4f, 0.7f, rgba(dark, 150));
+    A.box(8.5f, 32, 3.6f, 4.6f, 1.2f, shade(dark, 1.3f), 1.4f, 0.5f);
+    A.box(10, 32, 5, 1.2f, 0.5f, shade(hull, 1.4f), 1.0f, 0.5f);      // tail fin seen from above
+    A.line(10, 30.4f, 18, 30.4f, 0.7f, rgba(acc, 200)); A.line(10, 33.6f, 18, 33.6f, 0.7f, rgba(acc, 200));
+    teamDot(A, 38.0f, 32, 2.9f);
+    teamDot(A, 30.0f, 8.5f, 1.8f); teamDot(A, 30.0f, 55.5f, 1.8f);
+    A.dot(26.5f, 5.0f, 0.9f, rgb(255, 80, 70)); A.dot(26.5f, 59.0f, 0.9f, rgb(80, 255, 120));
+    A.grain(6, 4, 62, 60, 0.12f, cy ? 301 : 302);
+    enhance(c, 0.5f);
+    c.outline(rgb(8, 10, 14, 190));
+}
+
+// Parachute canopy seen from above: eight gores alternating the owner's colour and off-white, seams, a vent
+void artChute(Canvas& c, Color team) {
+    Art A(c, team);
+    const float R = 23.0f;
+    A.circle(32, 32, R, rgb(232, 230, 220), 3.6f, 0.55f);
+    for (int i = 0; i < 8; i += 2) {
+        float a0 = i * 0.785398f - 0.3927f, a1 = a0 + 0.785398f;
+        A.poly({ {32, 32}, {32 + std::cos(a0) * (R - 0.8f), 32 + std::sin(a0) * (R - 0.8f)}, {32 + std::cos((a0 + a1) * 0.5f) * (R - 0.3f), 32 + std::sin((a0 + a1) * 0.5f) * (R - 0.3f)}, {32 + std::cos(a1) * (R - 0.8f), 32 + std::sin(a1) * (R - 0.8f)} }, team, 1.2f, 0.25f);
+    }
+    for (int i = 0; i < 8; i++) { float a = i * 0.785398f - 0.3927f; A.line(32, 32, 32 + std::cos(a) * R, 32 + std::sin(a) * R, 0.6f, rgba(rgb(60, 58, 54), 130)); }
+    A.circle(32, 32, 2.6f, rgb(58, 56, 52), 1.2f, 0.4f);
+    A.grain(8, 8, 56, 56, 0.1f, 311);
+    c.outline(rgb(20, 22, 26, 160));
+}
+
 bool artUnitTurret(Canvas& c, int type, Color team) {
     setTone(type);
     Art A(c, team);
