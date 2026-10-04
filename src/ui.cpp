@@ -186,8 +186,11 @@ Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
             }
         }
         else if (e.kind == EK_RESOURCE) d = dist(w, e.pos) <= 20 ? dist(w, e.pos) : 1e9f;
+        else if (e.isAir()) {   // aircraft are drawn lifted off their ground point: pick the craft that is on screen, with a generous hit area
+            Vec2 drawn(e.pos.x, e.pos.y - 14.0f * e.alt);
+            d = dist(w, drawn) <= e.radius() + 12 ? dist(w, drawn) * 0.5f : 1e9f;
+        }
         else d = dist(w, e.pos) <= e.radius() + 6 ? dist(w, e.pos) : 1e9f;
-        if (e.isAir()) d *= 0.5f;
         if (d < bd) { bd = d; best = &e; }
     }
     return best;

@@ -1173,6 +1173,118 @@ static bool groundMatrixTest(u64 seed) {
     return bad == 0;
 }
 
+
+// Defensive structures: every turret / anti-air battery must engage what its weapon allows, from every side, and never while unfinished.
+static bool turretTest(u64 seed) {
+    int bad = 0, runs = 0;
+    const char* kinds[5] = { "infantry", "tank", "aircraft", "jet", "bomber" };
+    for (int fi = 0; fi < 2; fi++) for (int tb = 0; tb < 2; tb++) for (int kind = 0; kind < 5; kind++) for (int side = 0; side < 4; side++) for (int fresh = 0; fresh < 2; fresh++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
+        int b0 = firstBuildOf(fac[0]), u1 = firstUnitOf(fac[1]);
+        int type = b0 + (tb == 0 ? BR_TURRET : BR_AATURRET);
+        const Weapon& W = WEAPONS[BUILDS[type].weapon];
+        bool air = kind >= 2;
+        if (air && !W.air) continue;
+        if (!air && !W.ground) continue;
+        Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        Ref tur;
+        for (int dy = -8; dy < 8 && !tur.valid(); dy++) for (int dx = -8; dx < 8 && !tur.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) tur = g_sim.placeBuilding(type, 0, tx, ty, !fresh); }
+        // power plant so the turret is powered
+        int pwType = b0 + BR_POWER;
+        for (int dy = -8; dy < 8; dy++) for (int dx = 4; dx < 12; dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, pwType, tx, ty)) { g_sim.placeBuilding(pwType, 0, tx, ty, true); dy = 99; break; } }
+        g_sim.updatePowerPublic();
+        if (!tur.valid()) { fprintf(stderr, "turrettest: no spot\n"); return false; }
+        Vec2 tp = g_sim.get(tur)->pos;
+        float ang = side * 1.5708f; float dd = (W.range - 1.2f) * TILE;
+        Vec2 at = tp + Vec2(std::cos(ang), std::sin(ang)) * dd;
+        int ut = kind == 0 ? u1 + 2 : kind == 1 ? u1 + 5 : kind == 2 ? u1 + 8 : u1 + 11;
+        if (kind == 4) ut = u1 + 8;
+        Ref tg = g_sim.spawnUnit(ut, 1, g_map.nearestFree(at, 20));
+        if (!g_sim.get(tg)) return false;
+        g_sim.get(tg)->disabledUntil = 1e9f;     // sits still; its own weapons are off
+        float h0 = g_sim.get(tg)->hp;
+        float tx0 = dist(g_sim.get(tg)->pos, tp) / TILE;
+        if (tx0 > W.range + 0.3f) continue;       // the blocking terrain pushed the target out of range: not a fair test
+        for (int t = 0; t < 20 * 20; t++) { g_sim.step(); g_sim.events.clear(); }
+        Entity* e = g_sim.get(tg);
+        bool dealt = !e || e->hp < h0 - 1;
+        runs++;
+        if (fresh ? dealt : !dealt) { bad++; fprintf(stderr, "turrettest FAIL %s %s vs %s side %d %s: %s\n", FACTION_NAME[fac[0]], BUILDS[type].name, kinds[kind], side, fresh ? "unfinished" : "finished", fresh ? "an unfinished structure fired" : "no damage"); }
+    }
+    printf("turrettest: %d runs, %d failed\n", runs, bad);
+    return bad == 0;
+}
+
+
+// Command fuzzer: player 0 issues random commands (every command, random arguments, including nonsense) while the computer plays the others.
+// Looks for crashes (run it under the sanitizers) and broken invariants.
+static bool fuzzTest(u64 seed, int seconds) {
+    Rng rng(seed * 7919 + 1);
+    Faction fac[4] = { (Faction)rng.range(0, 1), F_CLANKER, F_CYBER, F_CLANKER };
+    bool ai[4] = { false, true, true, true };
+    int diff[4] = { 1, 2, 2, 1 }; int team[4] = { 0, 1, 2, 3 };
+    g_sim.init(4, fac, ai, diff, team, seed);
+    g_ai.init(seed);
+    g_sim.players[0].money = 200000;
+    int n = seconds * SIM_HZ;
+    long cmds = 0;
+    auto anyEnt = [&](int owner, int kindMask) -> Ref {   // random live entity (owner -2 = anyone); kindMask bit0 unit, bit1 building, bit2 resource
+        for (int tries = 0; tries < 30; tries++) {
+            if (g_sim.ents.empty()) break;
+            int i = rng.range(0, (int)g_sim.ents.size() - 1);
+            Entity& e = g_sim.ents[i];
+            if (!e.alive) continue;
+            if (owner != -2 && e.owner != owner) continue;
+            if (!(kindMask & (1 << (int)e.kind))) continue;
+            return g_sim.refOf(i);
+        }
+        return NOREF;
+    };
+    auto sel = [&]() { std::vector<Ref> v; int k = rng.range(1, 8); for (int i = 0; i < k; i++) { Ref r = rng.range(0, 9) == 0 ? Ref{rng.range(-3, 5000), (u32)rng.range(0, 3)} : anyEnt(0, 3); v.push_back(r); } return v; };
+    auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
+    for (int t = 0; t < n && !g_sim.gameOver; t++) {
+        if (t % 6 == 0) {
+            int c = rng.range(0, 17);
+            cmds++;
+            switch (c) {
+            case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
+            case 1: { Ref r = anyEnt(rng.range(-2, 3), 7); g_sim.cmdAttack(sel(), r); break; }
+            case 2: g_sim.cmdStop(sel()); break;
+            case 3: { Ref r = anyEnt(-1, 4); g_sim.cmdHarvest(sel(), r); break; }
+            case 4: g_sim.cmdGuardArea(sel(), where(), rng.f(-50, 700)); break;
+            case 5: g_sim.cmdGatherArea(sel(), where(), rng.f(-50, 700)); break;
+            case 6: g_sim.cmdArea(sel(), where(), rng.f(-50, 700)); break;
+            case 7: { Ref d = anyEnt(0, 1); int bt = rng.range(0, B_COUNT - 1); g_sim.cmdBuild(d, bt, rng.range(-3, MAP_W + 3), rng.range(-3, MAP_H + 3)); break; }
+            case 8: { Ref d = sel()[0]; Ref b = anyEnt(rng.range(-1, 1), 2); g_sim.cmdAssist({d}, b); break; }
+            case 9: { Ref b = anyEnt(0, 2); g_sim.cmdTrain(b, rng.range(0, U_COUNT - 1)); break; }
+            case 10: { Ref b = anyEnt(0, 2); g_sim.cmdCancelTrain(b, rng.range(-1, 6)); break; }
+            case 11: { Ref b = anyEnt(0, 2); g_sim.cmdSetRally(b, where()); break; }
+            case 12: if (rng.range(0, 5) == 0) { Ref b = anyEnt(0, 2); g_sim.cmdSell(b); } break;
+            case 13: g_sim.cmdPower(0, where()); break;
+            case 14: g_sim.cmdNuke(0, where()); break;
+            case 15: g_sim.cmdScan(0); break;
+            case 16: g_sim.cmdResearch(0); break;
+            case 17: { int bt = rng.range(0, B_COUNT - 1); g_sim.canPlace(0, bt, rng.range(-5, MAP_W + 5), rng.range(-5, MAP_H + 5)); g_sim.unitAvailable(0, rng.range(0, U_COUNT - 1)); g_sim.buildAvailable(0, bt); break; }
+            }
+        }
+        g_sim.step(); g_ai.update(); g_sim.events.clear();
+        for (auto& e : g_sim.ents) {
+            if (!e.alive) continue;
+            if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "fuzz: NaN position at tick %d (%s)\n", t, e.isUnit() ? e.ut().name : "?"); return false; }
+            if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "fuzz: entity out of world at tick %d (%s %.0f,%.0f)\n", t, e.isUnit() ? e.ut().name : "building", e.pos.x, e.pos.y); return false; }
+            if (e.isUnit() && !e.isAir() && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
+            if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "fuzz: hp above max at tick %d\n", t); return false; }
+            if (e.isUnit() && e.ammo < 0) { fprintf(stderr, "fuzz: negative ammo\n"); return false; }
+            if (e.kind != EK_RESOURCE && g_sim.players[e.owner >= 0 ? e.owner : 0].money < -1) { fprintf(stderr, "fuzz: negative money at tick %d\n", t); return false; }
+        }
+    }
+    printf("fuzztest seed %llu: ok (%ld commands, %.0f s of play)\n", (unsigned long long)seed, cmds, g_sim.time);
+    return true;
+}
+
 int main(int argc, char** argv) {
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0;
@@ -1203,6 +1315,8 @@ int main(int argc, char** argv) {
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
         else if (a == "--airmatrix") { g_map.generate(); return airMatrixTest(seed) ? 0 : 1; }
         else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
+        else if (a == "--turrettest") { g_map.generate(); return turretTest(seed) ? 0 : 1; }
+        else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--bombtest") { g_map.generate(); return bombTest(seed) && nukeDodgeTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;
