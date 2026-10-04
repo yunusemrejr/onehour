@@ -106,13 +106,13 @@ private:
     void selectSingle(Entity* e, bool add);
     void selectBox(Vec2 a, Vec2 b, bool add);
     void selectSameType(Entity* e);
-    void issueRightClick(Vec2 world);
     void issueAttackMove(Vec2 world);
     void cleanSelection();
     struct Button { int x, y, w, h; int kind; int id; bool enabled; const char* label; std::string tip; };
     std::vector<Button> buttons;
     void buildButtons();
 public:
+    void issueRightClick(Vec2 world);
     void buildButtonsPublic() { buildButtons(); }                 // test hooks
     const std::vector<Button>& buttonsPublic() const { return buttons; }
 private:

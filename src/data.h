@@ -39,6 +39,7 @@ enum UnitTypeId {
     U_C_DOZER = 0, U_C_HARV, U_C_INF1, U_C_INF2, U_C_INF3, U_C_TANK, U_C_VOLT, U_C_RAIL, U_C_AIR, U_C_ELITE, U_C_TITAN, U_C_JET,
     U_K_DOZER, U_K_HARV, U_K_INF1, U_K_INF2, U_K_INF3, U_K_TANK, U_K_GATLING, U_K_MLRS, U_K_AIR, U_K_ELITE, U_K_TITAN, U_K_JET,
     U_C_MEDIC, U_K_MEDIC,   // field medics sit after both armies' blocks so every earlier id stays put
+    U_C_SNIPER, U_K_SNIPER, // so do the snipers
     U_COUNT
 };
 
@@ -71,6 +72,7 @@ struct UnitType {
     int program;        // 1 = also needs the faction's Advanced Program (researched at the tech structure)
     int jet;            // 1 = supersonic fighter: fixed-wing strafing passes with a limited turn rate instead of hovering
     int bomber;         // 1 = carries bombs: flies bombing runs over ground targets (sticks of heavy bombs), uses its gun on aircraft
+    int sniper;         // 1 = sniper: shoots only infantry (never another sniper) and can only be spotted and hit by vehicles and aircraft
 };
 
 struct BuildType {
@@ -126,6 +128,7 @@ static const float HEAL_RADIUS = 5.0f;        // tiles: a Medic's healing aura
 static const float HEAL_RATE = 0.06f;         // fraction of max health restored per second to units in the aura (a third of that for structures)
 static const float BOMBER_TURN = 2.3f;        // rad/s: a bomber swings a wide circle (about 110 px at its cruise speed) between runs
 static const int   BOMB_STICK = 4;            // bombs released in one pass, a few tens of pixels apart along the flight line
+static const int   W_NEEDLE = 27, W_SNIPER_RIFLE = 28;   // the snipers' rifles
 static const int   W_BOMB_CYBER = 25, W_BOMB_CLANKER = 26;   // WEAPONS indices of the two armies' bombs
 static const float JET_TURN = 3.4f;           // rad/s: a supersonic jet at 560 px/s swings a turn circle of about 165 px
 

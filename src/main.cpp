@@ -20,7 +20,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --bombtest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --bombtest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -520,6 +520,107 @@ static bool hqTest(u64 seed) {
     return true;
 }
 
+
+// Rules added in the friendly-fire / sniper / air-power pass: forced fire on friends (humans only), snipers and who can spot them,
+// both aircraft kinds fighting aircraft, and the per-structure paradrop cooldown.
+static bool rulesTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "rulestest: %s\n", m); return false; };
+    auto run = [](int sec) { for (int t = 0; t < 20 * sec; t++) { g_sim.step(); g_sim.events.clear(); } };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[3] = { (Faction)fi, (Faction)fi, (Faction)(1 - fi) };
+        bool ai[3] = { false, true, true }; int diff[3] = { 1, 1, 1 }; int team[3] = { 0, 0, 1 };
+        g_sim.init(3, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 3; p++) { g_sim.players[p].money = 100000; std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); }
+        Faction me = fac[0], foe = fac[2];
+        int tankMe = me == F_CYBER ? U_C_TANK : U_K_TANK, tankFoe = foe == F_CYBER ? U_C_TANK : U_K_TANK;
+        int inf1Foe = firstUnitOf(foe) + 2, sniperMe = me == F_CYBER ? U_C_SNIPER : U_K_SNIPER, sniperFoe = foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+        Vec2 mid = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 30);
+        auto hpOf = [](Ref r) { Entity* e = g_sim.get(r); return e ? e->hp : 0.0f; };
+        // ---- force fire on friends: humans only
+        Ref a = g_sim.spawnUnit(tankMe, 0, mid), own = g_sim.spawnUnit(tankMe, 0, mid + Vec2(90, 0)), ally = g_sim.spawnUnit(tankMe, 1, mid + Vec2(0, 90));
+        float own0 = hpOf(own), ally0 = hpOf(ally);
+        g_sim.cmdAttack({a}, own); g_sim.cmdAttack({a}, ally); run(6);
+        if (hpOf(own) < own0 || hpOf(ally) < ally0) return fail("a plain attack order hurt a friend");
+        g_sim.cmdAttack({a}, own, true); run(10);
+        if (hpOf(own) >= own0) return fail("force fire did not hurt my own tank");
+        g_sim.cmdAttack({a}, ally, true); run(14);
+        if (hpOf(ally) >= ally0) return fail("force fire did not hurt the ally's tank");
+        {   // the same through the UI: Ctrl + right-click on a friendly selects force fire, a plain right-click only moves
+            Ref uiTank = g_sim.spawnUnit(tankMe, 0, mid + Vec2(-120, 300)), uiOwn = g_sim.spawnUnit(tankMe, 0, mid + Vec2(-30, 300));
+            float u0 = hpOf(uiOwn);
+            g_game.selection.clear(); g_game.selection.push_back(uiTank);
+            g_game.cam = Vec2(clampf(mid.x - 120 - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(mid.y + 300 - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+            SDL_SetModState(KMOD_NONE); g_game.issueRightClick(g_sim.get(uiOwn)->pos); run(8);
+            if (hpOf(uiOwn) < u0) return fail("a plain right-click on my own tank attacked it");
+            SDL_SetModState(KMOD_LCTRL); g_game.issueRightClick(g_sim.get(uiOwn)->pos); SDL_SetModState(KMOD_NONE); run(12);
+            if (hpOf(uiOwn) >= u0) return fail("Ctrl+right-click did not force fire on my own tank");
+            g_game.selection.clear();
+        }
+        Ref ai1 = g_sim.spawnUnit(tankMe, 1, mid + Vec2(-300, 0)), vict = g_sim.spawnUnit(tankMe, 0, mid + Vec2(-210, 0));
+        float v0 = hpOf(vict);
+        g_sim.cmdAttack({ai1}, vict, true); run(10);
+        if (hpOf(vict) < v0) return fail("a computer army attacked its human ally on purpose");
+        // a forced nuke flattens friendly ground, a normal one does not
+        Vec2 gz = g_map.nearestFree(mid + Vec2(500, 300), 30);
+        Ref bystander = g_sim.spawnUnit(tankMe, 0, gz);
+        g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, false}); for (int t = 0; t < 2; t++) { g_sim.step(); g_sim.events.clear(); }   // (lingering fallout hurts everyone: look at the blast itself)
+        if (!g_sim.get(bystander) || hpOf(bystander) < g_sim.get(bystander)->maxHp) return fail("an ordinary nuke hurt my own tank");
+        g_sim.fallouts.clear();
+        g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, true}); run(1);
+        if (hpOf(bystander) > 0) return fail("a forced nuke spared my own tank");
+        g_sim.fallouts.clear();
+        Vec2 gz2 = g_map.nearestFree(gz + Vec2(-600, 100), 30);
+        g_sim.nukes.push_back({g_sim.players[1].basePos, gz2, 1, Sim::NUKE_FLIGHT - 0.05f, true});
+        Ref safe = g_sim.spawnUnit(tankMe, 0, gz2); for (int t = 0; t < 2; t++) { g_sim.step(); g_sim.events.clear(); }
+        if (hpOf(safe) < g_sim.get(safe)->maxHp) return fail("a computer army's forced nuke hurt a friend");
+        // ---- snipers
+        g_sim.fallouts.clear();
+        Vec2 sp = g_map.nearestFree(mid + Vec2(-400, 300), 30);
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type != U_C_DOZER && e.type != U_K_DOZER && e.ut().role == UR_COMBAT) g_sim.destroy(e, false);
+        Ref sn = g_sim.spawnUnit(sniperMe, 0, sp), trooper = g_sim.spawnUnit(inf1Foe, 2, sp + Vec2(200, 0)), enemySn = g_sim.spawnUnit(sniperFoe, 2, sp + Vec2(0, 200)), tk = g_sim.spawnUnit(tankFoe, 2, sp + Vec2(-200, 0));
+        g_sim.cmdAttack({sn}, trooper); run(8);
+        if (g_sim.get(trooper)) return fail("a sniper could not kill an infantryman");
+        g_sim.cmdAttack({sn}, tk); run(3);
+        if (hpOf(tk) < g_sim.get(tk)->maxHp) return fail("a sniper hurt a vehicle");
+        g_sim.cmdAttack({sn}, enemySn); run(6);
+        if (hpOf(enemySn) < g_sim.get(enemySn)->maxHp) return fail("a sniper shot another sniper");
+        for (int k = 0; k < 4; k++) g_sim.spawnUnit(inf1Foe, 2, sp + Vec2(60 + k * 14, 40));
+        g_sim.destroy(*g_sim.get(tk), false); g_sim.destroy(*g_sim.get(enemySn), false);
+        float sn0 = hpOf(sn); run(8);
+        if (hpOf(sn) < sn0) return fail("infantry spotted and shot a sniper");
+        g_sim.spawnUnit(tankFoe, 2, sp + Vec2(150, 60)); run(8);
+        if (g_sim.get(sn) && hpOf(sn) >= sn0) return fail("a vehicle could not spot and shoot a sniper");
+        // ---- aircraft: each kind kills aircraft
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().role == UR_COMBAT) g_sim.destroy(e, false);
+        for (int kind = 0; kind < 2; kind++) {
+            int myAir = firstUnitOf(me) + (kind ? 11 : 8), foeAir = firstUnitOf(foe) + 8;
+            Vec2 at = g_map.nearestFree(mid, 30);
+            Ref mine = g_sim.spawnUnit(myAir, 0, at), theirs = g_sim.spawnUnit(foeAir, 2, at + Vec2(260, 0));
+            if (Entity* m = g_sim.get(mine)) { m->alt = 1; }
+            if (Entity* t = g_sim.get(theirs)) { t->alt = 1; }
+            g_sim.cmdAttack({mine}, theirs);
+            run(40);
+            // the cheap drone trades with an equal bomber (it hurts it badly), the expensive jet wins outright
+            if (kind == 1 ? g_sim.get(theirs) != nullptr : (g_sim.get(theirs) && hpOf(theirs) > g_sim.get(theirs)->maxHp * 0.7f)) { fprintf(stderr, "kind %d: target hp left %.0f\n", kind, hpOf(theirs)); return fail("aircraft failed to fight aircraft"); }
+            if (Entity* m = g_sim.get(mine)) g_sim.destroy(*m, false);
+        }
+        // ---- paradrop: one launch per tech structure, 2 minutes each
+        int bb = firstBuildOf(me);
+        Vec2 b0 = g_sim.players[0].basePos; int placed = 0;
+        for (int dy = 4; dy < 22 && placed < 2; dy++) for (int dx = -16; dx < 16 && placed < 2; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, bb + BR_TECH, tx, ty)) { g_sim.placeBuilding(bb + BR_TECH, 0, tx, ty, true); placed++; } }
+        if (placed < 2) return fail("could not place two tech structures");
+        g_sim.players[0].dropReady = 0; g_sim.updatePowerPublic();
+        Vec2 tgt = g_map.nearestFree(mid + Vec2(200, 200), 30);
+        if (g_sim.dropsReady(0) != 2) return fail("two tech structures should offer two drops");
+        if (!g_sim.cmdParadrop(0, tgt) || !g_sim.cmdParadrop(0, tgt)) return fail("two drops refused");
+        if (g_sim.cmdParadrop(0, tgt)) return fail("a third drop with two structures");
+        run(119); if (g_sim.dropsReady(0) != 0) return fail("drops came back before two minutes");
+        run(3);   if (g_sim.dropsReady(0) != 2) return fail("drops did not come back after two minutes");
+        printf("rulestest %s: ok\n", FACTION_NAME[me]);
+    }
+    return true;
+}
+
 // Supersonic jets: built at the airfield, they fly fixed-wing strafing passes (finite turn rate, very fast), kill things, rearm and land.
 static bool jetTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "jettest: %s\n", m); return false; };
@@ -628,7 +729,7 @@ static bool dropTest(u64 seed) {
         int before = g_sim.countUnits(0), beforeAir = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) beforeAir++;
         if (!g_sim.cmdParadrop(0, target)) return fail("paradrop refused");
         if (g_sim.cmdParadrop(0, target)) return fail("paradrop ignored its cooldown");
-        if (std::abs((pl.dropReady - g_sim.time) - 300.0f) > 0.5f) return fail("cooldown is not five minutes");
+        if (std::abs(g_sim.dropWait(0) - 120.0f) > 0.5f) return fail("cooldown is not two minutes");
         if (g_sim.airlifts.size() != 1) return fail("no cargo plane");
         bool sawFall = false; int maxFalling = 0;
         for (int t = 0; t < 20 * 45 && !g_sim.airlifts.empty(); t++) {
@@ -1074,7 +1175,7 @@ static bool uiTest() {
         if (!g_game.dropMode) return fail("P did not arm the paradrop");
         { Vec2 tgt = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f); g_game.cam = Vec2(clampf(tgt.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(tgt.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); frames(1); click((int)(tgt.x - g_game.cam.x), (int)(tgt.y - g_game.cam.y), SDL_BUTTON_LEFT); }
         if (g_game.dropMode || g_sim.airlifts.size() != 1) return fail("clicking the map did not launch the paradrop");
-        if (g_sim.players[0].dropReady < g_sim.time + 299.0f) return fail("paradrop cooldown not started");
+        if (g_sim.dropWait(0) < 119.0f) return fail("paradrop cooldown not started");
         key(SDLK_p);
         if (g_game.dropMode) return fail("P armed the paradrop during its cooldown");
         for (int i = 0; i < 60 * 14; i++) frames(1);   // the plane crosses the map and the troops land (renders every frame: the plane, parachutes and drop circle)
@@ -1362,7 +1463,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 15: g_sim.cmdScan(0); break;
             case 16: g_sim.cmdResearch(0); break;
             case 17: { int bt = rng.range(0, B_COUNT - 1); g_sim.canPlace(0, bt, rng.range(-5, MAP_W + 5), rng.range(-5, MAP_H + 5)); g_sim.unitAvailable(0, rng.range(0, U_COUNT - 1)); g_sim.buildAvailable(0, bt); break; }
-            case 18: g_sim.players[0].dropReady = std::min(g_sim.players[0].dropReady, g_sim.time + 3.0f); g_sim.cmdParadrop(0, where()); break;
+            case 18: g_sim.players[0].dropReady = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding()) e.dropTimer = std::min(e.dropTimer, g_sim.time + 3.0f); g_sim.cmdParadrop(0, where()); break;
             }
         }
         g_sim.step(); g_ai.update(); g_sim.events.clear();
@@ -1413,6 +1514,7 @@ int main(int argc, char** argv) {
         else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
         else if (a == "--turrettest") { g_map.generate(); return turretTest(seed) ? 0 : 1; }
         else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
+        else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--bombtest") { g_map.generate(); return bombTest(seed) && nukeDodgeTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;
@@ -1497,6 +1599,7 @@ int main(int argc, char** argv) {
             g.draw(g.unitBody[t][owner], x1, y1, 0, 1); if (g.unitTurret[t][owner].tex) g.draw(g.unitTurret[t][owner], x1, y1, 0, 1);
             if (UNITS[t].kind != UK_AIR) { g.draw(g.unitAnim[t][owner][0], 400 + u * 32, y1, 0, 1); if (g.unitTurret[t][owner].tex) g.draw(g.unitTurret[t][owner], 400 + u * 32, y1, 0, 1); }
         }
+        for (int m = 0; m < 2; m++) { int t = m == 0 ? U_C_SNIPER : U_K_SNIPER; g.draw(g.unitBody[t][0], 860 + m * 110, 150, 0, 3); }   // the snipers
         for (int m = 0; m < 2; m++) { int t = m == 0 ? U_C_MEDIC : U_K_MEDIC; g.draw(g.shadowLarge, 860 + m * 110, 306, 0, 1.6f); g.draw(g.unitBody[t][0], 860 + m * 110, 300, 0, 3); }   // the medics sit after both unit blocks
         for (int i = 0; i < 4; i++) g.draw(g.turretHead[i], 800 + i * 50, 480, 0, 1.2f);
         for (int p = 0; p < MAX_PLAYERS; p++) g.drawFlag(820 + p * 50, 590, p, 1.4f, 1.0f);
@@ -1668,9 +1771,10 @@ int main(int argc, char** argv) {
                 g_sim.get(last)->actionTimer = 0; g_game.selection.clear(); g_game.selection.push_back(last);
                 std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
                 bool boom = getenv("ONEHOUR_NEWB")[0] == 'b';   // ONEHOUR_NEWB=boom: freeze a moment after detonation instead of the flight
-                g_sim.nukes.push_back({g_sim.get(last)->pos, g_sim.get(last)->pos + Vec2(300, 40), 0, boom ? Sim::NUKE_FLIGHT - 0.05f : 4.0f});
+                g_sim.nukes.push_back({g_sim.get(last)->pos, g_sim.get(last)->pos + Vec2(300, boom ? -300 : 40), 0, boom ? Sim::NUKE_FLIGHT - 0.05f : 4.0f});
+                if (boom) g_game.cam = Vec2(clampf(g_sim.get(last)->pos.x - SCREEN_W / 2 + 300, 0, WORLD_W - SCREEN_W), clampf(g_sim.get(last)->pos.y - 300 - VIEW_H * 0.8f, 0, WORLD_H - VIEW_H));
                 if (boom) for (int t = 0, tn = getenv("ONEHOUR_BOOMT") ? atoi(getenv("ONEHOUR_BOOMT")) : 22; t < tn; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
-                g_game.cam = Vec2(clampf(g_sim.get(last)->pos.x - SCREEN_W / 2 + 100, 0, WORLD_W - SCREEN_W), clampf(g_sim.get(last)->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                g_game.cam = Vec2(clampf(g_sim.get(last)->pos.x - SCREEN_W / 2 + (boom ? 300 : 100), 0, WORLD_W - SCREEN_W), clampf(g_sim.get(last)->pos.y + (boom ? -300 : 0) - VIEW_H * (boom ? 0.8f : 0.5f), 0, WORLD_H - VIEW_H));   // (the cloud climbs above ground zero: frame it low)
             }
             // select something for the HUD
             if (g_game.selection.empty()) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && !e.queue.empty()) { g_game.selection.push_back(g_sim.refOf(e)); break; }

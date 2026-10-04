@@ -48,7 +48,7 @@ const CkTone CK_TONES[12] = {
 
 // type < 0 selects the neutral default palette (structures' turret heads)
 // position inside the army's block; the medics live after both blocks but are drawn as the 13th design
-static int unitLocal(int type) { return type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction); }
+static int unitLocal(int type) { return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction); }
 
 void setTone(int type) {
     CYH = CYH0; CYP = CYP0; CYD = CYD0; CYG = CYG0; CYW = CYW0; CYM = CYM0;
@@ -271,6 +271,21 @@ void medicBody(Art& A, bool cy, int frame) {
     float pulse = frame == 1 ? 1.0f : 0.5f;
     A.glow(44, 32, 7 * pulse + 3, rgba(cross, 130)); A.dot(44, 28, 1.3f, cross); A.dot(44, 36, 1.3f, cross);    // beacon bar
     teamDot(A, 10.0f, 32, 2.8f);
+}
+
+// Sniper: the ordinary soldier body with a hooded cloak, a very long rifle with a scope, and a bipod
+void sniperBody(Art& A, bool cy, int frame) {
+    soldier(A, cy, 2, frame);
+    Color cloak = cy ? rgb(40, 70, 74) : rgb(78, 84, 52), leaf = cy ? rgb(70, 120, 120) : rgb(112, 120, 70), dark = cy ? CYD : CKD;
+    A.ell(30.5f, 32, 8.2f, 10.5f, cloak, 2.6f, 0.5f);                                   // cloak over the shoulders and pack
+    for (int i = 0; i < 7; i++) A.ell(25.5f + (i % 3) * 3.2f, 32 - 8.5f + i * 2.8f, 1.8f, 1.1f, i % 2 ? leaf : shade(leaf, 0.8f), 1.0f, 0.3f);
+    A.ell(33, 32, 4.6f, 5.4f, shade(cloak, 1.1f), 2.0f, 0.5f);                          // hood
+    A.cap(34, 32, 60, 32, 1.05f, cy ? CYW : shade(CKD, 1.7f), 1.2f, 0.55f);             // long barrel
+    A.cap(36, 32, 44, 32, 1.9f, cy ? shade(CYM, 1.3f) : shade(CKR, 0.85f), 1.2f, 0.4f); // stock and receiver
+    A.box(43, 32 - 2.6f, 5.2f, 1.5f, 0.6f, dark, 1.2f, 0.5f); A.dot(47.4f, 32 - 2.6f, 1.0f, cy ? CYG : rgb(255, 214, 120));   // scope
+    A.line(50, 32, 54, 29, 0.7f, rgba(dark, 220)); A.line(50, 32, 54, 35, 0.7f, rgba(dark, 220));   // bipod
+    if (cy) { A.dot(60.4f, 32, 1.2f, CYG); A.glow(60.8f, 32, 4, rgba(CYG, 120)); }
+    teamDot(A, 31.0f, 32, 2.4f);
 }
 
 void tankCyber(Art& A, int frame) {   // Photon Tank body
@@ -624,9 +639,10 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 10: if (cy) titanCyber(A, frame); else behemothBody(A, frame); break;
     case 11: if (cy) jetCyber(A); else jetClanker(A); break;
     case 12: medicBody(A, cy, frame); break;
+    case 13: sniperBody(A, cy, frame); break;
     }
     if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
-    else if (local != 8 && local != 11 && local != 12) vehicleDetail(A, cy, local);
+    else if (local != 8 && local != 11 && local != 12 && local != 13) vehicleDetail(A, cy, local);
     enhance(c, local == 8 || local == 11 ? 0.45f : 0.7f);
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }

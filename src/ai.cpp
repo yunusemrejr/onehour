@@ -119,6 +119,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         cands.push_back({base + 3, 0.9f + fv * 2.0f + fa * 2.5f});        // anti-armor / AA
         cands.push_back({base + 4, 0.7f + fi * 2.0f});                    // tech infantry
         cands.push_back({base + 9, 0.8f + fi * 1.0f + fv * 1.6f});        // elite (needs the Advanced Program)
+        cands.push_back({pl.faction == F_CYBER ? (int)U_C_SNIPER : (int)U_K_SNIPER, 0.25f + fi * 2.2f});   // sniper: only worth it against infantry (vehicles and aircraft are the ones that can answer it)
     } else if (role == BR_FACTORY) {
         cands.push_back({base + 5, 1.4f + fv * 1.0f});                    // main tank
         cands.push_back({base + 6, 0.9f + fi * 2.0f + fa * 2.0f});        // anti-inf / AA vehicle
@@ -576,7 +577,7 @@ void AiPlayer::think() {
     }
 
     // ---------- paradrop: reinforce a base under attack, or land on the objective of a wave that is under way (never into a wall of flak)
-    if (techs > 0 && pl.difficulty >= 1 && S.time >= pl.dropReady && S.time > 150.0f) {
+    if (techs > 0 && pl.difficulty >= 1 && S.dropsReady(player) > 0 && S.time > 150.0f) {
         Vec2 at; bool go = false;
         if (threat && threatCount >= 3 && dist(threat->pos, pl.basePos) < 26 * TILE) {
             Vec2 d = threat->pos - pl.basePos; float l = std::max(1.0f, d.len());

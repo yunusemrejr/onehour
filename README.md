@@ -25,7 +25,7 @@ column, Enter starts.
 **Cyber Army** — electric and optical. Pulse rifles, laser troopers, shock troopers, Photon Tanks,
 Volt Walkers (arc lightning, anti-infantry/anti-air), Railgun Tanks (long range, pierces a line),
 Wraith Drones, Laser Turrets and Patriot Batteries. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop,
-Overclock Program → Ion Lancer sniper and Aegis Titan super-heavy walker).
+Overclock Program → Ion Lancer and Aegis Titan super-heavy walker).
 
 **Clanker Army** — diesel and gunpowder. Riflemen, RPG troopers, heavy gunners, Brute Tanks,
 Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries.
@@ -37,7 +37,7 @@ Tech structure: Arms Lab (Shell Storm, Recon Flight, Heavy Ordnance → Grenadie
 | --- | --- | --- |
 | Strike (EMP Strike / Shell Storm) | X | call a strike on a circle of your choice (3 min cooldown); also on the Command Core/Post |
 | Scan (Orbital Scan / Recon Flight) | V | the whole map and every enemy on it is visible for 30 s (3.5 min cooldown) |
-| Paradrop (Airlift Drop / Paradrop) | P | a cargo plane drops a free force on parachutes wherever you click (5 min cooldown, see below) |
+| Paradrop (Airlift Drop / Paradrop) | P | a cargo plane drops a free force on parachutes wherever you click (2 min cooldown per tech structure, see below) |
 | Advanced Program | R | $2500, 45 s (half speed on low power): unlocks the army's two elite units for good |
 
 Team colours: every unit type has its own tone (graphite, cobalt, ceramic and teal for Cyber; olive, sand, brick and iron for
@@ -49,17 +49,32 @@ edge along the line from your base through the drop zone and, as it crosses the 
 5 Laser Troopers, 3 Shock Troopers, 3 Photon Tanks, 2 Volt Walkers, a Railgun Tank, a Medic Rig, 2 Wraith Drones and 2 Specter Jets; Clanker: the matching
 Riflemen, RPG Troopers, Gunners, Brute Tanks, Gatling Tanks, Rocket Launcher, Field Medic, Vulture Gunships and Talon Jets). The soldiers and vehicles hang
 under parachutes for a few seconds (they cannot be hit or act until they land) and the aircraft take up guard over the zone. The load is free, the power
-recharges for **5 minutes** (first available at 2:30), and it needs a standing tech structure. The plane is not invulnerable: every anti-air gun that
+recharges for **2 minutes per tech structure** (first available at 2:30): like nuke ramps, every Data Center / Arms Lab you own has its own cooldown, so three of them can send three airlifts back to back and the button shows `READY x3`. The plane is not invulnerable: every anti-air gun that
 reaches it on its way in shoots at it (1100 hp, a few Patriot Batteries bring it down) and a plane lost before the drop takes its whole load with it.
 The enemy is told when an airlift is on its way, and the drop circle is public. The computer commander uses it to reinforce a base under attack
 and to land on the objective of a wave, avoiding targets with a lot of anti-air. `--droptest` covers the call, the load, the parachute descent and the shoot-down.
+
+**Force fire (human players only)** — hold `Ctrl` and right-click (or attack-move with `A`) a unit or structure of your own or of your ally to attack it on purpose, exactly as you
+would an enemy: tanks shoot it, jets and bombers strafe and bomb it, turrets can be turned on it, and area weapons (shells, arcs, bombs, rails, grenades) hurt everything near
+the impact, friends included. `Ctrl` while placing a power or nuke target makes the blast hit friendly ground too (the cursor says `FORCE FIRE` / `NUKE (FRIENDLY FIRE)`).
+Without `Ctrl` nothing ever hurts a friend by accident. Computer armies (the AI commander, the learned brain and the AI ally) can never do this: the simulation drops the flag
+for any army that is not human. `--rulestest` covers it.
+
+**Snipers** — both armies train one at the Barracks / Command Post once the tech structure stands: the **Ghost Sniper** (Cyber, needle rifle) and the **Sniper** (Clanker, rifle).
+$550, fragile, long sight, 11.5 tile range: they kill any infantryman in a couple of shots and can shoot nothing else, not vehicles, structures, aircraft or other snipers. Only
+**vehicles and aircraft can spot and hit a sniper**: infantry, turrets and the splash of infantry weapons never find one, so a sniper is safe from soldiers and at the mercy of a
+tank or a drone. The AI builds them against infantry-heavy enemies.
+
+**Aircraft** — each army has a cheap, fast, fragile bomber (Wraith Drone / Vulture Gunship: $850, 520 / 560 hp, 340 / 300 px/s) and an expensive, fast, powerful fighter-bomber
+(Specter Jet / Talon Jet: $2400, 1500 / 1550 hp, 560 / 540 px/s, 10 passes a sortie). Both kinds hit air and ground: the bombers carpet-bomb the ground and shoot aircraft down with
+their guns, the jets use heavy plasma lances / homing Sidewinders on everything (about 85-100% against structures) and fight aircraft on the turn.
 
 **Bombers** — the Wraith Drone and the Vulture Gunship are bombers. Against anything on the ground they fly real bombing runs: they line up on the
 target (leading a moving one), release a stick of four heavy bombs a few tens of pixels apart along the flight line, fly straight on for a second and
 swing round for another pass (12 / 16 bombs per sortie, reloaded in under half a second per bomb on the pad). A bomb splashes two tiles, hits
 structures about one and a half times as hard as soldiers' small arms, and goes off in a fireball with secondary bursts, a shockwave ring, flung debris,
 a dust ring, a climbing smoke column and a scorch mark. A flight of three takes a factory down in one or two passes, so anti-air batteries matter.
-Against aircraft they keep using their guns. They carry more armour than before (880 / 1000 hp).
+Against aircraft they keep using their guns. They are fragile on purpose (520 / 560 hp): their price is low and they are fast.
 
 **Supersonic jets** — the Drone Pad and the Airstrip each build a second aircraft once the tech structure stands: the **Specter Jet**
 (Cyber, stealth delta, plasma lances) and the **Talon Jet** (Clanker, swept-wing fighter-bomber, homing Sidewinders). They are the
@@ -166,5 +181,5 @@ pass instead of flying through the defences, steer clear of heavily covered targ
 ## Income and nukes
 
 - **Oil Well** (Clanker, $1400) pumps $380 every 5 s for as long as it stands, no power needed. **Bitcoin Datacenter** (Cyber, $1600) mines $450 every 5 s and runs at half rate on low power. Up to 4 each, so income continues after the supply piles run dry.
-- **Nuke Ramp** (both armies, $5000, needs the tech structure): each ramp can launch one tactical nuke every 5 minutes (60 s arming after it is built). The warhead flies for 7 s, so the enemy gets a warning circle, and it tears up an 11 tile radius around ground zero. **Every enemy ground unit in the blast collapses** (a lethal core, then falling damage), **enemy aircraft inside the fireball (the inner 70%) fall out of the sky** and those in the shock ring beyond are badly mauled, **small structures collapse** (anything of six tiles or less: turrets, batteries, reactors, barracks, income structures) while **large structures survive heavily damaged** (about 80% of their health lost at ground zero, a fifth at the rim, never lethal, and knocked offline for a while). Survivors are stunned and hurled, and chain explosions go off under a rising mushroom cloud. Friendly units are thrown but never hurt by the blast itself. The crater stays radioactive for 80 s: every unit on the ground inside it, friend or foe, keeps taking damage, while structures only suffer a slow drain that stops at a tenth of their health. Any number of ramps can be built; more ramps means more warheads per cycle.
+- **Nuke Ramp** (both armies, $5000, needs the tech structure): each ramp can launch one tactical nuke every 5 minutes (60 s arming after it is built). The warhead flies for 7 s, so the enemy gets a warning circle, and it tears up an 11 tile radius around ground zero. **Every enemy ground unit in the blast collapses** (a lethal core, then falling damage), **enemy aircraft inside the fireball (the inner 70%) fall out of the sky** and those in the shock ring beyond are badly mauled, **small structures collapse** (anything of six tiles or less: turrets, batteries, reactors, barracks, income structures) while **large structures survive heavily damaged** (about 80% of their health lost at ground zero, a fifth at the rim, never lethal, and knocked offline for a while). Survivors are stunned and hurled, and chain explosions go off under a towering mushroom cloud (a rolling vortex cap lit by the fireball, a turbulent stem, a condensation collar and a base surge of dust). The missile itself is a large two-livery warhead with a long exhaust, a smoke trail, a ground shadow and a glowing nose on re-entry. Friendly units are thrown but never hurt by the blast itself (unless the human fired it with Ctrl held, see Force fire). The crater stays radioactive for 80 s: every unit on the ground inside it, friend or foe, keeps taking damage, while structures only suffer a slow drain that stops at a tenth of their health. Any number of ramps can be built; more ramps means more warheads per cycle.
 - Airfields honor their rally point: new aircraft fly there and wait, going back to the pad only to rearm.

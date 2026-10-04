@@ -250,9 +250,18 @@ Entity* Game::selectedBuilding() const {
 }
 int Game::selectionOwner() const { return g_sim.humanPlayer; }
 
+// Ctrl held = "force fire": the click may target your own or an ally's units and structures (and powers/nukes hit friendly ground too).
+static bool forceFireKey() { return (SDL_GetModState() & KMOD_CTRL) != 0; }
+
 void Game::issueRightClick(Vec2 w) {
     if (selection.empty()) return;
     Entity* t = pickEntity(w, false);
+    if (t && t->kind != EK_RESOURCE && t->owner >= 0 && forceFireKey()) {
+        std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
+        for (auto r : selection) if (r != tr) sel.push_back(r);
+        if (!sel.empty()) { g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); }
+        return;
+    }
     if (t && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE) {
         if (g_sim.enemies(g_sim.humanPlayer, t->owner)) { g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); }
         return;
@@ -267,7 +276,12 @@ void Game::issueRightClick(Vec2 w) {
 
 void Game::issueAttackMove(Vec2 w) {
     Entity* t = pickEntity(w, false);
-    if (t && g_sim.enemies(g_sim.humanPlayer, t->owner)) g_sim.cmdAttack(selection, g_sim.refOf(*t));
+    if (t && t->kind != EK_RESOURCE && t->owner >= 0 && forceFireKey()) {
+        std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
+        for (auto r : selection) if (r != tr) sel.push_back(r);
+        g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner));
+    }
+    else if (t && g_sim.enemies(g_sim.humanPlayer, t->owner)) g_sim.cmdAttack(selection, g_sim.refOf(*t));
     else g_sim.cmdMove(selection, w, true);
     g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
 }
@@ -315,7 +329,7 @@ void Game::buildButtons() {
             add(BK_RESEARCH, 0, g_sim.programAvailable(g_sim.humanPlayer) && g_sim.canAfford(g_sim.humanPlayer, pg.cost), pg.name, tip);
             const DropType& dr = DROPS[pl.faction];
             snprintf(tip, sizeof tip, "%s  [P]  %s", dr.name, dr.desc);
-            add(BK_DROP, 0, g_sim.time >= pl.dropReady, dr.name, tip);
+            add(BK_DROP, 0, g_sim.dropsReady(g_sim.humanPlayer) > 0, dr.name, tip);
         }
         if (role == BR_NUKE) {
             int rdy = g_sim.nukesReady(g_sim.humanPlayer);
@@ -373,7 +387,7 @@ void Game::cmdSelection(int kind, int id) {
     case BK_RALLY: rallyMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_POWER: if (g_sim.time >= pl.powerReady && g_sim.hasRole(g_sim.humanPlayer, BR_TECH)) { powerMode = true; placingType = -1; attackMoveMode = false; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_NUKE: if (g_sim.nukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
-    case BK_DROP: if (g_sim.time >= pl.dropReady && g_sim.hasRole(g_sim.humanPlayer, BR_TECH)) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_ATTACKMOVE: attackMoveMode = true; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
@@ -562,8 +576,8 @@ void Game::gameEvent(const SDL_Event& e) {
                 Vec2 wp((mouseX - MINIMAP_X) * (float)WORLD_W / MINIMAP_SIZE, (mouseY - MINIMAP_Y) * (float)WORLD_H / MINIMAP_SIZE);
                 if (areaMode) applyArea(wp, AREA_DEFAULT_R);
                 else if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
-                else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp)) powerMode = false; }
-                else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp)) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
+                else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) powerMode = false; }
+                else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp, forceFireKey())) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
                 else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else cam = Vec2(clampf(wp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(wp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 return;
@@ -590,8 +604,8 @@ void Game::gameEvent(const SDL_Event& e) {
                 else g_audio.play(SND_CANT, Vec2(), true);
                 return;
             }
-            if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w)) powerMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
-            if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w)) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
+            if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) powerMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w, forceFireKey())) { nukeMode = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
             if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (attackMoveMode) { issueAttackMove(w); attackMoveMode = false; return; }
             if (rallyMode) { Entity* b = selectedBuilding(); if (b) g_sim.cmdSetRally(g_sim.refOf(*b), w); rallyMode = false; return; }
@@ -1239,13 +1253,17 @@ void Game::renderWorld() {
     // cursor hints
     if (areaMode) {}
     else if (attackMoveMode) g.text(mouseX + 12, mouseY - 4, "ATTACK", rgb(255, 90, 80));
-    else if (nukeMode) g.text(mouseX + 12, mouseY - 4, "NUKE", rgb(255, 100, 70));
+    else if (nukeMode) g.text(mouseX + 12, mouseY - 4, forceFireKey() ? "NUKE (FRIENDLY FIRE)" : "NUKE", rgb(255, 100, 70));
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (powerMode) g.text(mouseX + 12, mouseY - 4, POWERS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (rallyMode) g.text(mouseX + 12, mouseY - 4, "RALLY", rgb(120, 255, 120));
     else if (mouseY < VIEW_H) {
         Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
-        if (h && h->kind != EK_RESOURCE && h->owner != g_sim.humanPlayer) {
+        if (h && h->kind != EK_RESOURCE && h->owner >= 0 && forceFireKey() && !selection.empty()) {
+            const char* nm = h->isUnit() ? h->ut().name : h->bt().name;
+            char buf[96]; snprintf(buf, sizeof buf, "FORCE FIRE: %s%s", nm, h->owner == g_sim.humanPlayer ? " (yours)" : g_sim.enemies(g_sim.humanPlayer, h->owner) ? "" : " (ally)");
+            g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 120, 90));
+        } else if (h && h->kind != EK_RESOURCE && h->owner != g_sim.humanPlayer) {
             const char* nm = h->isUnit() ? h->ut().name : h->bt().name;
             bool foe = g_sim.enemies(g_sim.humanPlayer, h->owner);
             char buf[96]; snprintf(buf, sizeof buf, "%s (%s%s)", nm, foe || h->owner < 0 ? "" : "ally, ", h->owner >= 0 ? FACTION_NAME[g_sim.players[h->owner].faction] : "");
@@ -1431,7 +1449,7 @@ void Game::renderHud() {
         }
     } else {
         g.text(INFO_X + 10, hy + 14, "No selection", hudDim(), 2);
-        g.text(INFO_X + 10, hy + 40, "Left-click / drag: select    Right-click: move, attack, gather, repair", hudDim());
+        g.text(INFO_X + 10, hy + 40, "Left-click / drag: select    Right-click: move, attack, gather, repair   Ctrl+right-click: force fire on own / allies", hudDim());
         g.text(INFO_X + 10, hy + 52, "A: attack-move   S: stop   Tab: select army on screen   Ctrl+#: group", hudDim());
         g.text(INFO_X + 10, hy + 64, "Arrows/edge/middle-drag/wheel: scroll   Home: base   Space: pause   +/-: speed", hudDim());
         g.text(INFO_X + 10, hy + 76, "Select a Dozer to build structures; select a structure to train units", hudDim());
@@ -1452,9 +1470,9 @@ void Game::renderHud() {
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
         if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
         if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP) {
-            float rem = (b.kind == BK_POWER ? pl.powerReady : (b.kind == BK_DROP ? pl.dropReady : pl.scanReady)) - g_sim.time;
+            float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
             if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(b.x + 5, b.y + 15, buf, hudDim()); }
-            else if (b.enabled) g.text(b.x + 5, b.y + 15, "READY", accent);
+            else if (b.enabled) { int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : 1; if (dn > 1) { snprintf(buf, sizeof buf, "READY x%d", dn); g.text(b.x + 5, b.y + 15, buf, accent); } else g.text(b.x + 5, b.y + 15, "READY", accent); }
         }
         if (b.kind == BK_RESEARCH) {
             const ProgramType& pg = PROGRAMS[pl.faction];
@@ -1488,6 +1506,7 @@ void Game::renderHud() {
             "Arrows, screen edge, middle-drag, wheel: scroll     Home: your base",
             "Dozer selected             build menu; click the ground to place, Shift for several",
             "Structure selected         train units; right-click ground for rally; Del sells",
+            "Ctrl + right-click / A     force fire on your own or an ally's unit or structure (Ctrl+click a power/nuke target hits friendly ground too)",
             "Tech structure            X strike, V map scan (30s), R Advanced Program: unlocks elite units",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",
             "",
@@ -1561,16 +1580,50 @@ void Game::drawNukes() {
         g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, rgb(255, 230, 200));
         // the missile: rises from the ramp on a long arc and falls on the target
         auto world = [&](float u) { Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; };
+        auto ground = [&](float u) { return n.from + (n.pos - n.from) * u; };
         Vec2 w0 = world(k), w1 = world(std::min(1.0f, k + 0.012f));
         Vec2 m = worldToScreen(w0), dir = (w1 - w0).norm();
         float ang = std::atan2(dir.y, dir.x);
-        int fr = ((int)(wallTime * 24)) % 6;
-        Vec2 tail = m - dir * 17.0f;
-        g.draw(g.fxs.flame[fr], tail.x, tail.y, ang - 1.5708f, 1.5f, rgb(255, 214, 160), 235);
-        g.glowAdd(tail.x, tail.y, 30, Color{255, 160, 70, 170});
-        g.draw(g.fxs.missile, m.x, m.y, ang, 1.5f);
-        if (frameDt > 0 && onScreen(w0.x, w0.y, 200) && fxRng.f() < 55.0f * frameDt)
-            emitP(w0.x - dir.x * 20, w0.y - dir.y * 20, fxRng.f(-8, 8), fxRng.f(-8, 8), fxRng.f(1.8f, 2.6f), 5, 17, rgb(232, 228, 222, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.8f, fxRng.f(0, 6), fxRng.f(-0.4f, 0.4f));
+        const float S = 1.3f;
+        bool cyberArmy = g_sim.players[n.owner < 0 ? 0 : n.owner].faction == F_CYBER;
+        const Sprite& body = cyberArmy ? g.fxs.missile : g.fxs.missileK;
+        // its shadow slides across the ground below it, smaller and fainter the higher it climbs
+        { Vec2 gs = worldToScreen(ground(k)); float lift = std::sin(k * 3.14159f); float sz = 34.0f - 12.0f * lift;
+          g.drawSized(g.fxs.cloud[0], gs.x + 6, gs.y + 4, sz * 2.2f, sz, ang, rgb(0, 0, 0), (u8)(120 - 60 * lift)); }
+        // exhaust: a long white-hot core fading through orange, with a hard glow at the nozzle
+        int fr = ((int)(wallTime * 26)) % 6;
+        Vec2 tail = m - dir * (27.0f * S);
+        for (int j = 2; j >= 0; j--) {
+            Vec2 fp = tail - dir * (j * 15.0f * S);
+            g.draw(g.fxs.flame[(fr + j * 2) % 6], fp.x, fp.y, ang - 1.5708f, (1.9f - 0.35f * j) * S, j == 0 ? rgb(255, 244, 214) : rgb(255, 190, 120), (u8)(245 - 55 * j));
+        }
+        g.glowAdd(tail.x, tail.y, 52 * S, Color{255, 150, 60, 150});
+        g.glowAdd(tail.x - dir.x * 6, tail.y - dir.y * 6, 22 * S, Color{255, 240, 200, 210});
+        g.draw(body, m.x, m.y, ang, S);
+        if (k > 0.5f) {   // re-entry: the nose cone glows as the warhead dives
+            float heat = clampf((k - 0.5f) / 0.4f, 0, 1);
+            Vec2 nose = m + dir * (29.0f * S);
+            g.glowAdd(nose.x, nose.y, 26 * S, Color{255, 140, 70, (u8)(140 * heat)});
+            g.glowAdd(nose.x, nose.y, 11 * S, Color{255, 236, 200, (u8)(190 * heat)});
+        }
+        if (frameDt > 0 && onScreen(w0.x, w0.y, 260)) {
+            // a thick billowing trail that hangs in the air for a few seconds, plus embers
+            float rate = 95.0f;
+            for (float q = fxRng.f(); q < rate * frameDt; q += 1.0f) {
+                Vec2 back = w0 - dir * (30.0f + fxRng.f(0, 10));
+                emitP(back.x, back.y, fxRng.f(-12, 12), fxRng.f(-12, 12), fxRng.f(2.8f, 4.6f), 6, fxRng.f(24, 36), rgb(236, 232, 226, 200), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.7f, fxRng.f(0, 6), fxRng.f(-0.4f, 0.4f));
+            }
+            if (fxRng.f() < 40.0f * frameDt) emitP(w0.x - dir.x * 34, w0.y - dir.y * 34, -dir.x * fxRng.f(40, 120) + fxRng.f(-40, 40), -dir.y * fxRng.f(40, 120) + fxRng.f(-40, 40), fxRng.f(0.3f, 0.7f), 1.8f, 0.4f, rgb(255, 214, 140), PK_SPARK, 0, 120, 2.0f);
+        }
+        if (k < 0.3f && frameDt > 0 && onScreen(n.from.x, n.from.y, 200)) {   // launch plume at the ramp
+            float inten = 1.0f - k / 0.3f;
+            for (float q = fxRng.f(); q < 70.0f * inten * frameDt; q += 1.0f) {
+                float an = fxRng.f(0, 6.283f), sp = fxRng.f(30, 100);
+                emitP(n.from.x, n.from.y, std::cos(an) * sp, std::sin(an) * sp * 0.5f - fxRng.f(10, 40), fxRng.f(1.4f, 2.6f), 14, fxRng.f(44, 70), rgb(190, 178, 164, 190), PK_DUST, (u8)fxRng.range(0, 2), 0, 1.6f, fxRng.f(0, 6), fxRng.f(-0.4f, 0.4f));
+            }
+            Vec2 fs = worldToScreen(n.from);
+            g.glowAdd(fs.x, fs.y, 64 * inten, Color{255, 170, 80, (u8)(150 * inten)});
+        }
     }
     if (nukeFlash > 0) {
         g.fill(0, 0, SCREEN_W, VIEW_H, rgb(255, 246, 228, (int)(215 * clampf(nukeFlash / 0.55f, 0, 1))));

@@ -324,12 +324,21 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     }
 }
 
-void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target) {
+// Attacking your own or an ally's units and structures on purpose ("force fire") is something only a human player can order: the
+// computer armies (and the learned brain) never pass 'force', and even if they did it is dropped here.
+void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
     Entity* t = get(target);
     if (!t) return;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || !e->isUnit()) continue;
+        if (!e || e == t) continue;
+        bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
+        if (e->isBuilding()) {   // a turret or battery can be turned on a friendly target too
+            if (ff && e->constructed && e->bt().weapon >= 0) { e->forceTarget = target; e->engaged = target; }
+            continue;
+        }
+        if (!e->isUnit()) continue;
+        e->forceTarget = ff ? target : NOREF;
         const UnitType& ut = e->ut();
         if (ut.role == UR_DOZER) {
             if (t->isBuilding() && t->owner == e->owner) { cmdAssist({r}, target); continue; }
@@ -476,8 +485,9 @@ void Sim::cmdSell(Ref building) {
     emit(EV_SOUND, b->owner, SND_CLICK, b->pos);
 }
 
-bool Sim::cmdPower(int player, Vec2 pos) {
+bool Sim::cmdPower(int player, Vec2 pos, bool force) {
     Player& pl = players[player];
+    force = force && !pl.isAI;   // hitting your own or an ally's units is a human's choice
     static int noPower = getenv("ONEHOUR_NOPOWER") ? 1 : 0;
     if (noPower) return false;
     if (time < pl.powerReady) return false;
@@ -486,7 +496,7 @@ bool Sim::cmdPower(int player, Vec2 pos) {
     pl.powerReady = time + pw.cooldown;
     if (pl.faction == F_CYBER) {
         forEachNear(pos, pw.radius * TILE, [&](Entity& e) {
-            if (e.kind == EK_RESOURCE || !enemies(player, e.owner)) return;
+            if (e.kind == EK_RESOURCE || !(enemies(player, e.owner) || (force && e.owner >= 0))) return;
             if (e.isUnit() && e.ut().kind == UK_INF) return;
             e.disabledUntil = time + EMP_DURATION;
             if (e.isAir()) { e.hp = 0; applyDamage(e, 1, player, NOREF, nullptr); }
@@ -494,7 +504,7 @@ bool Sim::cmdPower(int player, Vec2 pos) {
         fx.push_back({FX_EMP, pos, pos, 0, 1.2f, rgb(160, 220, 255), pw.radius * TILE});
         emit(EV_SOUND, -1, SND_EMP, pos);
     } else {
-        storms.push_back({pos, pw.radius * TILE, player, 0, 18, 0});
+        storms.push_back({pos, pw.radius * TILE, player, 0, 18, 0, force});
         emit(EV_SOUND, -1, SND_CANNON, pos);
     }
     return true;
@@ -505,6 +515,20 @@ bool Sim::inFallout(Vec2 p, float margin) const {
     return false;
 }
 
+int Sim::dropsReady(int player) const {
+    if (player < 0 || player >= numPlayers || time < players[player].dropReady) return 0;
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.dropTimer) n++;
+    return n;
+}
+float Sim::dropWait(int player) const {
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH) {
+        float w = std::max(0.0f, std::max(e.dropTimer, players[player].dropReady) - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
 int Sim::nukesReady(int player) const {
     if (players[player].lowPower()) return 0;
     int n = 0;
@@ -520,13 +544,14 @@ float Sim::nukeWait(int player) const {
     return best;
 }
 
-bool Sim::cmdNuke(int player, Vec2 pos) {
+bool Sim::cmdNuke(int player, Vec2 pos, bool force) {
+    force = force && !players[player].isAI;
     Entity* ramp = nullptr;
     if (players[player].lowPower()) return false;
     for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_NUKE && time >= e.actionTimer && e.disabledUntil <= time) { ramp = &e; break; }
     if (!ramp) return false;
     ramp->actionTimer = time + NUKE_COOLDOWN;
-    nukes.push_back({ramp->pos, pos, player, 0});
+    nukes.push_back({ramp->pos, pos, player, 0, force});
     emit(EV_SOUND, -1, SND_ROCKET, ramp->pos);
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) { emit(EV_MSG, p, SND_ATTACKED, pos, "NUCLEAR LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Nuclear missile incoming!"); }
     return true;
@@ -539,10 +564,13 @@ bool Sim::cmdNuke(int player, Vec2 pos) {
 bool Sim::cmdParadrop(int player, Vec2 pos, bool attackOn) {
     if (player < 0 || player >= numPlayers) return false;
     Player& pl = players[player];
-    if (!pl.alive || time < pl.dropReady || !hasRole(player, BR_TECH)) return false;
+    if (!pl.alive || time < pl.dropReady) return false;
+    Entity* tech = nullptr;   // like the nuke ramps: every Data Center / Arms Lab has its own cooldown, so more of them means more drops
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.dropTimer) { tech = &e; break; }
+    if (!tech) return false;
     const DropType& dt = DROPS[pl.faction];
     pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
-    pl.dropReady = time + dt.cooldown;
+    tech->dropTimer = time + dt.cooldown;
     Airlift a;
     a.owner = player; a.target = pos; a.attackOn = attackOn;
     a.hp = a.maxHp = AIRLIFT_HP;
@@ -684,7 +712,7 @@ void Sim::nukeBlast(const Nuke& n) {
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (d > R) continue;
         float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
-        bool foe = enemies(n.owner, e->owner);
+        bool foe = enemies(n.owner, e->owner) || (n.force && !players[n.owner].isAI && e->owner >= 0);   // a nuke the human aimed at friendly ground flattens friendly ground
         if (e->isAir()) {
             if (!foe) continue;
             float core = R * NUKE_AIR_KILL;
@@ -869,7 +897,12 @@ void Sim::moveAlong(Entity& e, float speed) {
 bool Sim::canTarget(const Entity& e, const Entity& t) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
     if (t.fall > 0) return false;   // still under the parachute
-    if (!enemies(e.owner, t.owner)) return false;
+    if (t.isUnit() && t.ut().sniper && !(e.isUnit() && e.ut().kind != UK_INF)) return false;   // only vehicles and aircraft can spot a sniper
+    if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper
+    if (!enemies(e.owner, t.owner)) {   // a friendly is only a legal target for the one the human ordered it to hit
+        if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
+        if (get(e.forceTarget) != &t) return false;
+    }
     int w = e.weapon();
     if (w < 0) return false;
     const Weapon& wp = WEAPONS[w];
@@ -897,7 +930,7 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
     const Weapon& wp = WEAPONS[w];
     Entity* best = nullptr; float bs = 1e9f;
     forEachNear(e.pos, rangeTiles * TILE, [&](Entity& t) {
-        if (&t == &e || !canTarget(e, t)) return;
+        if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t)) return;   // (auto-acquisition never picks a friend)
         float d = distToEntity(e.pos, t) / TILE;
         if (d < wp.minRange) return;
         float score = d - 2.5f * wp.mult[t.armor()];
@@ -922,7 +955,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
     const Weapon& wp = WEAPONS[w];
     Entity* best = nullptr; float bs = 1e9f;
     forEachNear(e.zone, e.zoneR + (wp.range + 1.0f) * TILE, [&](Entity& t) {
-        if (&t == &e || !canTarget(e, t)) return;
+        if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t)) return;
         float d = distToEntity(e.pos, t) / TILE;
         if (d < wp.minRange) return;
         bool inZone = distToEntity(e.zone, t) <= e.zoneR;
@@ -968,6 +1001,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
     else if (e.isUnit() && e.ut().kind == UK_AIR) from = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 9.0f;
     Ref tref = refOf(tgt);
     Ref self = refOf(e);
+    bool forced = !enemies(e.owner, tgt.owner);   // only possible on a human's order: the shot is meant for a friend and its blast hurts everybody
     emit(EV_SOUND, e.owner, w.sound, from);
     fx.push_back({FX_FLASH, from, from, 0, 0.08f, w.color, 5});
     switch (w.proj) {
@@ -977,7 +1011,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
         break;
     case PJ_ARC:
         fx.push_back({FX_ARC, from, tgt.pos, 0, 0.16f, w.color, 2});
-        splashDamage(tgt.pos, w.splash, w.dmg, e.owner, self, w, tref);
+        splashDamage(tgt.pos, w.splash, w.dmg, e.owner, self, w, tref, forced);
         break;
     case PJ_RAIL: {
         Vec2 dir = (tgt.pos - from).norm();
@@ -986,7 +1020,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
         // pierce: every enemy near the line takes the hit
         std::vector<Entity*> hits;
         forEachNear(from + dir * (w.range * TILE * 0.5f), w.range * TILE * 0.5f + 40, [&](Entity& t) {
-            if (!canTarget(e, t)) return;
+            if (forced ? (&t == &e || !t.alive || t.owner < 0 || t.kind == EK_RESOURCE || t.fall > 0 || (t.isAir() ? !w.air : !w.ground)) : !canTarget(e, t)) return;
             Vec2 rel = t.pos - from;
             float along = rel.x * dir.x + rel.y * dir.y;
             if (along < 0 || along > w.range * TILE + t.radius()) return;   // (range is measured to a target's edge, not its centre)
@@ -998,7 +1032,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
         break;
     }
     case PJ_BULLET: case PJ_ROCKET: {
-        Projectile p; p.pos = from; p.prevPos = from; p.target = tref; p.weapon = (int)(&w - WEAPONS); p.owner = e.owner; p.shooter = self;
+        Projectile p; p.pos = from; p.prevPos = from; p.target = tref; p.weapon = (int)(&w - WEAPONS); p.owner = e.owner; p.shooter = self; p.forced = forced;
         Vec2 dir = (tgt.pos - from).norm();
         if (w.proj == PJ_ROCKET) dir = (dir + Vec2(rng.f(-0.35f, 0.35f), rng.f(-0.35f, 0.35f))).norm();
         p.vel = dir * w.projSpeed;
@@ -1008,7 +1042,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
         break;
     }
     case PJ_SHELL: {
-        Projectile p; p.pos = from; p.prevPos = from; p.target = tref; p.weapon = (int)(&w - WEAPONS); p.owner = e.owner; p.shooter = self;
+        Projectile p; p.pos = from; p.prevPos = from; p.target = tref; p.weapon = (int)(&w - WEAPONS); p.owner = e.owner; p.shooter = self; p.forced = forced;
         Vec2 lead = tgt.pos;
         p.dest = lead; p.vel = from;  // vel stores the launch point for the arc
         p.arcLen = std::max(0.25f, dist(from, lead) / w.projSpeed);
@@ -1056,17 +1090,18 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     }
 }
 
-void Sim::splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct) {
+void Sim::splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced) {
     float r = std::max(radiusTiles, 0.05f) * TILE;
     std::vector<Entity*> hits;
     forEachNear(at, r, [&](Entity& t) {
-        if (t.kind == EK_RESOURCE || !enemies(owner, t.owner)) return;
+        if (t.kind == EK_RESOURCE || !(enemies(owner, t.owner) || (forced && t.owner >= 0))) return;
         if (t.isAir() && !w.air) return;
         if (!t.isAir() && !w.ground) return;
+        if (t.isUnit() && t.ut().sniper) { const Entity* at = get(attacker); if (at && !(at->isUnit() && at->ut().kind != UK_INF)) return; }   // an infantry or structure blast cannot find a sniper
         hits.push_back(&t);
     });
     Entity* dt = get(direct);
-    if (dt && std::find(hits.begin(), hits.end(), dt) == hits.end() && enemies(owner, dt->owner)) hits.push_back(dt);
+    if (dt && std::find(hits.begin(), hits.end(), dt) == hits.end() && (enemies(owner, dt->owner) || (forced && dt->owner >= 0))) hits.push_back(dt);
     for (auto* t : hits) {
         float d = distToEntity(at, *t);
         float f = (refOf(*t) == direct) ? 1.0f : clampf(1.0f - d / r, 0.35f, 1.0f);
@@ -1092,7 +1127,7 @@ void Sim::updateProjectiles() {
             if (p.arcT >= 1.0f) {
                 fx.push_back({FX_EXPLODE, p.dest, p.dest, 0, 0.35f, rgb(255, 190, 90), w.splash * TILE + 8});
                 fx.push_back({FX_SMOKE, p.dest, p.dest, 0, 1.2f, rgb(70, 65, 60), 9, Vec2(0, -20)});
-                splashDamage(p.dest, w.splash, w.dmg, p.owner, p.shooter, w, p.target);
+                splashDamage(p.dest, w.splash, w.dmg, p.owner, p.shooter, w, p.target, p.forced);
                 p.alive = false;
             }
             continue;
@@ -1113,7 +1148,7 @@ void Sim::updateProjectiles() {
         if (d <= hitR || p.life <= 0) {
             if (w.splash > 0) {
                 fx.push_back({FX_EXPLODE, aim, aim, 0, 0.3f, rgb(255, 190, 90), w.splash * TILE + 6});
-                splashDamage(aim, w.splash, w.dmg, p.owner, p.shooter, w, p.target);
+                splashDamage(aim, w.splash, w.dmg, p.owner, p.shooter, w, p.target, p.forced);
             } else if (t && d <= hitR) {
                 applyDamage(*t, w.dmg, p.owner, p.shooter, &w);
             }
@@ -1153,7 +1188,7 @@ void Sim::updateStorms() {
             s.shellsLeft--;
             float a = rng.f(0, 6.283f), r = rng.f(0, s.radius);
             Vec2 at = s.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
-            Projectile p; p.pos = at + Vec2(0, -400); p.prevPos = p.pos; p.vel = p.pos; p.dest = at; p.weapon = 18; p.owner = s.owner;
+            Projectile p; p.pos = at + Vec2(0, -400); p.prevPos = p.pos; p.vel = p.pos; p.dest = at; p.weapon = 18; p.owner = s.owner; p.forced = s.force;
             p.arcLen = 0.7f; p.arcT = 0; p.life = 1.0f; p.target = NOREF;
             projs.push_back(p);
             emit(EV_SOUND, -1, SND_CANNON, at);
@@ -1236,8 +1271,8 @@ void Sim::jetAttack(Entity& e, Entity& t) {
     if (e.jetBreak > 0) {
         e.jetBreak -= SIM_DT;
         want = std::atan2(-to.y, -to.x);                   // peel away: turn back out of range instead of flying through the defences
-    } else if (d <= w.range && std::abs(angDiff(e.angle, want)) < 0.3f) {
-        if (e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; e.jetBreak = 1.25f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
+    } else if (d <= w.range && std::abs(angDiff(e.angle, want)) < (t.isAir() ? 0.9f : 0.3f)) {   // (a dogfight is fought on the turn: a fighter fires inside a wide cone at another aircraft)
+        if (e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; e.jetBreak = t.isAir() ? 0.5f : 1.25f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
     } else if (d < 2.0f && e.cooldown > 0) {
         e.jetBreak = 0.9f;                                 // arrived with the guns still cooling: peel off and come round again
     } else if (d < w.range + 5.0f) {
@@ -1297,6 +1332,7 @@ void Sim::dropBomb(Entity& e, Vec2 at) {
     Projectile p;
     p.pos = e.pos; p.prevPos = e.pos; p.vel = e.pos;      // vel keeps the release point (the ground point under the aircraft), like a shell's launch point
     p.dest = at; p.target = NOREF; p.owner = e.owner; p.shooter = refOf(e);
+    { const Entity* ft = get(e.targetEnt); p.forced = ft && e.order == O_ATTACK && !enemies(e.owner, ft->owner); }   // a human-ordered run on a friendly: the bombs hurt everything near it
     p.weapon = e.ut().faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER;
     p.arcLen = 0.62f; p.arcT = 0; p.life = p.arcLen + 0.3f;
     projs.push_back(p);
@@ -1307,7 +1343,7 @@ void Sim::bombImpact(Projectile& p) {
     const Weapon& w = WEAPONS[p.weapon];
     Vec2 at = p.dest;
     float R = w.splash * TILE;
-    splashDamage(at, w.splash, w.dmg, p.owner, p.shooter, w, NOREF);
+    splashDamage(at, w.splash, w.dmg, p.owner, p.shooter, w, NOREF, p.forced);
     bool cy = p.weapon == W_BOMB_CYBER;
     Color fire = cy ? rgb(190, 235, 255) : rgb(255, 210, 140), hot = cy ? rgb(120, 220, 255) : rgb(255, 150, 60);
     fx.push_back({FX_EXPLODE, at, at, 0, 0.75f, fire, R * 1.25f});

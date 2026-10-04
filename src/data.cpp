@@ -8,7 +8,7 @@ const Weapon WEAPONS[] = {
     /* 3 */ { "Photon Cannon",   62, 6.5f, 0, 1.50f, PJ_LASER,  0,    true, false, {0.6f, 1.00f, 0.90f, 0.60f, 0.0f}, 1, 0,    SND_LASER_HEAVY, rgb(80, 200, 255) },
     /* 4 */ { "Volt Coil",       28, 5.0f, 0, 0.95f, PJ_ARC,    0.8f, true, true,  {1.6f, 0.45f, 0.25f, 0.30f, 0.7f}, 1, 0,    SND_ARC,         rgb(200, 230, 255) },
     /* 5 */ { "Railgun",        115, 8.5f, 2, 4.00f, PJ_RAIL,   0,    true, false, {0.5f, 1.00f, 1.20f, 1.00f, 0.0f}, 1, 0,    SND_RAIL,        rgb(255, 255, 255) },
-    /* 6 */ { "Drone Laser",     70, 5.5f, 0, 0.85f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 0.90f, 0.85f, 1.1f}, 1, 0,    SND_LASER,       rgb(120, 230, 255) },
+    /* 6 */ { "Drone Laser",     66, 5.8f, 0, 0.70f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 0.90f, 0.85f, 1.5f}, 1, 0,    SND_LASER,       rgb(120, 230, 255) },
     /* 7 */ { "Laser Turret",    90, 8.0f, 0, 1.10f, PJ_LASER,  0,    true, false, {0.9f, 1.00f, 0.80f, 0.50f, 0.0f}, 1, 0,    SND_LASER_HEAVY, rgb(80, 200, 255) },
     /* 8 */ { "Patriot Missile",110, 9.0f, 0, 1.20f, PJ_ROCKET, 0.6f, true, true,  {0.6f, 1.00f, 1.00f, 0.60f, 2.0f}, 1, 520,  SND_ROCKET,      rgb(240, 240, 240) },
     /* 9 */ { "Assault Rifle",   10, 5.0f, 0, 0.50f, PJ_BULLET, 0,    true, false, {1.0f, 0.35f, 0.20f, 0.15f, 0.0f}, 1, 900,  SND_RIFLE,       rgb(255, 220, 120) },
@@ -17,7 +17,7 @@ const Weapon WEAPONS[] = {
     /* 12 */{ "120mm Cannon",    62, 6.0f, 0, 2.10f, PJ_SHELL,  0.4f,true, false, {0.5f, 1.00f, 1.00f, 0.70f, 0.0f}, 1, 480,  SND_CANNON,      rgb(255, 210, 120) },
     /* 13 */{ "Gatling Gun",      8, 5.5f, 0, 0.12f, PJ_BULLET, 0,    true, true,  {1.3f, 0.40f, 0.20f, 0.15f, 0.9f}, 1, 1000, SND_MG,          rgb(255, 240, 160) },
     /* 14 */{ "Rocket Salvo",    40, 10.0f,3, 4.20f, PJ_ROCKET, 0.85f,true, false, {1.0f, 0.90f, 0.80f, 1.10f, 0.0f}, 4, 380,  SND_ROCKET,      rgb(255, 190, 110) },
-    /* 15 */{ "Gunship Rockets", 58, 5.5f, 0, 1.00f, PJ_ROCKET, 0.5f, true, true,  {1.0f, 1.10f, 0.90f, 1.00f, 0.7f}, 2, 520,  SND_ROCKET,      rgb(255, 200, 120) },
+    /* 15 */{ "Gunship Rockets", 58, 5.8f, 0, 0.90f, PJ_ROCKET, 0.5f, true, true,  {1.0f, 1.10f, 0.90f, 1.00f, 1.5f}, 2, 520,  SND_ROCKET,      rgb(255, 200, 120) },
     /* 16 */{ "Gun Nest",        13, 6.5f, 0, 0.20f, PJ_BULLET, 0,    true, true,  {1.3f, 0.55f, 0.40f, 0.20f, 0.5f}, 1, 1000, SND_MG,          rgb(255, 230, 140) },
     /* 17 */{ "Rocket Battery",  56, 8.0f, 0, 1.60f, PJ_ROCKET, 0.4f, true, true,  {0.5f, 0.90f, 0.90f, 0.50f, 1.5f}, 1, 520,  SND_ROCKET,      rgb(255, 210, 140) },
     /* 18 */{ "Storm Shell",     95, 0.0f, 0, 1.00f, PJ_SHELL,  1.0f, true, false, {1.2f, 1.00f, 0.90f, 1.00f, 0.0f}, 1, 600,  SND_CANNON,      rgb(255, 210, 120) },
@@ -25,10 +25,12 @@ const Weapon WEAPONS[] = {
     /* 20 */{ "Twin Ion Cannon", 74, 7.5f, 0, 1.30f, PJ_LASER,  0,    true, true,  {0.7f, 1.10f, 1.10f, 0.90f, 0.7f}, 2, 0,    SND_LASER_HEAVY, rgb(120, 240, 255) },
     /* 21 */{ "Grenade Launcher",70, 6.5f, 1.5f, 2.20f, PJ_SHELL, 1.1f, true, false, {1.4f, 0.90f, 0.70f, 1.20f, 0.0f}, 1, 330,  SND_CANNON,      rgb(255, 190, 110) },
     /* 22 */{ "Behemoth Cannon", 78, 6.8f, 0, 2.00f, PJ_SHELL,  0.7f, true, false, {0.6f, 1.00f, 1.10f, 0.90f, 0.0f}, 2, 520,  SND_CANNON,      rgb(255, 200, 110) },
-    /* 23 */{ "Plasma Lances",   44, 6.0f, 0, 2.30f, PJ_LASER,  0,    true, true,  {0.8f, 1.00f, 0.70f, 0.40f, 1.8f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
-    /* 24 */{ "Sidewinder Salvo",62, 7.0f, 0, 2.30f, PJ_ROCKET, 0.55f,true, true,  {0.9f, 1.10f, 0.90f, 0.80f, 1.6f}, 4, 880,  SND_ROCKET,      rgb(255, 214, 140) },
+    /* 23 */{ "Plasma Lances",   60, 6.0f, 0, 2.10f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 0.90f, 0.85f, 2.0f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
+    /* 24 */{ "Sidewinder Salvo",78, 7.0f, 0, 2.10f, PJ_ROCKET, 0.55f,true, true,  {1.0f, 1.10f, 1.00f, 1.00f, 1.9f}, 4, 880,  SND_ROCKET,      rgb(255, 214, 140) },
     /* 25 */{ "Plasma Bombs",   150, 1.0f, 0, 0.00f, PJ_BOMB,   2.0f, true, false, {1.2f, 1.25f, 1.00f, 1.50f, 0.0f}, 4, 0,    SND_EXPLODE_L,   rgb(120, 230, 255) },
     /* 26 */{ "Carpet Bombs",   165, 1.0f, 0, 0.00f, PJ_BOMB,   2.1f, true, false, {1.3f, 1.20f, 1.00f, 1.60f, 0.0f}, 4, 0,    SND_EXPLODE_L,   rgb(255, 176, 90) },
+    /* 27 */{ "Needle Rifle",   150, 11.5f, 0, 2.80f, PJ_LASER,  0,    true, false, {1.00f, 0.00f, 0.00f, 0.00f, 0.0f}, 1, 0,    SND_RAIL,        rgb(170, 255, 236) },
+    /* 28 */{ "Sniper Rifle",   140, 11.5f, 0, 2.60f, PJ_BULLET, 0,    true, false, {1.00f, 0.00f, 0.00f, 0.00f, 0.0f}, 1, 2200, SND_RIFLE,        rgb(255, 232, 160) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -42,10 +44,10 @@ const UnitType UNITS[U_COUNT] = {
     { "Photon Tank",    "T", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 720, 84,  900,  12, 7, 13, 3,  0, BR_FACTORY,  -1,         "Fast electric tank with photon cannon" },
     { "Volt Walker",    "V", F_CYBER, UK_VEH, UR_COMBAT,    AR_LIGHT, 560, 76,  800,  11, 7, 12, 4,  0, BR_FACTORY,  -1,         "Volt coil, arcs across infantry and drones" },
     { "Railgun Tank",   "G", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 700, 62,  1300, 17, 8, 14, 5,  0, BR_FACTORY,  B_C_TECH,   "Long range railgun, punches heavy armor" },
-    { "Wraith Drone",   "W", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   880, 250, 1200, 16, 9, 10, 6,  12, BR_AIRFIELD, -1,        "Bomber drone: carpet-bombs ground targets with plasma bombs (12 bombs a sortie), guns for aircraft", 0, 0, 1 },
-    { "Ion Lancer",     "I", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   150, 50,  750,  12, 8, 6,  19, 0, BR_BARRACKS, B_C_TECH,   "Elite sniper, piercing ion lance out to 9 tiles", 1 },
+    { "Wraith Drone",   "W", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   520, 340, 850,  12, 9, 10, 6,  12, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber drone: carpet-bombs ground targets with plasma bombs (12 a sortie), laser kills aircraft", 0, 0, 1 },
+    { "Ion Lancer",     "I", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   150, 50,  750,  12, 8, 6,  19, 0, BR_BARRACKS, B_C_TECH,   "Elite lancer, piercing ion lance out to 9 tiles", 1 },
     { "Aegis Titan",    "N", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 1700, 58, 2300, 26, 8, 17, 20, 0, BR_FACTORY,  B_C_TECH,   "Super-heavy walker, twin ion cannons hit ground and air", 1 },
-    { "Specter Jet",    "J", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   900, 560, 1800, 20, 11, 11, 23, 8, BR_AIRFIELD, B_C_TECH,  "Supersonic fighter: plasma lances, 8 strafing passes, shreds aircraft and light armor", 0, 1 },
+    { "Specter Jet",    "J", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   1500, 560, 2400, 24, 11, 11, 23, 10, BR_AIRFIELD, B_C_TECH,  "Powerful supersonic fighter-bomber: heavy plasma lances, 10 strafing passes, tough, kills aircraft and ground targets alike", 0, 1 },
 
     { "Dozer",          "D", F_CLANKER, UK_VEH, UR_DOZER,     AR_LIGHT, 420, 82,  1000, 12, 6, 12, -1, 0, BR_HQ,       -1,         "Constructs structures" },
     { "Supply Truck",   "H", F_CLANKER, UK_VEH, UR_HARVESTER, AR_LIGHT, 450, 96,  700,  9,  6, 12, -1, 0, BR_SUPPLY,   -1,         "Hauls supplies to a Supply Depot" },
@@ -55,13 +57,15 @@ const UnitType UNITS[U_COUNT] = {
     { "Brute Tank",     "T", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 900, 74,  900,  12, 7, 14, 12, 0, BR_FACTORY,  -1,         "Diesel main battle tank, 120mm cannon" },
     { "Gatling Tank",   "A", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 580, 80,  800,  11, 7, 12, 13, 0, BR_FACTORY,  -1,         "Gatling gun, anti-infantry and anti-air" },
     { "Rocket Launcher","M", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 450, 60,  1100, 16, 8, 13, 14, 0, BR_FACTORY,  B_K_TECH,   "Long range rocket artillery" },
-    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   1000, 210, 1200, 16, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Bomber gunship: drops sticks of heavy bombs on ground targets (16 bombs a sortie), rockets for aircraft", 0, 0, 1 },
+    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   560, 300, 850,  12, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber: drops sticks of heavy bombs on ground targets (16 a sortie), rockets for aircraft", 0, 0, 1 },
     { "Grenadier",      "B", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   170, 48,  700,  12, 7, 6,  21, 0, BR_BARRACKS, B_K_TECH,   "Elite lobber, splash grenades crack infantry and bunkers", 1 },
     { "Behemoth",       "N", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 2000, 52, 2300, 26, 8, 17, 22, 0, BR_FACTORY,  B_K_TECH,   "Super-heavy tank, twin 150mm shells with splash", 1 },
-    { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   950, 540, 1800, 20, 11, 12, 24, 8, BR_AIRFIELD, B_K_TECH,  "Supersonic fighter: homing Sidewinders, 8 strafing passes, hunts aircraft and vehicles", 0, 1 },
+    { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   1550, 540, 2400, 24, 11, 12, 24, 10, BR_AIRFIELD, B_K_TECH,  "Powerful supersonic fighter-bomber: homing Sidewinders, 10 strafing passes, tough, kills aircraft and ground targets alike", 0, 1 },
 
     { "Medic Rig",      "Y", F_CYBER,   UK_VEH, UR_HEALER, AR_LIGHT, 520, 92, 900, 12, 7, 13, -1, 0, BR_FACTORY, -1, "Nano-repair field: heals every friendly soldier, vehicle and aircraft near it, structures slowly" },
     { "Field Medic",    "Y", F_CLANKER, UK_VEH, UR_HEALER, AR_LIGHT, 540, 88, 900, 12, 7, 13, -1, 0, BR_FACTORY, -1, "Repair crew: heals every friendly soldier, vehicle and aircraft near it, structures slowly" },
+    { "Ghost Sniper",   "Q", F_CYBER,   UK_INF, UR_COMBAT, AR_INF,   85, 52, 550, 10, 11, 6, 27, 0, BR_BARRACKS, B_C_TECH, "Cloaked marksman: needle rifle kills any infantry from 11 tiles but nothing else. Only vehicles and aircraft can spot it", 0, 0, 0, 1 },
+    { "Sniper",         "Q", F_CLANKER, UK_INF, UR_COMBAT, AR_INF,   90, 50, 550, 10, 11, 6, 28, 0, BR_BARRACKS, B_K_TECH, "Dug-in marksman: rifle kills any infantry from 11 tiles but nothing else. Only vehicles and aircraft can spot it", 0, 0, 0, 1 },
 };
 
 const BuildType BUILDS[B_COUNT] = {
@@ -105,8 +109,8 @@ const ProgramType PROGRAMS[F_COUNT] = {
 };
 
 const DropType DROPS[F_COUNT] = {
-    { "Airlift Drop", "A stealth cargo plane drops 15 troopers, 7 vehicles and 4 aircraft on parachutes anywhere you choose (5 min cooldown)", 300.0f, 4.5f },
-    { "Paradrop",     "A cargo plane drops 15 infantry, 7 vehicles and 4 aircraft on parachutes anywhere you choose (5 min cooldown)",          300.0f, 4.5f },
+    { "Airlift Drop", "A stealth cargo plane drops 15 troopers, 7 vehicles and 4 aircraft on parachutes anywhere you choose (2 min cooldown per Data Center)", 120.0f, 4.5f },
+    { "Paradrop",     "A cargo plane drops 15 infantry, 7 vehicles and 4 aircraft on parachutes anywhere you choose (2 min cooldown per Arms Lab)",          120.0f, 4.5f },
 };
 const int DROP_INF_TYPES[F_COUNT][DROP_INF] = {
     { U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF3, U_C_INF3, U_C_INF3 },

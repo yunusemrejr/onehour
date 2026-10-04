@@ -45,6 +45,8 @@ struct Entity {
     float jetBreak = 0;     // jets and bombers: seconds left of the breakaway after a pass
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
+    float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
+    Ref forceTarget;        // a friendly (own or allied) target the human ordered it to attack on purpose (never set for computer armies)
     std::vector<Vec2> path;
     size_t pathIdx = 0;
     float repathTimer = 0;
@@ -97,6 +99,7 @@ struct Projectile {
     float life;
     float arcT = 0, arcLen = 1;
     bool alive = true;
+    bool forced = false;   // fired on purpose at a friendly: the blast hurts everybody
 };
 
 enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_SPARK, FX_RING, FX_DEBRIS, FX_EMP, FX_WRECK, FX_RUBBLE, FX_MUSHROOM, FX_FALLOUT };
@@ -116,7 +119,7 @@ struct Player {
     int powerMade = 0, powerUsed = 0;
     float powerReady = 0;       // sim time when the strike power is available
     float scanReady = 0;        // sim time when the map scan is available
-    float dropReady = 0;        // sim time when the paradrop is available
+    float dropReady = 0;        // sim time when paradrops unlock (the opening delay); after that every tech structure has its own cooldown
     float revealUntil = -1;     // the whole map is visible until this sim time
     bool advTech = false;       // Advanced Program researched: special units unlocked
     bool researching = false;
@@ -151,10 +154,10 @@ struct Sim {
     Rng rng;
     bool gameOver = false;
     int winnerTeam = -1;
-    struct Storm { Vec2 pos; float radius; int owner; float t; int shellsLeft; float nextShell; };
+    struct Storm { Vec2 pos; float radius; int owner; float t; int shellsLeft; float nextShell; bool force = false; };
     std::vector<Storm> storms;
     // tactical nukes in flight: launched from a Nuke Ramp, they detonate at 'pos' after NUKE_FLIGHT seconds
-    struct Nuke { Vec2 from, pos; int owner; float t; };
+    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; };   // force: the human chose to hit friendly ground too
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
     // paradrop: a cargo plane crosses the map over the target and releases its load on parachutes (it can be shot down by anti-air)
@@ -198,7 +201,7 @@ struct Sim {
 
     // commands (validated; safe to call with anything)
     void cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove);
-    void cmdAttack(const std::vector<Ref>& sel, Ref target);
+    void cmdAttack(const std::vector<Ref>& sel, Ref target, bool force = false);   // force: attack a friendly target on purpose (human armies only)
     void cmdStop(const std::vector<Ref>& sel);
     void cmdHarvest(const std::vector<Ref>& sel, Ref pile);
     // area assignments (Zero Hour style): combat units and aircraft protect the circle, haulers search it for supplies
@@ -211,9 +214,11 @@ struct Sim {
     void cmdCancelTrain(Ref building, int queueIndex);
     void cmdSetRally(Ref building, Vec2 p);
     void cmdSell(Ref building);
-    bool cmdPower(int player, Vec2 pos);
-    bool cmdNuke(int player, Vec2 pos);       // fires one ready Nuke Ramp at pos
+    bool cmdPower(int player, Vec2 pos, bool force = false);
+    bool cmdNuke(int player, Vec2 pos, bool force = false);       // fires one ready Nuke Ramp at pos
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
+    int dropsReady(int player) const;         // tech structures that can send a paradrop right now (after the opening delay)
+    float dropWait(int player) const;         // seconds until the soonest paradrop is ready (0 = ready, -1 = no tech structure)
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
     bool atIncomeLimit(int player, int buildType) const;
@@ -270,7 +275,7 @@ private:
     bool tryFire(Entity& e, Entity& tgt);
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w);
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w);
-    void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct);
+    void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
     Entity* acquireTarget(Entity& e, float range);
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);

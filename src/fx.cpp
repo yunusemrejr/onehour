@@ -83,6 +83,22 @@ void Gfx::buildEffects() {
     { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blobAdd = fromCanvasAdd(c, 16, 16); }
     for (int v = 0; v < 4; v++) { Canvas c(64, 64); puffCanvas(c, v, false); fxs.smoke[v] = fromCanvasSmooth(c, 32, 32); }
     for (int v = 0; v < 3; v++) { Canvas c(64, 64); puffCanvas(c, v + 4, true); fxs.dust[v] = fromCanvasSmooth(c, 32, 32); }
+    for (int v = 0; v < 4; v++) {   // dense, lit billows for the mushroom cloud: a sphere lit from the top-left with a turbulent edge and a puckered surface
+        Canvas c(96, 96);
+        for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
+            float dx = (x + 0.5f - 48) / 46.0f, dy = (y + 0.5f - 48) / 46.0f, d = std::sqrt(dx * dx + dy * dy);
+            float n = fb(x * 0.07f + v * 5.0f, y * 0.07f + v * 2.0f, 900 + v), n2 = fb(x * 0.17f + v * 3.0f, y * 0.17f, 930 + v);
+            float e = d + (n - 0.5f) * 0.5f;
+            float a = clampf((0.98f - e) / 0.3f, 0, 1); a = a * a * (3 - 2 * a);
+            if (a <= 0.01f) continue;
+            float nz = std::sqrt(std::max(0.0f, 1 - d * d)), nx = dx + (n2 - 0.5f) * 0.5f, ny = dy + (n2 - 0.5f) * 0.4f;
+            float light = nx * -0.5f + ny * -0.6f + nz * 0.62f;
+            float lum = clampf(0.52f + 0.62f * light, 0.22f, 1.12f) * (0.84f + 0.32f * n2);
+            u8 L = (u8)clampf(lum * 255, 0, 255);
+            c.px[y * 96 + x] = Canvas::pack(Color{L, L, L, (u8)(a * 240)});
+        }
+        fxs.billow[v] = fromCanvasSmooth(c, 48, 48);
+    }
     for (int f = 0; f < 8; f++) { Canvas c(64, 64); fireCanvas(c, f); fxs.fire[f] = fromCanvasSmooth(c, 32, 32); }
     for (int f = 0; f < 6; f++) { Canvas c(32, 48); flameCanvas(c, f); fxs.flame[f] = fromCanvasAdd(c, 16, 44); }
     for (int v = 0; v < 3; v++) { Canvas c(48, 48); flashCanvas(c, v); fxs.flash[v] = fromCanvasAdd(c, 24, 24); }
@@ -119,15 +135,28 @@ void Gfx::buildEffects() {
         }
         fxs.cloud[v] = fromCanvasSmooth(c, 64, 64);
     }
-    {   // tactical warhead on its way down: white body, yellow band, red nose, swept fins (faces +x)
-        Canvas c(96, 32); Art a(c, rgb(255, 255, 255), 2.0f);
-        a.poly({ {12, 8}, {4, 2}, {2, 2}, {7, 8}, {2, 14}, {4, 14}, {12, 8} }, rgb(150, 154, 160), 1.4f, 0.6f);
-        a.cap(10, 8, 34, 8, 3.4f, rgb(226, 228, 228), 3.0f, 0.65f);
-        a.rect(20, 4.6f, 3.4f, 6.8f, 0.4f, rgb(240, 196, 60), 0.8f, 0.4f);
-        a.circle(35, 8, 3.4f, rgb(214, 66, 56), 3.0f, 0.65f);
-        a.dot(34, 6.4f, 0.9f, rgba(rgb(255, 255, 255), 200));
-        c.outline(rgb(8, 10, 14, 150));
-        fxs.missile = fromCanvasSmooth(c, 14, 16); fxs.missile.dscale = 0.5f;
+    for (int army = 0; army < 2; army++) {   // tactical warhead on its way down (faces +x, origin at the middle of the body): two liveries, ogive nose, hazard bands, swept fins, nozzle
+        bool cy = army == 0;
+        Canvas c(136, 44); Art a(c, rgb(255, 255, 255), 2.0f);
+        Color body = cy ? rgb(228, 234, 240) : rgb(122, 128, 88), band = cy ? rgb(96, 214, 238) : rgb(238, 196, 62), nose = cy ? rgb(54, 62, 78) : rgb(206, 64, 52), fin = cy ? rgb(92, 102, 120) : rgb(70, 74, 62);
+        for (int s = -1; s <= 1; s += 2) {
+            float Y = 11 + s * 0.0f;
+            a.poly({ {13, Y}, {5.5f, Y + s * 10.0f}, {2.5f, Y + s * 10.0f}, {7.0f, Y} }, fin, 1.6f, 0.55f);            // swept main fins
+            a.poly({ {40, Y + s * 3.2f}, {35, Y + s * 6.8f}, {33, Y + s * 6.8f}, {35.5f, Y + s * 3.2f} }, fin, 1.2f, 0.5f);   // canards
+        }
+        a.rect(2.4f, 7.6f, 5.2f, 6.8f, 0.8f, rgb(46, 48, 52), 1.8f, 0.6f);                                             // nozzle bell
+        a.dot(3.2f, 11, 2.3f, rgb(255, 170, 70)); a.glow(3.2f, 11, 6, rgba(rgb(255, 170, 70), 160));
+        a.cap(8, 11, 44, 11, 4.4f, body, 3.4f, 0.7f);                                                                  // body
+        a.poly({ {44, 6.7f}, {50, 8.0f}, {56, 10.0f}, {59, 11}, {56, 12.0f}, {50, 14.0f}, {44, 15.3f} }, nose, 3.0f, 0.7f);   // ogive nose
+        if (cy) a.dot(57.4f, 11, 1.1f, rgb(150, 245, 255));
+        a.rect(18, 6.4f, 4.4f, 9.2f, 0.3f, band, 0.9f, 0.45f);                                                         // warhead band
+        for (int i = 0; i < 4; i++) a.poly({ {18.4f + i * 1.1f, 6.6f}, {19.4f + i * 1.1f, 6.6f}, {18.4f + i * 1.1f + 1.6f, 15.4f}, {17.4f + i * 1.1f + 1.6f, 15.4f} }, rgba(rgb(30, 30, 30), 170), 0.2f, 0.2f);   // hazard hatching
+        a.rect(30, 6.7f, 1.6f, 8.6f, 0.2f, shade(body, 0.62f), 0.6f, 0.4f); a.rect(38, 6.9f, 1.2f, 8.2f, 0.2f, shade(body, 0.62f), 0.6f, 0.4f);   // panel seams
+        a.circle(26, 11, 1.7f, rgb(240, 214, 70), 0.8f, 0.4f);                                                          // radiation roundel
+        a.line(10, 7.9f, 43, 7.9f, 0.7f, rgba(rgb(255, 255, 255), 130));
+        a.dot(53, 8.7f, 0.9f, rgba(rgb(255, 255, 255), 190));
+        c.outline(rgb(8, 10, 14, 170));
+        (cy ? fxs.missile : fxs.missileK) = fromCanvasSmooth(c, 62, 22); (cy ? fxs.missile : fxs.missileK).dscale = 0.5f;
     }
     // water caustics: sums of integer-frequency waves so every frame tiles seamlessly, four frames that loop
     for (int f = 0; f < 4; f++) {
@@ -348,35 +377,72 @@ void Game::drawFx() {
             g.drawSized(g.fxs.ring, a.x, a.y, d * 0.4f, d * 0.4f, 0, f.color, (u8)(90 * (1 - k)));
             break;
         }
-        case FX_MUSHROOM: {   // stem, rolling cap and a hot underside, growing over several seconds
+        case FX_MUSHROOM: {   // a rolling toroidal cap on a turbulent stem, a condensation collar, a base surge and a fire-lit underside
             float R = f.size * 0.52f, t = f.t;
-            float grow = clampf(t / 7.0f, 0, 1); grow = 1 - (1 - grow) * (1 - grow);
+            float g1 = clampf(t / 9.0f, 0, 1), grow = 1 - (1 - g1) * (1 - g1) * (1 - g1);
             float fade = clampf((1 - k) * 3.5f, 0, 1);
-            float heat = clampf(1 - t / 6.0f, 0, 1);
-            Color tint = Color{(u8)(170 + 85 * heat), (u8)(150 + 20 * heat), (u8)(135 - 55 * heat), 255};
-            float H = R * 1.7f * grow, Rc = R * (0.25f + 0.55f * grow);
+            float heat = clampf(1 - t / 7.5f, 0, 1);
+            float H = R * 2.05f * grow, Rc = R * (0.2f + 0.78f * grow);
             Vec2 top(a.x, a.y - H);
-            if (heat > 0) g.glowAdd(a.x, a.y, R * 1.1f * heat, Color{255, 150, 60, (u8)(170 * heat * fade)});
-            for (int i = 0; i < 16; i++) {   // stem
-                float u = i / 15.0f; float wob = std::sin(t * 1.3f + i * 1.7f) * R * 0.04f;
-                float rad = R * (0.16f - 0.05f * u) * (0.6f + 0.4f * grow) + 6;
-                Vec2 p(a.x + wob, a.y - H * u * 0.96f);
-                g.drawSized(g.fxs.smoke[i & 3], p.x, p.y, rad * 2.4f, rad * 2.4f, t * 0.25f + i, tint, (u8)(230 * fade));
+            auto lerpc = [](Color x, Color y, float u) { u = clampf(u, 0, 1); return Color{(u8)(x.r + (y.r - x.r) * u), (u8)(x.g + (y.g - x.g) * u), (u8)(x.b + (y.b - x.b) * u), 255}; };
+            const Color ash{206, 188, 172, 255}, soot{118, 108, 102, 255}, ember{255, 150, 66, 255}, lit{255, 246, 232, 255};
+            if (heat > 0) g.glowAdd(a.x, a.y, R * 1.25f * heat, Color{255, 140, 50, (u8)(180 * heat * fade)});
+            // base surge: a low skirt of dust billows rolling outward along the ground
+            float sg = clampf(t / 10.0f, 0, 1); sg = 1 - (1 - sg) * (1 - sg);
+            for (int i = 0; i < 16; i++) {
+                float an = i * 0.3927f + std::sin(i * 2.3f) * 0.12f, rr = R * (0.28f + 1.05f * sg) * (0.86f + 0.14f * std::sin(i * 3.1f + t * 0.4f));
+                float rad = R * (0.2f + 0.1f * sg) + 8;
+                g.drawSized(g.fxs.billow[i & 3], a.x + std::cos(an) * rr, a.y + std::sin(an) * rr * 0.42f + 4, rad * 2.4f, rad * 1.6f, 0, lerpc(Color{168, 146, 120, 255}, ash, sg), (u8)(150 * fade * (1.0f - 0.4f * sg)));
             }
-            for (int i = 0; i < 26; i++) {   // cap: a rolling torus of billows
-                float an = i * 6.2832f / 26 + t * 0.12f;
-                float rx = Rc * (0.75f + 0.2f * std::sin(i * 2.1f)), ry = Rc * 0.38f;
-                Vec2 p(top.x + std::cos(an) * rx, top.y + std::sin(an) * ry - Rc * 0.1f * std::sin(an + t));
-                float rad = Rc * 0.46f + 10;
-                float under = std::sin(an) > 0 ? 1.0f : 0.8f;   // near side catches the fire glow
-                Color c = Color{(u8)(tint.r * under), (u8)(tint.g * under), (u8)(tint.b * under), 255};
-                g.drawSized(g.fxs.smoke[(i + 1) & 3], p.x, p.y, rad * 2.6f, rad * 2.6f, t * 0.2f + i * 0.9f, c, (u8)(255 * fade));
+            // stem: turbulent billows, fat at the foot, narrow in the middle, flaring into the cap; the lower part still glows
+            const int NS = 30;
+            for (int i = 0; i < NS; i++) {
+                float u = i / (float)(NS - 1);
+                float prof = 1.45f - 0.95f * std::sin(u * 3.1416f * 0.62f) + 0.55f * u * u * u;   // foot wide, waist narrow, throat widening under the cap
+                float wob = std::sin(t * 1.1f + i * 1.9f) * R * 0.05f * (0.5f + u) + std::sin(t * 0.5f + u * 5.0f) * R * 0.035f;
+                float rad = R * 0.15f * prof * (0.65f + 0.35f * grow) + 7;
+                Vec2 p(a.x + wob, a.y - H * u * 0.97f);
+                Color c = lerpc(lerpc(ash, soot, u * 0.4f), ember, clampf(heat * (1 - u * 1.3f), 0, 1) * 0.85f);
+                g.drawSized(g.fxs.billow[i & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(235 * fade));
             }
-            for (int i = 0; i < 8; i++) {   // dense core
-                float an = i * 0.785f + t * 0.2f; Vec2 p(top.x + std::cos(an) * Rc * 0.35f, top.y - Rc * 0.12f + std::sin(an) * Rc * 0.15f);
-                g.drawSized(g.fxs.smoke[i & 3], p.x, p.y, Rc * 1.1f, Rc * 1.1f, t * 0.3f + i, shade(tint, 0.85f), (u8)(240 * fade));
+            // condensation collar: a pale ring that opens around the stem and fades
+            { float cu = clampf((t - 1.5f) / 2.5f, 0, 1), cf = cu * clampf(1 - (t - 4.0f) / 9.0f, 0, 1) * fade;
+              if (cf > 0.02f) { Vec2 cp(a.x, a.y - H * 0.5f); float cr = Rc * (0.55f + 0.25f * cu);
+                for (int i = 0; i < 14; i++) { float an = i * 0.4488f + t * 0.08f; g.drawSized(g.fxs.billow[(i + 2) & 3], cp.x + std::cos(an) * cr, cp.y + std::sin(an) * cr * 0.28f, R * 0.5f, R * 0.4f, 0, Color{236, 232, 228, 255}, (u8)(120 * cf)); } } }
+            // cap: two rolling tori of billows (an outer rolling lip and a smaller inner one), back half first, then the core, then the front half
+            auto torus = [&](bool front) {
+                for (int ring = 0; ring < 2; ring++) {
+                    int n = ring ? 18 : 32;
+                    for (int i = 0; i < n; i++) {
+                        float th = i * 6.2832f / n + t * (ring ? -0.07f : 0.05f) + ring * 0.4f, sn = std::sin(th);
+                        if ((sn > 0) != front) continue;
+                        float phi = i * 1.9f + t * (ring ? 1.5f : 1.0f);                         // the roll of the vortex ring
+                        float rm = Rc * (ring ? 0.22f : 0.3f), rc = Rc * (ring ? 0.42f : 0.8f);
+                        float radial = rc + rm * std::cos(phi);
+                        Vec2 p(top.x + std::cos(th) * radial, top.y + sn * radial * 0.34f - rm * std::sin(phi) * 0.85f - Rc * (ring ? 0.12f : 0.0f));
+                        float up = std::sin(phi) * 0.5f + 0.5f;                                // top of the roll catches the light, the underside glows
+                        Color c = lerpc(lerpc(ash, lit, up * 0.8f), ember, clampf(heat * (1 - up) * (sn > 0 ? 1.0f : 0.6f), 0, 1) * 0.9f);
+                        if (up > 0.5f) c = lerpc(c, soot, clampf((t - 8.0f) / 10.0f, 0, 0.6f));
+                        float rad = rm * 1.08f + 9;
+                        g.drawSized(g.fxs.billow[(i + ring) & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(255 * fade));
+                    }
+                }
+            };
+            torus(false);
+            for (int i = 0; i < 10; i++) {   // dense core of the cap
+                float an = i * 0.628f + t * 0.2f; Vec2 p(top.x + std::cos(an) * Rc * 0.4f, top.y - Rc * 0.14f + std::sin(an) * Rc * 0.16f);
+                g.drawSized(g.fxs.billow[i & 3], p.x, p.y, Rc * 1.15f, Rc * 0.9f, 0, lerpc(lerpc(ash, lit, 0.35f), ember, heat * 0.5f), (u8)(240 * fade));
             }
-            if (heat > 0) { g.glowAdd(top.x, top.y + Rc * 0.15f, Rc * 1.0f, Color{255, 170, 80, (u8)(190 * heat * fade)}); g.glowAdd(top.x, top.y, Rc * 0.6f, Color{255, 240, 200, (u8)(200 * heat * fade)}); }
+            torus(true);
+            for (int i = 0; i < 9; i++) {    // pale smooth hat riding on top of the cap
+                float an = i * 0.698f + t * 0.1f; Vec2 p(top.x + std::cos(an) * Rc * 0.38f, top.y - Rc * 0.34f + std::sin(an) * Rc * 0.1f);
+                g.drawSized(g.fxs.billow[(i + 3) & 3], p.x, p.y, Rc * 0.7f, Rc * 0.45f, 0, lit, (u8)(190 * fade * grow));
+            }
+            if (heat > 0) {
+                g.glowAdd(top.x, top.y + Rc * 0.18f, Rc * 1.15f, Color{255, 160, 70, (u8)(200 * heat * fade)});
+                g.glowAdd(top.x, top.y + Rc * 0.05f, Rc * 0.62f, Color{255, 238, 196, (u8)(210 * heat * fade)});
+                g.glowAdd(a.x, a.y - H * 0.25f, R * 0.35f, Color{255, 170, 80, (u8)(120 * heat * fade)});
+            }
             break;
         }
         case FX_FALLOUT: {   // sickly green haze, a pulsing boundary and drifting motes
