@@ -3,7 +3,7 @@
 Sim g_sim;
 
 static const float BUILD_REACH = 26.0f;     // px from structure edge for dozers
-static const float HARVEST_REACH = 22.0f;
+static const float HARVEST_REACH = 34.0f;   // px from the pile's edge: a hauler parked on a diagonal neighbour tile is about 29 px away
 static const float PATH_INTERVAL = 0.6f;
 static const int AIRFIELD_CAP = 4;
 static const float EMP_DURATION = 8.0f;
@@ -423,7 +423,7 @@ bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     if (!canAfford(p, b.cost)) { emit(EV_NOFUNDS, p, SND_NOFUNDS, d->pos, "Insufficient funds"); return false; }
     players[p].money -= b.cost;
     Ref site = placeBuilding(buildType, p, tx, ty, false);
-    d->order = O_BUILD; d->targetEnt = site; d->engaged = NOREF; d->repathTimer = 0;
+    d->order = O_BUILD; d->targetEnt = site; d->engaged = NOREF; d->repathTimer = 0; d->actionTimer = 0;
     emit(EV_SOUND, p, SND_PLACE, d->pos);
     return true;
 }
@@ -434,7 +434,7 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->ut().role != UR_DOZER || e->owner != b->owner) continue;
-        e->order = O_BUILD; e->targetEnt = building; e->repathTimer = 0;
+        e->order = O_BUILD; e->targetEnt = building; e->repathTimer = 0; e->actionTimer = 0;
     }
 }
 
@@ -863,10 +863,11 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
             if (!canTarget(e, t)) return;
             Vec2 rel = t.pos - from;
             float along = rel.x * dir.x + rel.y * dir.y;
-            if (along < 0 || along > w.range * TILE) return;
+            if (along < 0 || along > w.range * TILE + t.radius()) return;   // (range is measured to a target's edge, not its centre)
             float perp = std::abs(rel.x * dir.y - rel.y * dir.x);
             if (perp <= t.radius() + 6) hits.push_back(&t);
         });
+        if (std::find(hits.begin(), hits.end(), &tgt) == hits.end()) hits.push_back(&tgt);   // the aimed target is always hit: tryFire already checked the range
         for (auto* t : hits) applyDamage(*t, refOf(*t) == tref ? w.dmg : w.dmg * 0.5f, e.owner, self, &w);  // pierce: half damage to anything else on the line
         break;
     }
@@ -1110,10 +1111,15 @@ void Sim::jetAttack(Entity& e, Entity& t) {
         e.jetBreak -= SIM_DT;
         want = std::atan2(-to.y, -to.x);                   // peel away: turn back out of range instead of flying through the defences
     } else if (d <= w.range && std::abs(angDiff(e.angle, want)) < 0.3f) {
-        if (e.cooldown <= 0 && tryFire(e, t)) { e.jetBreak = 1.25f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
+        if (e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; e.jetBreak = 1.25f; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
     } else if (d < 2.0f && e.cooldown > 0) {
         e.jetBreak = 0.9f;                                 // arrived with the guns still cooling: peel off and come round again
-    }
+    } else if (d < w.range + 5.0f) {
+        // close to the target but not lined up: a target inside the jet's own turn circle would be circled forever, so give up
+        // on the turn after a moment, fly out straight and make a fresh run from far enough away
+        e.stuckTimer += SIM_DT;
+        if (e.stuckTimer > 1.1f) { e.jetBreak = 1.0f; e.stuckTimer = 0; }
+    } else e.stuckTimer = 0;
     // stay over the map: near an edge, the breakaway curves back toward the middle
     const float edge = 3.5f * TILE;
     if (e.pos.x < edge || e.pos.y < edge || e.pos.x > WORLD_W - edge || e.pos.y > WORLD_H - edge) {
@@ -1141,11 +1147,15 @@ void Sim::bomberAttack(Entity& e, Entity& t) {
         e.jetBreak -= SIM_DT;
         want = e.angle;                                               // straight on over and past the target
     } else if (e.bombsLeft <= 0 && e.ammo > 0 && D <= release + 8 && D >= release - 40 && std::abs(angDiff(e.angle, want)) < 0.2f) {
-        e.bombsLeft = std::min(BOMB_STICK, e.ammo); e.bombTimer = 0; e.jetBreak = 1.15f;
+        e.bombsLeft = std::min(BOMB_STICK, e.ammo); e.bombTimer = 0; e.jetBreak = 1.15f; e.stuckTimer = 0;
         emit(EV_SOUND, e.owner, SND_AIR, e.pos);
     } else if (D < release - 40 && e.bombsLeft <= 0) {
         e.jetBreak = 0.8f;                                            // too close or badly lined up: fly through and come round again
-    }
+    } else if (e.bombsLeft <= 0 && D < release + 160) {
+        // near the target but never lining up (it sits inside the bomber's turn circle): straighten out and make a fresh run
+        e.stuckTimer += SIM_DT;
+        if (e.stuckTimer > 1.6f) { e.jetBreak = 1.0f; e.stuckTimer = 0; }
+    } else e.stuckTimer = 0;
     const float edge = 3.0f * TILE;
     if (e.pos.x < edge || e.pos.y < edge || e.pos.x > WORLD_W - edge || e.pos.y > WORLD_H - edge) {
         Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos;
@@ -1261,7 +1271,7 @@ void Sim::updateUnit(Entity& e) {
                     if (!b.alive || !b.isBuilding() || b.owner != e.owner || !b.constructed || b.hp >= b.maxHp * 0.995f || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;   // (idle dozers do not drive into radiation)
                     float d = dist2(b.pos, e.pos); if (d < bd) { bd = d; best = &b; }
                 }
-                if (best) { e.order = O_BUILD; e.targetEnt = refOf(*best); e.repathTimer = 0; e.path.clear(); }
+                if (best) { e.order = O_BUILD; e.targetEnt = refOf(*best); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); }
             }
             break;
         }
@@ -1508,7 +1518,9 @@ void Sim::updateUnit(Entity& e) {
         Entity* b = get(e.targetEnt);
         if (!b || !b->isBuilding() || b->owner != e.owner || (b->constructed && b->hp >= b->maxHp)) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; break; }
         float d = distToEntity(e.pos, *b);
-        if (d <= BUILD_REACH) {
+        // a dozer boxed in by neighbouring structures cannot always get right up to the wall: after a short wait it works from where it is
+        bool inReach = d <= BUILD_REACH || (e.actionTimer > 1.5f && d <= BUILD_REACH + 3 * TILE);
+        if (inReach) {
             e.path.clear();
             e.angle = std::atan2(b->pos.y - e.pos.y, b->pos.x - e.pos.x);
             const BuildType& bt = b->bt();
@@ -1523,9 +1535,12 @@ void Sim::updateUnit(Entity& e) {
             }
         } else {
             if (e.pathIdx >= e.path.size()) requestPath(e, g_map.nearestFree(b->pos + Vec2(0, b->bt().h * TILE * 0.5f + 12), 6));
+            Vec2 before = e.pos;
             moveAlong(e, ut.speed);
+            if (dist(e.pos, before) < 0.05f) e.actionTimer += SIM_DT; else e.actionTimer = 0;   // time spent unable to advance
+            if (e.actionTimer > 14.0f) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; break; }   // the structure cannot be reached: give up
             e.stuckTimer += SIM_DT;
-            if (e.stuckTimer > 2.0f) { if (dist(e.pos, e.lastPos) < 8) requestPath(e, g_map.nearestFree(b->pos + Vec2(rng.f(-1, 1) * b->bt().w * TILE * 0.6f, rng.f(-1, 1) * b->bt().h * TILE * 0.6f), 6)); e.stuckTimer = 0; e.lastPos = e.pos; }
+            if (e.stuckTimer > 2.0f) { if (dist(e.pos, e.lastPos) < 8) requestPath(e, g_map.nearestFree(b->pos + Vec2(rng.f(-1, 1) * b->bt().w * TILE * 0.8f, rng.f(-1, 1) * b->bt().h * TILE * 0.8f), 6)); e.stuckTimer = 0; e.lastPos = e.pos; }
         }
         break;
     }

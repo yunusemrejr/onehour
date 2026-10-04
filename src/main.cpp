@@ -39,10 +39,41 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
     int ticks = seconds * SIM_HZ;
     auto t0 = std::chrono::steady_clock::now();
     int maxEnts = 0;
+    // optional stuck-unit report (ONEHOUR_STUCK=1): a unit that holds a movement-type order without moving for a long while is a pathing or order bug
+    const bool stuckCheck = getenv("ONEHOUR_STUCK") != nullptr;
+    struct StuckRec { u32 gen = 0; Vec2 pos; int since = 0; bool reported = false; int order = -1; };
+    std::vector<StuckRec> stuckRecs; int stuckReports = 0; int traceIdx = -1, traceUntil = 0;
     for (int t = 0; t < ticks && !g_sim.gameOver; t++) {
         g_sim.step();
         g_ai.update();
         g_sim.events.clear();
+        if (const char* tr = getenv("ONEHOUR_TRACE")) { int ti = 0, t0 = 0, t1 = 0; sscanf(tr, "%d,%d,%d", &ti, &t0, &t1); if (t >= t0 * SIM_HZ && t < t1 * SIM_HZ) { traceIdx = ti; traceUntil = t + 2; } }
+        if (traceIdx >= 0 && t < traceUntil && t % 3 == 0) { Entity& e = g_sim.ents[traceIdx]; Entity* tg = g_sim.get(e.targetEnt); fprintf(stderr, "  trace t=%d order %d post %d pos %.1f,%.1f path %zu/%zu target %s(%d) cooldown %.2f stuck %.2f cargo %d act %.2f\n", t, (int)e.order, (int)e.postOrder, e.pos.x, e.pos.y, e.pathIdx, e.path.size(), tg ? (tg->isBuilding() ? tg->bt().name : tg->kind == EK_RESOURCE ? "pile" : tg->ut().name) : "-", tg ? tg->amount : 0, e.cooldown, e.stuckTimer, e.cargo, e.actionTimer); }
+        if (stuckCheck && t % 40 == 0) {
+            if (stuckRecs.size() < g_sim.ents.size()) stuckRecs.resize(g_sim.ents.size());
+            for (size_t i = 0; i < g_sim.ents.size(); i++) {
+                Entity& e = g_sim.ents[i]; StuckRec& r = stuckRecs[i];
+                if (!e.alive || !e.isUnit() || r.gen != e.gen || r.order != (int)e.order || dist(r.pos, e.pos) > 6.0f) { r.gen = e.gen; r.pos = e.pos; r.since = t; r.reported = false; r.order = (int)e.order; continue; }
+                if (e.disabledUntil > g_sim.time || r.reported || t - r.since < 30 * SIM_HZ) continue;
+                bool bad = false;
+                if (e.order == O_MOVE || e.order == O_ATTACKMOVE || e.order == O_RETURN) bad = dist(e.pos, e.target) > 40 && e.order != O_RETURN;
+                if (e.order == O_ATTACK && !e.isAir()) { Entity* tg = g_sim.get(e.targetEnt); if (tg && g_sim.distToEntity(e.pos, *tg) / TILE > WEAPONS[e.ut().weapon].range + 0.5f) bad = true; }
+                if (e.order == O_BUILD) { Entity* tg = g_sim.get(e.targetEnt); if (tg && g_sim.distToEntity(e.pos, *tg) > 26.0f + 4) bad = true; }
+                if (e.order == O_HARVEST) { Entity* tg = g_sim.get(e.targetEnt); if (tg && g_sim.distToEntity(e.pos, *tg) > 34.0f + 4) bad = true; }
+                if (e.isAir() && e.order == O_ATTACK) bad = true;
+                if (bad) { r.reported = true; if (stuckReports++ < 40) {
+                    fprintf(stderr, "STUCK idx %zu t=%ds P%d %s order %d at %.0f,%.0f (target %.0f,%.0f) for %ds, cargo %d path %zu/%zu actionTimer %.1f", i, t / SIM_HZ, e.owner, e.ut().name, (int)e.order, e.pos.x, e.pos.y, e.target.x, e.target.y, (t - r.since) / SIM_HZ, e.cargo, e.pathIdx, e.path.size(), e.actionTimer);
+                    if (e.pathIdx < e.path.size()) fprintf(stderr, " wp %.0f,%.0f (tile passable %d)", e.path[e.pathIdx].x, e.path[e.pathIdx].y, (int)g_map.passable(tileOf(e.path[e.pathIdx].x), tileOf(e.path[e.pathIdx].y)));
+                    fprintf(stderr, " here passable %d stuckTimer %.1f", (int)g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y)), e.stuckTimer);
+                    if (e.order == O_RETURN) { Entity* sb = nullptr; float bd = 1e9f; for (auto& b : g_sim.ents) if (b.alive && b.isBuilding() && b.owner == e.owner && b.constructed && b.bt().role == BR_SUPPLY) { float d = g_sim.distToEntity(e.pos, b); if (d < bd) { bd = d; sb = &b; } } fprintf(stderr, " nearest supply %.0fpx %s", bd, sb ? "yes" : "none"); }
+                    fprintf(stderr, "\n");
+                    if (stuckReports == 1 && getenv("ONEHOUR_STUCKMAP")) { traceIdx = (int)i; traceUntil = t + 40; }
+                    if (stuckReports <= 0 && getenv("ONEHOUR_STUCKMAP")) {
+                        int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y);
+                        for (int dy = -9; dy <= 9; dy++) { for (int dx = -14; dx <= 14; dx++) { int x = cx + dx, y = cy + dy; char c = !inMap(x, y) ? ' ' : (g_map.passable(x, y) ? '.' : (g_map.terrainPassable(x, y) ? 'B' : '#')); for (auto& o : g_sim.ents) if (o.alive && o.isUnit() && !o.isAir() && tileOf(o.pos.x) == x && tileOf(o.pos.y) == y) c = (&o == &e) ? '@' : 'u'; fputc(c, stderr); } fputc('\n', stderr); }
+                    } } }
+            }
+        }
         int alive = 0;
         for (auto& e : g_sim.ents) {
             if (!e.alive) continue;
@@ -1030,6 +1061,118 @@ static bool uiTest() {
     return true;
 }
 
+
+// Every aircraft in every order mode against every kind of target: each combination must end with damage dealt.
+static bool airMatrixTest(u64 seed) {
+    int bad = 0, runs = 0;
+    const char* modes[5] = { "idle", "attack-move", "guard", "attack", "guard-near" };
+    const char* kinds[7] = { "infantry", "tank", "plant", "turret", "aircraft", "hq", "jet" };
+    for (int fi = 0; fi < 2; fi++) for (int ac = 0; ac < 2; ac++) for (int kind = 0; kind < 7; kind++) for (int mode = 0; mode < 5; mode++) for (int var = 0; var < 3; var++) {
+        if (var == 1 && kind > 1) continue;
+        if (ac == 0 && kind == 6) continue;   // a lone bomber against fighters is expected to lose
+        if (var == 2 && kind > 1 && kind != 4 && kind != 6) continue;   // var 1: the targets drive off; var 2: a flight of four
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
+        int b0 = firstBuildOf(fac[0]), b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]), u1 = firstUnitOf(fac[1]);
+        Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        Ref af;
+        for (int dy = -8; dy < 8 && !af.valid(); dy++) for (int dx = -8; dx < 8 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, b0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(b0 + BR_AIRFIELD, 0, tx, ty, true); }
+        if (!af.valid()) { fprintf(stderr, "airmatrix: no airfield spot\n"); return false; }
+        g_sim.updatePowerPublic();
+        Vec2 pad = g_sim.get(af)->pos;
+        int type = u0 + (ac == 0 ? 8 : 11);
+        Ref jet = g_sim.spawnUnit(type, 0, pad + Vec2(0, 0)); g_sim.get(jet)->home = af;
+        std::vector<Ref> flight{jet};
+        if (var == 2) for (int i = 1; i < 4; i++) { Ref r = g_sim.spawnUnit(type, 0, pad + Vec2((i - 1.5f) * 30, 0)); g_sim.get(r)->home = af; flight.push_back(r); }
+        Vec2 where = pad + Vec2(0, (mode == 0 ? 7 : 16) * TILE);
+        std::vector<Ref> tg;
+        auto putB = [&](int btype) { for (int dy = 0; dy < 10; dy++) for (int dx = -6; dx < 6; dx++) { int tx = tileOf(where.x) + dx, ty = tileOf(where.y) + dy; if (g_sim.canPlace(1, btype, tx, ty)) return g_sim.placeBuilding(btype, 1, tx, ty, true); } return NOREF; };
+        if (kind == 0) for (int i = 0; i < 3; i++) tg.push_back(g_sim.spawnUnit(u1 + 2, 1, g_map.nearestFree(where + Vec2(i * 18, 0), 20)));
+        if (kind == 1) for (int i = 0; i < 3; i++) tg.push_back(g_sim.spawnUnit(u1 + 5, 1, g_map.nearestFree(where + Vec2(i * 24, 0), 20)));
+        if (kind == 2) tg.push_back(putB(b1 + BR_POWER));
+        if (kind == 3) tg.push_back(putB(b1 + BR_TURRET));
+        if (kind == 4) for (int i = 0; i < 2; i++) tg.push_back(g_sim.spawnUnit(u1 + 8, 1, where + Vec2(i * 40, 0)));
+        if (kind == 5) tg.push_back(putB(b1 + BR_HQ));
+        if (kind == 6) tg.push_back(g_sim.spawnUnit(u1 + 11, 1, where));
+        g_sim.updatePowerPublic();
+        for (Ref r : tg) if (!g_sim.get(r)) { fprintf(stderr, "airmatrix: scene failed\n"); return false; }
+        float h0 = 0; for (Ref r : tg) h0 += g_sim.get(r)->hp;
+        if (var == 1) for (Ref r : tg) g_sim.cmdMove({r}, g_map.nearestFree(g_sim.get(r)->pos + Vec2(30 * TILE, 0), 60), false);
+        // aircraft targets need to be able to fly: park the enemy ones as plain idle craft without a home (they just hover)
+        Vec2 tc = g_sim.get(tg[0])->pos;
+        if (mode == 1) g_sim.cmdMove(flight, tc, true);
+        else if (mode == 2) g_sim.cmdGuardArea(flight, tc, var == 1 ? 14 * TILE : 6 * TILE);
+        else if (mode == 3) g_sim.cmdAttack(flight, tg[0]);
+        else if (mode == 4) g_sim.cmdGuardArea(flight, tc + Vec2(0, -7 * TILE), 12 * TILE);
+        float firstDmg = -1;
+        for (int t = 0; t < 20 * 45; t++) {
+            g_sim.step(); g_sim.events.clear();
+            if (firstDmg < 0 && (t % 4) == 0) { float hh = 0; for (Ref r : tg) if (Entity* e = g_sim.get(r)) hh += e->hp; if (hh < h0 - 1) firstDmg = t * SIM_DT; }
+        }
+        float h1 = 0; for (Ref r : tg) if (Entity* e = g_sim.get(r)) h1 += e->hp;
+        runs++;
+        Entity* j = g_sim.get(jet);
+        bool ok = h1 < h0 - 1 && firstDmg < 22.0f;
+        if (!ok) { bad++; fprintf(stderr, "airmatrix FAIL %s %s vs %s var %d: first damage %.1fs (jet %s order %d ammo %d alt %.1f)\n", FACTION_NAME[fac[0]], modes[mode], kinds[kind], var, firstDmg, j ? UNITS[j->type].name : "dead", j ? (int)j->order : -1, j ? j->ammo : -1, j ? j->alt : 0.f); }
+    }
+    printf("airmatrix: %d runs, %d without damage\n", runs, bad);
+    return bad == 0;
+}
+
+
+// Every ground combat unit in every order mode against every kind of target: each combination that its weapon allows must deal damage.
+static bool groundMatrixTest(u64 seed) {
+    int bad = 0, runs = 0;
+    const char* modes[4] = { "idle", "attack-move", "guard", "attack" };
+    const char* kinds[6] = { "infantry", "tank", "plant", "turret", "aircraft", "hq" };
+    for (int fi = 0; fi < 2; fi++) for (int ut = 0; ut < 12; ut++) for (int kind = 0; kind < 6; kind++) for (int mode = 0; mode < 4; mode++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        int u0 = firstUnitOf(fac[0]);
+        const UnitType& U = UNITS[u0 + ut];
+        if (U.kind == UK_AIR || U.role != UR_COMBAT || U.weapon < 0) continue;
+        const Weapon& W = WEAPONS[U.weapon];
+        if (kind == 4 && !W.air) continue;
+        if (mode == 0 && W.minRange > 0) continue;   // artillery standing idle does not engage what is inside its minimum range (by design)
+        if (kind != 4 && !W.ground) continue;
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
+        int b1 = firstBuildOf(fac[1]), u1 = firstUnitOf(fac[1]);
+        Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        Vec2 me = g_map.nearestFree(mid, 20);
+        Ref unit = g_sim.spawnUnit(u0 + ut, 0, me);
+        Vec2 where = g_map.nearestFree(me + Vec2(mode == 0 ? 5.0f * TILE : 13.0f * TILE, 0), 30);
+        std::vector<Ref> tg;
+        auto putB = [&](int btype) { for (int dy = -4; dy < 10; dy++) for (int dx = -2; dx < 12; dx++) { int tx = tileOf(where.x) + dx, ty = tileOf(where.y) + dy; if (g_sim.canPlace(1, btype, tx, ty)) return g_sim.placeBuilding(btype, 1, tx, ty, true); } return NOREF; };
+        if (kind == 0) for (int i = 0; i < 3; i++) tg.push_back(g_sim.spawnUnit(u1 + 2, 1, g_map.nearestFree(where + Vec2(0, i * 18), 20)));
+        if (kind == 1) for (int i = 0; i < 3; i++) tg.push_back(g_sim.spawnUnit(u1 + 5, 1, g_map.nearestFree(where + Vec2(0, i * 24), 20)));
+        if (kind == 2) tg.push_back(putB(b1 + BR_POWER));
+        if (kind == 3) tg.push_back(putB(b1 + BR_TURRET));
+        if (kind == 4) for (int i = 0; i < 2; i++) tg.push_back(g_sim.spawnUnit(u1 + 8, 1, where + Vec2(0, i * 40)));
+        if (kind == 5) tg.push_back(putB(b1 + BR_HQ));
+        g_sim.updatePowerPublic();
+        for (Ref r : tg) if (!g_sim.get(r)) { fprintf(stderr, "groundmatrix: scene failed\n"); return false; }
+        // enemies that shoot back would muddy the result for weak units: make the targets harmless where they could kill the attacker
+        for (Ref r : tg) { Entity* e = g_sim.get(r); if (e->isUnit()) e->disabledUntil = 1e9f; else if (e->weapon() >= 0) e->disabledUntil = 1e9f; }
+        float h0 = 0; for (Ref r : tg) h0 += g_sim.get(r)->hp;
+        Vec2 tc = g_sim.get(tg[0])->pos;
+        if (mode == 1) g_sim.cmdMove({unit}, tc, true);
+        else if (mode == 2) g_sim.cmdGuardArea({unit}, tc, 6 * TILE);
+        else if (mode == 3) g_sim.cmdAttack({unit}, tg[0]);
+        float firstDmg = -1;
+        for (int t = 0; t < 20 * 60; t++) {
+            g_sim.step(); g_sim.events.clear();
+            if (firstDmg < 0 && (t % 4) == 0) { float hh = 0; for (Ref r : tg) if (Entity* e = g_sim.get(r)) hh += e->hp; else hh = -1e9f; if (hh < h0 - 1) firstDmg = t * SIM_DT; }
+        }
+        runs++;
+        if (firstDmg < 0 || firstDmg > 45) { bad++; Entity* j = g_sim.get(unit); fprintf(stderr, "groundmatrix FAIL %s %s %s vs %s: first damage %.1fs (order %d at %.0f,%.0f target %.0f,%.0f)\n", FACTION_NAME[fac[0]], U.name, modes[mode], kinds[kind], firstDmg, j ? (int)j->order : -1, j ? j->pos.x : 0.f, j ? j->pos.y : 0.f, tc.x, tc.y); }
+    }
+    printf("groundmatrix: %d runs, %d failed\n", runs, bad);
+    return bad == 0;
+}
+
 int main(int argc, char** argv) {
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0;
@@ -1058,6 +1201,8 @@ int main(int argc, char** argv) {
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
+        else if (a == "--airmatrix") { g_map.generate(); return airMatrixTest(seed) ? 0 : 1; }
+        else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--bombtest") { g_map.generate(); return bombTest(seed) && nukeDodgeTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;

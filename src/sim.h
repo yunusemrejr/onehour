@@ -74,7 +74,7 @@ struct Entity {
     bool isBuilding() const { return kind == EK_BUILDING; }
     const UnitType& ut() const { return UNITS[type]; }
     const BuildType& bt() const { return BUILDS[type]; }
-    float radius() const { return kind == EK_UNIT ? UNITS[type].radius : (std::max(BUILDS[type].w, BUILDS[type].h) * TILE * 0.5f); }
+    float radius() const { return kind == EK_UNIT ? UNITS[type].radius : kind == EK_RESOURCE ? TILE * 0.5f : (std::max(BUILDS[type].w, BUILDS[type].h) * TILE * 0.5f); }
     int weapon() const { return kind == EK_UNIT ? UNITS[type].weapon : (kind == EK_BUILDING ? BUILDS[type].weapon : -1); }
     Armor armor() const { return kind == EK_UNIT ? UNITS[type].armor : AR_STRUCT; }
     bool isAir() const { return kind == EK_UNIT && UNITS[type].kind == UK_AIR; }
