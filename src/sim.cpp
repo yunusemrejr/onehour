@@ -718,11 +718,10 @@ void Sim::updateAirlifts() {
 
 // What a detonation does (all of it to whatever nukeHurts says it hurts; anything else is thrown but never hurt):
 //  * ground units: a lethal core, then falling damage out to the rim (they collapse, as ever)
-//  * aircraft: those inside the fireball fall out of the sky, those in the shock ring beyond it are badly mauled
+//  * aircraft: everything in the blast falls out of the sky (and none of them try to outrun it, see dodgeDanger)
 //  * small structures (footprint of NUKE_SMALL_AREA tiles or less: turrets, batteries, reactors, barracks, income structures) collapse
 //    in the inner blast; every large structure survives with heavy damage that tapers with the distance and is never lethal
 static const int NUKE_SMALL_AREA = 6;
-static const float NUKE_AIR_KILL = 0.7f;   // fraction of the blast radius that is "in direct contact" with the fireball for aircraft
 
 void Sim::updateNukes() {
     for (auto& n : nukes) n.t += SIM_DT;
@@ -744,18 +743,12 @@ void Sim::nukeBlast(const Nuke& n) {
         if (d > R) continue;
         float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
         bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies as well (and the human's own army when forced)
-        if (e->isAir()) {
+        if (e->isAir()) {   // nothing flying survives the fireball and the shock front: torn apart, it falls out of the sky
             if (!foe) continue;
-            float core = R * NUKE_AIR_KILL;
-            if (d <= core) {   // caught in the fireball: the aircraft is torn apart and falls
-                fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
-                fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
-                for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
-                applyDamage(*e, e->maxHp * 2.0f, n.owner, NOREF, nullptr);
-            } else {           // the shock ring beyond it mauls what it does not destroy
-                float k = 1.0f - (d - core) / std::max(1.0f, R - core);
-                applyDamage(*e, e->maxHp * 0.62f * k, n.owner, NOREF, nullptr);
-            }
+            fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
+            fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
+            for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
+            applyDamage(*e, e->maxHp * 2.0f, n.owner, NOREF, nullptr);
             continue;
         }
         Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
@@ -1616,8 +1609,10 @@ void Sim::retreatFrom(Entity& e, Vec2 threat, float tiles) {
 
 bool Sim::dodgeDanger(Entity& e) {
     if (e.order == O_MOVE && !e.autoTask) return false;   // the player is moving it: their call
-    // an incoming warhead: whatever it would hurt gets out of the circle while there is time
+    // an incoming warhead: whatever it would hurt on the ground gets out of the circle while there is time (aircraft would always
+    // make it, so nuking an airfield only ever scrambled its planes: they stay and burn)
     for (auto& n : nukes) {
+        if (e.isAir()) break;
         bool hurts = nukeHurts(n, e.owner);
         float left = NUKE_FLIGHT - n.t;
         if (!hurts || n.t < 1.0f || left < 0.3f) continue;

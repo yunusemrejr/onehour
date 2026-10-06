@@ -829,6 +829,38 @@ static bool autoTest(u64 seed) {
     return true;
 }
 
+// Nukes and aircraft: aircraft are far too fast to be given the chance to dodge a warhead, so every aircraft under one burns,
+// whether it hovers over ground zero, flies through or sits parked; a computer army (difficulty Brutal: it notices at once) and a
+// human army alike (both get their ground units out of the circle).
+static bool nukeTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "nuketest: %s\n", m); return false; };
+    for (int fi = 0; fi < 4; fi++) {
+        Faction fac[2] = { (Faction)(fi & 1), (Faction)(1 - (fi & 1)) };
+        int victim = fi < 2 ? 1 : 0, shooter = 1 - victim;   // first a computer army's aircraft, then a human army's
+        bool ai[2] = { false, true }; int diff[2] = { 3, 3 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + 31 * fi);
+        g_ai.init(seed);
+        Vec2 gz = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 30);
+        std::vector<Ref> air;
+        int k = 0;
+        for (int u = 0; u < U_COUNT; u++) if (UNITS[u].faction == fac[victim] && UNITS[u].kind == UK_AIR) {
+            air.push_back(g_sim.spawnUnit(u, victim, gz + Vec2((k % 4) * 40.0f - 60, (k / 4) * 40.0f - 20)));
+            Ref mover = g_sim.spawnUnit(u, victim, gz + Vec2(-8 * TILE, 3 * TILE + k * 8.0f));
+            g_sim.cmdMove({mover}, gz + Vec2(8 * TILE, 3 * TILE), false);   // crossing ground zero as it lands
+            air.push_back(mover);
+            k++;
+        }
+        g_sim.nukes.push_back({g_sim.players[shooter].basePos, gz, shooter, Sim::NUKE_FLIGHT - 1.0f - 2.0f / 3, false});   // (the crossing aircraft reach ground zero together with it)
+        int dodgeTicks = 0;
+        while (!g_sim.nukes.empty() && dodgeTicks++ < 200) { g_sim.step(); g_ai.ais[1].dodgeNukes(); g_sim.events.clear(); }   // (only the dodging: the commander's plans would send them elsewhere)
+        for (auto r : air) if (Entity* e = g_sim.get(r)) {
+            fprintf(stderr, "%s (player %d) survived %.0f px from ground zero with %.0f/%.0f hp\n", e->ut().name, victim, dist(e->pos, gz), e->hp, e->maxHp);
+            return fail("an aircraft got away from a nuke");
+        }
+    }
+    return true;
+}
+
 // Supersonic jets: built at the airfield, they fly fixed-wing strafing passes (finite turn rate, very fast), kill things, rearm and land.
 static bool jetTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "jettest: %s\n", m); return false; };
@@ -1084,7 +1116,7 @@ static bool bombTest(u64 seed) {
         Ref factory = put(b1 + BR_FACTORY, 3, 4.6f), hq = put(b1 + BR_HQ, 8, 0.8f), rim = put(b1 + BR_SUPPLY, 9.5f, 2.4f);
         for (Ref r : { turret, power, barracks, factory, hq, rim }) if (!g_sim.get(r)) return fail("could not set the scene up");
         Ref tank = g_sim.spawnUnit(u1 + 5, 1, g_map.nearestFree(gz + Vec2(0, 50), 20));
-        Ref airC = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(20, 0)), airFar = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(NUKE_RADIUS * TILE * 0.88f, 0));
+        Ref airC = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(20, 0)), airRing = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(NUKE_RADIUS * TILE * 0.88f, 0)), airOut = g_sim.spawnUnit(u1 + 8, 1, gz + Vec2(0, NUKE_RADIUS * TILE + 3 * TILE));
         Ref airMine = g_sim.spawnUnit(u0 + 8, 0, gz + Vec2(-20, 10));
         g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f});
         for (int t = 0; t < 6; t++) { g_sim.step(); g_sim.events.clear(); }
@@ -1100,11 +1132,11 @@ static bool bombTest(u64 seed) {
         if (f->hp <= 0 || h->hp <= 0) return fail("large structure dead");
         if (rm && rm->hp >= rm->maxHp) return fail("a structure near the rim took no damage");
         if (g_sim.get(airC)) return fail("an aircraft inside the fireball did not fall");
-        Entity* af = g_sim.get(airFar); if (!af) return fail("an aircraft at the shock ring should have survived");
-        if (af->hp >= af->maxHp) return fail("an aircraft in the shock ring took no damage");
+        if (g_sim.get(airRing)) return fail("an aircraft at the shock ring did not fall");
+        Entity* ao = g_sim.get(airOut); if (!ao || ao->hp < ao->maxHp) return fail("the nuke hurt an aircraft outside its radius");
         if (!g_sim.get(airMine)) return fail("the launcher's own aircraft was destroyed");
         g_sim.destroy(*g_sim.get(airMine), false);   // (an armed idle bomber would go finish the wounded factory by itself)
-        printf("bombtest nuke %s: ok (factory %.0f%%, hq %.0f%%, rim %.0f%%, shock-ring aircraft %.0f%%)\n", FACTION_NAME[fac[0]], 100 * f->hp / f->maxHp, 100 * h->hp / h->maxHp, rm ? 100 * rm->hp / rm->maxHp : 0.0f, 100 * af->hp / af->maxHp);
+        printf("bombtest nuke %s: ok (factory %.0f%%, hq %.0f%%, rim %.0f%%)\n", FACTION_NAME[fac[0]], 100 * f->hp / f->maxHp, 100 * h->hp / h->maxHp, rm ? 100 * rm->hp / rm->maxHp : 0.0f);
         // radiation never finishes a structure off
         for (int t = 0; t < 20 * 90; t++) { g_sim.step(); g_sim.events.clear(); if (getenv("ONEHOUR_DEBUG") && t % 100 == 0) fprintf(stderr, "t %d factory %.0f hq %.0f\n", t, g_sim.get(factory) ? g_sim.get(factory)->hp : -1, g_sim.get(hq) ? g_sim.get(hq)->hp : -1); }
         if (!g_sim.get(factory) || !g_sim.get(hq)) return fail("radiation killed a large structure");
@@ -1956,6 +1988,7 @@ int main(int argc, char** argv) {
         else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
+        else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
         else if (a == "--autotest") { g_map.generate(); return autoTest(seed) ? 0 : 1; }
         else if (a == "--bombtest") { g_map.generate(); return bombTest(seed) && nukeDodgeTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;

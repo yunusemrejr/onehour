@@ -229,7 +229,7 @@ void AiPlayer::dodgeNukes() {
         if (!hurts || n.t < notice || n.t > Sim::NUKE_FLIGHT - 0.5f) continue;
         float safe = (NUKE_RADIUS + 2.0f) * TILE;
         for (auto& e : S.ents) {
-            if (!e.alive || e.owner != player || !e.isUnit()) continue;
+            if (!e.alive || e.owner != player || !e.isUnit() || e.isAir()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger)
             if (dist(e.pos, n.pos) > safe) continue;
             if (e.order == O_MOVE && dist(e.target, n.pos) > safe) continue;   // already on its way out
             Vec2 away = e.pos - n.pos; float l = away.len();
