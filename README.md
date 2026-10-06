@@ -25,14 +25,16 @@ column, Enter starts.
 **Cyber Army** — electric and optical. Pulse rifles, laser troopers, shock troopers, Photon Tanks,
 Volt Walkers (arc lightning, anti-infantry/anti-air), Railgun Tanks (long range, pierces a line),
 Wraith Drones, Laser Turrets and Patriot Batteries. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop,
-Overclock Program → Ion Lancer and Aegis Titan super-heavy walker).
+Overclock Program → Ion Lancer and Aegis Titan super-heavy walker; structure upgrades Rugged Nanoshell, Defense Lasers, Nanite Repair).
 
 **Clanker Army** — diesel and gunpowder. Riflemen, RPG troopers, heavy gunners, Brute Tanks,
 Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries.
-Tech structure: Arms Lab (Shell Storm, Recon Flight, Heavy Ordnance → Grenadier and Behemoth).
+Tech structure: Arms Lab (Shell Storm, Recon Flight, Heavy Ordnance → Grenadier and Behemoth; structure upgrades Rugged Bulwark, Bunker Guns, Repair Crews).
 
 **Base defenses** (Laser Turret, Patriot Battery, Gun Nest, Rocket Battery) are fortified: 5200 to 6800 hp each (more than a Command Core) and
-heavy-hitting weapons, so a few of them hold a choke point against a large force even though their reach is short. Artillery and long-range rails can still outrange them, and a nuke still flattens them.
+brutal weapons: the Laser Turret burns 310 per shot, the Patriot Battery fires pairs of 240-damage missiles out to 10.5 tiles (more than double
+against aircraft), the Gun Nest hammers out 42-damage rounds seven times a second and the Rocket Battery fires salvos of three, so a few of them hold
+a choke point against a large force. Artillery and long-range rails can still outrange them, and a nuke still flattens them (unless they are Rugged).
 
 **Tech structure powers** (select the Data Center / Arms Lab):
 
@@ -42,6 +44,12 @@ heavy-hitting weapons, so a few of them hold a choke point against a large force
 | Scan (Orbital Scan / Recon Flight) | V | the whole map and every enemy on it is visible for 30 s (3.5 min cooldown) |
 | Paradrop (Airlift Drop / Paradrop) | P | a cargo plane drops a free force on parachutes wherever you click (2 min cooldown per tech structure, see below) |
 | Advanced Program | R | $2500, 45 s (half speed on low power): unlocks the army's two elite units for good |
+| Rugged (Nanoshell / Bulwark) | U | $3000, 40 s: every structure gets 50% more health and takes half damage. One nuke no longer flattens anything (a warhead takes at most 55% at ground zero, so it takes two); the plating only gives way when a massive assault lands a big share of a structure's health within a couple of seconds |
+| Defense Guns (Defense Lasers / Bunker Guns) | G | $3500, 45 s: every structure gets a roof gun (Cyber laser, Clanker machine gun, 7.5 tiles) that shoots aircraft, vehicles and infantry; half rate on low power |
+| Self-Repair (Nanite Repair / Repair Crews) | E | $2000, 30 s: every structure mends itself, 1.2% of its health a second once it has been out of fire for 3 s and a quarter of that under fire (never inside fallout). Units are not repaired: that is still the medics' job |
+
+Structure upgrades are researched side by side, last the whole match and cover every structure the army owns, the ones standing and every one
+it builds later, even after the tech structure that researched them is gone. The computer armies buy them too (easy only buys Self-Repair); `ONEHOUR_UPGMASK=bits` limits which ones they may buy, for balance runs).
 
 Team colours: every unit type has its own tone (graphite, cobalt, ceramic and teal for Cyber; olive, sand, brick and iron for
 Clanker), a small jewel-like dot in the owner's colour marks each unit, and every finished structure flies its owner's own flag
@@ -142,7 +150,7 @@ switches powered defenses off, exactly the pressure Zero Hour puts on you.
 | Arrows, screen edge, middle drag, wheel | scroll, Home: your base |
 | Dozer selected | build menu with hotkeys (including `C`: a new Command Core / Post); click the ground to place, Shift to place several |
 | Structure selected | train units (hotkeys shown), Del sells |
-| X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program with a tech structure selected |
+| X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program, U / G / E structure upgrades with a tech structure selected |
 | Space | pause, + / - game speed (x0.5 to x4), F1 help, F2 mute, F11 fullscreen, F12 screenshot |
 | Esc | cancels a pending order, otherwise opens the pause menu: resume, game speed slider, sound, help, restart, surrender, quit to menu / desktop |
 | K | with a Nuke Ramp selected: pick a target for a tactical nuke |
@@ -207,12 +215,16 @@ Beyond the learned parts the commander plays tactically:
   headless; `--train N` self-plays N games to train the AI brain, `--eval N` pits the learned AI against the plain heuristic AI;
   `--soundcheck` prints statistics for the synthesized sounds; `--hqtest` rebuilds a lost Command Core (human dozer and AI), `--jettest` flies
   the jets (speed, banking, strafing, rearming), `--econtest` and `--areatest` cover income structures, nukes and area orders, and `--bench [N]`
-  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, and `--sheet FILE`
+  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--upgradetest` covers the structure upgrades (research rules, Rugged under one and two nukes and under a massive assault, roof guns against aircraft, vehicles and infantry, self-repair on structures but never units, upgrades lasting after the tech structure falls) and dozers sharing out repairs, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, `ONEHOUR_UPG=1|raid` (every army starts with all structure upgrades; `raid` then sends aircraft and tanks into the viewed base), and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
 **Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura
 heals every friendly soldier, vehicle and aircraft within 5 tiles (6% of max health per second; structures at a third of that), and an idle
-medic drifts toward the nearest wounded friend. Idle dozers also repair damaged structures on their own. Jets now peel away from each strafing
+medic drifts toward the nearest wounded friend. Idle dozers also repair damaged structures on their own, and they share the work out: each dozer
+weighs distance against how badly a structure is hurt and how much it matters (defenses, power, Command Cores and tech come first), a structure
+takes only as many dozers as it has room for (one for a turret or a scratch, up to three for a big hurt building), a dozer that finishes a repair
+moves straight on to the next one nearby, and a group of dozers ordered onto one structure leaves its crew there and fans the rest out to the other
+damaged structures around it. Jets now peel away from each strafing
 pass instead of flying through the defences, steer clear of heavily covered targets when softer ones exist, and carry more armour and ammo.
 `--supporttest` covers medics, dozer repair, nukes and fallout; `--bombtest` covers the nuke damage model (what collapses, what is left standing, who falls from the sky) and the bombing runs.
 

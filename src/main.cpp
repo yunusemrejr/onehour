@@ -115,7 +115,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
     for (int p = 0; p < g_sim.numPlayers; p++) {
         Player& pl = g_sim.players[p];
         int ubase = firstUnitOf(pl.faction);
-        printf("  P%d: team %d diff %d doctrine %s, mined $%d, income structures %d, nuke ramps %d, nuke dodges %d, medics built %d\n", p, pl.team, pl.difficulty, DOCTRINE_NAME[g_ai.ais[p].doctrine], pl.mined, g_sim.countRole(p, BR_INCOME, false), g_sim.countRole(p, BR_NUKE, false), g_ai.ais[p].dodges, g_ai.ais[p].medicsBuilt);
+        printf("  P%d: team %d diff %d doctrine %s, mined $%d, income structures %d, nuke ramps %d, nuke dodges %d, medics built %d, upgrades %d%d%d\n", p, pl.team, pl.difficulty, DOCTRINE_NAME[g_ai.ais[p].doctrine], pl.mined, g_sim.countRole(p, BR_INCOME, false), g_sim.countRole(p, BR_NUKE, false), g_ai.ais[p].dodges, g_ai.ais[p].medicsBuilt, (int)pl.upg[UPG_RUGGED], (int)pl.upg[UPG_GUNS], (int)pl.upg[UPG_REPAIR]);
         printf("  P%d: built %d lost %d kills %d structures killed %d harvested %d alive=%d | program %d, elites bought %d/%d, titans %d, drones/gunships %d, jets %d\n", p, pl.unitsBuilt, pl.unitsLost, pl.unitsKilled, pl.structuresKilled, pl.harvested, (int)pl.alive,
                (int)pl.advTech, (int)(pl.spentOn[ubase + 9] / UNITS[ubase + 9].cost), (int)(pl.spentOn[ubase + 9] > 0), (int)(pl.spentOn[ubase + 10] / UNITS[ubase + 10].cost), (int)(pl.spentOn[ubase + 8] / UNITS[ubase + 8].cost), (int)(pl.spentOn[ubase + 11] / UNITS[ubase + 11].cost));
         if (getenv("ONEHOUR_DEBUG")) {
@@ -1386,12 +1386,18 @@ static bool uiTest() {
         if (g_sim.dropWait(0) < 119.0f) return fail("paradrop cooldown not started");
         key(SDLK_p);
         if (g_game.dropMode) return fail("P armed the paradrop during its cooldown");
+        g_sim.players[0].money = 20000;
+        key(SDLK_u); key(SDLK_g); key(SDLK_e);
+        for (int u = 0; u < UPG_COUNT; u++) if (!g_sim.players[0].upgBusy[u]) return fail("U / G / E did not start the structure upgrades");
+        if (g_sim.players[0].money != 20000 - UPGRADES[F_CLANKER][0].cost - UPGRADES[F_CLANKER][1].cost - UPGRADES[F_CLANKER][2].cost) return fail("upgrade costs not charged");
         for (int i = 0; i < 60 * 14; i++) frames(1);   // the plane crosses the map and the troops land (renders every frame: the plane, parachutes and drop circle)
         g_game.cam = Vec2(clampf(te->pos.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(te->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
         g_game.selection.clear(); g_game.selection.push_back(tech);
         frames(30);   // shroud-free path, HUD scan label, tech panel
         for (int i = 0; i < 60 * 50 && !g_sim.players[0].advTech; i++) frames(1);
         if (!g_sim.players[0].advTech) return fail("research did not complete");
+        for (int i = 0; i < 60 * 30 && !g_sim.players[0].upg[UPG_GUNS]; i++) frames(1);   // (renders the roof guns firing at whatever comes by)
+        if (!g_sim.players[0].upg[UPG_RUGGED] || !g_sim.players[0].upg[UPG_GUNS] || !g_sim.players[0].upg[UPG_REPAIR]) return fail("structure upgrades did not complete");
         // barracks now offers the Grenadier
         Ref bk; for (int dy = 6; dy < 14 && !bk.valid(); dy++) for (int dx = -12; dx < 12 && !bk.valid(); dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, B_K_BARRACKS, tx, ty)) bk = g_sim.placeBuilding(B_K_BARRACKS, 0, tx, ty, true); }
         Entity* be = g_sim.get(bk);
@@ -1622,6 +1628,169 @@ static bool turretTest(u64 seed) {
 }
 
 
+// Structure upgrades at the tech structure (Rugged, Defense Guns, Self-Repair) and the dozer repair crews that share out the work.
+static bool upgradeTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "upgradetest: %s\n", m); return false; };
+    auto steps = [](int n) { for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); } };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
+        int b0 = firstBuildOf(fac[0]), u0 = firstUnitOf(fac[0]), u1 = firstUnitOf(fac[1]);
+        Player& pl = g_sim.players[0];
+        // structures of player 0 on free ground near its base, placed at the first spot beyond the wanted distance in a direction
+        auto put = [&](int type, float distTiles, float ang, int owner = 0) {
+            Vec2 base = g_sim.players[owner].basePos;
+            for (float extra = 0; extra < 8; extra += 0.5f) for (float da = 0; da < 6.2f; da += 0.2f) {
+                Vec2 c = base + Vec2(std::cos(ang + da), std::sin(ang + da)) * ((distTiles + extra) * TILE);
+                int tx = tileOf(c.x) - BUILDS[type].w / 2, ty = tileOf(c.y) - BUILDS[type].h / 2;
+                if (!inMap(tx, ty) || !g_sim.canPlace(owner, type, tx, ty)) continue;
+                return g_sim.placeBuilding(type, owner, tx, ty, true);
+            }
+            return NOREF;
+        };
+        Ref power = put(b0 + BR_POWER, 5, 0.0f), power2 = put(b0 + BR_POWER, 5, 1.2f), tech = put(b0 + BR_TECH, 6, 2.4f), barracks = put(b0 + BR_BARRACKS, 6, 3.6f);
+        for (Ref r : { power, power2, tech, barracks }) if (!g_sim.get(r)) return fail("could not set the scene up");
+        g_sim.updatePowerPublic();
+        // ---- research rules
+        if (g_sim.upgradeAvailable(1, UPG_RUGGED) || g_sim.cmdUpgrade(1, UPG_RUGGED)) return fail("an upgrade started without a tech structure");
+        for (int u = 0; u < UPG_COUNT; u++) {
+            int m = pl.money;
+            if (!g_sim.cmdUpgrade(0, u)) return fail("upgrade refused");
+            if (pl.money != m - UPGRADES[fac[0]][u].cost) return fail("upgrade cost not charged");
+            if (g_sim.cmdUpgrade(0, u)) return fail("the same upgrade started twice");
+        }
+        float hp0 = g_sim.get(barracks)->maxHp;
+        for (int guard = 0; guard < 20 * 120 && !(pl.upg[0] && pl.upg[1] && pl.upg[2]); guard++) steps(1);
+        if (!(pl.upg[UPG_RUGGED] && pl.upg[UPG_GUNS] && pl.upg[UPG_REPAIR])) return fail("upgrades never finished");
+        if (g_sim.upgradeAvailable(0, UPG_GUNS) || g_sim.cmdUpgrade(0, UPG_GUNS)) return fail("a finished upgrade can be bought again");
+        if (std::abs(g_sim.get(barracks)->maxHp - hp0 * RUGGED_HP) > 1) return fail("Rugged did not toughen a standing structure");
+        // ---- they last: the tech structure falls, a new structure still gets everything
+        g_sim.destroy(*g_sim.get(tech), true);
+        Ref fresh = put(b0 + BR_BARRACKS, 9, 5.0f);
+        if (!g_sim.get(fresh)) return fail("no room for a new structure");
+        if (std::abs(g_sim.get(fresh)->maxHp - BUILDS[b0 + BR_BARRACKS].hp * RUGGED_HP) > 1) return fail("a structure built after the tech structure fell is not rugged");
+        if (g_sim.roofGun(*g_sim.get(fresh)) < 0) return fail("a new structure has no roof gun");
+        // ---- self-repair heals structures, never units
+        Entity* br = g_sim.get(barracks);
+        br->hp = br->maxHp * 0.4f; br->lastDamaged = g_sim.time - 10;
+        Ref tank = g_sim.spawnUnit(u0 + 5, 0, g_map.nearestFree(pl.basePos + Vec2(0, 90), 10));
+        g_sim.get(tank)->hp = g_sim.get(tank)->maxHp * 0.5f;
+        float bh = br->hp, th = g_sim.get(tank)->hp;
+        steps(20 * 5);
+        if (!g_sim.get(barracks) || g_sim.get(barracks)->hp < bh + g_sim.get(barracks)->maxHp * SELF_REPAIR_RATE * 4) return fail("self-repair did not mend a structure");
+        if (!g_sim.get(tank) || g_sim.get(tank)->hp > th + 0.01f) return fail("self-repair healed a unit");
+        g_sim.destroy(*g_sim.get(tank), false);
+        // ---- roof guns: a plain structure shoots aircraft, vehicles and infantry
+        const char* kinds[3] = { "aircraft", "tank", "infantry" };
+        int types[3] = { u1 + 8, u1 + 5, u1 + 2 };
+        for (int k = 0; k < 3; k++) {
+            Entity* b = g_sim.get(barracks);
+            b->hp = b->maxHp;
+            Vec2 at = b->pos + Vec2(0, (b->bt().h * 0.5f + 4.0f) * TILE);
+            Ref foe = g_sim.spawnUnit(types[k], 1, k == 0 ? at : g_map.nearestFree(at, 12));
+            Entity* f = g_sim.get(foe);
+            if (dist(f->pos, b->pos) / TILE > WEAPONS[W_DEFENSE_LASER].range + 1.5f) { g_sim.destroy(*f, false); continue; }
+            f->disabledUntil = 1e9f;
+            float h0 = f->hp;
+            steps(20 * 6);
+            f = g_sim.get(foe);
+            if (f && f->hp > h0 - 1) { fprintf(stderr, "upgradetest %s: the roof gun never hit the %s\n", FACTION_NAME[fac[0]], kinds[k]); return false; }
+            if (f) g_sim.destroy(*f, false);
+        }
+        // ---- Rugged under nukes: one warhead at ground zero leaves a barracks standing, a second flattens it
+        {
+            Entity* b = g_sim.get(barracks); b->hp = b->maxHp;
+            Vec2 gz = b->pos;
+            g_sim.nukes.push_back({g_sim.players[1].basePos, gz, 1, Sim::NUKE_FLIGHT - 0.05f});
+            steps(4);
+            if (!g_sim.get(barracks)) return fail("one nuke flattened a rugged barracks");
+            if (g_sim.get(barracks)->hp > g_sim.get(barracks)->maxHp * 0.6f) return fail("the nuke barely scratched a rugged barracks");
+            g_sim.nukes.push_back({g_sim.players[1].basePos, gz, 1, Sim::NUKE_FLIGHT - 0.05f});
+            steps(4);
+            if (g_sim.get(barracks)) return fail("two nukes at ground zero did not bring a rugged barracks down");
+        }
+    }
+    // ---- Rugged plating: a small group of tanks does half damage, a massive assault at once swamps it and does full damage
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        float perTank[2] = {};
+        for (int big = 0; big < 2; big++) {
+            g_sim.init(2, fac, ai, diff, team, seed + 3 + fi);
+            g_sim.players[0].upg[UPG_RUGGED] = true;
+            int b0 = firstBuildOf(fac[0]), u1 = firstUnitOf(fac[1]);
+            Ref bk;
+            Vec2 base = g_sim.players[0].basePos;
+            for (int ring = 6; ring < 14 && !bk.valid(); ring++) for (int dy = -ring; dy <= ring && !bk.valid(); dy++) for (int dx = -ring; dx <= ring && !bk.valid(); dx++)
+                if ((std::abs(dx) == ring || std::abs(dy) == ring) && g_sim.canPlace(0, b0 + BR_BARRACKS, tileOf(base.x) + dx, tileOf(base.y) + dy)) bk = g_sim.placeBuilding(b0 + BR_BARRACKS, 0, tileOf(base.x) + dx, tileOf(base.y) + dy, true);
+            if (!g_sim.get(bk)) return fail("no room for the plating test");
+            Entity* b = g_sim.get(bk);
+            b->maxHp = b->hp = 1e6f;   // (never falls during the measurement, so the load is a share of a fixed health: set it like a 3000 hp structure)
+            int n = big ? 16 : 2;
+            std::vector<Ref> tanks;
+            for (int k = 0; k < n; k++) { float a = k * 6.283f / n; tanks.push_back(g_sim.spawnUnit(u1 + 5, 1, g_map.nearestFree(b->pos + Vec2(std::cos(a), std::sin(a)) * 3.2f * TILE, 6))); }
+            g_sim.cmdAttack(tanks, bk);
+            b = g_sim.get(bk); b->maxHp = 3000 * RUGGED_HP; b->hp = 1e6f;
+            steps(20 * 4);
+            b = g_sim.get(bk); float h0 = b->hp;
+            steps(20 * 6);
+            b = g_sim.get(bk);
+            perTank[big] = (h0 - b->hp) / n;
+        }
+        if (perTank[0] <= 0) return fail("the tanks never hit the rugged structure");
+        if (perTank[1] < perTank[0] * 1.5f) { fprintf(stderr, "upgradetest: a massive assault did not swamp the plating (%.0f vs %.0f per tank)\n", perTank[1], perTank[0]); return false; }
+    }
+    // ---- dozers share out the repairs
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + 7 + fi);
+        g_sim.players[0].money = 100000;
+        int b0 = firstBuildOf(fac[0]), u0 = firstUnitOf(fac[0]);
+        auto put = [&](int type, float distTiles, float ang) {
+            Vec2 base = g_sim.players[0].basePos;
+            for (float extra = 0; extra < 8; extra += 0.5f) for (float da = 0; da < 6.2f; da += 0.2f) {
+                Vec2 c = base + Vec2(std::cos(ang + da), std::sin(ang + da)) * ((distTiles + extra) * TILE);
+                int tx = tileOf(c.x) - BUILDS[type].w / 2, ty = tileOf(c.y) - BUILDS[type].h / 2;
+                if (!inMap(tx, ty) || !g_sim.canPlace(0, type, tx, ty)) continue;
+                return g_sim.placeBuilding(type, 0, tx, ty, true);
+            }
+            return NOREF;
+        };
+        std::vector<Ref> blds = { put(b0 + BR_POWER, 6, 0.0f), put(b0 + BR_BARRACKS, 6, 1.5f), put(b0 + BR_POWER, 6, 3.0f), put(b0 + BR_SUPPLY, 7, 4.5f) };
+        for (Ref r : blds) if (!g_sim.get(r)) return fail("could not set the repair scene up");
+        std::vector<Ref> dz;
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0) dz.push_back(g_sim.refOf(e));
+        while (dz.size() < 5) dz.push_back(g_sim.spawnUnit(u0, 0, g_map.nearestFree(g_sim.players[0].basePos + Vec2((float)dz.size() * 26.0f - 60.0f , 70), 10)));
+        auto hurt = [&](Ref r, float f) { Entity* b = g_sim.get(r); b->hp = b->maxHp * f; b->lastDamaged = -100; };
+        auto crews = [&](Ref r) { Entity* b = g_sim.get(r); return b ? g_sim.repairCrew(*b) : 0; };
+        // one lightly damaged structure: one dozer goes, the rest stay free
+        hurt(blds[1], 0.85f);
+        steps(25);
+        if (crews(blds[1]) != 1) { fprintf(stderr, "upgradetest: %d dozers went to mend one scratched structure\n", crews(blds[1])); return false; }
+        // four damaged structures: the idle dozers spread over them
+        for (Ref r : blds) hurt(r, 0.3f);
+        steps(25);
+        int busy = 0, worst = 0;
+        for (Ref r : blds) { int c = crews(r); if (c > 0) busy++; worst = std::max(worst, c); }
+        if (busy < 4) { fprintf(stderr, "upgradetest: idle dozers covered only %d of 4 damaged structures (most on one: %d)\n", busy, worst); return false; }
+        // the player sends all five to one structure: its crew is capped and the others fan out to the damaged ones around it
+        for (Ref r : blds) { hurt(r, 0.3f); }
+        for (Ref d : dz) g_sim.cmdStop({d});
+        g_sim.cmdAssist(dz, blds[0]);
+        int c0 = crews(blds[0]); busy = 0;
+        for (Ref r : blds) if (crews(r) > 0) busy++;
+        if (c0 > std::max(2, Sim::repairCrewCap(*g_sim.get(blds[0]))) || busy < 3) { fprintf(stderr, "upgradetest: a group repair order piled %d dozers on one structure (%d covered)\n", c0, busy); return false; }
+        // and the work gets done
+        steps(20 * 40);
+        for (Ref r : blds) { Entity* b = g_sim.get(r); if (!b || b->hp < b->maxHp * 0.99f) return fail("the dozers did not finish the repairs"); }
+    }
+    printf("upgradetest: ok\n");
+    return true;
+}
+
 // Command fuzzer: player 0 issues random commands (every command, random arguments, including nonsense) while the computer plays the others.
 // Looks for crashes (run it under the sanitizers) and broken invariants.
 static bool fuzzTest(u64 seed, int seconds) {
@@ -1650,7 +1819,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 18);
+            int c = rng.range(0, 19);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -1671,6 +1840,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 15: g_sim.cmdScan(0); break;
             case 16: g_sim.cmdResearch(0); break;
             case 17: { int bt = rng.range(0, B_COUNT - 1); g_sim.canPlace(0, bt, rng.range(-5, MAP_W + 5), rng.range(-5, MAP_H + 5)); g_sim.unitAvailable(0, rng.range(0, U_COUNT - 1)); g_sim.buildAvailable(0, bt); break; }
+            case 19: g_sim.cmdUpgrade(rng.range(-1, 2) == 0 ? 0 : rng.range(-1, 4), rng.range(-1, UPG_COUNT)); break;
             case 18: g_sim.players[0].dropReady = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding()) e.dropTimer = std::min(e.dropTimer, g_sim.time + 3.0f); g_sim.cmdParadrop(0, where()); break;
             }
         }
@@ -1721,6 +1891,7 @@ int main(int argc, char** argv) {
         else if (a == "--airmatrix") { g_map.generate(); return airMatrixTest(seed) ? 0 : 1; }
         else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
         else if (a == "--turrettest") { g_map.generate(); return turretTest(seed) ? 0 : 1; }
+        else if (a == "--upgradetest") { g_map.generate(); return upgradeTest(seed) ? 0 : 1; }
         else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
@@ -1844,8 +2015,19 @@ int main(int argc, char** argv) {
         if (ticks > 0) {
             g_game.startGame();
             if (allAi) { g_sim.players[0].isAI = true; g_ai.init(seed); }
+            const char* upgShow = getenv("ONEHOUR_UPG");   // ONEHOUR_UPG=1: every army starts with all structure upgrades; =raid: enemy aircraft and tanks then hit the viewed base
+            if (upgShow) for (int p = 0; p < g_sim.numPlayers; p++) for (int u = 0; u < UPG_COUNT; u++) g_sim.players[p].upg[u] = true;
             for (int t = 0; t < ticks; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
             Vec2 b = g_sim.players[std::min(viewPlayer, 3)].basePos;
+            if (upgShow && std::string(upgShow) == "raid") {
+                int vp = std::min(viewPlayer, g_sim.numPlayers - 1), foe = vp == 0 ? 1 : 0, uf = firstUnitOf(g_sim.players[foe].faction);
+                g_game.cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                std::vector<Ref> raid;
+                for (int k = 0; k < 4; k++) raid.push_back(g_sim.spawnUnit(uf + 8, foe, b + Vec2(-260 + k * 150, -150 + (k & 1) * 260)));
+                for (int k = 0; k < 4; k++) raid.push_back(g_sim.spawnUnit(uf + 5, foe, g_map.nearestFree(b + Vec2(-300 + k * 200, 200), 10)));
+                g_sim.cmdMove(raid, b, true);
+                for (int t = 0; t < 40; t++) { g_sim.step(); g_sim.events.clear(); }
+            }
             if (viewPlayer == 9) {
                 // centre on the action: the unit hit most recently
                 float best = -1; for (auto& e : g_sim.ents) if (e.alive && e.lastDamaged > best) { best = e.lastDamaged; b = e.pos; }

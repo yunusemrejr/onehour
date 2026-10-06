@@ -3,7 +3,7 @@
 
 Game g_game;
 
-enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE };
+enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE };
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -18,6 +18,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_STOP: return "S";
     case BK_AREA: return "G";
     case BK_FORCE: return "F";
+    case BK_UPGRADE: return UPGRADES[0][id].hotkey;   // (the same keys for both armies)
     }
     return nullptr;
 }
@@ -317,7 +318,7 @@ void Game::buildButtons() {
     if (placingType >= 0) { add(BK_CANCEL, 0, true, "Cancel", "Cancel placement (Esc)"); return; }
     if (selection.empty()) return;
     Entity* b = selectedBuilding();
-    char tip[160];
+    char tip[256];
     if (b) {
         if (!b->constructed) { add(BK_SELL, 0, true, "Sell", "Sell this structure for a partial refund"); return; }
         BuildRole role = b->bt().role;
@@ -347,6 +348,13 @@ void Game::buildButtons() {
             const DropType& dr = DROPS[pl.faction];
             snprintf(tip, sizeof tip, "%s  [P]  %s", dr.name, dr.desc);
             add(BK_DROP, 0, g_sim.dropsReady(g_sim.humanPlayer) > 0, dr.name, tip);
+            for (int u = 0; u < UPG_COUNT; u++) {
+                const UpgradeType& ug = UPGRADES[pl.faction][u];
+                if (pl.upg[u]) snprintf(tip, sizeof tip, "%s: done. %s", ug.name, ug.desc);
+                else if (pl.upgBusy[u]) snprintf(tip, sizeof tip, "%s in progress (%d%%): %s", ug.name, (int)(pl.upgProgress[u] * 100), ug.desc);
+                else snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s. Lasts the whole match", ug.name, ug.cost, ug.hotkey, ug.desc);
+                add(BK_UPGRADE, u, g_sim.upgradeAvailable(g_sim.humanPlayer, u) && g_sim.canAfford(g_sim.humanPlayer, ug.cost), ug.name, tip);
+            }
         }
         if (role == BR_NUKE) {
             int rdy = g_sim.nukesReady(g_sim.humanPlayer);
@@ -408,6 +416,7 @@ void Game::cmdSelection(int kind, int id) {
     case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_UPGRADE: if (g_sim.cmdUpgrade(g_sim.humanPlayer, id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_ATTACKMOVE: attackMoveMode = true; forceMode = false; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_FORCE: cancelModes(); forceMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_AREA: areaMode = true; areaDrag = false; placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
@@ -867,6 +876,9 @@ void Game::drawRangeRings() {
             const BuildType& bt = e->bt();
             bool powered = !(pl.lowPower() && bt.power < 0) && e->disabledUntil <= g_sim.time;
             rangeRing(sp, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, powered, false, false);
+        } else if (e->isBuilding() && g_sim.roofGun(*e) >= 0) {
+            const BuildType& bt = e->bt();
+            rangeRing(sp, WEAPONS[g_sim.roofGun(*e)].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, g_sim.roofGun(*e), WEAPONS[g_sim.roofGun(*e)].name, e->disabledUntil <= g_sim.time, false, false);
         } else if (e->isUnit() && e->weapon() >= 0 && fewUnits <= 3) {
             rangeRing(sp, WEAPONS[e->weapon()].range * TILE + e->radius(), e->weapon(), nullptr, true, false, true);
         }
@@ -1000,6 +1012,14 @@ void Game::drawEntity(Entity& e) {
             // rotating heads for defenses
             if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
             else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);
+            if (g_sim.roofGun(e) >= 0) {   // Defense Guns upgrade: a small laser / machine gun mount on the roof
+                Vec2 gp = p + (g_sim.roofGunPos(e) - e.pos);
+                Color ac = hudAccent(bt.faction);
+                g.fillCircle(gp.x, gp.y + 2.0f, 9.0f, rgb(10, 12, 16, 150));
+                g.fillCircle(gp.x, gp.y + 1.0f, 8.0f, disabled ? rgb(70, 76, 90) : shade(ac, 0.55f));
+                g.fillCircle(gp.x, gp.y + 1.0f, 6.5f, rgb(30, 34, 40));
+                g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], gp.x, gp.y, e.turret2, 0.85f, tint);
+            }
             // production activity light
             if (!e.queue.empty() && ((int)(wallTime * 3) & 1)) { Color ac = hudAccent(bt.faction); g.glowAdd(fx + fw - 7, fy + 2, 7, Color{ac.r, ac.g, ac.b, 160}); g.fillCircle(fx + fw - 7, fy + 2, 2.4f, ac); }
         }
@@ -1421,6 +1441,12 @@ void Game::renderHud() {
             } else {
                 const BuildType& bt = e->bt();
                 if (bt.power != 0) { snprintf(buf, sizeof buf, "Power %+d", bt.power); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
+                if (e->owner >= 0 && e->constructed) {   // structure upgrades of its army
+                    const Player& op = g_sim.players[e->owner];
+                    std::string ups;
+                    for (int u = 0; u < UPG_COUNT; u++) if (op.upg[u]) { if (!ups.empty()) ups += "  "; ups += UPGRADES[op.faction][u].name; }
+                    if (!ups.empty()) g.text(INFO_X + 86 + (bt.power != 0 ? 70 : 0), hy + 58, ups.c_str(), accent);
+                }
                 { char d[96]; snprintf(d, sizeof d, "%.*s", e->queue.empty() ? 76 : 38, bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
                 if (bt.role == BR_TECH && e->constructed) {
                     const ProgramType& pg = PROGRAMS[pl.faction];
@@ -1428,6 +1454,11 @@ void Game::renderHud() {
                     else if (pl.researching) snprintf(buf, sizeof buf, "%s: researching %d%%%s", pg.name, (int)(pl.researchProgress * 100), pl.lowPower() ? " (slowed: low power)" : "");
                     else snprintf(buf, sizeof buf, "%s: not researched ($%d)", pg.name, pg.cost);
                     g.text(INFO_X + 86, hy + 84, buf, pl.advTech ? accent : hudDim());
+                    {   // structure upgrades under way
+                        std::string ups;
+                        for (int u = 0; u < UPG_COUNT; u++) if (pl.upgBusy[u]) { char t[64]; snprintf(t, sizeof t, "%s%s %d%%", ups.empty() ? "Upgrading: " : "  ", UPGRADES[pl.faction][u].name, (int)(pl.upgProgress[u] * 100)); ups += t; }
+                        if (!ups.empty() && !g_sim.revealed(g_sim.humanPlayer)) g.text(INFO_X + 86, hy + 98, ups.c_str(), accent);
+                    }
                     if (g_sim.revealed(g_sim.humanPlayer)) { snprintf(buf, sizeof buf, "%s: %ds left", SCANS[pl.faction].name, (int)std::ceil(pl.revealUntil - g_sim.time)); g.text(INFO_X + 86, hy + 98, buf, accent); }
                 }
                 if (!e->queue.empty()) {
@@ -1507,6 +1538,13 @@ void Game::renderHud() {
             if (pl.advTech) g.text(b.x + 5, b.y + 15, "DONE", accent);
             else if (pl.researching) { snprintf(buf, sizeof buf, "%d%%", (int)(pl.researchProgress * 100)); g.text(b.x + 5, b.y + 15, buf, accent); g.fill(b.x + 36, b.y + 18, (int)((b.w - 42) * clampf(pl.researchProgress, 0, 1)), 3, accent); }
             else { snprintf(buf, sizeof buf, "$%d", pg.cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= pg.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
+        }
+        if (b.kind == BK_UPGRADE) {
+            const UpgradeType& ug = UPGRADES[pl.faction][b.id];
+            float pr = pl.upgProgress[b.id];
+            if (pl.upg[b.id]) g.text(b.x + 5, b.y + 15, "DONE", accent);
+            else if (pl.upgBusy[b.id]) { snprintf(buf, sizeof buf, "%d%%", (int)(pr * 100)); g.text(b.x + 5, b.y + 15, buf, accent); g.fill(b.x + 36, b.y + 18, (int)((b.w - 52) * clampf(pr, 0, 1)), 3, accent); }
+            else { snprintf(buf, sizeof buf, "$%d", ug.cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= ug.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
         }
         const char* hk = kindHotkey(b.kind, b.id);
         if (hk) g.text(b.x + b.w - 12, b.y + 15, hk, accent);

@@ -58,6 +58,10 @@ struct Entity {
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
+    float cooldown2 = 0;    // structure: the roof gun of the Defense Guns upgrade (its own target, cooldown and facing)
+    Ref engaged2;
+    float turret2 = 0;
+    float dmgLoad = 0;      // structure: damage taken over the last couple of seconds (decaying); a big load overwhelms Rugged plating
     Ref forceTarget;        // a friendly (own or allied) target the human ordered it to attack on purpose (never set for computer armies)
     std::vector<Vec2> path;
     size_t pathIdx = 0;
@@ -136,6 +140,9 @@ struct Player {
     bool advTech = false;       // Advanced Program researched: special units unlocked
     bool researching = false;
     float researchProgress = 0; // 0..1
+    bool upg[UPG_COUNT] = {};           // structure upgrades finished (they last the whole match)
+    bool upgBusy[UPG_COUNT] = {};       // being researched at the tech structure
+    float upgProgress[UPG_COUNT] = {};  // 0..1
     float lastNotice = -100, lastMine = -100;   // throttles for alerts (reset every game)
     bool wasLowPower = false;
     Vec2 basePos;
@@ -247,6 +254,14 @@ struct Sim {
     bool cmdScan(int player);                 // tech structure: reveal the whole map for SCANS[].duration
     bool cmdResearch(int player);             // tech structure: research the Advanced Program (unlocks special units)
     bool programAvailable(int player) const;  // tech structure standing, program not yet researched or running
+    bool cmdUpgrade(int player, int upg);     // tech structure: research a structure upgrade (UPGRADES[faction][upg])
+    bool upgradeAvailable(int player, int upg) const;   // tech structure standing, upgrade not yet finished or running
+    bool hasUpgrade(int player, int upg) const { return player >= 0 && player < numPlayers && players[player].upg[upg]; }
+    int roofGun(const Entity& b) const;       // WEAPONS index of a structure's Defense Guns roof gun, -1 without the upgrade
+    Vec2 roofGunPos(const Entity& b) const;   // where that gun sits (world px)
+    Entity* repairJob(Entity& dozer, float maxDist = 1e9f);   // the damaged structure a dozer should mend next (spreads dozers out, -> nullptr: nothing to do)
+    int repairCrew(const Entity& b, const Entity* except = nullptr) const;   // dozers already mending this structure
+    static int repairCrewCap(const Entity& b);   // how many dozers a structure needs at most
 
     // queries
     bool canPlace(int player, int buildType, int tx, int ty) const;
@@ -289,18 +304,20 @@ private:
     Vec2 landingSpot(Airlift& a, float spacing);
     void updateFallout();
     void updateResearch();
+    void finishUpgrade(int player, int upg);
+    void updateRoofGun(Entity& b, bool powered);
     void separateUnits();
     void checkVictory();
     void moveAlong(Entity& e, float speed);
     bool requestPath(Entity& e, Vec2 dest);
     bool tryFire(Entity& e, Entity& tgt);
-    void fireWeapon(Entity& e, Entity& tgt, const Weapon& w);
+    void fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle = nullptr);
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
-    Entity* acquireTarget(Entity& e, float range);
+    Entity* acquireTarget(Entity& e, float range, int wpn = -1);
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);
-    bool canTarget(const Entity& e, const Entity& t) const;
+    bool canTarget(const Entity& e, const Entity& t, int wpn = -1) const;   // wpn: a weapon other than the entity's own (a roof gun)
     void finishBuilding(Entity& b);
     void spawnFromQueue(Entity& b);
     Entity* findSupplyBuilding(Entity& h);

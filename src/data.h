@@ -105,6 +105,21 @@ extern const ScanType SCANS[F_COUNT];
 struct ProgramType { const char* name; const char* desc; int cost; float time; };
 extern const ProgramType PROGRAMS[F_COUNT];
 
+// Structure upgrades researched at the tech structure (Data Center / Arms Lab). Once finished an upgrade lasts the whole match and
+// covers every structure the army owns, the ones standing and the ones it builds later, even if the tech structure falls afterwards.
+enum UpgradeId { UPG_RUGGED = 0, UPG_GUNS, UPG_REPAIR, UPG_COUNT };
+struct UpgradeType { const char* name; const char* hotkey; const char* desc; int cost; float time; };
+extern const UpgradeType UPGRADES[F_COUNT][UPG_COUNT];
+static const float RUGGED_HP = 1.5f;          // Rugged: structure health multiplier
+static const float RUGGED_ARMOR = 0.5f;       // Rugged: fraction of incoming damage a structure takes
+static const float RUGGED_SWAMP_LO = 0.03f;  // Rugged: the plating starts to give once this share of max health lands within ~2 s ...
+static const float RUGGED_SWAMP_HI = 0.11f;  // ... and is overwhelmed (full damage) from this share on: only a massive assault breaks through
+static const float RUGGED_NUKE = 0.55f;       // Rugged: fraction of max health one warhead takes at ground zero (two close nukes bring it down)
+static const float SELF_REPAIR_RATE = 0.012f; // Self-Repair: fraction of max health a structure restores per second once out of combat
+static const float SELF_REPAIR_HOT = 0.25f;   // ... and the share of that rate it keeps while still taking fire
+static const float SELF_REPAIR_DELAY = 3.0f;  // seconds after the last hit before full-rate repair resumes
+static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns of the Defense Guns upgrade (Cyber laser, Clanker machine gun)
+
 // Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes
 static const int DROP_INF = 15, DROP_VEH = 7, DROP_AIR = 4;
 struct DropType { const char* name; const char* desc; float cooldown; float radius; };   // radius: tiles around the target the troops land in

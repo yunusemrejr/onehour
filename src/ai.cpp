@@ -480,7 +480,10 @@ void AiPlayer::think() {
         if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 3 ? 7.0f : (pl.difficulty == 2 ? 9.0f : 13.0f)) * style.nuke && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
         if (!built && barracks.size() < 2 && minutes > 10 && pl.money > 3500) built = tryBuild(base + BR_BARRACKS, pl.basePos);
         // repair
-        if (!built && !damaged.empty()) S.cmdAssist({S.refOf(*dz)}, S.refOf(*damaged[0]));
+        if (!built && !damaged.empty() && dz->order != O_BUILD) {   // (a dozer already mending something keeps at it; the job picker spreads the others)
+            Entity* job = S.repairJob(*dz);
+            if (job) S.cmdAssist({S.refOf(*dz)}, S.refOf(*job));
+        }
         // continue unfinished structures whose dozer died
         if (!built) for (auto& e : S.ents)
             if (e.alive && e.isBuilding() && e.owner == player && !e.constructed) {
@@ -527,6 +530,21 @@ void AiPlayer::think() {
 
     // ---------- tech structure: the Advanced Program, a map scan when nothing is known about the enemy, and the strike
     if (techs > 0 && S.programAvailable(player) && minutes > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
+    // structure upgrades once the economy carries them: self-repair first, then the roof guns, then the rugged armour (easy skips the last two)
+    if (techs > 0) {
+        static const int order[UPG_COUNT] = { UPG_REPAIR, UPG_GUNS, UPG_RUGGED };
+        static const float from[UPG_COUNT] = { 13.0f, 11.0f, 8.0f };   // minutes, by UpgradeId
+        float pace = pl.difficulty >= 3 ? 0.55f : (pl.difficulty == 2 ? 0.75f : (pl.difficulty == 1 ? 1.0f : 1.6f));
+        for (int k = 0; k < UPG_COUNT; k++) {
+            int u = order[k];
+            if (pl.difficulty == 0 && u != UPG_REPAIR) continue;
+            static const int upgMask = getenv("ONEHOUR_UPGMASK") ? atoi(getenv("ONEHOUR_UPGMASK")) : -1;   // (debug: bit u allows upgrade u)
+            if (!(upgMask & (1 << u))) continue;
+            if (!S.upgradeAvailable(player, u) || minutes < from[u] * pace) continue;
+            if (pl.money > UPGRADES[pl.faction][u].cost + (threat ? 3000 : 1500)) S.cmdUpgrade(player, u);
+            break;   // one at a time, in order
+        }
+    }
     if (techs > 0 && enemyUnits.empty() && minutes > 4 && S.time >= pl.scanReady) S.cmdScan(player);
     if (techs > 0 && S.time >= pl.powerReady && !enemyUnits.empty()) {
         const PowerType& pw = POWERS[pl.faction];

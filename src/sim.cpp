@@ -77,12 +77,13 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.tx = tx; e.ty = ty;
     const BuildType& b = BUILDS[type];
     e.pos = buildingCenter(type, tx, ty);
-    e.maxHp = b.hp;
+    e.maxHp = b.hp * (hasUpgrade(owner, UPG_RUGGED) ? RUGGED_HP : 1.0f);
     e.constructed = instant;
     e.progress = instant ? 1.0f : 0.0f;
-    e.hp = instant ? b.hp : b.hp * 0.1f;
+    e.hp = instant ? e.maxHp : e.maxHp * 0.1f;
     e.rally = e.pos + Vec2(0, b.h * TILE * 0.5f + 40);
     e.angle = -1.5708f;
+    e.turret2 = 2.4f;   // (the roof gun idles looking out over a corner)
     g_map.setStructure(tx, ty, b.w, b.h, true);
     // shove units off the foundation
     Ref self = refOf(i);
@@ -447,14 +448,30 @@ bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     return true;
 }
 
+// Construction takes every dozer sent. A repair takes the closest few the structure has room for; the rest of a big group fan out to the
+// other damaged structures around it (and only pile on when there is nothing else to mend nearby).
 void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
     Entity* b = get(building);
     if (!b || !b->isBuilding()) return;
+    std::vector<Entity*> dz;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || !e->isUnit() || e->ut().role != UR_DOZER || e->owner != b->owner) continue;
+        if (e && e->isUnit() && e->ut().role == UR_DOZER && e->owner == b->owner) dz.push_back(e);
+    }
+    Vec2 at = b->pos;
+    std::stable_sort(dz.begin(), dz.end(), [&](const Entity* x, const Entity* y) { return dist2(x->pos, at) < dist2(y->pos, at); });
+    int room = std::max(2, repairCrewCap(*b));
+    for (auto* e : dz) {
         takeOrder(*e);
-        e->order = O_BUILD; e->targetEnt = building; e->repathTimer = 0; e->actionTimer = 0;
+        Ref job = building;
+        if (b->constructed && e->targetEnt != building && repairCrew(*b) >= room) {
+            Vec2 keep = e->pos; e->pos = at;                 // look for work around the structure the player pointed at
+            e->order = O_IDLE; e->targetEnt = NOREF;          // (so this dozer does not count itself in a crew)
+            Entity* other = repairJob(*e, 14.0f * TILE);
+            e->pos = keep;
+            if (other) job = refOf(*other);
+        }
+        e->order = O_BUILD; e->targetEnt = job; e->repathTimer = 0; e->actionTimer = 0; e->path.clear();
     }
 }
 
@@ -746,15 +763,17 @@ void Sim::nukeBlast(const Nuke& n) {
         if (foe) {
             if (e->isBuilding()) {
                 bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA;
+                bool rugged = hasUpgrade(e->owner, UPG_RUGGED);
                 float dmg;
-                if (small) dmg = e->maxHp * 1.6f * f;                                        // f above ~0.63 (the inner blast) brings it down
+                if (rugged) dmg = e->maxHp * RUGGED_NUKE * f / RUGGED_ARMOR;                   // (after the armour) a bit over half at ground zero: it takes two warheads
+                else if (small) dmg = e->maxHp * 1.6f * f;                                        // f above ~0.63 (the inner blast) brings it down
                 else {
                     dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f);                          // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
                     dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));           // never lethal
                 }
                 if (dmg > 0) applyDamage(*e, dmg, n.owner, NOREF, nullptr);
                 e = get(r); if (!e) continue;
-                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f);            // the pulse knocks survivors offline for a while
+                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * (rugged ? 0.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
                     for (int k = 0; k < 4; k++) {
                         Vec2 p = e->pos + Vec2(rng.f(-e->radius() * 0.7f, e->radius() * 0.7f), rng.f(-e->radius() * 0.5f, e->radius() * 0.5f));
@@ -852,15 +871,50 @@ bool Sim::cmdScan(int player) {
     return true;
 }
 
+bool Sim::upgradeAvailable(int player, int upg) const {
+    if (player < 0 || player >= numPlayers || upg < 0 || upg >= UPG_COUNT) return false;
+    const Player& pl = players[player];
+    return !pl.upg[upg] && !pl.upgBusy[upg] && hasRole(player, BR_TECH);
+}
+
+bool Sim::cmdUpgrade(int player, int upg) {
+    if (!upgradeAvailable(player, upg)) return false;
+    Player& pl = players[player];
+    const UpgradeType& u = UPGRADES[pl.faction][upg];
+    if (!canAfford(player, u.cost)) { emit(EV_NOFUNDS, player, SND_NOFUNDS, pl.basePos, "Insufficient funds"); return false; }
+    pl.money -= u.cost;
+    pl.upgBusy[upg] = true; pl.upgProgress[upg] = 0;
+    emit(EV_MSG, player, SND_CLICK, pl.basePos, (std::string(u.name) + " started").c_str());
+    return true;
+}
+
+// an upgrade takes effect at once on every structure the army already has (new ones get it when they are placed)
+void Sim::finishUpgrade(int p, int upg) {
+    Player& pl = players[p];
+    pl.upgBusy[upg] = false; pl.upg[upg] = true; pl.upgProgress[upg] = 1;
+    for (auto& e : ents) {
+        if (!e.alive || !e.isBuilding() || e.owner != p) continue;
+        if (upg == UPG_RUGGED) { e.maxHp *= RUGGED_HP; e.hp *= RUGGED_HP; }
+    }
+    emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(UPGRADES[pl.faction][upg].name) + " complete: " + UPGRADES[pl.faction][upg].desc).c_str());
+}
+
 void Sim::updateResearch() {
     for (int p = 0; p < numPlayers; p++) {
         Player& pl = players[p];
-        if (!pl.researching) continue;
         if (!hasRole(p, BR_TECH)) continue;            // paused while the tech structure is down
-        pl.researchProgress += 5 * SIM_DT * (pl.lowPower() ? 0.5f : 1.0f) * pl.buildMul() / PROGRAMS[pl.faction].time;   // called every 5th tick
-        if (pl.researchProgress >= 1.0f) {
-            pl.researching = false; pl.advTech = true; pl.researchProgress = 1;
-            emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(PROGRAMS[pl.faction].name) + " complete: " + PROGRAMS[pl.faction].desc).c_str());
+        float rate = 5 * SIM_DT * (pl.lowPower() ? 0.5f : 1.0f) * pl.buildMul();   // called every 5th tick
+        if (pl.researching) {
+            pl.researchProgress += rate / PROGRAMS[pl.faction].time;
+            if (pl.researchProgress >= 1.0f) {
+                pl.researching = false; pl.advTech = true; pl.researchProgress = 1;
+                emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(PROGRAMS[pl.faction].name) + " complete: " + PROGRAMS[pl.faction].desc).c_str());
+            }
+        }
+        for (int u = 0; u < UPG_COUNT; u++) {
+            if (!pl.upgBusy[u]) continue;
+            pl.upgProgress[u] += rate / UPGRADES[pl.faction][u].time;
+            if (pl.upgProgress[u] >= 1.0f) finishUpgrade(p, u);
         }
     }
 }
@@ -909,7 +963,7 @@ void Sim::moveAlong(Entity& e, float speed) {
 }
 
 // ------------------------------------------------------------ combat
-bool Sim::canTarget(const Entity& e, const Entity& t) const {
+bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
     if (t.fall > 0) return false;   // still under the parachute
     if (t.isUnit() && t.ut().sniper && !(e.isUnit() && e.ut().kind != UK_INF)) return false;   // only vehicles and aircraft can spot a sniper
@@ -918,7 +972,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t) const {
         if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
         if (get(e.forceTarget) != &t) return false;
     }
-    int w = e.weapon();
+    int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return false;
     const Weapon& wp = WEAPONS[w];
     if (t.isAir()) return wp.air;
@@ -939,13 +993,13 @@ float Sim::aaCover(const Entity& t, int owner) {
     return n;
 }
 
-Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
-    int w = e.weapon();
+Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn) {
+    int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return nullptr;
     const Weapon& wp = WEAPONS[w];
     Entity* best = nullptr; float bs = 1e9f;
     forEachNear(e.pos, rangeTiles * TILE, [&](Entity& t) {
-        if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t)) return;   // (auto-acquisition never picks a friend)
+        if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t, w)) return;   // (auto-acquisition never picks a friend)
         float d = distToEntity(e.pos, t) / TILE;
         if (d < wp.minRange) return;
         float score = d - 2.5f * wp.mult[t.armor()];
@@ -953,6 +1007,7 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles) {
         if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
+        if (wpn >= 0 && t.isAir()) score -= 1.0f;                  // a roof gun is there to keep aircraft off the base first
         if (e.isAir() && !t.isAir()) {
             if (e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
             if (e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
@@ -1009,8 +1064,8 @@ bool Sim::tryFire(Entity& e, Entity& tgt) {
     return true;
 }
 
-void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
-    Vec2 from = e.pos;
+void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle) {
+    Vec2 from = muzzle ? *muzzle : e.pos;
     if (e.isUnit() && e.ut().kind == UK_VEH) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * (e.radius() * 0.9f);
     else if (e.isUnit() && e.ut().kind == UK_INF) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * 12.0f;   // muzzle of the rifle, not the soldier's chest
     else if (e.isUnit() && e.ut().kind == UK_AIR) from = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 9.0f;
@@ -1035,7 +1090,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w) {
         // pierce: every enemy near the line takes the hit
         std::vector<Entity*> hits;
         forEachNear(from + dir * (w.range * TILE * 0.5f), w.range * TILE * 0.5f + 40, [&](Entity& t) {
-            if (forced ? (&t == &e || !t.alive || t.owner < 0 || t.kind == EK_RESOURCE || t.fall > 0 || (t.isAir() ? !w.air : !w.ground)) : !canTarget(e, t)) return;
+            if (forced ? (&t == &e || !t.alive || t.owner < 0 || t.kind == EK_RESOURCE || t.fall > 0 || (t.isAir() ? !w.air : !w.ground)) : !canTarget(e, t, (int)(&w - WEAPONS))) return;
             Vec2 rel = t.pos - from;
             float along = rel.x * dir.x + rel.y * dir.y;
             if (along < 0 || along > w.range * TILE + t.radius()) return;   // (range is measured to a target's edge, not its centre)
@@ -1074,6 +1129,11 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
+    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED)) {   // Rugged: half damage, until so much lands at once that the plating is swamped
+        float load = tgt.dmgLoad / tgt.maxHp;
+        real *= RUGGED_ARMOR + (1.0f - RUGGED_ARMOR) * clampf((load - RUGGED_SWAMP_LO) / (RUGGED_SWAMP_HI - RUGGED_SWAMP_LO), 0, 1);
+    }
+    if (tgt.isBuilding()) tgt.dmgLoad += real;
     if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner)) real *= players[attackerOwner].damageMul();
     tgt.hp -= real;
     tgt.lastDamaged = time;
@@ -1753,6 +1813,40 @@ void Sim::updateUnit(Entity& e) {
         airSteer(e, e.angle, std::max(e.airspeed, ut.speed * AIR_STALL));
 }
 
+// ------------------------------------------------------------ repairs
+int Sim::repairCrewCap(const Entity& b) {
+    int area = b.bt().w * b.bt().h;
+    return area >= 12 ? 3 : (area >= 6 ? 2 : 1);   // a big structure has room for a few dozers, a turret for one
+}
+
+int Sim::repairCrew(const Entity& b, const Entity* except) const {
+    int n = 0; Ref br = refOf(b);
+    for (auto& u : ents)
+        if (u.alive && &u != except && u.isUnit() && u.owner == b.owner && u.order == O_BUILD && u.targetEnt == br && u.ut().role == UR_DOZER) n++;
+    return n;
+}
+
+// The structure a dozer should mend next. Every damaged structure is a job; the dozer weighs how far away it is against how badly it is hurt
+// and how much it matters, and a job that already has its full crew is skipped (a second dozer only joins a big or badly hurt one), so a
+// group of dozers spreads over the base instead of piling onto one building. Structures under fire right now and radiation are left alone.
+Entity* Sim::repairJob(Entity& dz, float maxDist) {
+    Entity* best = nullptr; float bs = 1e18f;
+    for (auto& b : ents) {
+        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || !b.constructed || b.hp >= b.maxHp * 0.995f || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
+        float d = dist(b.pos, dz.pos);
+        if (d > maxDist) continue;
+        float hurt = 1.0f - b.hp / b.maxHp;
+        int crew = repairCrew(b, &dz), cap = repairCrewCap(b);
+        if (hurt < 0.5f) cap = std::min(cap, 1 + (hurt > 0.25f ? 1 : 0));   // a scratch needs one dozer
+        if (crew >= cap) continue;
+        BuildRole r = b.bt().role;
+        float weight = (r == BR_TURRET || r == BR_AATURRET) ? 1.4f : (r == BR_HQ || r == BR_POWER || r == BR_TECH) ? 1.25f : 1.0f;
+        float score = d / TILE - hurt * 14.0f * weight + crew * 10.0f;   // each dozer already there counts as ten tiles further away
+        if (score < bs) { bs = score; best = &b; }
+    }
+    return best;
+}
+
 void Sim::runOrder(Entity& e, const UnitType& ut) {
     switch (e.order) {
     case O_IDLE: {
@@ -1767,13 +1861,9 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             }
             break;
         }
-        if (ut.role == UR_DOZER) {    // bulldozers mend damaged structures on their own when they have nothing to do
+        if (ut.role == UR_DOZER) {    // bulldozers mend damaged structures on their own when they have nothing to do, each taking its own job
             if ((tick + e.gen) % 20 == 0) {
-                Entity* best = nullptr; float bd = 1e18f;
-                for (auto& b : ents) {
-                    if (!b.alive || !b.isBuilding() || b.owner != e.owner || !b.constructed || b.hp >= b.maxHp * 0.995f || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;   // (idle dozers do not drive into radiation)
-                    float d = dist2(b.pos, e.pos); if (d < bd) { bd = d; best = &b; }
-                }
+                Entity* best = repairJob(e);
                 if (best) { e.order = O_BUILD; e.targetEnt = refOf(*best); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); }
             }
             break;
@@ -2064,7 +2154,14 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     case O_BUILD: {
         if (time - e.lastDamaged < 1.0f && e.lastDamaged > 0 && e.hp < e.maxHp * 0.5f) { e.order = O_MOVE; e.target = g_map.nearestFree(players[e.owner].basePos + Vec2(0, 60), 6); e.targetEnt = NOREF; requestPath(e, e.target); break; }
         Entity* b = get(e.targetEnt);
-        if (!b || !b->isBuilding() || b->owner != e.owner || (b->constructed && b->hp >= b->maxHp)) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; break; }
+        if (!b || !b->isBuilding() || b->owner != e.owner || (b->constructed && b->hp >= b->maxHp)) {
+            e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos;
+            if (b && b->constructed && b->owner == e.owner) {   // a repair is done: move straight on to the next job close by
+                Entity* next = repairJob(e, 18.0f * TILE);
+                if (next) { e.order = O_BUILD; e.targetEnt = refOf(*next); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); }
+            }
+            break;
+        }
         float d = distToEntity(e.pos, *b);
         // a dozer boxed in by neighbouring structures cannot always get right up to the wall: after a short wait it works from where it is
         bool inReach = d <= BUILD_REACH || (e.actionTimer > 1.5f && d <= BUILD_REACH + 3 * TILE);
@@ -2074,7 +2171,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             const BuildType& bt = b->bt();
             if (!b->constructed) {
                 b->progress += SIM_DT * players[e.owner].buildMul() / bt.buildTime;
-                b->hp = std::max(b->hp, bt.hp * (0.1f + 0.9f * clampf(b->progress, 0, 1)));
+                b->hp = std::max(b->hp, b->maxHp * (0.1f + 0.9f * clampf(b->progress, 0, 1)));
                 if (tick % 6 == 0) fx.push_back({FX_SPARK, b->pos + Vec2(rng.f(-bt.w * 14.0f, bt.w * 14.0f), rng.f(-bt.h * 14.0f, bt.h * 14.0f)), Vec2(), 0, 0.2f, rgb(255, 230, 150), 3});
                 if (b->progress >= 1.0f) { finishBuilding(*b); e.order = O_IDLE; e.guardPos = e.pos; }
             } else {
@@ -2154,11 +2251,19 @@ void Sim::spawnFromQueue(Entity& b) {
 
 void Sim::updateBuilding(Entity& b) {
     if (b.cooldown > 0) b.cooldown -= SIM_DT;
+    if (b.cooldown2 > 0) b.cooldown2 -= SIM_DT;
+    if (b.dmgLoad > 0) b.dmgLoad *= 0.975f;   // (a time constant of two seconds)
     if (!b.constructed) return;
     if (b.disabledUntil > time) return;
     const BuildType& bt = b.bt();
     Player& pl = players[b.owner];
     bool powered = !(pl.lowPower() && bt.power < 0);
+    if (pl.upg[UPG_REPAIR] && b.hp < b.maxHp && !inFallout(b.pos)) {   // Self-Repair: full rate once out of combat, a trickle under fire
+        float rate = SELF_REPAIR_RATE * (time - b.lastDamaged >= SELF_REPAIR_DELAY ? 1.0f : SELF_REPAIR_HOT);
+        b.hp = std::min(b.maxHp, b.hp + b.maxHp * rate * SIM_DT);
+        if ((tick + b.gen) % 40 == 0) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-bt.w * 12.0f, bt.w * 12.0f), rng.f(-bt.h * 12.0f, bt.h * 12.0f)), Vec2(), 0, 0.3f, pl.faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
+    }
+    if (pl.upg[UPG_GUNS]) updateRoofGun(b, powered);
     if (bt.role == BR_INCOME) {
         b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
         if (b.actionTimer >= INCOME_INTERVAL) {
@@ -2202,6 +2307,36 @@ void Sim::updateBuilding(Entity& b) {
             if (b.queueProgress >= 1.0f) spawnFromQueue(b);
         }
     }
+}
+
+// ------------------------------------------------------------ Defense Guns: every structure's roof laser / machine gun
+int Sim::roofGun(const Entity& b) const {
+    if (!b.isBuilding() || !b.constructed || !hasUpgrade(b.owner, UPG_GUNS)) return -1;
+    return BUILDS[b.type].faction == F_CYBER ? W_DEFENSE_LASER : W_DEFENSE_MG;
+}
+
+Vec2 Sim::roofGunPos(const Entity& b) const {
+    const BuildType& bt = b.bt();
+    if (bt.w * bt.h <= 1) return b.pos + Vec2(-10, -10);            // beside the main gun of a small turret
+    return b.pos + Vec2(-bt.w * TILE * 0.30f, -bt.h * TILE * 0.28f);   // the roof corner away from the team flag
+}
+
+void Sim::updateRoofGun(Entity& b, bool powered) {
+    int wi = roofGun(b);
+    if (wi < 0) return;
+    const Weapon& w = WEAPONS[wi];
+    float reach = (w.range + 0.2f) * TILE;
+    Entity* t = get(b.engaged2);
+    if (!t || !enemies(b.owner, t->owner) || !canTarget(b, *t, wi) || distToEntity(b.pos, *t) > reach) {
+        t = nullptr; b.engaged2 = NOREF;
+        if ((tick + b.gen) % 3 == 1) { t = acquireTarget(b, w.range, wi); if (t) b.engaged2 = refOf(*t); }
+    }
+    if (!t) return;
+    Vec2 muzzle = roofGunPos(b);
+    b.turret2 = std::atan2(t->pos.y - muzzle.y, t->pos.x - muzzle.x);
+    if (b.cooldown2 > 0) return;
+    fireWeapon(b, *t, w, &muzzle);
+    b.cooldown2 = w.cooldown * (powered ? 1.0f : 2.0f);   // runs on reserve power at half rate when the base is short of power
 }
 
 void Sim::updatePower() {
