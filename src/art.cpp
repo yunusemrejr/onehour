@@ -48,7 +48,7 @@ const CkTone CK_TONES[12] = {
 
 // type < 0 selects the neutral default palette (structures' turret heads)
 // position inside the army's block; the medics live after both blocks but are drawn as the 13th design
-static int unitLocal(int type) { return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction); }
+static int unitLocal(int type) { return type == U_C_HELI ? 14 : type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction); }
 
 void setTone(int type) {
     CYH = CYH0; CYP = CYP0; CYD = CYD0; CYG = CYG0; CYW = CYW0; CYM = CYM0;
@@ -473,6 +473,32 @@ void droneBody(Art& A) {   // Wraith Drone: stealth flying wing
     teamDot(A, 25.0f, 32, 2.9f);
     A.dot(9.5f, 12, 0.9f, rgb(255, 80, 70)); A.dot(9.5f, 52, 0.9f, rgb(80, 255, 120));   // nav lights
 }
+void hornetBody(Art& A) {   // Hornet Gunship: slim electric attack helicopter, ducted tail fan, stub wings with twin laser pods (rotor hub at the centre)
+    // tail boom and the glowing ducted fan
+    A.cap(30, 32, 7, 32, 2.2f, shade(CYH, 0.92f), 1.6f, 0.55f);
+    A.line(26, 32, 10, 32, 0.6f, rgba(CYG, 170));
+    A.circle(6.5f, 32, 4.6f, shade(CYD, 1.3f), 1.6f, 0.5f); A.circle(6.5f, 32, 3.0f, rgb(14, 30, 44), 1.2f, 0.3f);
+    A.glow(6.5f, 32, 7, rgba(CYG, 150)); A.dot(6.5f, 32, 1.1f, CYG);
+    A.box(11, 32, 1.2f, 6.0f, 0.5f, shade(CYP, 1.05f), 1.0f, 0.5f);                    // tailplane
+    A.dot(11, 26.3f, 0.8f, rgb(255, 80, 70)); A.dot(11, 37.7f, 0.8f, rgb(80, 255, 120));
+    // stub wings with laser pods
+    A.box(31, 32, 3.6f, 18.5f, 1.4f, shade(CYP, 0.95f), 1.8f, 0.5f);
+    for (int sd = -1; sd <= 1; sd += 2) {
+        float y = 32 + sd * 15.0f;
+        A.cap(27, y, 41, y, 2.0f, CYM, 1.4f, 0.6f);
+        A.line(29, y, 42.5f, y, 0.8f, rgba(CYG, 220)); A.glow(43, y, 5, rgba(CYG, 160)); A.dot(42.6f, y, 1.0f, CYW);
+    }
+    // fuselage: a narrow armoured pod, stepped tandem canopy, sensor nose
+    A.poly({ {54, 32}, {49, 26.8f}, {36, 25.6f}, {24, 27.2f}, {21, 32}, {24, 36.8f}, {36, 38.4f}, {49, 37.2f} }, CYH, 2.8f, 0.62f);
+    A.poly({ {50, 32}, {46, 28.6f}, {37, 27.8f}, {28, 29}, {26, 32}, {28, 35}, {37, 36.2f}, {46, 35.4f} }, shade(CYP, 1.05f), 2.0f, 0.5f);
+    A.ell(44.5f, 32, 5.6f, 3.0f, rgb(18, 52, 74), 1.8f, 0.7f); A.ell(38, 32, 4.0f, 2.6f, rgb(18, 52, 74), 1.6f, 0.7f);
+    A.ell(43.4f, 31, 2.6f, 0.9f, rgba(CYW, 200), 1, 0); A.ell(37.2f, 31, 1.8f, 0.8f, rgba(CYW, 180), 1, 0);
+    A.circle(55.5f, 32, 2.1f, shade(CYD, 1.4f), 1.2f, 0.5f); A.dot(56.2f, 32, 1.1f, CYG); A.glow(56.5f, 32, 5, rgba(CYG, 130));   // sensor ball
+    A.line(24, 28.4f, 34, 27.4f, 0.6f, rgba(CYD, 160)); A.line(24, 35.6f, 34, 36.6f, 0.6f, rgba(CYD, 160));
+    A.circle(32, 32, 3.0f, shade(CYD, 1.5f), 1.6f, 0.55f); A.dot(32, 32, 1.2f, CYG);   // rotor mast
+    teamDot(A, 26.5f, 32, 2.4f);
+    A.grain(6, 13, 58, 51, 0.05f, 141);
+}
 void gunshipBody(Art& A) {   // Vulture Gunship: fuselage, tail boom, stub wings with rocket pods
     A.cap(28, 32, 4, 32, 2.6f, shade(CKH, 0.9f), 1.8f, 0.5f);                          // tail boom
     A.box(6, 32, 1.4f, 7.5f, 0.6f, shade(CKH, 0.8f), 1.2f, 0.4f);                       // tail stabiliser
@@ -640,10 +666,11 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 11: if (cy) jetCyber(A); else jetClanker(A); break;
     case 12: medicBody(A, cy, frame); break;
     case 13: sniperBody(A, cy, frame); break;
+    case 14: hornetBody(A); break;
     }
     if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
-    else if (local != 8 && local != 11 && local != 12 && local != 13) vehicleDetail(A, cy, local);
-    enhance(c, local == 8 || local == 11 ? 0.45f : 0.7f);
+    else if (local != 8 && local != 11 && local != 12 && local != 13 && local != 14) vehicleDetail(A, cy, local);
+    enhance(c, local == 8 || local == 11 || local == 14 ? 0.45f : 0.7f);
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }
 

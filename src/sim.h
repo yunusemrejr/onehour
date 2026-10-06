@@ -278,6 +278,7 @@ struct Sim {
     void forEachNear(Vec2 p, float r, const std::function<void(Entity&)>& fn);
     Entity* findPile(Entity& h, float maxDist);   // nearest supply pile with supplies left
     Vec2 unitExit(const Entity& b) const;
+    int padsUsed(const Entity& airfield, const Entity* except = nullptr) const;   // fixed-wing aircraft based at an airfield (helicopters do not take a pad)
     // what the player can see: everything explored so far, or the whole map while a scan is running
     bool explored(int player, int tx, int ty) const { return time < players[player].revealUntil || players[player].explored[ty * MAP_W + tx] != 0; }
     bool exploredRaw(int player, int tx, int ty) const { return players[player].explored[ty * MAP_W + tx] != 0; }

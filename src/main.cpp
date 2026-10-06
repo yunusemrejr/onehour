@@ -1476,7 +1476,8 @@ static bool airMatrixTest(u64 seed) {
     int bad = 0, runs = 0;
     const char* modes[5] = { "idle", "attack-move", "guard", "attack", "guard-near" };
     const char* kinds[7] = { "infantry", "tank", "plant", "turret", "aircraft", "hq", "jet" };
-    for (int fi = 0; fi < 2; fi++) for (int ac = 0; ac < 2; ac++) for (int kind = 0; kind < 7; kind++) for (int mode = 0; mode < 5; mode++) for (int var = 0; var < 3; var++) {
+    for (int fi = 0; fi < 2; fi++) for (int ac = 0; ac < 3; ac++) for (int kind = 0; kind < 7; kind++) for (int mode = 0; mode < 5; mode++) for (int var = 0; var < 3; var++) {
+        if (ac == 2 && fi != F_CYBER) continue;   // ac 2: the Hornet Gunship (the Clanker helicopter is the Vulture, ac 0)
         if (var == 1 && kind > 1) continue;
         if (ac == 0 && kind == 6) continue;   // a lone bomber against fighters is expected to lose
         if (var == 2 && kind > 1 && kind != 4 && kind != 6) continue;   // var 1: the targets drive off; var 2: a flight of four
@@ -1491,7 +1492,7 @@ static bool airMatrixTest(u64 seed) {
         if (!af.valid()) { fprintf(stderr, "airmatrix: no airfield spot\n"); return false; }
         g_sim.updatePowerPublic();
         Vec2 pad = g_sim.get(af)->pos;
-        int type = u0 + (ac == 0 ? 8 : 11);
+        int type = ac == 2 ? (int)U_C_HELI : u0 + (ac == 0 ? 8 : 11);
         Ref jet = g_sim.spawnUnit(type, 0, pad + Vec2(0, 0)); g_sim.get(jet)->home = af;
         std::vector<Ref> flight{jet};
         if (var == 2) for (int i = 1; i < 4; i++) { Ref r = g_sim.spawnUnit(type, 0, pad + Vec2((i - 1.5f) * 30, 0)); g_sim.get(r)->home = af; flight.push_back(r); }
@@ -1791,6 +1792,65 @@ static bool upgradeTest(u64 seed) {
     return true;
 }
 
+// Helicopters at the airfields: both armies build them, as many as they like from one airfield (planes still need a free pad each),
+// and they park on helipads around it.
+static bool heliTest(u64 seed) {
+    auto steps = [](int n) { for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); } };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + fi);
+        g_sim.players[0].money = 200000;
+        int b0 = firstBuildOf(fac[0]);
+        auto fail = [&](const char* m) { fprintf(stderr, "helitest %s: %s\n", FACTION_NAME[fac[0]], m); return false; };
+        auto put = [&](int type, float distTiles, float ang) {
+            Vec2 base = g_sim.players[0].basePos;
+            for (float extra = 0; extra < 8; extra += 0.5f) for (float da = 0; da < 6.2f; da += 0.2f) {
+                Vec2 c = base + Vec2(std::cos(ang + da), std::sin(ang + da)) * ((distTiles + extra) * TILE);
+                int tx = tileOf(c.x) - BUILDS[type].w / 2, ty = tileOf(c.y) - BUILDS[type].h / 2;
+                if (!inMap(tx, ty) || !g_sim.canPlace(0, type, tx, ty)) continue;
+                return g_sim.placeBuilding(type, 0, tx, ty, true);
+            }
+            return NOREF;
+        };
+        Ref pw = put(b0 + BR_POWER, 5, 0.0f), pw2 = put(b0 + BR_POWER, 5, 1.5f), fac0 = put(b0 + BR_FACTORY, 6, 3.0f), tech = put(b0 + BR_TECH, 6, 4.5f), air = put(b0 + BR_AIRFIELD, 8, 2.2f);
+        for (Ref r : { pw, pw2, fac0, tech, air }) if (!g_sim.get(r)) return fail("could not set the scene up");
+        g_sim.updatePowerPublic();
+        int heli = -1, plane = -1;
+        for (int u = 0; u < U_COUNT; u++) if (UNITS[u].faction == fac[0] && UNITS[u].builtBy == BR_AIRFIELD) { if (UNITS[u].heli && heli < 0) heli = u; if (!UNITS[u].heli && plane < 0) plane = u; }
+        if (heli < 0) return fail("the airfield builds no helicopter");
+        if (plane < 0) return fail("the airfield builds no plane");
+        auto count = [&](int type) { int n = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.type == type) n++; return n; };
+        // two full queues of helicopters from one airfield: far beyond its four pads, and every one of them comes out
+        for (int round = 0; round < 2; round++) {
+            for (int k = 0; k < 9; k++) if (!g_sim.cmdTrain(air, heli)) return fail("could not queue a helicopter");
+            for (int guard = 0; guard < 20 * 260 && !g_sim.get(air)->queue.empty(); guard++) steps(1);
+            if (!g_sim.get(air)->queue.empty()) { fprintf(stderr, "helitest %s: production stalled with %d helicopters out\n", FACTION_NAME[fac[0]], count(heli)); return false; }
+        }
+        if (count(heli) != 18) return fail("not every helicopter was built");
+        if (g_sim.padsUsed(*g_sim.get(air)) != 0) return fail("helicopters took up plane pads");
+        // they settle on helipads around the airfield: all of them land close by, none on top of each other in a pile
+        steps(20 * 25);
+        int parked = 0, crowded = 0;
+        std::vector<Vec2> spots;
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == heli) { if (dist(e.pos, g_sim.get(air)->pos) < 8 * TILE && e.order == O_IDLE) parked++; spots.push_back(e.pos); }
+        for (size_t i = 0; i < spots.size(); i++) for (size_t j = i + 1; j < spots.size(); j++) if (dist(spots[i], spots[j]) < 6) crowded++;
+        if (parked < 18) { fprintf(stderr, "helitest %s: only %d of 18 helicopters settled at their airfield\n", FACTION_NAME[fac[0]], parked); return false; }
+        if (crowded > 3) { fprintf(stderr, "helitest %s: %d helicopter pairs sit on the same spot\n", FACTION_NAME[fac[0]], crowded); return false; }
+        // planes still wait for a free pad: six queued, four come out, the rest wait
+        for (int k = 0; k < 6; k++) if (!g_sim.cmdTrain(air, plane)) return fail("could not queue a plane");
+        steps(20 * 200);
+        if (count(plane) != AIRFIELD_CAP || g_sim.get(air)->queue.size() != 2) { fprintf(stderr, "helitest %s: %d planes out, %zu waiting (want %d and 2)\n", FACTION_NAME[fac[0]], count(plane), g_sim.get(air)->queue.size(), AIRFIELD_CAP); return false; }
+        // and a helicopter queued behind the waiting planes is not held up by them for ever: cancel the planes, it comes out
+        g_sim.cmdCancelTrain(air, 0); g_sim.cmdCancelTrain(air, 0);
+        if (!g_sim.cmdTrain(air, heli)) return fail("could not queue a helicopter after the planes");
+        steps(20 * 30);
+        if (count(heli) != 19) return fail("a helicopter was not built once the pads were full of planes");
+    }
+    printf("helitest: ok\n");
+    return true;
+}
+
 // Command fuzzer: player 0 issues random commands (every command, random arguments, including nonsense) while the computer plays the others.
 // Looks for crashes (run it under the sanitizers) and broken invariants.
 static bool fuzzTest(u64 seed, int seconds) {
@@ -1892,6 +1952,7 @@ int main(int argc, char** argv) {
         else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
         else if (a == "--turrettest") { g_map.generate(); return turretTest(seed) ? 0 : 1; }
         else if (a == "--upgradetest") { g_map.generate(); return upgradeTest(seed) ? 0 : 1; }
+        else if (a == "--helitest") { g_map.generate(); return heliTest(seed) ? 0 : 1; }
         else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
@@ -2019,6 +2080,11 @@ int main(int argc, char** argv) {
             if (upgShow) for (int p = 0; p < g_sim.numPlayers; p++) for (int u = 0; u < UPG_COUNT; u++) g_sim.players[p].upg[u] = true;
             for (int t = 0; t < ticks; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
             Vec2 b = g_sim.players[std::min(viewPlayer, 3)].basePos;
+            if (const char* hs = getenv("ONEHOUR_HELI")) {   // ONEHOUR_HELI=N: N helicopters of the viewed army hover over its base, a few more parked at an airfield
+                int vp = std::min(viewPlayer, g_sim.numPlayers - 1), ht = g_sim.players[vp].faction == F_CYBER ? (int)U_C_HELI : (int)U_K_AIR, n = std::max(1, atoi(hs));
+                for (int k = 0; k < n; k++) { Ref r = g_sim.spawnUnit(ht, vp, b + Vec2(-200 + (k % 4) * 120, -120 + (k / 4) * 110)); g_sim.get(r)->alt = 1; g_sim.get(r)->angle = 0.3f * k; }
+                for (int t = 0; t < 30; t++) { g_sim.step(); g_sim.events.clear(); }
+            }
             if (upgShow && std::string(upgShow) == "raid") {
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), foe = vp == 0 ? 1 : 0, uf = firstUnitOf(g_sim.players[foe].faction);
                 g_game.cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));

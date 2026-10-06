@@ -1121,10 +1121,11 @@ void Game::drawEntity(Entity& e) {
             g.draw(g.fxs.flame[fr], p.x + 1, p.y + 3, 0, 0.5f, rgb(255, 255, 255), 230);
         }
     }
-    if (ut.kind == UK_AIR && ut.faction == F_CLANKER && !ut.jet) {   // main rotor: motion-blur disc plus a spinning blade pair
-        float spin = paused || disabled ? 0.4f : wallTime * 38.0f;
-        g.draw(g.rotorDisc, p.x - 2, p.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
-        g.draw(g.rotorBlades, p.x - 2, p.y, spin, 1, rgb(255, 255, 255), 150);
+    if (ut.kind == UK_AIR && ut.heli) {   // main rotor: motion-blur disc plus a spinning blade pair over the hub
+        float spin = paused || disabled ? 0.4f : wallTime * (ut.faction == F_CYBER ? -42.0f : 38.0f);
+        Vec2 hub = ut.faction == F_CYBER ? p : Vec2(p.x - 2, p.y);
+        g.draw(g.rotorDisc, hub.x, hub.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
+        g.draw(g.rotorBlades, hub.x, hub.y, spin, 1, ut.faction == F_CYBER ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
     }
     if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
     if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10, p.y - e.radius() - 7, 20, e.hp / e.maxHp);
@@ -1486,9 +1487,9 @@ void Game::renderHud() {
                     snprintf(buf, sizeof buf, "%d ramp(s) ready of %d", g_sim.nukesReady(g_sim.humanPlayer), g_sim.countRole(g_sim.humanPlayer, BR_NUKE, true)); g.text(INFO_X + 86, hy + 96, buf, hudDim());
                 }
                 if (bt.role == BR_AIRFIELD && e->constructed) {
-                    int n = 0; Ref self = g_sim.refOf(*e);
-                    for (auto& u : g_sim.ents) if (u.alive && u.isUnit() && u.isAir() && u.home == self) n++;
-                    snprintf(buf, sizeof buf, "Aircraft %d / 4%s", n, n >= 4 ? "  (full: production waits)" : ""); g.text(INFO_X + 86, hy + 84, buf, n >= 4 ? rgb(255, 200, 120) : hudDim());
+                    int n = g_sim.padsUsed(*e), hn = 0; Ref self = g_sim.refOf(*e);
+                    for (auto& u : g_sim.ents) if (u.alive && u.isUnit() && u.isAir() && u.ut().heli && u.home == self) hn++;
+                    snprintf(buf, sizeof buf, "Planes %d / %d%s   Helicopters %d (no limit)", n, AIRFIELD_CAP, n >= AIRFIELD_CAP ? "  (pads full: planes wait)" : "", hn); g.text(INFO_X + 86, hy + 84, buf, n >= AIRFIELD_CAP ? rgb(255, 200, 120) : hudDim());
                 }
             }
         }

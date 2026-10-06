@@ -5,7 +5,6 @@ Sim g_sim;
 static const float BUILD_REACH = 26.0f;     // px from structure edge for dozers
 static const float HARVEST_REACH = 34.0f;   // px from the pile's edge: a hauler parked on a diagonal neighbour tile is about 29 px away
 static const float PATH_INTERVAL = 0.6f;
-static const int AIRFIELD_CAP = 4;
 static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
@@ -1296,15 +1295,19 @@ Entity* Sim::findZonePile(Entity& h) {
     }
     return best;
 }
+int Sim::padsUsed(const Entity& airfield, const Entity* except) const {
+    int n = 0; Ref self = refOf(airfield);
+    for (auto& u : ents) if (u.alive && &u != except && u.isUnit() && u.isAir() && !u.ut().heli && u.home == self) n++;
+    return n;
+}
+
 Entity* Sim::findAirfield(Entity& a) {
     int o = a.owner;
-    // prefer an airfield with free capacity
+    // a plane needs an airfield with a free pad; a helicopter can use any airfield (it lands on a helipad beside it)
     Entity* best = nullptr; float bd = 1e18f;
     for (auto& e : ents) {
         if (!predAirfield(e, &o)) continue;
-        int n = 0;
-        for (auto& u : ents) if (u.alive && u.isUnit() && u.isAir() && u.home == refOf(e) && &u != &a) n++;
-        if (n >= AIRFIELD_CAP) continue;
+        if (!a.ut().heli && padsUsed(e, &a) >= AIRFIELD_CAP) continue;
         float d = dist2(a.pos, e.pos);
         if (d < bd) { bd = d; best = &e; }
     }
@@ -1320,7 +1323,15 @@ static float angDiff(float a, float b) {   // b - a wrapped to (-pi, pi]
 }
 
 Vec2 Sim::padSlot(const Entity& h, const Entity& e) const {
-    int slot = ((int)(&e - &ents[0])) % AIRFIELD_CAP;
+    int idx = (int)(&e - &ents[0]);
+    if (e.isUnit() && e.ut().heli) {   // helipads in two rings around the airfield (as many helicopters as you like: a crowded ring just packs tighter)
+        int slot = idx % 20, ring = slot / 10;
+        float a = (slot % 10) * 0.6283f + ring * 0.314f;
+        float R = std::max(h.bt().w, h.bt().h) * TILE * 0.5f + 26.0f + ring * 30.0f;
+        Vec2 p = h.pos + Vec2(std::cos(a) * R, std::sin(a) * R * 0.8f);
+        return Vec2(clampf(p.x, 12, WORLD_W - 12), clampf(p.y, 12, WORLD_H - 12));
+    }
+    int slot = idx % AIRFIELD_CAP;
     return h.pos + Vec2((slot - 1.5f) * 30, 0);
 }
 
@@ -2295,11 +2306,7 @@ void Sim::updateBuilding(Entity& b) {
     if (!b.queue.empty()) {
         const UnitType& ut = UNITS[b.queue.front()];
         bool blocked = false;
-        if (bt.role == BR_AIRFIELD) {
-            int n = 0; Ref self = refOf(b);
-            for (auto& u : ents) if (u.alive && u.isUnit() && u.isAir() && u.home == self) n++;
-            if (n >= AIRFIELD_CAP) blocked = true;
-        }
+        if (bt.role == BR_AIRFIELD && !ut.heli && padsUsed(b) >= AIRFIELD_CAP) blocked = true;   // a plane waits for a free pad; helicopters never wait
         if (!blocked) {
             float rate = (pl.lowPower() ? 0.5f : 1.0f) / ut.buildTime;
             rate *= pl.buildMul();

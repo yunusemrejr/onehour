@@ -33,6 +33,7 @@ const Weapon WEAPONS[] = {
     /* 28 */{ "Sniper Rifle",   140, 11.5f, 0, 2.60f, PJ_BULLET, 0,    true, false, {1.00f, 0.00f, 0.00f, 0.00f, 0.0f}, 1, 2200, SND_RIFLE,        rgb(255, 232, 160) },
     /* 29 */{ "Defense Laser",   58, 7.5f, 0, 0.80f, PJ_LASER,  0,    true, true,  {1.0f, 1.00f, 0.80f, 0.00f, 1.6f}, 1, 0,    SND_LASER,       rgb(130, 236, 255) },
     /* 30 */{ "Defense MG",      15, 7.5f, 0, 0.15f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.5f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
+    /* 31 */{ "Hornet Lasers",   36, 6.0f, 0, 0.60f, PJ_LASER,  0,    true, true,  {1.0f, 1.10f, 0.85f, 0.60f, 1.3f}, 2, 0,    SND_LASER,       rgb(120, 236, 255) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -59,7 +60,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Brute Tank",     "T", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 900, 74,  900,  12, 7, 14, 12, 0, BR_FACTORY,  -1,         "Diesel main battle tank, 120mm cannon" },
     { "Gatling Tank",   "A", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 580, 80,  800,  11, 7, 12, 13, 0, BR_FACTORY,  -1,         "Gatling gun, anti-infantry and anti-air" },
     { "Rocket Launcher","M", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 450, 60,  1100, 16, 8, 13, 14, 0, BR_FACTORY,  B_K_TECH,   "Long range rocket artillery" },
-    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   560, 300, 850,  12, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber helicopter: drops sticks of heavy bombs on ground targets (16 a sortie), rockets for aircraft", 0, 0, 1, 0, 1 },
+    { "Vulture Gunship","W", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   560, 300, 850,  12, 9, 11, 15, 16, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber helicopter: drops sticks of heavy bombs on ground targets (16 a sortie), rockets for aircraft. Helicopters do not use pads: build as many as you like", 0, 0, 1, 0, 1 },
     { "Grenadier",      "B", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   170, 48,  700,  12, 7, 6,  21, 0, BR_BARRACKS, B_K_TECH,   "Elite lobber, splash grenades crack infantry and bunkers", 1 },
     { "Behemoth",       "N", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 2000, 52, 2300, 26, 8, 17, 22, 0, BR_FACTORY,  B_K_TECH,   "Super-heavy tank, twin 150mm shells with splash", 1 },
     { "Talon Jet",      "J", F_CLANKER, UK_AIR, UR_COMBAT,    AR_AIR,   1550, 540, 2400, 24, 11, 12, 24, 10, BR_AIRFIELD, B_K_TECH,  "Powerful supersonic fighter-bomber: homing Sidewinders, 10 strafing passes, tough, kills aircraft and ground targets alike", 0, 1 },
@@ -68,6 +69,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Field Medic",    "Y", F_CLANKER, UK_VEH, UR_HEALER, AR_LIGHT, 540, 88, 900, 12, 7, 13, -1, 0, BR_FACTORY, -1, "Repair crew: heals every friendly soldier, vehicle and aircraft near it, structures slowly" },
     { "Ghost Sniper",   "Q", F_CYBER,   UK_INF, UR_COMBAT, AR_INF,   85, 52, 550, 10, 11, 6, 27, 0, BR_BARRACKS, B_C_TECH, "Cloaked marksman: needle rifle kills any infantry from 11 tiles but nothing else. Only vehicles and aircraft can spot it", 0, 0, 0, 1 },
     { "Sniper",         "Q", F_CLANKER, UK_INF, UR_COMBAT, AR_INF,   90, 50, 550, 10, 11, 6, 28, 0, BR_BARRACKS, B_K_TECH, "Dug-in marksman: rifle kills any infantry from 11 tiles but nothing else. Only vehicles and aircraft can spot it", 0, 0, 0, 1 },
+    { "Hornet Gunship", "H", F_CYBER,   UK_AIR, UR_COMBAT, AR_AIR,   640, 280, 950, 13, 9, 11, 31, 0, BR_AIRFIELD, -1, "Electric attack helicopter: twin lasers hit ground and air, hovers, never needs to rearm. Helicopters do not use pads: build as many as you like", 0, 0, 0, 0, 1 },
 };
 
 const BuildType BUILDS[B_COUNT] = {

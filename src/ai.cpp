@@ -128,6 +128,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
     } else if (role == BR_AIRFIELD) {
         cands.push_back({base + 8, smart ? 1.4f + (doctrine == DOC_AIR ? 0.9f : 0.0f) : 1.0f});   // bomber drone / gunship (a smart commander knows what they do to structures)
         cands.push_back({base + 11, 0.8f + fa * 2.2f + fv * 0.9f});       // supersonic jet (needs the tech structure): best against aircraft and vehicles
+        if (pl.faction == F_CYBER) cands.push_back({(int)U_C_HELI, 0.8f + fv * 1.2f + fa * 1.0f});   // attack helicopter: all-round, never rearms
     }
     // weight by how many we already have (diminishing returns), availability, and predicted efficiency:
     // the brain's per-type regression (value destroyed per credit given the enemy mix) replaces the old

@@ -40,6 +40,7 @@ enum UnitTypeId {
     U_K_DOZER, U_K_HARV, U_K_INF1, U_K_INF2, U_K_INF3, U_K_TANK, U_K_GATLING, U_K_MLRS, U_K_AIR, U_K_ELITE, U_K_TITAN, U_K_JET,
     U_C_MEDIC, U_K_MEDIC,   // field medics sit after both armies' blocks so every earlier id stays put
     U_C_SNIPER, U_K_SNIPER, // so do the snipers
+    U_C_HELI,               // and the Cyber attack helicopter (the Clanker helicopter is the Vulture Gunship, U_K_AIR)
     U_COUNT
 };
 
@@ -157,4 +158,6 @@ static const float AIR_PAD_REPAIR = 0.03f;    // fraction of max health an aircr
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures
 int firstBuildOf(Faction f);
 static const int UNITS_PER_FACTION = 12;
+static const int AIRFIELD_CAP = 4;            // fixed-wing aircraft (drones, jets) based at one airfield: one per pad. Helicopters do not count:
+                                              // they land on helipads around the airfield, so an airfield can build and house any number of them
 static const int BUILDS_PER_FACTION = 11;
