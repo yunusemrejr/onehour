@@ -9,7 +9,7 @@ static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
-    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); fallouts.clear();
+    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fallouts.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -182,6 +182,8 @@ void Sim::rebuildGrid() {
         int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1);
         grid[cy * GRID_W + cx].push_back(i);
     }
+    heliList.clear();
+    for (int i = 0; i < (int)ents.size(); i++) if (ents[i].alive && ents[i].isUnit() && ents[i].ut().heli) heliList.push_back(i);
 }
 
 void Sim::forEachNear(Vec2 p, float r, const std::function<void(Entity&)>& fn) {
@@ -585,6 +587,20 @@ bool Sim::cmdNuke(int player, Vec2 pos, bool force) {
 }
 
 // ------------------------------------------------------------ paradrop
+// A transport's track: the line from the sender's base through the target (straight across the map's middle when the target is next to
+// the base), entering from beyond the map edge at least a few hundred pixels before the target. Returns the heading; 'start' the entry.
+static Vec2 flightTrack(Vec2 base, Vec2 pos, Vec2& start) {
+    Vec2 d = pos - base;
+    Vec2 dir = d.len() > 6.0f * TILE ? d.norm() : (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - pos).norm();
+    if (dir.len2() < 0.5f) dir = Vec2(1, 0);
+    float s = 1e9f;
+    if (dir.x > 1e-4f) s = std::min(s, (pos.x + 160.0f) / dir.x); else if (dir.x < -1e-4f) s = std::min(s, (pos.x - WORLD_W - 160.0f) / dir.x);
+    if (dir.y > 1e-4f) s = std::min(s, (pos.y + 160.0f) / dir.y); else if (dir.y < -1e-4f) s = std::min(s, (pos.y - WORLD_H - 160.0f) / dir.y);
+    s = clampf(s, 560.0f, 3200.0f);
+    start = pos - dir * s;
+    return dir;
+}
+
 // A cargo plane crosses the map along the line from the owner's base through the target and releases its load while it flies over:
 // infantry and vehicles hang under parachutes for a few seconds (they cannot be hit or act until they land), the aircraft simply
 // leave the cargo bay and take up guard over the zone. Anti-air that covers the plane's track can shoot it down, and the load with it.
@@ -601,16 +617,8 @@ bool Sim::cmdParadrop(int player, Vec2 pos, bool attackOn) {
     Airlift a;
     a.owner = player; a.target = pos; a.attackOn = attackOn;
     a.hp = a.maxHp = AIRLIFT_HP;
-    Vec2 d = pos - pl.basePos;
-    Vec2 dir = d.len() > 6.0f * TILE ? d.norm() : (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - pos).norm();
-    if (dir.len2() < 0.5f) dir = Vec2(1, 0);
-    a.dir = dir;
-    // the plane comes in from beyond the map edge, at least a few hundred pixels before the target
-    float s = 1e9f;
-    if (dir.x > 1e-4f) s = std::min(s, (pos.x + 160.0f) / dir.x); else if (dir.x < -1e-4f) s = std::min(s, (pos.x - WORLD_W - 160.0f) / dir.x);
-    if (dir.y > 1e-4f) s = std::min(s, (pos.y + 160.0f) / dir.y); else if (dir.y < -1e-4f) s = std::min(s, (pos.y - WORLD_H - 160.0f) / dir.y);
-    s = clampf(s, 560.0f, 3200.0f);
-    a.pos = a.prevPos = pos - dir * s;
+    a.dir = flightTrack(pl.basePos, pos, a.pos);   // the plane comes in from beyond the map edge, at least a few hundred pixels before the target
+    a.prevPos = a.pos;
     // release order: vehicles spread through the infantry, the aircraft leave last
     int vi = 0, ii = 0;
     for (int k = 0; k < DROP_INF + DROP_VEH; k++) {
@@ -716,6 +724,117 @@ void Sim::updateAirlifts() {
     }
 }
 
+// ------------------------------------------------------------ aid drop
+// The human player's own relief flight (computer armies never get it): one per tech structure per AID_COOLDOWN. The white plane flies
+// the same kind of track as a paradrop and releases its crates over the spot; no enemy ever harms it (see nukeBlast for the one exception).
+int Sim::aidsReady(int player) const {
+    if (player < 0 || player >= numPlayers || players[player].isAI || !players[player].alive) return 0;
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.aidTimer) n++;
+    return n;
+}
+float Sim::aidWait(int player) const {
+    if (player < 0 || player >= numPlayers || players[player].isAI) return -1;
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH) {
+        float w = std::max(0.0f, e.aidTimer - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+int Sim::aidCandidates(int sender, Vec2 at, int* out) const {
+    float best[MAX_PLAYERS];
+    for (int p = 0; p < MAX_PLAYERS; p++) best[p] = -1;
+    for (auto& e : ents) {
+        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || e.owner >= numPlayers || e.owner == sender || !players[e.owner].alive) continue;
+        float d = distToEntity(at, e);
+        if (best[e.owner] < 0 || d < best[e.owner]) best[e.owner] = d;
+    }
+    float m = -1;
+    for (int p = 0; p < numPlayers; p++) if (best[p] >= 0 && (m < 0 || best[p] < m)) m = best[p];
+    int n = 0;
+    if (m >= 0) for (int p = 0; p < numPlayers; p++) if (best[p] == m) out[n++] = p;
+    return n;
+}
+
+bool Sim::cmdAidDrop(int player, Vec2 pos) {
+    if (player < 0 || player >= numPlayers) return false;
+    Player& pl = players[player];
+    if (pl.isAI || !pl.alive) return false;   // only a human player has it
+    Entity* tech = nullptr;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.aidTimer) { tech = &e; break; }
+    if (!tech) return false;
+    pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
+    int who[MAX_PLAYERS];
+    if (aidCandidates(player, pos, who) == 0) { emit(EV_MSG, player, SND_CANT, pos, "No other army is left to receive aid"); return false; }
+    tech->aidTimer = time + AID_COOLDOWN;
+    AidDrop a;
+    a.owner = player; a.target = pos;
+    a.dir = flightTrack(pl.basePos, pos, a.pos);
+    a.prevPos = a.pos;
+    a.releaseAt = -(AID_CRATES - 1) * 0.5f * 46.0f;   // a stick of crates 46 px apart, centred on the spot
+    aidDrops.push_back(a);
+    emit(EV_SOUND, player, SND_AIR, a.pos);
+    emit(EV_MSG, player, SND_NONE, pos, "Aid flight inbound");
+    return true;
+}
+
+void Sim::deliverAid(AidDrop& a) {
+    a.delivered = true; a.deliveredAt = time;
+    int who[MAX_PLAYERS];
+    int n = aidCandidates(a.owner, a.target, who);   // whoever is nearest when the crates are down (never the sender)
+    if (n == 0) { a.recipient = -1; emit(EV_MSG, a.owner, SND_NONE, a.target, "The aid found nobody to take it"); return; }
+    int r = n == 1 ? who[0] : who[rng.range(0, n - 1)];
+    a.recipient = r;
+    Player& rp = players[r];
+    rp.money += AID_MONEY;
+    Vec2 at = a.crates.empty() ? a.target : a.crates[a.crates.size() / 2].to;
+    Vec2 side(-a.dir.y, a.dir.x), home = rp.basePos - at;   // the dozer rolls out beside the crates, on the side facing its own base
+    if (side.x * home.x + side.y * home.y < 0) side = side * -1.0f;
+    Vec2 out = at + side * 52.0f;
+    spawnUnit(rp.faction == F_CYBER ? U_C_DOZER : U_K_DOZER, r, Vec2(clampf(out.x, TILE, WORLD_W - TILE), clampf(out.y, TILE, WORLD_H - TILE)));
+    emit(EV_SOUND, -1, SND_SUPPLY, at);
+    events.push_back({EV_AID, a.owner, SND_SUPPLY, at, "", r});
+    char msg[64]; snprintf(msg, sizeof msg, "Aid received: $%d and a dozer", AID_MONEY);
+    emit(EV_MSG, r, SND_NONE, at, msg);
+}
+
+void Sim::updateAidDrops() {
+    for (size_t i = 0; i < aidDrops.size();) {
+        AidDrop& a = aidDrops[i];
+        a.t += SIM_DT;
+        a.prevPos = a.pos;
+        if (!a.downed) a.pos += a.dir * (AID_SPEED * SIM_DT);
+        float rel = (a.pos.x - a.target.x) * a.dir.x + (a.pos.y - a.target.y) * a.dir.y;
+        while (!a.downed && (int)a.crates.size() < AID_CRATES && rel >= a.releaseAt) {
+            AidCrate c;
+            c.from = Vec2(clampf(a.pos.x, 8, WORLD_W - 8), clampf(a.pos.y, 8, WORLD_H - 8));
+            Vec2 perp(-a.dir.y, a.dir.x);
+            Vec2 to = c.from + a.dir * 22.0f + perp * rng.f(-0.4f, 0.4f) * AID_RADIUS * TILE;   // carried on a little by the plane's speed
+            Vec2 off = to - a.target; float l = off.len();
+            if (l > AID_RADIUS * TILE) to = a.target + off * (AID_RADIUS * TILE / l);
+            c.to = Vec2(clampf(to.x, 16, WORLD_W - 16), clampf(to.y, 16, WORLD_H - 16));
+            c.fall = c.fallTime = 4.2f + 0.3f * (a.crates.size() % 2);
+            a.crates.push_back(c);
+            a.releaseAt += 46.0f;
+        }
+        bool down = (int)a.crates.size() == AID_CRATES || a.downed;
+        for (auto& c : a.crates) if (c.fall > 0) {
+            c.fall -= SIM_DT;
+            if (c.fall <= 0) { c.fall = 0; fx.push_back({FX_SMOKE, c.to, c.to, 0, 1.4f, rgb(170, 150, 120), 16.0f, Vec2(0, -8)}); }   // dust as it lands
+            else down = false;
+        }
+        if (down && !a.delivered) {
+            if (a.crates.empty()) { a.delivered = true; a.deliveredAt = time; a.recipient = -1; }   // shot down before a single crate got out
+            else deliverAid(a);
+        }
+        bool gone = a.downed || a.pos.x < -300 || a.pos.y < -300 || a.pos.x > WORLD_W + 300 || a.pos.y > WORLD_H + 300;
+        if ((a.delivered && gone && time - a.deliveredAt > AID_LINGER) || a.t > 120.0f) { aidDrops.erase(aidDrops.begin() + i); continue; }
+        i++;
+    }
+}
+
 // What a detonation does (all of it to whatever nukeHurts says it hurts; anything else is thrown but never hurt):
 //  * ground units: a lethal core, then falling damage out to the rim (they collapse, as ever)
 //  * aircraft: everything in the blast falls out of the sky (and none of them try to outrun it, see dodgeDanger)
@@ -742,9 +861,8 @@ void Sim::nukeBlast(const Nuke& n) {
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (d > R) continue;
         float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
-        bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies as well (and the human's own army when forced)
-        if (e->isAir()) {   // nothing flying survives the fireball and the shock front: torn apart, it falls out of the sky
-            if (!foe) continue;
+        bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies and the human's own army as well
+        if (e->isAir()) {   // nothing flying survives the fireball and the shock front, whoever owns it: torn apart, it falls out of the sky
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
             fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
             for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
@@ -784,6 +902,16 @@ void Sim::nukeBlast(const Nuke& n) {
             if (g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
         }
+    }
+    // paradrop cargo planes in the blast go down with their load, whoever sent them (updateAirlifts wrecks them on its next pass); an aid
+    // plane only goes down in its own sender's nuke (nobody else ever harms it), with the crates still aboard
+    for (auto& a : airlifts) if (dist(a.pos, n.pos) <= R) a.hp = 0;
+    for (auto& a : aidDrops) if (!a.downed && a.owner == n.owner && dist(a.pos, n.pos) <= R) {
+        a.downed = true;
+        fx.push_back({FX_EXPLODE, a.pos, a.pos, 0, 1.2f, rgb(255, 190, 90), 70.0f});
+        fx.push_back({FX_SMOKE, a.pos, a.pos, 0, 4.0f, rgb(44, 42, 40), 40.0f, Vec2(rng.f(-10, 10), -20)});
+        for (int k = 0; k < 14; k++) fx.push_back({FX_DEBRIS, a.pos, a.pos, 0, rng.f(0.7f, 1.6f), rgb(220, 222, 226), rng.f(2, 5), Vec2(rng.f(-200, 200), rng.f(-220, -30))});
+        emit(EV_MSG, a.owner, SND_NONE, a.pos, a.crates.empty() ? "Your nuke brought down the aid plane: the aid is lost" : "Your nuke brought down the aid plane: only the crates already out will land");
     }
     // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
     fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, rgb(255, 240, 200), R * 1.3f});
@@ -1320,11 +1448,15 @@ Vec2 Sim::padSlot(const Entity& h, const Entity& e) const {
     if (e.isUnit() && e.ut().heli) {   // helipads in two rings around the airfield (as many helicopters as you like: a crowded ring just packs tighter)
         int slot = idx % 20, ring = slot / 10;
         float a = (slot % 10) * 0.6283f + ring * 0.314f;
-        float R = std::max(h.bt().w, h.bt().h) * TILE * 0.5f + 26.0f + ring * 30.0f;
+        float R = std::max(h.bt().w, h.bt().h) * TILE * 0.5f + 26.0f + ring * HELI_SPACE;
         Vec2 p = h.pos + Vec2(std::cos(a) * R, std::sin(a) * R * 0.8f);
         return Vec2(clampf(p.x, 12, WORLD_W - 12), clampf(p.y, 12, WORLD_H - 12));
     }
-    int slot = idx % AIRFIELD_CAP;
+    // a plane takes the pad of its rank among the planes based here (at most AIRFIELD_CAP of them), so no two ever share a pad
+    Ref hr = refOf(h);
+    int slot = 0;
+    for (int i = 0; i < idx; i++) { const Entity& o = ents[i]; if (o.alive && o.isUnit() && o.isAir() && !o.ut().heli && o.home == hr) slot++; }
+    slot %= AIRFIELD_CAP;
     return h.pos + Vec2((slot - 1.5f) * 30, 0);
 }
 
@@ -1387,11 +1519,63 @@ void Sim::flyTo(Entity& e, Vec2 dest, float speed) {
     e.pos += step.len() >= l ? d : step;
 }
 
+// Helicopters hover on spots of their own. Where several are sent to the same place (one move order, a rally point, crowded guard slots,
+// a shared helipad), they take spots in hexagonal rings around it a small gap apart (each the free spot of the innermost ring nearest to
+// it) instead of piling up on one point. Every helicopter claims the spot it heads for; when two claims are closer than the spacing, the
+// helicopter nearer to its own spot keeps it (ties: the lower index) and the other moves over, so one already hovering keeps its spot,
+// one passing by never pushes anybody off, and the choice settles as they arrive.
+Vec2 Sim::heliSpot(Entity& e, Vec2 want) {
+    const float s = HELI_SPACE;
+    const int self = (int)(&e - &ents[0]);
+    struct Claim { Vec2 spot; float d2; int idx; };   // another helicopter's claimed spot and its own distance (squared) to it
+    std::vector<Claim> claims;
+    const float reach = s * 8.0f;
+    for (int i : heliList) {
+        const Entity& h = ents[i];
+        if (i == self || !h.alive || !h.isUnit() || !h.ut().heli || h.hoverTick == 0 || h.hoverTick + 1 < tick) continue;
+        if (dist2(h.hoverSpot, want) > reach * reach) continue;
+        claims.push_back({h.hoverSpot, dist2(h.pos, h.hoverSpot), i});
+    }
+    auto taken = [&](Vec2 c) {
+        float de = dist2(e.pos, c);
+        for (auto& h : claims) if (dist2(h.spot, c) < s * s && (h.d2 < de || (h.d2 == de && h.idx < self))) return true;
+        return false;
+    };
+    Vec2 spot = want;
+    if (taken(want)) {
+        bool found = false;
+        for (int ring = 1; ring <= 7 && !found; ring++) {
+            float bd = 1e18f;
+            for (int side = 0; side < 6; side++) {
+                Vec2 c0 = Vec2(std::cos(side * 1.0471976f), std::sin(side * 1.0471976f)) * (ring * s);
+                Vec2 c1 = Vec2(std::cos((side + 1) * 1.0471976f), std::sin((side + 1) * 1.0471976f)) * (ring * s);
+                for (int k = 0; k < ring; k++) {
+                    Vec2 c = want + c0 + (c1 - c0) * ((float)k / ring);
+                    c = Vec2(clampf(c.x, 12, WORLD_W - 12), clampf(c.y, 12, WORLD_H - 12));
+                    float d = dist2(e.pos, c);
+                    if (d < bd && !taken(c)) { bd = d; spot = c; found = true; }
+                }
+            }
+        }
+    }
+    e.hoverSpot = spot; e.hoverTick = tick;
+    return spot;
+}
+
+void Sim::heliHover(Entity& e, Vec2 spot, float speed) {
+    Vec2 d = spot - e.pos; float l = d.len();
+    if (l <= 1.5f) { e.airspeed = 0; return; }
+    float v = l > 120.0f ? speed : std::max(speed * 0.25f, speed * l / 120.0f);   // eases in over the last few metres instead of stopping dead
+    e.pos += d * (std::min(l, v * SIM_DT) / l);
+    e.airspeed = v;
+    if (l > 10.0f) { float tr = 5.0f * SIM_DT; e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, std::atan2(d.y, d.x)), -tr, tr)); }   // only a real transfer turns the nose
+}
+
 // Waiting in the air: a fixed-wing craft circles the spot at a relaxed speed (the circle is never tighter than it can fly), a helicopter
-// hovers over it.
+// hovers over it (on a spot of its own when others wait there too).
 void Sim::airLoiter(Entity& e, Vec2 c, float R, float speedFrac) {
     const UnitType& ut = e.ut();
-    if (!fixedWing(ut)) { flyTo(e, Vec2(clampf(c.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(c.y, 2.0f * TILE, WORLD_H - 2.0f * TILE)), ut.speed * 0.6f); return; }
+    if (!fixedWing(ut)) { heliHover(e, heliSpot(e, Vec2(clampf(c.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(c.y, 2.0f * TILE, WORLD_H - 2.0f * TILE))), ut.speed * 0.6f); return; }
     float v = ut.speed * speedFrac;
     float rTurn = v / std::min(baseTurn(ut) * AIR_TURN_MAX, baseTurn(ut) * ut.speed / v);
     R = std::min(std::max(R, rTurn * 1.5f + 12.0f), WORLD_H * 0.3f);
@@ -1892,8 +2076,9 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             else if (h && h->hasRally && loaded) airLoiter(e, h->rally + (fixedWing(ut) ? Vec2() : Vec2((slot - 1.5f) * 34, 0)), (2.6f + slot * 0.35f) * TILE, 0.55f);
             else if (h) {
                 Vec2 pad = padSlot(*h, e);
+                if (!fixedWing(ut)) pad = heliSpot(e, pad);   // (never onto a helipad another helicopter already sits on)
                 float dp = dist(pad, e.pos);
-                flyTo(e, pad, ut.speed * 0.6f);
+                if (fixedWing(ut)) flyTo(e, pad, ut.speed * 0.6f); else heliHover(e, pad, ut.speed * 0.6f);
                 if (fixedWing(ut) && dp < 14) { float tr = baseTurn(ut) * AIR_TURN_MAX * SIM_DT; e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, -1.5708f) * 0.2f, -tr, tr)); }   // parked planes face up the runway
                 if (dp < 8) {
                     if (dp < 4) e.airspeed = 0;   // down on the pad
@@ -1939,14 +2124,14 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         if (e.zoneR <= 0) { e.order = O_IDLE; e.guardPos = e.pos; break; }
         const Weapon& w = WEAPONS[ut.weapon];
         if (e.isAir()) {
-            // patrol the zone in a wide circle (a helicopter flies a slow orbit of waypoints), strike whatever enters it
+            // planes patrol the zone in a wide circle; a helicopter hovers still on its own slot of the zone, nose turned out toward
+            // where trouble would come from; both strike whatever enters it
             if (fixedWing(ut)) airLoiter(e, e.zone, ut.jet ? std::max(e.zoneR * 0.55f, 4.0f * TILE) : std::max(e.zoneR * 0.45f, 3.0f * TILE), ut.jet ? 0.62f : 0.6f);
             else {
-                float orbR = e.zoneR * 0.45f;
-                e.orbit += SIM_DT * ut.speed * 0.4f / std::max(48.0f, orbR);
-                Vec2 wp = e.zone + Vec2(std::cos(e.orbit), std::sin(e.orbit)) * orbR;
-                Vec2 d = wp - e.pos; float l = d.len();
-                if (l > 2) { e.pos += d.norm() * std::min(l, ut.speed * SIM_DT * (l > 140 ? 1.0f : 0.55f)); e.angle = std::atan2(d.y, d.x); }
+                Vec2 spot = heliSpot(e, e.guardPos);
+                heliHover(e, spot, ut.speed);
+                Vec2 out = spot - e.zone;
+                if (dist(e.pos, spot) < 10.0f && out.len2() > 16.0f * 16.0f) { float tr = 1.6f * SIM_DT; e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, std::atan2(out.y, out.x)), -tr, tr)); }
             }
             if ((tick + e.gen) % 4 == 0) {
                 Entity* t = acquireZoneTarget(e);
@@ -1985,8 +2170,8 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     case O_MOVE: case O_ATTACKMOVE: {
         if (e.isAir()) {
             // a fixed-wing craft has arrived once it passes within its own turn circle of the spot; it then waits there (circling)
-            Vec2 d = e.target - e.pos;
             bool fw = fixedWing(ut);
+            Vec2 d = (!fw && dist(e.pos, e.target) < 6.0f * TILE ? heliSpot(e, e.target) : e.target) - e.pos;   // (a group of helicopters stops side by side)
             float arrive = fw ? std::max(48.0f, 1.3f * e.airspeed / airTurnRate(e)) : 6.0f;
             if (d.len() < arrive) {
                 e.order = O_IDLE; e.postOrder = O_IDLE;
@@ -2200,8 +2385,9 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         if (!h) { h = findAirfield(e); if (h) e.home = refOf(*h); }
         if (!h) { e.order = O_IDLE; break; }  // nowhere to land: loiter
         Vec2 pad = padSlot(*h, e);
+        if (!fixedWing(ut)) pad = heliSpot(e, pad);
         Vec2 d = pad - e.pos;
-        if (d.len() > 4) flyTo(e, pad, ut.speed);
+        if (d.len() > 4) { if (fixedWing(ut)) flyTo(e, pad, ut.speed); else heliHover(e, pad, ut.speed); }
         else {
             e.airspeed = 0;   // down on the pad
             if (fixedWing(ut)) { float tr = baseTurn(ut) * AIR_TURN_MAX * SIM_DT; e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, -1.5708f) * 0.25f, -tr, tr)); }
@@ -2386,6 +2572,7 @@ void Sim::separateUnits() {
                 if (!b.alive || !b.isUnit() || b.isAir() != air || b.fall > 0) continue;
                 if (!air && (a.squeezeUntil > time || b.squeezeUntil > time)) continue;   // a jammed unit slips past
                 float rr = ra + b.radius();
+                if (air && a.ut().heli && b.ut().heli) rr = HELI_SPACE;   // helicopters keep a small gap between their hulls
                 Vec2 d = a.pos - b.pos;
                 float l2 = d.len2();
                 if (l2 >= rr * rr || l2 < 1e-4f) { if (l2 < 1e-4f) push += Vec2(rng.f(-1, 1), rng.f(-1, 1)); continue; }
@@ -2444,6 +2631,7 @@ void Sim::step() {
     updateStorms();
     updateNukes();
     updateAirlifts();
+    updateAidDrops();
     updateFallout();
     separateUnits();
     updateFx();

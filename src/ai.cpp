@@ -581,6 +581,7 @@ void AiPlayer::think() {
             }
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && o.owner != player && !S.enemies(player, o.owner) && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;   // fallout hurts friends too
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner == player && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;
+            for (auto& o : S.ents) if (o.alive && o.isAir() && o.owner >= 0 && !S.enemies(player, o.owner) && dist(c->pos, o.pos) < R) score -= UNITS[o.type].cost * 1.2f;   // and every aircraft in the blast falls, ours too
             if (score > bestScore) { bestScore = score; bestPos = c->pos; }
         }
         if (bestScore >= (pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f))) S.cmdNuke(player, bestPos);

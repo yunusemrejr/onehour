@@ -18,3 +18,6 @@ float artScale(int type);
 // Paradrop cargo plane (faction look, owner colour) and parachute canopy, both 64x64.
 void artCargoPlane(Canvas& c, Color team, bool cyber);
 void artChute(Canvas& c, Color team);
+// Aid Drop: the white relief plane (64x64, faces +x) and the wooden aid crate, closed (falling) or opened (landed).
+void artAidPlane(Canvas& c);
+void artCrate(Canvas& c, bool open);

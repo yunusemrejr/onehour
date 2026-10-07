@@ -129,6 +129,13 @@ extern const int DROP_INF_TYPES[F_COUNT][DROP_INF];
 extern const int DROP_VEH_TYPES[F_COUNT][DROP_VEH];
 extern const int DROP_AIR_TYPES[F_COUNT][DROP_AIR];
 
+// Aid Drop: the human player's own power at the tech structure (Data Center / Arms Lab), never a computer army's. A white relief plane
+// nobody shoots at drops crates on parachutes; the army nearest to the spot, other than the sender, receives the money and a dozer.
+static const int   AID_MONEY = 20000;
+static const float AID_COOLDOWN = 60.0f;      // seconds, per tech structure (more of them, more flights)
+static const int   AID_CRATES = 5;            // crates in one drop (the dozer comes out of the middle one)
+static const float AID_RADIUS = 3.0f;         // tiles: the crates come down within this of the spot
+
 static const int START_CASH = 10000;
 static const int SUPPLY_PER_TRIP = 300;
 static const float HARVEST_TIME = 3.0f;   // seconds at pile
@@ -161,3 +168,5 @@ static const int UNITS_PER_FACTION = 12;
 static const int AIRFIELD_CAP = 4;            // fixed-wing aircraft (drones, jets) based at one airfield: one per pad. Helicopters do not count:
                                               // they land on helipads around the airfield, so an airfield can build and house any number of them
 static const int BUILDS_PER_FACTION = 11;
+static const float HELI_SPACE = 46.0f;        // px between the centres of neighbouring hovering helicopters (the drawn hulls are about 40 px
+                                              // across, so this leaves a small gap between them)

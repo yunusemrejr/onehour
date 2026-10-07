@@ -58,11 +58,14 @@ struct Entity {
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
+    float aidTimer = 0;     // tech structure: sim time its next Aid Drop flight is ready (human players only)
     float cooldown2 = 0;    // structure: the roof gun of the Defense Guns upgrade (its own target, cooldown and facing)
     Ref engaged2;
     float turret2 = 0;
     float dmgLoad = 0;      // structure: damage taken over the last couple of seconds (decaying); a big load overwhelms Rugged plating
     Ref forceTarget;        // a friendly (own or allied) target the human ordered it to attack on purpose (never set for computer armies)
+    Vec2 hoverSpot;         // helicopter: the spot it last claimed to hover on (see heliSpot) ...
+    u32 hoverTick = 0;      // ... and the tick it claimed it (a claim older than a tick has lapsed)
     std::vector<Vec2> path;
     size_t pathIdx = 0;
     float repathTimer = 0;
@@ -162,8 +165,8 @@ struct Player {
     float damageMul() const { return brutal() ? 1.25f : 1.0f; }   // damage dealt to enemies
 };
 
-enum EventType { EV_SOUND = 0, EV_MSG, EV_BUILD_DONE, EV_UNIT_READY, EV_UNDER_ATTACK, EV_NOFUNDS, EV_LOWPOWER, EV_PLAYER_DEAD, EV_SUPPLY_EMPTY };
-struct Event { EventType type; int player; Sound sound; Vec2 pos; std::string msg; };
+enum EventType { EV_SOUND = 0, EV_MSG, EV_BUILD_DONE, EV_UNIT_READY, EV_UNDER_ATTACK, EV_NOFUNDS, EV_LOWPOWER, EV_PLAYER_DEAD, EV_SUPPLY_EMPTY, EV_AID };
+struct Event { EventType type; int player; Sound sound; Vec2 pos; std::string msg; int other = -1; };   // other: EV_AID, the army that received it (-1 nobody)
 
 struct Sim {
     std::vector<Entity> ents;
@@ -202,6 +205,25 @@ struct Sim {
     static constexpr float AIRLIFT_SPEED = 270.0f;
     static constexpr float AIRLIFT_HP = 1100.0f;
     static constexpr float FALLOUT_LIFE = 80.0f;
+    // Aid Drop (human players only): a white relief plane crosses the map over the spot and drops crates on parachutes. No enemy and no
+    // computer army ever harms it (it is not an entity, no gun targets it, their nukes spare it); only the sender's own nuke brings it down,
+    // like every aircraft in the blast. When the crates that left the plane are down, the army nearest to the spot other than the sender
+    // gets AID_MONEY and a dozer (see aidCandidates); the opened crates stay on the ground for a while.
+    struct AidCrate { Vec2 from, to; float fall = 0, fallTime = 1; };
+    struct AidDrop {
+        Vec2 pos, prevPos, dir, target;
+        int owner = -1;
+        float t = 0;
+        float releaseAt = 0;            // distance along the track from the target at which the next crate leaves the plane
+        std::vector<AidCrate> crates;   // released so far
+        bool downed = false;            // caught in the sender's own nuke: the crates still aboard are lost, the ones already falling land
+        bool delivered = false;
+        int recipient = -1;             // the army that got it (-1: nobody was left to take it, or nothing got out of the plane)
+        float deliveredAt = -1;
+    };
+    std::vector<AidDrop> aidDrops;
+    static constexpr float AID_SPEED = 230.0f;
+    static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
     struct Fallout { Vec2 pos; float r; float t; float tick; };
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
@@ -209,6 +231,7 @@ struct Sim {
     static const int GRID_CELL = 64;
     static const int GRID_W = WORLD_W / GRID_CELL, GRID_H = WORLD_H / GRID_CELL;
     std::vector<int> grid[GRID_W * GRID_H];
+    std::vector<int> heliList;   // living helicopters (rebuilt with the grid every tick)
 
     void init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed);
     void step();
@@ -217,9 +240,9 @@ struct Sim {
     Ref refOf(const Entity& e) const { return Ref{ (i32)(&e - &ents[0]), e.gen }; }
     Ref refOf(int idx) const { return Ref{ idx, ents[idx].gen }; }
     bool enemies(int a, int b) const { return a >= 0 && b >= 0 && a != b && players[a].team != players[b].team; }
-    // Whom a warhead hurts: the launcher's enemies always; a human's nuke also every ally caught in it (only humans can do that),
-    // and the human's own army too when the human aimed it as force fire.
-    bool nukeHurts(const Nuke& n, int owner) const { return enemies(n.owner, owner) || (owner >= 0 && n.owner >= 0 && !players[n.owner].isAI && (owner != n.owner || n.force)); }
+    // Whom a warhead hurts on the ground: the launcher's enemies always; a human's nuke everybody caught in it, allies and the human's
+    // own army included, exactly as hard as an enemy (computer armies never hurt their own side). Aircraft: see nukeBlast.
+    bool nukeHurts(const Nuke& n, int owner) const { return enemies(n.owner, owner) || (owner >= 0 && n.owner >= 0 && !players[n.owner].isAI); }
 
     // creation
     Ref spawnUnit(int type, int owner, Vec2 pos);
@@ -247,6 +270,12 @@ struct Sim {
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
     int dropsReady(int player) const;         // tech structures that can send a paradrop right now (after the opening delay)
     float dropWait(int player) const;         // seconds until the soonest paradrop is ready (0 = ready, -1 = no tech structure)
+    bool cmdAidDrop(int player, Vec2 pos);    // tech structure, human players only: a relief flight drops $20000 and a dozer to the army nearest pos
+    int aidsReady(int player) const;          // tech structures that can send an aid flight right now (0 for computer armies)
+    float aidWait(int player) const;          // seconds until the soonest aid flight is ready (0 = ready, -1 = no tech structure)
+    // the armies an aid drop at 'at' would go to: every army but the sender at the smallest distance to its nearest unit or structure
+    // (edge distance, 0 when the spot is on it); more than one only on an exact tie, which is drawn at random. Returns the count.
+    int aidCandidates(int sender, Vec2 at, int* out) const;
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
     bool atIncomeLimit(int player, int buildType) const;
@@ -301,6 +330,8 @@ private:
     void updateStorms();
     void updateNukes();
     void updateAirlifts();
+    void updateAidDrops();
+    void deliverAid(AidDrop& a);
     void releaseUnit(Airlift& a);
     Vec2 landingSpot(Airlift& a, float spacing);
     void updateFallout();
@@ -329,6 +360,8 @@ private:
     float airTurnRate(const Entity& e) const;            // fixed-wing: g-limited turn rate at the current airspeed
     void airSteer(Entity& e, float want, float wantSpeed, bool keepOnMap = true);   // fixed-wing: bank toward a heading, throttle toward a speed, fly on
     void airLoiter(Entity& e, Vec2 center, float radius, float speedFrac);         // circle a spot (helicopters hover over it)
+    Vec2 heliSpot(Entity& e, Vec2 want);                 // helicopters: claim a spot to hover on for 'want' that no other helicopter holds
+    void heliHover(Entity& e, Vec2 spot, float speed);   // helicopters: fly to a hover spot (easing in) and hold there
     void airDogfight(Entity& e, Entity& t);              // fixed-wing air-to-air: lead pursuit, corner speed, extend and re-engage
     void runOrder(Entity& e, const UnitType& ut);         // carry out the unit's current order for one tick (the body of updateUnit)
     bool autonomy(Entity& e);                            // a unit left on its own: dodge danger, answer fire, help friends (true = took a new order)

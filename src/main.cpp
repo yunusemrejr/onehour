@@ -578,15 +578,12 @@ static bool rulesTest(u64 seed) {
         float v0 = hpOf(vict);
         g_sim.cmdAttack({ai1}, vict, true); run(10);
         if (hpOf(vict) < v0) return fail("a computer army attacked its human ally on purpose");
-        // a human's nuke always flattens the allies under it; the human's own army only when it is forced
+        // a human's nuke flattens everything under it: the allies' units and the human's own, forced or not
         Vec2 gz = g_map.nearestFree(mid + Vec2(500, 300), 30);
         Ref bystander = g_sim.spawnUnit(tankMe, 0, gz), allyTank = g_sim.spawnUnit(tankMe, 1, g_map.nearestFree(gz + Vec2(60, 0), 30));
         g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, false}); for (int t = 0; t < 2; t++) { g_sim.step(); g_sim.events.clear(); }   // (lingering fallout hurts everyone: look at the blast itself)
-        if (!g_sim.get(bystander) || hpOf(bystander) < g_sim.get(bystander)->maxHp) return fail("an ordinary nuke hurt my own tank");
+        if (hpOf(bystander) > 0) return fail("my own nuke spared my own tank under it");
         if (hpOf(allyTank) > 0) return fail("my nuke spared the ally's tank under it");
-        g_sim.fallouts.clear();
-        g_sim.nukes.push_back({g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, true}); run(1);
-        if (hpOf(bystander) > 0) return fail("a forced nuke spared my own tank");
         g_sim.fallouts.clear();
         Vec2 gz2 = g_map.nearestFree(gz + Vec2(-600, 100), 30);
         g_sim.nukes.push_back({g_sim.players[1].basePos, gz2, 1, Sim::NUKE_FLIGHT - 0.05f, true});
@@ -744,7 +741,7 @@ static bool autoTest(u64 seed) {
             }
             g_sim.cmdStop(mine); g_sim.cmdStop(theirs);
             g_sim.nukes.push_back({g_sim.players[1].basePos, gz, 2, 0.0f, false});   // the enemy's warhead
-            g_sim.nukes.push_back({g_sim.players[2].basePos, gz, 0, 0.0f, false});   // and one of ours on the same spot (it does not hurt our own tanks either way)
+            g_sim.nukes.push_back({g_sim.players[2].basePos, gz, 0, 0.0f, false});   // and one of ours on the same spot (it would hurt our own tanks just the same)
             run(9);
             int alive = 0, foesAlive = 0; for (auto r : mine) if (g_sim.get(r)) alive++; for (auto r : theirs) if (g_sim.get(r)) foesAlive++;
             if (alive < 3) { fprintf(stderr, "%d of 4 survived\n", alive); return fail("a human army's units did not get out of the nuke's circle"); }
@@ -950,6 +947,157 @@ static bool jetTest(u64 seed) {
 
 
 // Paradrop: a cargo plane releases 15 infantry, 7 vehicles and 4 aircraft on parachutes over the chosen spot, the power recharges for 5 minutes, and anti-air can shoot the plane down.
+// Aid Drop: the human player's own relief flight. Needs a tech structure, one flight per tech structure per cooldown, never available to a
+// computer army; nothing shoots the plane down (not even a nuke); the army nearest to the spot gets $20000 and a dozer, never the sender
+// (dropping on your own base still goes to the nearest other army), and an exact tie is drawn at random between the armies in it.
+static bool aidTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "aidtest: %s\n", m); return false; };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[4] = { (Faction)fi, (Faction)(1 - fi), F_CLANKER, F_CYBER };
+        bool ai[4] = { false, true, true, true }; int diff[4] = { 1, 1, 3, 1 }; int team[4] = { 0, 0, 1, 1 };
+        g_sim.init(4, fac, ai, diff, team, seed + fi);
+        for (int p = 0; p < 4; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+        auto techNear = [&](int p, Vec2 at, int skip) -> Ref {   // a finished tech structure of p's army near 'at' (skip: candidate sites passed over)
+            int type = firstBuildOf(g_sim.players[p].faction) + BR_TECH;
+            for (int r = 3; r < 24; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                int tx = tileOf(at.x) + dx, ty = tileOf(at.y) + dy;
+                if (!inMap(tx, ty) || !g_sim.canPlace(p, type, tx, ty)) continue;
+                if (skip-- > 0) continue;
+                return g_sim.placeBuilding(type, p, tx, ty, true);
+            }
+            return NOREF;
+        };
+        auto dozers = [&](int p) { int n = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == p && e.ut().role == UR_DOZER) n++; return n; };
+        auto nearestArmies = [&](Vec2 at, std::vector<int>& out) {   // brute force, independent of the game's own code
+            float best[4] = { -1, -1, -1, -1 };
+            for (auto& e : g_sim.ents) if (e.alive && e.kind != EK_RESOURCE && e.owner > 0) {
+                float d;
+                if (e.isBuilding()) { float x0 = e.tx * TILE, y0 = e.ty * TILE, x1 = x0 + e.bt().w * TILE, y1 = y0 + e.bt().h * TILE; float dx = std::max({x0 - at.x, 0.0f, at.x - x1}), dy = std::max({y0 - at.y, 0.0f, at.y - y1}); d = std::sqrt(dx * dx + dy * dy); }
+                else d = std::max(0.0f, dist(at, e.pos) - e.radius());
+                if (best[e.owner] < 0 || d < best[e.owner]) best[e.owner] = d;
+            }
+            float m = -1; for (int p = 1; p < 4; p++) if (best[p] >= 0 && (m < 0 || best[p] < m)) m = best[p];
+            out.clear(); for (int p = 1; p < 4; p++) if (best[p] == m) out.push_back(p);
+        };
+        // fly every flight in the air until it has delivered; check the money and the dozer landed with whoever was nearest
+        auto deliverAll = [&](const char* what, std::vector<int>& got, bool nukeIt = false) -> bool {
+            got.clear();
+            std::vector<std::vector<int>> expect(g_sim.aidDrops.size());
+            bool nuked = false;
+            for (int t = 0; t < 20 * 60; t++) {
+                int m0[4], d0[4]; for (int p = 0; p < 4; p++) { m0[p] = g_sim.players[p].money; d0[p] = dozers(p); }
+                for (size_t i = 0; i < g_sim.aidDrops.size(); i++) if (!g_sim.aidDrops[i].delivered) nearestArmies(g_sim.aidDrops[i].target, expect[i]);
+                std::vector<bool> was; for (auto& a : g_sim.aidDrops) was.push_back(a.delivered);
+                if (nukeIt && !nuked && !g_sim.aidDrops.empty() && dist(g_sim.aidDrops[0].pos, g_sim.aidDrops[0].target) < 500) {   // a warhead right on the plane
+                    g_sim.nukes.push_back({g_sim.players[2].basePos, g_sim.aidDrops[0].pos, 2, Sim::NUKE_FLIGHT - 0.05f, false}); nuked = true;
+                }
+                g_sim.step(); g_sim.events.clear();
+                if (g_sim.aidDrops.size() != was.size()) { fprintf(stderr, "aidtest %s: a flight vanished before delivering\n", what); return false; }
+                int delivered = 0, gotMoney[4] = {}, gotDozer[4] = {};
+                std::vector<int> sameTick;   // armies an earlier flight of this very tick gave a dozer to: it stands on the spot now, so it may win the next one
+                for (size_t i = 0; i < g_sim.aidDrops.size(); i++) {
+                    auto& a = g_sim.aidDrops[i];
+                    if (!a.delivered || was[i]) continue;
+                    delivered++;
+                    if (getenv("ONEHOUR_DEBUG")) {
+                        fprintf(stderr, "  t=%.2f flight %zu target %.0f,%.0f -> army %d (expected", g_sim.time, i, a.target.x, a.target.y, a.recipient);
+                        for (int q : expect[i]) fprintf(stderr, " %d", q);
+                        fprintf(stderr, ")");
+                        for (int q = 1; q < 4; q++) { const Entity* nb = nullptr; float bd = 1e30f; for (auto& e : g_sim.ents) if (e.alive && e.owner == q && e.kind != EK_RESOURCE) { float d = g_sim.distToEntity(a.target, e); if (d < bd) { bd = d; nb = &e; } } if (nb) fprintf(stderr, "  [%d: %.1f %s]", q, bd, nb->isUnit() ? nb->ut().name : nb->bt().name); }
+                        fprintf(stderr, "\n");
+                    }
+                    if (a.recipient == 0) { fprintf(stderr, "aidtest %s: the sender got its own aid\n", what); return false; }
+                    if (std::find(expect[i].begin(), expect[i].end(), a.recipient) == expect[i].end() && std::find(sameTick.begin(), sameTick.end(), a.recipient) == sameTick.end()) { fprintf(stderr, "aidtest %s: army %d got it, the nearest was army %d\n", what, a.recipient, expect[i].empty() ? -1 : expect[i][0]); return false; }
+                    gotMoney[a.recipient] += AID_MONEY; gotDozer[a.recipient]++;
+                    got.push_back(a.recipient); sameTick.push_back(a.recipient);
+                }
+                if (delivered) for (int p = 0; p < 4; p++) {
+                    if (g_sim.players[p].money - m0[p] != gotMoney[p]) { fprintf(stderr, "aidtest %s: army %d money %+d (want %+d)\n", what, p, g_sim.players[p].money - m0[p], gotMoney[p]); return false; }
+                    if (dozers(p) - d0[p] != gotDozer[p]) { fprintf(stderr, "aidtest %s: army %d dozers %+d (want %+d)\n", what, p, dozers(p) - d0[p], gotDozer[p]); return false; }
+                }
+                bool all = true; for (auto& a : g_sim.aidDrops) if (!a.delivered) all = false;
+                if (all) break;
+            }
+            for (auto& a : g_sim.aidDrops) if (!a.delivered) { fprintf(stderr, "aidtest %s: a flight never delivered\n", what); return false; }
+            if (nukeIt && !nuked) { fprintf(stderr, "aidtest %s: the nuke was never fired\n", what); return false; }
+            for (int t = 0; t < 20 * 30 && !g_sim.aidDrops.empty(); t++) { g_sim.step(); g_sim.events.clear(); }
+            if (!g_sim.aidDrops.empty()) { fprintf(stderr, "aidtest %s: the plane and crates never cleared away\n", what); return false; }
+            return true;
+        };
+        Vec2 b0 = g_sim.players[0].basePos, b2 = g_sim.players[2].basePos;
+        if (g_sim.cmdAidDrop(0, b2) || g_sim.aidsReady(0) != 0) return fail("aid offered without a tech structure");
+        if (!techNear(0, b0, 0).valid() || !techNear(1, g_sim.players[1].basePos, 0).valid() || !techNear(2, b2, 0).valid()) return fail("could not place the tech structures");
+        // computer armies never have it, an ally's or an enemy's, Brutal or not
+        if (g_sim.aidsReady(1) || g_sim.aidsReady(2) || g_sim.cmdAidDrop(1, b2) || g_sim.cmdAidDrop(2, b0) || !g_sim.aidDrops.empty()) return fail("a computer army could send aid");
+        if (g_sim.aidsReady(0) != 1) return fail("one tech structure should offer one aid flight");
+        // onto the enemy base: that army gets it, even with a nuke going off right on the plane on the way in
+        if (!g_sim.cmdAidDrop(0, b2)) return fail("aid refused");
+        if (g_sim.cmdAidDrop(0, b2)) return fail("aid ignored its cooldown");
+        if (std::abs(g_sim.aidWait(0) - AID_COOLDOWN) > 0.5f) return fail("wrong cooldown");
+        std::vector<int> got;
+        if (!deliverAll("enemy base", got, true)) return false;
+        if (got.size() != 1 || got[0] != 2) return fail("the enemy army under the drop did not get it");
+        // your own nuke on the plane before the drop: it goes down like every aircraft in your blast, and the aid with it (nobody gets anything)
+        for (int t = 0; t < (int)(AID_COOLDOWN * SIM_HZ) && g_sim.aidsReady(0) == 0; t++) { g_sim.step(); g_sim.events.clear(); }
+        {
+            int m[4], d[4]; for (int p = 0; p < 4; p++) { m[p] = g_sim.players[p].money; d[p] = dozers(p); }
+            if (!g_sim.cmdAidDrop(0, b2)) return fail("aid refused (own nuke)");
+            bool nuked = false;
+            for (int t = 0; t < 20 * 90 && !g_sim.aidDrops.empty(); t++) {
+                if (!nuked && dist(g_sim.aidDrops[0].pos, g_sim.aidDrops[0].target) < 600) { g_sim.nukes.push_back({b0, g_sim.aidDrops[0].pos, 0, Sim::NUKE_FLIGHT - 0.05f, false}); nuked = true; }
+                g_sim.step(); g_sim.events.clear();
+                if (!g_sim.aidDrops.empty() && g_sim.aidDrops[0].recipient >= 0) return fail("an aid plane downed before the drop still delivered");
+            }
+            if (!nuked) return fail("the own nuke was never fired");
+            if (!g_sim.aidDrops.empty()) return fail("the downed aid flight never cleared away");
+            for (int p = 1; p < 4; p++) if (g_sim.players[p].money != m[p] || dozers(p) > d[p]) return fail("aid from a downed plane reached somebody");
+            if (g_sim.players[0].money != m[0]) return fail("the sender's money changed");
+        }
+        // onto your own base: never you, the nearest other army gets it; two more tech structures give two flights back to back
+        for (int t = 0; t < (int)(AID_COOLDOWN * SIM_HZ); t++) { g_sim.step(); g_sim.events.clear(); }
+        if (!techNear(0, b0, 0).valid() || !techNear(0, b0, 0).valid()) return fail("could not place more tech structures");
+        if (g_sim.aidsReady(0) != 3) { fprintf(stderr, "aidtest: %d flights ready with three tech structures\n", g_sim.aidsReady(0)); return false; }
+        if (!g_sim.cmdAidDrop(0, b0)) return fail("three tech structures should send three flights");
+        for (int t = 0; t < 30; t++) { g_sim.step(); g_sim.events.clear(); }   // (a moment apart, so each one's delivery can be checked on its own)
+        if (!g_sim.cmdAidDrop(0, b0 + Vec2(40, 0))) return fail("three tech structures should send three flights");
+        for (int t = 0; t < 30; t++) { g_sim.step(); g_sim.events.clear(); }
+        if (!g_sim.cmdAidDrop(0, b0 + Vec2(0, 40))) return fail("three tech structures should send three flights");
+        if (g_sim.cmdAidDrop(0, b0) || g_sim.aidsReady(0) != 0) return fail("a fourth flight with three tech structures");
+        if (!deliverAll("own base", got)) return false;
+        if (got.size() != 3) return fail("not every flight over our own base delivered");
+        // an exact tie: two armies' identical structures exactly as far from the spot on either side; both win some of the draws
+        for (int t = 0; t < (int)(AID_COOLDOWN * SIM_HZ); t++) { g_sim.step(); g_sim.events.clear(); }
+        Vec2 tie; bool placed = false;
+        for (int r = 0; r < 30 && !placed; r++) for (int dy = -r; dy <= r && !placed; dy++) for (int dx = -r; dx <= r && !placed; dx++) {
+            if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+            int cx = MAP_W / 2 + dx, cy = MAP_H / 2 + dy;
+            const int type = B_C_POWER; const int w = BUILDS[type].w, h = BUILDS[type].h;
+            int txA = cx - 1 - w, txB = cx + 1, ty = cy - h / 2;
+            if (!g_sim.canPlace(2, type, txA, ty) || !g_sim.canPlace(3, type, txB, ty)) continue;
+            Vec2 c((float)(cx * TILE), (float)(ty * TILE + h * TILE / 2));
+            bool clear = true; for (auto& e : g_sim.ents) if (e.alive && e.kind != EK_RESOURCE && g_sim.distToEntity(c, e) < 12 * TILE) clear = false;
+            if (!clear) continue;
+            g_sim.placeBuilding(type, 2, txA, ty, true); g_sim.placeBuilding(type, 3, txB, ty, true);
+            tie = c; placed = true;
+        }
+        if (!placed) return fail("no room for the tie");
+        int who[4]; int n = g_sim.aidCandidates(0, tie, who);
+        if (n != 2 || who[0] != 2 || who[1] != 3) { fprintf(stderr, "aidtest: tie spot has %d candidates\n", n); return false; }
+        int wins[4] = {};
+        for (int round = 0; round < 12; round++) {   // one flight at a time: the dozer out of the crates would win every later draw
+            for (int t = 0; t < (int)(AID_COOLDOWN * SIM_HZ) && g_sim.aidsReady(0) == 0; t++) { g_sim.step(); g_sim.events.clear(); }
+            if (!g_sim.cmdAidDrop(0, tie)) return fail("tie flight refused");
+            if (!deliverAll("tie", got)) return false;
+            for (int r : got) wins[r]++;
+            for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().role == UR_DOZER && g_sim.distToEntity(tie, e) < 6 * TILE) g_sim.destroy(e, false);
+        }
+        if (wins[0] || wins[1] || !wins[2] || !wins[3]) { fprintf(stderr, "aidtest: tie draws %d/%d/%d/%d\n", wins[0], wins[1], wins[2], wins[3]); return false; }
+        printf("aidtest %s: ok (tie draws: army 2 x%d, army 3 x%d)\n", FACTION_NAME[fac[0]], wins[2], wins[3]);
+    }
+    return true;
+}
+
 static bool dropTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "droptest: %s\n", m); return false; };
     for (int fi = 0; fi < 2; fi++) {
@@ -1070,13 +1218,14 @@ static bool supportTest(u64 seed) {
         // nuke: lots of enemy units and a structure, 9 tiles from ground zero
         Vec2 gz = g_map.nearestFree(b0 + Vec2(0, 30 * TILE), 60);
         Ref e1 = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, gz), e2 = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, g_map.nearestFree(gz + Vec2(9 * TILE, 0), 20));
-        Ref ally = g_sim.spawnUnit(ub + 5, 0, g_map.nearestFree(gz + Vec2(0, 3 * TILE), 20));
         Vec2 gzE = g_sim.get(e1)->pos;
         g_sim.nukes.push_back({b0, gzE, 0, Sim::NUKE_FLIGHT - 0.05f});
         for (int t = 0; t < 10; t++) { g_sim.step(); g_sim.events.clear(); if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "step %d nukes %zu fallouts %zu\n", t, g_sim.nukes.size(), g_sim.fallouts.size()); }
         if (g_sim.get(e1)) return fail("a tank at ground zero survived the nuke");
         if (g_sim.get(e2)) return fail("a tank at 9 tiles survived the nuke");
         if (g_sim.fallouts.empty()) { fprintf(stderr, "nukes %zu over %d gameOver %d t %.1f\n", g_sim.nukes.size(), (int)g_sim.gameOver, (int)g_sim.gameOver, g_sim.time); return fail("no radiation left behind"); }
+        Ref ally = g_sim.spawnUnit(ub + 5, 0, g_map.nearestFree(gzE + Vec2(0, 3 * TILE), 20));   // walks into the crater after the blast (the blast itself would have flattened it)
+        g_sim.cmdStop({ally});
         Entity* al = g_sim.get(ally); float hpA = al ? al->hp : 0;
         for (int t = 0; t < 20 * 20; t++) { g_sim.step(); g_sim.events.clear(); }
         al = g_sim.get(ally);
@@ -1134,8 +1283,7 @@ static bool bombTest(u64 seed) {
         if (g_sim.get(airC)) return fail("an aircraft inside the fireball did not fall");
         if (g_sim.get(airRing)) return fail("an aircraft at the shock ring did not fall");
         Entity* ao = g_sim.get(airOut); if (!ao || ao->hp < ao->maxHp) return fail("the nuke hurt an aircraft outside its radius");
-        if (!g_sim.get(airMine)) return fail("the launcher's own aircraft was destroyed");
-        g_sim.destroy(*g_sim.get(airMine), false);   // (an armed idle bomber would go finish the wounded factory by itself)
+        if (g_sim.get(airMine)) return fail("the launcher's own aircraft survived the blast");
         printf("bombtest nuke %s: ok (factory %.0f%%, hq %.0f%%, rim %.0f%%)\n", FACTION_NAME[fac[0]], 100 * f->hp / f->maxHp, 100 * h->hp / h->maxHp, rm ? 100 * rm->hp / rm->maxHp : 0.0f);
         // radiation never finishes a structure off
         for (int t = 0; t < 20 * 90; t++) { g_sim.step(); g_sim.events.clear(); if (getenv("ONEHOUR_DEBUG") && t % 100 == 0) fprintf(stderr, "t %d factory %.0f hq %.0f\n", t, g_sim.get(factory) ? g_sim.get(factory)->hp : -1, g_sim.get(hq) ? g_sim.get(hq)->hp : -1); }
@@ -1418,6 +1566,12 @@ static bool uiTest() {
         if (g_sim.dropWait(0) < 119.0f) return fail("paradrop cooldown not started");
         key(SDLK_p);
         if (g_game.dropMode) return fail("P armed the paradrop during its cooldown");
+        key(SDLK_d);
+        if (!g_game.aidMode) return fail("D did not arm the aid drop");
+        { Vec2 tgt = g_sim.players[1].basePos; g_game.cam = Vec2(clampf(tgt.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(tgt.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); frames(1); click((int)(tgt.x - g_game.cam.x), (int)(tgt.y - g_game.cam.y), SDL_BUTTON_LEFT); }
+        if (g_game.aidMode || g_sim.aidDrops.size() != 1) return fail("clicking the map did not send the aid flight");
+        key(SDLK_d);
+        if (g_game.aidMode) return fail("D armed the aid drop during its cooldown");
         g_sim.players[0].money = 20000;
         key(SDLK_u); key(SDLK_g); key(SDLK_e);
         for (int u = 0; u < UPG_COUNT; u++) if (!g_sim.players[0].upgBusy[u]) return fail("U / G / E did not start the structure upgrades");
@@ -1866,18 +2020,62 @@ static bool heliTest(u64 seed) {
         int parked = 0, crowded = 0;
         std::vector<Vec2> spots;
         for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == heli) { if (dist(e.pos, g_sim.get(air)->pos) < 8 * TILE && e.order == O_IDLE) parked++; spots.push_back(e.pos); }
-        for (size_t i = 0; i < spots.size(); i++) for (size_t j = i + 1; j < spots.size(); j++) if (dist(spots[i], spots[j]) < 6) crowded++;
+        const float gap = HELI_SPACE - 4.0f;   // hulls never touch: a few pixels of air between neighbouring helicopters
+        for (size_t i = 0; i < spots.size(); i++) for (size_t j = i + 1; j < spots.size(); j++) if (dist(spots[i], spots[j]) < gap) crowded++;
         if (parked < 18) { fprintf(stderr, "helitest %s: only %d of 18 helicopters settled at their airfield\n", FACTION_NAME[fac[0]], parked); return false; }
-        if (crowded > 3) { fprintf(stderr, "helitest %s: %d helicopter pairs sit on the same spot\n", FACTION_NAME[fac[0]], crowded); return false; }
+        if (crowded > 0) { fprintf(stderr, "helitest %s: %d helicopter pairs parked on top of each other\n", FACTION_NAME[fac[0]], crowded); return false; }
+        std::vector<Ref> helis;
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == heli) helis.push_back(g_sim.refOf(e));
+        auto pairsTooClose = [&]() { int n = 0; for (size_t i = 0; i < helis.size(); i++) for (size_t j = i + 1; j < helis.size(); j++) { Entity* a = g_sim.get(helis[i]); Entity* b = g_sim.get(helis[j]); if (a && b && dist(a->pos, b->pos) < gap) { n++; if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "  pair %d(%.0f,%.0f o%d v%.0f) %d(%.0f,%.0f o%d v%.0f) d %.1f\n", helis[i].idx, a->pos.x, a->pos.y, (int)a->order, a->airspeed, helis[j].idx, b->pos.x, b->pos.y, (int)b->order, b->airspeed, dist(a->pos, b->pos)); } } return n; };
+        // all of them sent to one spot: they stop side by side around it, a small gap apart, not in one pile
+        Vec2 meet = g_map.nearestFree(g_sim.players[0].basePos + Vec2(10 * TILE, -6 * TILE), 20);
+        g_sim.cmdMove(helis, meet, false);
+        steps(20 * 20);
+        if (int n = pairsTooClose()) { fprintf(stderr, "helitest %s: %d helicopter pairs piled up on a move order\n", FACTION_NAME[fac[0]], n); return false; }
+        for (Ref r : helis) if (dist(g_sim.get(r)->pos, meet) > 5 * TILE) return fail("a helicopter of a group move stopped far from the spot");
+        // guarding an area: each one hovers still on a spot of its own (no circling)
+        g_sim.cmdGuardArea(helis, meet, 3 * TILE);
+        steps(20 * 15);
+        std::vector<Vec2> was; for (Ref r : helis) was.push_back(g_sim.get(r)->pos);
+        steps(20 * 4);
+        for (size_t i = 0; i < helis.size(); i++) {
+            Entity* h = g_sim.get(helis[i]);
+            if (h->order != O_GUARDAREA) return fail("a helicopter dropped its guard order");
+            if (dist(h->pos, was[i]) > 3.0f) { fprintf(stderr, "helitest %s: a guarding helicopter moved %.0f px in 4 s\n", FACTION_NAME[fac[0]], dist(h->pos, was[i])); return false; }
+        }
+        if (int n = pairsTooClose()) { fprintf(stderr, "helitest %s: %d helicopter pairs share a guard spot\n", FACTION_NAME[fac[0]], n); return false; }
+        g_sim.cmdStop(helis);   // (back to the airfield for the rest of the test)
+        steps(20 * 25);
         // planes still wait for a free pad: six queued, four come out, the rest wait
         for (int k = 0; k < 6; k++) if (!g_sim.cmdTrain(air, plane)) return fail("could not queue a plane");
         steps(20 * 200);
         if (count(plane) != AIRFIELD_CAP || g_sim.get(air)->queue.size() != 2) { fprintf(stderr, "helitest %s: %d planes out, %zu waiting (want %d and 2)\n", FACTION_NAME[fac[0]], count(plane), g_sim.get(air)->queue.size(), AIRFIELD_CAP); return false; }
+        {   // each plane parks on a pad of its own (never two on one pad)
+            std::vector<Vec2> pads; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == plane) pads.push_back(e.pos);
+            for (size_t i = 0; i < pads.size(); i++) for (size_t j = i + 1; j < pads.size(); j++) if (dist(pads[i], pads[j]) < 20) { fprintf(stderr, "helitest %s: two planes parked on one pad\n", FACTION_NAME[fac[0]]); return false; }
+        }
         // and a helicopter queued behind the waiting planes is not held up by them for ever: cancel the planes, it comes out
         g_sim.cmdCancelTrain(air, 0); g_sim.cmdCancelTrain(air, 0);
         if (!g_sim.cmdTrain(air, heli)) return fail("could not queue a helicopter after the planes");
         steps(20 * 30);
         if (count(heli) != 19) return fail("a helicopter was not built once the pads were full of planes");
+        {   // a plane lost and replaced: the newcomer's entity index can sit four apart from a parked plane's; it still lands on a pad of its own
+            std::vector<Ref> pls; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == plane) pls.push_back(g_sim.refOf(e));
+            if (pls.size() < 2) return fail("planes missing");
+            Ref keep = pls[0];
+            g_sim.destroy(*g_sim.get(pls[1]), false);
+            Vec2 away = g_map.nearestFree(g_sim.players[0].basePos + Vec2(0, 6 * TILE), 20);
+            Ref nb;
+            for (int k = 0; k < 16 && !nb.valid(); k++) {
+                Ref f = g_sim.spawnUnit(firstUnitOf(fac[0]) + 2, 0, away);   // (a trooper as filler)
+                if (f.idx != keep.idx && (f.idx - keep.idx) % AIRFIELD_CAP == 0) { g_sim.destroy(*g_sim.get(f), false); nb = g_sim.spawnUnit(plane, 0, g_sim.get(air)->pos + Vec2(0, -6 * TILE)); }
+            }
+            if (!nb.valid() || (nb.idx - keep.idx) % AIRFIELD_CAP != 0) return fail("could not set up two planes four entity slots apart");
+            g_sim.get(nb)->home = air;
+            steps(20 * 40);
+            std::vector<Vec2> at; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == plane) at.push_back(e.pos);
+            for (size_t i = 0; i < at.size(); i++) for (size_t j = i + 1; j < at.size(); j++) if (dist(at[i], at[j]) < 20) { fprintf(stderr, "helitest %s: a replacement plane parked on another plane's pad\n", FACTION_NAME[fac[0]]); return false; }
+        }
     }
     printf("helitest: ok\n");
     return true;
@@ -1911,7 +2109,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 19);
+            int c = rng.range(0, 20);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -1934,9 +2132,11 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 17: { int bt = rng.range(0, B_COUNT - 1); g_sim.canPlace(0, bt, rng.range(-5, MAP_W + 5), rng.range(-5, MAP_H + 5)); g_sim.unitAvailable(0, rng.range(0, U_COUNT - 1)); g_sim.buildAvailable(0, bt); break; }
             case 19: g_sim.cmdUpgrade(rng.range(-1, 2) == 0 ? 0 : rng.range(-1, 4), rng.range(-1, UPG_COUNT)); break;
             case 18: g_sim.players[0].dropReady = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding()) e.dropTimer = std::min(e.dropTimer, g_sim.time + 3.0f); g_sim.cmdParadrop(0, where()); break;
+            case 20: g_sim.cmdAidDrop(rng.range(-1, 4), where()); break;   // (any player id: only the human's may ever fly)
             }
         }
         g_sim.step(); g_ai.update(); g_sim.events.clear();
+        for (auto& a : g_sim.aidDrops) if (a.owner < 0 || g_sim.players[a.owner].isAI || a.recipient == a.owner) { fprintf(stderr, "fuzz: an aid flight from a computer army, or back to its sender, at tick %d\n", t); return false; }
         for (auto& e : g_sim.ents) {
             if (!e.alive) continue;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "fuzz: NaN position at tick %d (%s)\n", t, e.isUnit() ? e.ut().name : "?"); return false; }
@@ -1979,6 +2179,7 @@ int main(int argc, char** argv) {
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
         else if (a == "--droptest") { g_map.generate(); return dropTest(seed) ? 0 : 1; }
+        else if (a == "--aidtest") { g_map.generate(); return aidTest(seed) ? 0 : 1; }
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
         else if (a == "--airmatrix") { g_map.generate(); return airMatrixTest(seed) ? 0 : 1; }
         else if (a == "--groundmatrix") { g_map.generate(); return groundMatrixTest(seed) ? 0 : 1; }
@@ -2115,7 +2316,9 @@ int main(int argc, char** argv) {
             Vec2 b = g_sim.players[std::min(viewPlayer, 3)].basePos;
             if (const char* hs = getenv("ONEHOUR_HELI")) {   // ONEHOUR_HELI=N: N helicopters of the viewed army hover over its base, a few more parked at an airfield
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), ht = g_sim.players[vp].faction == F_CYBER ? (int)U_C_HELI : (int)U_K_AIR, n = std::max(1, atoi(hs));
-                for (int k = 0; k < n; k++) { Ref r = g_sim.spawnUnit(ht, vp, b + Vec2(-200 + (k % 4) * 120, -120 + (k / 4) * 110)); g_sim.get(r)->alt = 1; g_sim.get(r)->angle = 0.3f * k; }
+                std::vector<Ref> hs2;
+                for (int k = 0; k < n; k++) { Ref r = g_sim.spawnUnit(ht, vp, b + Vec2(-200 + (k % 4) * 120, -120 + (k / 4) * 110)); g_sim.get(r)->alt = 1; g_sim.get(r)->angle = 0.3f * k; hs2.push_back(r); }
+                if (getenv("ONEHOUR_HELIGUARD")) { g_sim.cmdGuardArea(hs2, b, 3.0f * TILE); for (int t = 0; t < 20 * 15; t++) { g_sim.step(); g_sim.events.clear(); } }   // (they guard a small circle: each hovers on a spot of its own)
                 for (int t = 0; t < 30; t++) { g_sim.step(); g_sim.events.clear(); }
             }
             if (upgShow && std::string(upgShow) == "raid") {
@@ -2232,6 +2435,23 @@ int main(int argc, char** argv) {
                 g_game.cam = Vec2(clampf(look.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(look.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 printf("drop showcase: %zu planes in the air, %d units\n", g_sim.airlifts.size(), g_sim.countUnits(0));
+            }
+            if (getenv("ONEHOUR_AID")) {   // showcase: an Aid Drop near the enemy base (ONEHOUR_AID=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera against the heading)
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                g_sim.players[0].isAI = false;   // (only a human army has the power)
+                Faction f0 = g_sim.players[0].faction; int bb0 = firstBuildOf(f0);
+                Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
+                for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(bp.x) + dx, ty = tileOf(bp.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
+                Vec2 tgt = g_map.nearestFree(bp + (ep - bp) * 0.8f, 40);
+                if (!g_sim.cmdAidDrop(0, tgt)) fprintf(stderr, "aid showcase: the call was refused\n");
+                int n = atoi(getenv("ONEHOUR_AID")); if (n < 1) n = 100;
+                float back = getenv("ONEHOUR_CAMBACK") ? (float)atof(getenv("ONEHOUR_CAMBACK")) : 0.0f;
+                Vec2 dir = g_sim.aidDrops.empty() ? Vec2(1, 0) : g_sim.aidDrops[0].dir;
+                Vec2 look = tgt - dir * back;
+                g_game.cam = Vec2(clampf(look.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(look.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                for (int t = 0; t < n; t++) { g_sim.step(); g_game.update(0); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                if (getenv("ONEHOUR_CAMPLANE") && !g_sim.aidDrops.empty()) { Vec2 pp = g_sim.aidDrops[0].pos; g_game.cam = Vec2(clampf(pp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(pp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); }   // (centre on the plane)
+                printf("aid showcase: %zu flights, delivered %d to army %d\n", g_sim.aidDrops.size(), g_sim.aidDrops.empty() ? 0 : (int)g_sim.aidDrops[0].delivered, g_sim.aidDrops.empty() ? -2 : g_sim.aidDrops[0].recipient);
             }
             if (getenv("ONEHOUR_NUKEDMG")) {   // showcase: an enemy base under a nuke (ONEHOUR_NUKEDMG=N ticks after the blast)
                 Faction f1 = g_sim.players[1].faction; int bb1 = firstBuildOf(f1);

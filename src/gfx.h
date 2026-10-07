@@ -93,6 +93,7 @@ struct Gfx {
     Sprite rotorDisc, rotorBlades;
     Sprite cargoPlane[MAX_PLAYERS][F_COUNT];   // paradrop transport by owner colour and army look
     Sprite chute[MAX_PLAYERS];                 // parachute canopy by owner colour
+    Sprite aidPlane, aidChute, crate, crateOpen;   // Aid Drop: the white relief plane, its sky-blue canopies and the wooden crates
     Sprite turretHead[4];           // laser turret, gun nest, patriot, rocket battery
     Sprite building[B_COUNT];       // one colour sprite per structure type, shared by every owner (2x supersampled, shadow baked in)
     Sprite buildingTeam[B_COUNT];   // white-on-clear owner marks, drawn over the structure with the owner's colour modulated in

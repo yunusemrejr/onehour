@@ -711,6 +711,75 @@ void artCargoPlane(Canvas& c, Color team, bool cy) {
     c.outline(rgb(8, 10, 14, 190));
 }
 
+// Relief plane of the Aid Drop (the human player's own power): a big white four-engine transport with a sky-blue cheatline and aid
+// roundels on the wings, nobody's war colours. Faces +x, 64x64 canvas, wingspan 60.
+void artAidPlane(Canvas& c) {
+    setTone(-1);
+    Art A(c, rgb(90, 170, 235));
+    const Color hull = rgb(236, 238, 240), pan = rgb(214, 218, 224), dark = rgb(92, 100, 112), blue = rgb(70, 150, 225), sky = rgb(150, 205, 245);
+    for (int s = -1; s <= 1; s += 2) {
+        auto Y = [&](float y) { return 32 + s * (y - 32); };
+        A.poly({ {40, Y(27)}, {35, Y(2.5f)}, {25, Y(2.5f)}, {23.5f, Y(27)} }, hull, 2.4f, 0.5f);           // long straight wing
+        A.poly({ {38, Y(26)}, {34, Y(7)}, {28, Y(7)}, {26.5f, Y(26)} }, pan, 1.6f, 0.35f);
+        A.line(26, Y(4), 34.6f, Y(4), 1.1f, rgba(blue, 220));                                         // blue wing tips
+        A.poly({ {13.5f, Y(28.5f)}, {10, Y(14)}, {4.5f, Y(14)}, {6.5f, Y(28.5f)} }, hull, 1.8f, 0.45f);  // tailplane
+        for (int k = 0; k < 2; k++) {                                                                // four turboprops
+            float ey = Y(32 + (k ? 20.5f : 11.0f)), ex = k ? 34.0f : 38.0f;
+            A.cap(ex - 6.5f, ey, ex + 5, ey, 2.5f, shade(hull, 0.92f), 1.6f, 0.5f);
+            A.circle(ex + 6.6f, ey, 4.6f, rgba(rgb(200, 206, 214), 70), 1, 0);
+            A.dot(ex + 5.6f, ey, 1.1f, dark);
+        }
+        // aid roundel on each wing: a sky-blue ring around a white disc with a blue dot
+        A.circle(29.5f, Y(15.5f), 4.6f, blue, 1.2f, 0.4f);
+        A.circle(29.5f, Y(15.5f), 3.2f, rgb(250, 250, 250), 1.0f, 0.3f);
+        A.dot(29.5f, Y(15.5f), 1.4f, blue);
+    }
+    A.cap(7, 32, 56, 32, 6.4f, hull, 3.4f, 0.55f);                                                   // fuselage
+    A.ell(58, 32, 5.6f, 4.4f, shade(hull, 1.04f), 2.2f, 0.45f);
+    A.ell(56, 32, 3.4f, 2.7f, rgb(64, 96, 122), 1.8f, 0.7f); A.ell(55.2f, 31, 1.7f, 0.9f, rgba(rgb(210, 235, 250), 190), 1, 0);
+    A.cap(12, 32, 50, 32, 4.4f, pan, 2.0f, 0.35f);
+    A.line(10, 29.2f, 52, 29.2f, 1.0f, rgba(sky, 230)); A.line(10, 34.8f, 52, 34.8f, 1.0f, rgba(sky, 230));   // cheatline
+    for (int i = 0; i < 5; i++) A.line(17 + i * 7, 28.2f, 17 + i * 7, 35.8f, 0.6f, rgba(dark, 110));
+    A.box(9, 32, 3.8f, 1.3f, 0.5f, rgb(246, 248, 250), 1.0f, 0.4f);                                  // T-tail fin seen from above
+    A.box(9.2f, 32, 1.4f, 1.0f, 0.4f, blue, 1.0f, 0.3f);
+    A.dot(25.5f, 3.4f, 0.9f, rgb(255, 80, 70)); A.dot(25.5f, 60.6f, 0.9f, rgb(80, 255, 120));
+    A.grain(4, 2, 63, 62, 0.06f, 331);
+    enhance(c, 0.45f);
+    c.outline(rgb(40, 46, 56, 200));
+}
+
+// Wooden aid crate seen from above, 64x64: a big plank box with a frame, cross braces, steel corners and a sky-blue band.
+// open: the lid is off and the supplies show (bundles of cash, sacks, tool boxes).
+void artCrate(Canvas& c, bool open) {
+    setTone(-1);
+    Art A(c, rgb(90, 170, 235));
+    const Color wood = rgb(176, 128, 74), plank = rgb(196, 148, 90), dark = rgb(92, 62, 34), steel = rgb(150, 156, 162), blue = rgb(80, 160, 230);
+    A.box(32, 32, 19, 19, 1.6f, wood, 2.4f, 0.5f);
+    if (!open) {
+        for (int i = 0; i < 5; i++) A.box(32, 17.5f + i * 7.25f, 16.4f, 3.0f, 0.6f, shade(plank, 0.92f + 0.05f * (i % 3)), 1.2f, 0.35f);   // lid planks
+        A.line(15.5f, 15.5f, 48.5f, 48.5f, 3.2f, shade(wood, 0.85f));                                       // cross brace
+        A.line(15.5f, 48.5f, 48.5f, 15.5f, 3.2f, shade(wood, 0.85f));
+        A.line(15.5f, 15.5f, 48.5f, 48.5f, 1.0f, rgba(shade(plank, 1.12f), 160));
+        A.box(32, 32, 19, 2.6f, 0.4f, blue, 1.0f, 0.3f);                                                   // band
+        A.box(32, 32, 5.2f, 5.2f, 0.8f, rgb(246, 246, 240), 1.0f, 0.3f);                                    // the aid mark
+        A.dot(32, 32, 2.6f, blue);
+    } else {
+        A.box(32, 32, 16, 16, 0.8f, shade(dark, 0.8f), 1.4f, 0.6f);                                          // inside
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 2; j++)                                             // cash bundles
+            A.box(24 + i * 6.5f, 23 + j * 5.2f, 2.9f, 2.2f, 0.4f, rgb(110 + 10 * ((i + j) % 2), 170, 100), 1.0f, 0.35f);
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 2; j++) A.line(21.5f + i * 6.5f, 23 + j * 5.2f, 26.5f + i * 6.5f, 23 + j * 5.2f, 0.6f, rgba(rgb(240, 240, 220), 200));
+        A.ell(25, 39, 5.5f, 4.2f, rgb(200, 186, 150), 1.6f, 0.45f);                                         // sacks
+        A.ell(36, 40, 5.0f, 4.0f, rgb(188, 174, 138), 1.6f, 0.45f);
+        A.box(42, 30, 3.6f, 7, 0.6f, rgb(200, 70, 50), 1.2f, 0.4f);                                         // tool box
+        A.line(15, 13.5f, 49, 13.5f, 2.6f, shade(plank, 0.9f));                                             // broken lid planks on the edge
+        A.line(13.5f, 50.5f, 30, 50.5f, 2.6f, shade(plank, 0.86f));
+    }
+    for (int i = 0; i < 4; i++) { float x = i & 1 ? 49 : 15, y = i & 2 ? 49 : 15; A.box(x, y, 3.0f, 3.0f, 0.5f, steel, 1.0f, 0.4f); A.dot(x, y, 0.8f, shade(steel, 0.6f)); }
+    A.grain(12, 12, 52, 52, 0.18f, open ? 342 : 341);
+    enhance(c, 0.4f);
+    c.outline(rgb(30, 22, 14, 200));
+}
+
 // Parachute canopy seen from above: eight gores alternating the owner's colour and off-white, seams, a vent
 void artChute(Canvas& c, Color team) {
     Art A(c, team);
