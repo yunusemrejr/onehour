@@ -27,6 +27,8 @@ struct Brain {
     void reset();
     // wave: probability that launching now succeeds
     static void waveFeatures(float armyValue, float defenseValue, float enemyArmy, float minutes, int armyCount, float* x);
+    // estimate-based features: ln of the assault ratio at the target, ln of the ratio against the whole enemy army, minutes, army size
+    static void waveFeaturesR(float ratioTarget, float ratioAll, float minutes, int armyCount, float* x);
     float waveProb(const float* x) const;
     void learnWave(const float* x, bool success);
     // units: predicted efficiency (dealt/spent) given the enemy mix

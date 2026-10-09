@@ -206,6 +206,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
     g_brain.learning = false;
     int wins = 0, losses = 0, draws = 0; double winTime = 0, loseTime = 0;
     for (int i = 0; i < games; i++) {
+        if (getenv("ONEHOUR_EVALGAME") && i != atoi(getenv("ONEHOUR_EVALGAME"))) continue;   // (diagnostics: replay one game of the series)
         Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
         bool flip = (i >> 2) & 1;
         bool brainOn[4] = { true, true, true, true };
@@ -213,12 +214,21 @@ static int evalAi(int games, u64 seed, int difficulty) {
         static const bool legacy = getenv("ONEHOUR_EVALOLD") && getenv("ONEHOUR_EVALOLD")[0] == 'l';
         bool smart[4] = { legacy ? !flip : true, legacy ? flip : true, true, true };
         bool pro[4] = { !flip, flip, true, true };
+        static const int baseMask = getenv("ONEHOUR_BASEMASK") ? atoi(getenv("ONEHOUR_BASEMASK")) : FEAT_DEFAULT;   // the baseline side plays with only these pro features
+        static const int newMask = getenv("ONEHOUR_NEWMASK") ? atoi(getenv("ONEHOUR_NEWMASK")) : FEAT_DEFAULT;   // and the new side only these
+        for (int p = 0; p < 4; p++) g_ai.featMask[p] = (p == (flip ? 0 : 1)) ? baseMask : newMask;
+        if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK")) { pro[0] = pro[1] = true; }
         int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, nullptr, pro);
         int newTeam = flip ? 1 : 0;
         const char* res;
         if (w < 0) { draws++; res = "unresolved"; }
         else if (w == newTeam) { wins++; winTime += g_sim.time; res = "new AI wins"; }
         else { losses++; loseTime += g_sim.time; res = "old AI wins"; }
+        if (getenv("ONEHOUR_EVALGAME")) for (int p = 0; p < 2; p++) {   // the final position: who has what
+            Player& pl = g_sim.players[p]; int inf = 0, veh = 0, air = 0, dz = 0, hv = 0;
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == p && e.isUnit()) { if (e.ut().role == UR_DOZER) dz++; else if (e.ut().role == UR_HARVESTER) hv++; else if (e.isAir()) air++; else if (e.ut().kind == UK_INF) inf++; else veh++; }
+            printf("    P%d %s: $%d inf %d veh %d air %d dozers %d haulers %d | structures %d (factories %d barracks %d turrets %d) alive %d wave=%d\n", p, p == (flip ? 1 : 0) ? "new" : "old", pl.money, inf, veh, air, dz, hv, g_sim.countBuildings(p, -1, false), g_sim.countRole(p, BR_FACTORY, false), g_sim.countRole(p, BR_BARRACKS, false), g_sim.countRole(p, BR_TURRET, false) + g_sim.countRole(p, BR_AATURRET, false), (int)pl.alive, (int)g_ai.ais[p].attacking);
+        }
         printf("  game %2d (%s%s vs %s%s): %s at %.0f s, doctrine %s\n", i + 1, flip ? "old " : "new ", FACTION_NAME[fac[0]], flip ? "new " : "old ", FACTION_NAME[fac[1]], res, g_sim.time, DOCTRINE_NAME[g_ai.ais[flip ? 1 : 0].doctrine]);
         fflush(stdout);
     }
@@ -1386,7 +1396,7 @@ static bool brainTest() {
     fclose(f);
     Brain b;
     if (!b.load(path.c_str())) { remove(path.c_str()); return fail("a v2 brain file was refused"); }
-    bool ok = b.games == 5 && b.waveSamples == 9 && std::abs(b.ww[2] - 0.3f) < 1e-4f;
+    Brain prior; bool ok = b.games == 5 && b.waveSamples == 0 && std::abs(b.ww[2] - prior.ww[2]) < 1e-4f && std::abs(b.ww[1] - prior.ww[1]) < 1e-4f;   // (wave weights older than v8 mean something else: the prior stays)
     for (int r = 0; r < 22 && ok; r++) {
         int t = r < 11 ? r : r + 1;   // the Clanker block moved up one place for the Cyber jet
         ok = b.unitSamples[t] == r + 1 && std::abs(b.wu[t][0] - (1.0f + r * 0.01f)) < 1e-3f && std::abs(b.wu[t][3] - 0.3f) < 1e-3f;

@@ -6,7 +6,7 @@ std::string g_brainPath;
 void Brain::reset() {
     // prior = the hand-written heuristic: launch when the army is ~1.3x the defence it meets
     for (int i = 0; i < WAVE_F; i++) ww[i] = 0;
-    ww[0] = -0.35f; ww[1] = 2.2f;
+    ww[0] = -0.9f; ww[1] = 3.2f; ww[2] = 0.5f; ww[3] = 0.35f; ww[4] = 0.25f;
     for (int t = 0; t < U_COUNT; t++) { unitSamples[t] = 0; for (int i = 0; i < UNIT_F; i++) wu[t][i] = 0; wu[t][0] = 1.0f; }
     waveSamples = 0; games = 0;
     for (int d = 0; d < DOCTRINES; d++) { docQ[d] = 0.5f; docN[d] = 0; }
@@ -16,6 +16,13 @@ void Brain::waveFeatures(float A, float D, float E, float minutes, int armyCount
     x[0] = 1.0f;
     x[1] = clampf(std::log((A + 500.0f) / (D + 500.0f)), -2.5f, 2.5f);          // army vs defence at the target
     x[2] = clampf(std::log((A + 500.0f) / (E + 500.0f)), -2.5f, 2.5f) * 0.5f;   // army vs the enemy field army
+    x[3] = std::min(minutes, 30.0f) / 15.0f - 1.0f;
+    x[4] = std::min((float)armyCount, 40.0f) / 20.0f - 1.0f;
+}
+void Brain::waveFeaturesR(float Rt, float Ra, float minutes, int armyCount, float* x) {
+    x[0] = 1.0f;
+    x[1] = clampf(std::log(std::max(Rt, 0.05f)), -2.5f, 2.5f);
+    x[2] = clampf(std::log(std::max(Ra, 0.05f)), -2.5f, 2.5f) * 0.5f;
     x[3] = std::min(minutes, 30.0f) / 15.0f - 1.0f;
     x[4] = std::min((float)armyCount, 40.0f) / 20.0f - 1.0f;
 }
@@ -68,7 +75,7 @@ std::string Brain::defaultPath() {
 bool Brain::save(const char* path) const {
     FILE* f = fopen(path, "w");
     if (!f) return false;
-    fprintf(f, "onehour-brain 7 %d %d\n", games, waveSamples);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
+    fprintf(f, "onehour-brain 8 %d %d\n", games, waveSamples);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
     for (int i = 0; i < WAVE_F; i++) fprintf(f, "%.5f ", ww[i]);
     fprintf(f, "\n");
     for (int t = 0; t < U_COUNT; t++) { fprintf(f, "%d", unitSamples[t]); for (int i = 0; i < UNIT_F; i++) fprintf(f, " %.5f", wu[t][i]); fprintf(f, "\n"); }
@@ -84,8 +91,9 @@ bool Brain::load(const char* path) {
     if (!f) return false;
     Brain b;
     int ver = 0;
-    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 7);   // older layouts index a different unit table: start fresh
-    for (int i = 0; ok && i < WAVE_F; i++) ok = fscanf(f, "%f", &b.ww[i]) == 1;
+    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 8);   // older layouts index a different unit table: start fresh
+    for (int i = 0; ok && i < WAVE_F; i++) { float v = 0; ok = fscanf(f, "%f", &v) == 1; if (ver >= 8) b.ww[i] = v; }   // (v8: the wave features are the combat-estimate ratios; older weights mean something else, so the prior stays)
+    if (ver < 8) b.waveSamples = 0;
     // v2 had 22 rows (11 per army, no jets): map them onto the new table, the jets keep the prior
     for (int row = 0; ok && row < (ver == 2 ? 22 : (ver == 3 ? 24 : (ver <= 5 ? 26 : (ver == 6 ? 28 : (int)U_COUNT)))); row++) {   // v4 and v5 share a 26 row table (the snipers joined in v6, the Hornet in v7: newcomers keep the prior)
         int t = row;

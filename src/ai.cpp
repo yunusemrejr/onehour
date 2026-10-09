@@ -6,6 +6,51 @@ static bool aiDebug() { static int v = -1; if (v < 0) v = getenv("ONEHOUR_DEBUG"
 
 AiManager g_ai;
 
+// ---- combat estimate: the Lanchester square law over armour classes. A side is its total health, how that health splits across the
+// armour classes, and the damage per second it deals to each class (weapon table: damage x armour multiplier x burst / cooldown, zero where
+// the weapon cannot reach). A beats B by the ratio of (A's damage on B's armour mix x A's health) to (B's damage on A's mix x B's health).
+struct Force {
+    float hp = 0, hpBy[AR_COUNT] = {}, dps[AR_COUNT] = {};
+    void add(const Entity& e, float weight) {
+        int wi = e.weapon();
+        if (wi < 0) return;
+        const Weapon& w = WEAPONS[wi];
+        float hp0 = e.hp, dmgMul = g_sim.players[e.owner].damageMul();
+        if (e.isBuilding()) {
+            if (!e.constructed || (g_sim.players[e.owner].lowPower() && e.bt().power < 0)) return;
+            if (g_sim.players[e.owner].upg[UPG_RUGGED]) hp0 *= RUGGED_HP / RUGGED_ARMOR;   // plating halves the damage and adds half again to the health
+        } else if (!e.isUnit() || e.ut().role != UR_COMBAT || e.fall > 0) return;
+        hp += hp0 * weight; hpBy[e.armor()] += hp0 * weight;
+        bool sniper = e.isUnit() && e.ut().sniper;
+        for (int c = 0; c < AR_COUNT; c++) {
+            if (c == AR_AIR ? !w.air : !w.ground) continue;
+            if (sniper && c != AR_INF) continue;
+            dps[c] += w.dmg * w.mult[c] * std::max(1, w.burst) / std::max(0.05f, w.cooldown) * (1.0f + 0.25f * w.splash) * dmgMul * weight;
+        }
+    }
+    void addType(int type, float n, int owner) {   // n units of a type that does not exist yet
+        const UnitType& u = UNITS[type];
+        if (u.weapon < 0) return;
+        const Weapon& w = WEAPONS[u.weapon];
+        float dmgMul = g_sim.players[owner].damageMul();
+        hp += u.hp * n; hpBy[u.armor] += u.hp * n;
+        for (int c = 0; c < AR_COUNT; c++) {
+            if (c == AR_AIR ? !w.air : !w.ground) continue;
+            if (u.sniper && c != AR_INF) continue;
+            dps[c] += w.dmg * w.mult[c] * std::max(1, w.burst) / std::max(0.05f, w.cooldown) * (1.0f + 0.25f * w.splash) * dmgMul * n;
+        }
+    }
+    static float ratio(const Force& a, const Force& b) {   // > 1: a beats b
+        if (a.hp <= 1.0f) return 0.0f;
+        if (b.hp <= 1.0f) return 10.0f;
+        float ad = 0, bd = 0;
+        for (int c = 0; c < AR_COUNT; c++) { ad += b.hpBy[c] / b.hp * a.dps[c]; bd += a.hpBy[c] / a.hp * b.dps[c]; }
+        if (bd <= 1e-3f) return 10.0f;
+        if (ad <= 1e-3f) return 0.0f;
+        return clampf((ad * a.hp) / (bd * b.hp), 0.02f, 10.0f);
+    }
+};
+
 static float unitValue(const Entity& e) { return e.isUnit() ? UNITS[e.type].cost * (0.5f + 0.5f * e.hp / e.maxHp) : 0; }
 
 void AiManager::init(u64 seed) {
@@ -13,7 +58,7 @@ void AiManager::init(u64 seed) {
         bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
         ais[p].useBrain = ub;
-        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].init(p, seed + p * 7919); }
+        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].feat = featMask[p]; ais[p].init(p, seed + p * 7919); }
     }
 }
 void AiManager::update() {
@@ -140,11 +185,35 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         else if (pl.spentOn[c.type] > 0) { avgEff += pl.valueDealt[c.type] / pl.spentOn[c.type]; nEff++; }
     }
     avgEff = nEff ? avgEff / nEff : 0;
+    // the estimate picks the counter: what a few thousand credits of each candidate would add to the army's strength against the enemy
+    // force actually seen (its armour mix decides whose damage counts, its weapons whose health counts)
+    float estGain[16] = {}, estMax = 0;
+    if (on(FEAT_COMP) && cands.size() <= 16) {
+        Force A, B;
+        for (auto& e : g_sim.ents) {
+            if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || (!e.isUnit() && !e.isBuilding())) continue;
+            if (e.owner == player) { if (e.isUnit() && e.ut().role == UR_COMBAT) A.add(e, 1.0f); }
+            else if (g_sim.enemies(player, e.owner) && g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) {
+                if (e.isBuilding() && e.weapon() < 0) { float h = e.hp * 0.15f; B.hp += h; B.hpBy[AR_STRUCT] += h; }   // the objective: a little of every structure
+                else B.add(e, e.isBuilding() ? 0.6f : 1.0f);
+            }
+        }
+        if (B.hp > 1.0f) {
+            float base0 = std::log(Force::ratio(A, B));
+            for (size_t k = 0; k < cands.size(); k++) {
+                Force A2 = A; A2.addType(cands[k].type, 3000.0f / UNITS[cands[k].type].cost, player);
+                estGain[k] = std::max(0.0f, std::log(Force::ratio(A2, B)) - base0);
+                estMax = std::max(estMax, estGain[k]);
+            }
+        }
+    }
     float best = -1; int pick = -1;
-    for (auto& c : cands) {
+    for (size_t k = 0; k < cands.size(); k++) {
+        auto& c = cands[k];
         if (!g_sim.unitAvailable(player, c.type)) continue;
         int have = g_sim.countUnits(player, c.type);
         float w = c.w / (1.0f + have * 0.25f) * rng.f(0.85f, 1.15f);
+        if (estMax > 0.02f) w *= 0.4f + 1.2f * estGain[k] / estMax;
         if (useBrain && ablate() != 2) {
             if (avgEff > 0) w *= clampf(0.65f + 0.7f * (g_brain.unitEff(c.type, x) / avgEff), 0.5f, 1.8f);
         } else if (pl.spentOn[c.type] >= 1500 && avgEff > 0) {
@@ -193,6 +262,40 @@ Entity* AiPlayer::pickAttackTarget() {
         if (s < bs) { bs = s; best = &e; }
     }
     return best;
+}
+
+// An assault by 'attackers' on the spot 'at': everything that will meet them there. Armed structures count within 'radiusTiles' of the spot;
+// the defender's fighters count in full near it and less the farther they stand (they come running), or all of them when the whole
+// enemy army is what matters. Defenders also fight at home, repaired and reinforced: they get a small edge.
+float AiPlayer::assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy) {
+    Sim& S = g_sim;
+    Force A, B;
+    for (auto r : attackers) { Entity* e = S.get(r); if (e) A.add(*e, 1.0f); }
+    for (auto& e : S.ents) {
+        if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner)) continue;
+        if (!S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+        float d = dist(e.pos, at) / TILE;
+        if (e.isBuilding()) { if (d <= radiusTiles) B.add(e, 1.0f); }
+        else if (e.isUnit()) B.add(e, wholeEnemy ? 1.0f : (d <= radiusTiles ? 1.0f : (d <= radiusTiles * 2.5f ? 0.65f : 0.3f)));
+    }
+    return Force::ratio(A, B) / 1.08f;
+}
+
+// The same for a base under attack: everything of ours that can answer near 'at' (the fighters anywhere count a little less the farther
+// off they stand, structures in reach count in full) against the enemy fighters within 'radiusTiles' of it.
+float AiPlayer::defenceRatio(Vec2 at, float radiusTiles) {
+    Sim& S = g_sim;
+    Force A, B;
+    for (auto& e : S.ents) {
+        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0) continue;
+        float d = dist(e.pos, at) / TILE;
+        if (e.owner == player) {
+            if (e.isBuilding()) { if (d <= radiusTiles + 6) A.add(e, 1.0f); }
+            else if (e.isUnit() && !e.isAir()) A.add(e, d <= radiusTiles ? 1.0f : (d <= 30 ? 0.6f : 0.25f));
+            else if (e.isUnit()) A.add(e, 0.5f);
+        } else if (S.enemies(player, e.owner) && e.isUnit() && d <= radiusTiles) B.add(e, 1.0f);
+    }
+    return Force::ratio(A, B);
 }
 
 // Feed the outcome of a finished wave back into the model: did it destroy at least as much as it lost?
@@ -254,8 +357,8 @@ void AiPlayer::think() {
     float minutes = S.time / 60.0f;
     // a commander with money in the bank does not wait for the clock: the timed gates for tech, airfields, upgrades and nukes run on 'effective' minutes
     float tm = minutes;
-    if (pro && pl.difficulty >= 1) tm += clampf((pl.money - 4000.0f) / 2500.0f, 0.0f, 6.0f);
-    if (pro && S.time - incomeT >= 10.0f) {   // credits per second coming in (hauled supplies and income structures)
+    if (on(FEAT_MACRO) && pl.difficulty >= 1) tm += clampf((pl.money - 4000.0f) / 2500.0f, 0.0f, 6.0f);
+    if (on(FEAT_MACRO) && S.time - incomeT >= 10.0f) {   // credits per second coming in (hauled supplies and income structures)
         float inc = (float)(pl.harvested + pl.mined), r = (inc - incomeAt) / (S.time - incomeT);
         incomeRate = incomeRate <= 0 ? r : 0.6f * incomeRate + 0.4f * r;
         incomeAt = inc; incomeT = S.time;
@@ -387,7 +490,7 @@ void AiPlayer::think() {
         for (auto* h : supplyHubs) if (h->constructed && h->queue.empty()) { S.cmdTrain(S.refOf(*h), ubase + 1); break; }
     }
     int wantDozers = pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2);
-    if (pro && pl.difficulty >= 1) wantDozers += (pl.money > 6000 ? 1 : 0) + (pl.money > 14000 && pl.difficulty >= 2 ? 1 : 0);   // a rich army builds on several fronts at once
+    if (on(FEAT_MACRO) && pl.difficulty >= 1) wantDozers += (pl.money > 6000 ? 1 : 0) + (pl.money > 14000 && pl.difficulty >= 2 ? 1 : 0);   // a rich army builds on several fronts at once
     int queuedDozer = 0;
     if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER) queuedDozer++;
     if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200)) S.cmdTrain(S.refOf(*hq), ubase + 0);
@@ -463,14 +566,14 @@ void AiPlayer::think() {
         if (!built && airfields.empty() && tm > (pl.difficulty >= 2 ? 6.0f : 9.0f) * style.air && pl.money > 2000) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
         if (!built && factories.size() < 2 && tm > (pl.brutal() ? 4 : 7) && pl.money > (pl.brutal() ? 3000 : 4500)) built = tryBuild(base + BR_FACTORY, pl.basePos);
         // a smart commander with money piling up spends it on more production and a second airfield for the air doctrine
-        if (!built && smart && !pro && !threat && pl.money > (pl.brutal() ? 4500 : 6500) && minutes > 5) {
+        if (!built && smart && !on(FEAT_MACRO) && !threat && pl.money > (pl.brutal() ? 4500 : 6500) && minutes > 5) {
             if (factories.size() < (pl.difficulty >= 3 ? 4u : (pl.difficulty == 2 ? 3u : 2u))) built = tryBuild(base + BR_FACTORY, pl.basePos);
             else if (barracks.size() < 3) built = tryBuild(base + BR_BARRACKS, pl.basePos);
             else if (doctrine == DOC_AIR && airfields.size() < 2 && techs > 0) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
         }
         // production capacity follows the income: a bank that keeps growing means too few factories and barracks to turn credits into fighters
         // (and it is not put off by a fight at the door: the new buildings go up while the defenders hold)
-        if (!built && pro && pl.difficulty >= 1 && minutes > 1.2f && powerPlants > 0) {
+        if (!built && on(FEAT_MACRO) && pl.difficulty >= 1 && minutes > 1.2f && powerPlants > 0) {
             float prodRate = 0;
             for (auto* f : factories) prodRate += f->constructed ? 75.0f : 40.0f;
             for (auto* b : barracks) prodRate += b->constructed ? 43.0f : 20.0f;
@@ -534,7 +637,7 @@ void AiPlayer::think() {
     else if (pl.difficulty >= 2) armyCap = minutes < rampStart ? 6 : (minutes < rampStart + 2.5f ? 14 : (minutes < rampStart + 5 ? 26 : 60));
     else armyCap = minutes < rampStart ? 4 : (minutes < rampStart + 2.5f ? 9 : (minutes < rampStart + 5 ? 16 : (pl.difficulty == 0 ? 24 : 40)));
     if (smart) armyCap = (int)(armyCap * style.army + 0.5f);
-    if (pro && pl.difficulty >= 1) armyCap += (int)clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f);   // surplus credits become soldiers, not a bank balance
+    if (on(FEAT_MACRO) && pl.difficulty >= 1) armyCap += (int)clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f);   // surplus credits become soldiers, not a bank balance
     int queuedArmy = 0;
     for (auto* b : barracks) queuedArmy += (int)b->queue.size();
     for (auto* f : factories) queuedArmy += (int)f->queue.size();
@@ -751,14 +854,24 @@ void AiPlayer::think() {
             }
         }
         bool overwhelming = armyValue > enemyArmyValue * 1.6f + 1500 && armyCount >= 6;
-        bool eligible = armyValue >= waveThreshold || (overwhelming && minutes > 6);
+        bool eligible = armyValue >= waveThreshold * (on(FEAT_LAUNCH) ? 0.7f : 1.0f) || (overwhelming && minutes > 6);
         bool waveModel = useBrain && ablate() != 1;
         if (S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
             Entity* tgt = pickAttackTarget();
             float defense = tgt ? enemyStrengthNear(tgt->pos, 11) : 0;
             float x[WAVE_F]; Brain::waveFeatures(armyValue, defense, enemyArmyValue, minutes, armyCount, x);
             bool go = true;
-            if (tgt) {
+            float Rt = 0;
+            if (tgt && on(FEAT_LAUNCH)) {
+                // attack when the estimate says the army outguns what waits for it (the learned model calibrates how much margin that takes)
+                Rt = assaultRatio(army, tgt->pos, 11, false);
+                float Ra = assaultRatio(army, tgt->pos, 11, true);
+                Brain::waveFeaturesR(Rt, Ra, minutes, armyCount, x);
+                float p = g_brain.waveProb(x);
+                bool explore = useBrain && g_brain.learning && Rt > 0.8f && rng.f() < 0.12f;
+                go = explore || (useBrain ? p >= 0.5f : Rt >= 1.35f) || (armyCount >= armyCap && Rt >= 1.0f);
+                if (aiDebug() && !go && (int)S.time % 30 == 0) fprintf(stderr, "[ai%d t=%.0f] holding: R=%.2f (all %.2f) p=%.2f\n", player, S.time, Rt, Ra, p);
+            } else if (tgt) {
                 if (waveModel) {
                     float p = g_brain.waveProb(x);
                     float thr = 0.45f;   // the model can only hold a wave back, never launch a smaller one
