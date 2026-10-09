@@ -281,23 +281,6 @@ float AiPlayer::assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float r
     return Force::ratio(A, B) / 1.08f;
 }
 
-// The same for a base under attack: everything of ours that can answer near 'at' (the fighters anywhere count a little less the farther
-// off they stand, structures in reach count in full) against the enemy fighters within 'radiusTiles' of it.
-float AiPlayer::defenceRatio(Vec2 at, float radiusTiles) {
-    Sim& S = g_sim;
-    Force A, B;
-    for (auto& e : S.ents) {
-        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0) continue;
-        float d = dist(e.pos, at) / TILE;
-        if (e.owner == player) {
-            if (e.isBuilding()) { if (d <= radiusTiles + 6) A.add(e, 1.0f); }
-            else if (e.isUnit() && !e.isAir()) A.add(e, d <= radiusTiles ? 1.0f : (d <= 30 ? 0.6f : 0.25f));
-            else if (e.isUnit()) A.add(e, 0.5f);
-        } else if (S.enemies(player, e.owner) && e.isUnit() && d <= radiusTiles) B.add(e, 1.0f);
-    }
-    return Force::ratio(A, B);
-}
-
 // Feed the outcome of a finished wave back into the model: did it destroy at least as much as it lost?
 void AiPlayer::endWave(float remainingValue) {
     if (!waveHasSample) return;
@@ -484,6 +467,8 @@ void AiPlayer::think() {
     // ---------- economy
     int hubs = (int)supplyHubs.size();
     int wantHarv = pl.brutal() ? std::min(8, hubs * 4) : std::min(6, hubs * 3);
+    // a hauler pays for itself in about half a minute and the piles are vast: a smart commander keeps a bigger fleet on the road
+    if (on(FEAT_ECON) && pl.difficulty >= 1) wantHarv = std::min(pl.brutal() ? 14 : 12, hubs * (pl.brutal() ? 7 : 6));
     int queuedHarv = 0;
     for (auto* h : supplyHubs) for (int t : h->queue) if (UNITS[t].role == UR_HARVESTER) queuedHarv++;
     if (harvesters + queuedHarv < wantHarv) {

@@ -5,8 +5,8 @@
 
 // Features of the pro commander, each switchable on its own so --evalai can measure what a single one is worth (ONEHOUR_BASEMASK)
 // (the estimate-based retreat was tried and measured no better than the cost-based one)
-enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_DEFENSE = 8, FEAT_SCOUT = 16, FEAT_RAID = 32, FEAT_COMP = 64, FEAT_ALL = 0xFFFF,
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP };   // what ships
+enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALL = 0xFFFF,
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON };   // what ships
 
 struct AiPlayer {
     int player = -1;
@@ -55,7 +55,6 @@ private:
     int chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAir);
     Entity* pickAttackTarget();
     float assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy);
-    float defenceRatio(Vec2 at, float radiusTiles);
     float enemyStrengthNear(Vec2 p, float radiusTiles);
     Entity* idleDozer();
     void managePower();
