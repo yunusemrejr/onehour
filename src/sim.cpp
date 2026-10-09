@@ -1846,6 +1846,36 @@ bool Sim::autonomy(Entity& e) {
     const UnitType& ut = e.ut();
     if (e.fall > 0 || e.disabledUntil > time || e.owner < 0) return false;
     if (!players[e.owner].isAI && dodgeDanger(e)) return true;
+    // a hauler at work keeps out of the way of a raider: an enemy gun closing on its pile, with no friendly fighters near enough to see it off,
+    // sends it away from the threat (the way it leaves is toward the depot) until the danger has passed; it goes back to the pile afterwards
+    if (ut.role == UR_HARVESTER && e.order == O_HARVEST && players[e.owner].haulFlee && time > e.evadeUntil) {
+        Entity* raider = nullptr; float rd = 6.5f * TILE; int guards = 0;
+        forEachNear(e.pos, 8.0f * TILE, [&](Entity& f) {
+            if (f.kind == EK_RESOURCE || f.owner < 0 || !f.isUnit() || f.ut().role != UR_COMBAT || f.weapon() < 0 || f.fall > 0) return;
+            if (!enemies(e.owner, f.owner)) { if (!f.isAir()) guards++; return; }
+            if (!canTarget(f, e)) return;
+            float d = dist(f.pos, e.pos); if (d < rd) { rd = d; raider = &f; }
+        });
+        if (raider && guards < 2 && !inFallout(e.pos)) {
+            Entity* hub = findSupplyBuilding(e);
+            // eight ways out: the one that ends farthest from the raider, inside the map and not far from the depot (no running into a corner)
+            Vec2 dest = e.pos; float best = -1e18f;
+            for (int k = 0; k < 8; k++) {
+                float a = k * 0.7854f;
+                Vec2 c = e.pos + Vec2(std::cos(a), std::sin(a)) * (9.0f * TILE);
+                if (c.x < 3 * TILE || c.y < 3 * TILE || c.x > WORLD_W - 3 * TILE || c.y > WORLD_H - 3 * TILE) continue;
+                c = g_map.nearestFree(c, 3);
+                float sc = dist(c, raider->pos) / TILE - (hub ? dist(c, hub->pos) / TILE * 0.35f : 0.0f);
+                if (sc > best) { best = sc; dest = c; }
+            }
+            if (best < -1e17f) dest = e.pos + (e.pos - raider->pos).norm() * (6.0f * TILE);
+            e.resumeOrder = O_HARVEST; e.resumePost = e.postOrder; e.resumeTarget = e.target;
+            Ref keep = e.targetEnt;
+            moveAside(e, dest, 4.0f);
+            e.targetEnt = keep;
+            return true;
+        }
+    }
     bool onOwn = e.order == O_IDLE || e.order == O_GUARDPOS || e.order == O_GUARDAREA || ((e.order == O_ATTACK || e.order == O_MOVE) && (e.autoTask || e.leashed));
     if (!onOwn) return false;
     bool combat = ut.role == UR_COMBAT && ut.weapon >= 0;

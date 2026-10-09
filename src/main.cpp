@@ -1013,6 +1013,50 @@ static bool allyTest(u64 seed) {
     return true;
 }
 
+// A hauler at work keeps clear of a raider: an enemy tank sent at its pile finds nothing to shoot (the hauler leaves toward the depot) and the hauler goes
+// back to work once the tank is gone; with the behaviour switched off the tank kills it.
+static bool haulTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "haultest: %s\n", m); return false; };
+    bool survived[2] = { false, false }; int delivered[2] = { 0, 0 };
+    for (int mode = 0; mode < 2; mode++) {   // 0 = hauler avoids raiders, 1 = switched off
+        Faction fac[2] = { F_CYBER, F_CLANKER };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed);
+        g_sim.players[0].haulFlee = mode == 0;
+        std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
+        Entity* pile = nullptr; float bd = 1e18f;
+        for (auto& e : g_sim.ents) if (e.alive && e.kind == EK_RESOURCE) { float d = dist2(e.pos, g_sim.players[0].basePos); if (d < bd) { bd = d; pile = &e; } }
+        if (!pile) return fail("no supply pile");
+        Vec2 pp = pile->pos; Ref pr = g_sim.refOf(*pile);
+        int hubType = firstBuildOf(F_CYBER) + BR_SUPPLY;
+        bool placed = false;
+        for (int r = 3; r < 14 && !placed; r++) for (int dy = -r; dy <= r && !placed; dy++) for (int dx = -r; dx <= r && !placed; dx++) {
+            if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+            int tx = tileOf(pp.x) + dx, ty = tileOf(pp.y) + dy;
+            if (g_sim.canPlace(0, hubType, tx, ty)) { g_sim.placeBuilding(hubType, 0, tx, ty, true); placed = true; }
+        }
+        if (!placed) return fail("could not place a depot");
+        Ref h = g_sim.spawnUnit(U_C_HARV, 0, g_map.nearestFree(pp + Vec2(TILE, TILE), 4));
+        g_sim.cmdHarvest({h}, pr);
+        Vec2 hubPos; for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0 && e.bt().role == BR_SUPPLY) hubPos = e.pos;
+        Vec2 away = (pp - hubPos).norm();   // the raider sits on the far side of the pile from the depot, in reach of the pile only
+        Ref tank = g_sim.spawnUnit(firstUnitOf(F_CLANKER) + 5, 1, g_map.nearestFree(pp + away * (5 * TILE), 6));
+        for (int t = 0; t < 70 * SIM_HZ; t++) {
+            g_sim.step(); g_sim.events.clear();
+            if (getenv("ONEHOUR_TESTDBG") && t % (2 * SIM_HZ) == 0 && t < 70 * SIM_HZ) { Entity* hh = g_sim.get(h); Entity* tk = g_sim.get(tank); printf("  mode %d t=%2ds hauler %s hp %.0f order %d cargo %d pos %.0f,%.0f | tank %s hp %.0f order %d pos %.0f,%.0f\n", mode, t / SIM_HZ, hh ? "alive" : "dead", hh ? hh->hp : 0.0f, hh ? (int)hh->order : -1, hh ? hh->cargo : 0, hh ? hh->pos.x : 0.0f, hh ? hh->pos.y : 0.0f, tk ? "alive" : "dead", tk ? tk->hp : 0.0f, tk ? (int)tk->order : -1, tk ? tk->pos.x : 0.0f, tk ? tk->pos.y : 0.0f); }
+            if (t == 25 * SIM_HZ) { Entity* tk = g_sim.get(tank); if (tk) g_sim.destroy(*tk, false); survived[mode] = g_sim.get(h) != nullptr; }
+        }
+        Entity* hh = g_sim.get(h);
+        delivered[mode] = g_sim.players[0].harvested;
+        if (mode == 0 && !hh) return fail("the hauler died after the raider was gone");
+    }
+    printf("haultest: hauler alive when the raider was removed: %d avoiding, %d switched off; credits delivered afterwards: %d / %d\n", (int)survived[0], (int)survived[1], delivered[0], delivered[1]);
+    if (!survived[0]) return fail("the hauler did not get away from the raider");
+    if (survived[1]) return fail("the raider never caught the hauler with the behaviour off (the test proves nothing)");
+    if (delivered[0] < 300) return fail("the hauler did not go back to work after the raider was gone");
+    return true;
+}
+
 static bool aidTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "aidtest: %s\n", m); return false; };
     for (int fi = 0; fi < 2; fi++) {
@@ -2258,6 +2302,7 @@ int main(int argc, char** argv) {
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
         else if (a == "--droptest") { g_map.generate(); return dropTest(seed) ? 0 : 1; }
+        else if (a == "--haultest") { g_map.generate(); return haulTest(seed) ? 0 : 1; }
         else if (a == "--allytest") { g_map.generate(); return allyTest(seed) ? 0 : 1; }
         else if (a == "--aidtest") { g_map.generate(); return aidTest(seed) ? 0 : 1; }
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }

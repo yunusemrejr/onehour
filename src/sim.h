@@ -148,6 +148,7 @@ struct Player {
     float upgProgress[UPG_COUNT] = {};  // 0..1
     float lastNotice = -100, lastMine = -100;   // throttles for alerts (reset every game)
     bool wasLowPower = false;
+    bool haulFlee = true;       // haulers keep clear of raiders: an unescorted enemy gun closing on the pile sends them away until it has passed
     Vec2 basePos;
     int startIdx = 0;
     // stats
