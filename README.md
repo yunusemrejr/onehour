@@ -227,7 +227,7 @@ Beyond the learned parts the commander plays tactically:
 `--evalai N` plays the current commander against the previous generation of the AI (over 72 games it loses none at Normal, Hard or Brutal: 55, 66 and 66 wins, the rest unresolved after 1500 s); `--evaldiff N` with
 `ONEHOUR_DA` / `ONEHOUR_DB` checks that the difficulty ladder holds (Normal and Hard beat Easy 16-0, Hard beats Normal 10-0, Brutal beats Hard 16-0 over 16 games each). Every part of the new commander has its own switch (`AiFeat` in `src/ai.h`),
 so each was measured alone: `ONEHOUR_BASEMASK` / `ONEHOUR_NEWMASK` (bit sets) make the two sides of `--evalai` play with different feature sets, `ONEHOUR_BRAIN2=path|prior` gives the baseline its own brain (what is training worth?) and
-`ONEHOUR_EVALGAME=i` replays game *i* of a series and prints the final position. Ideas that did not beat the baseline over about a hundred games each were taken out again: staging a wave outside the target's defences (it lost 30-47: the whole defending army
+`ONEHOUR_EVALGAME=i` replays game *i* of a series and prints the final position, `ONEHOUR_EVALTEAMS=1` plays two new commanders against two previous ones (2v2: 35-0, 47-0 and 42-0 over 48 games at Normal, Hard and Brutal), `ONEHOUR_OLDDIFF=d` sets the baseline's difficulty. Ideas that did not beat the baseline over about a hundred games each were taken out again: staging a wave outside the target's defences (it lost 30-47: the whole defending army
 reacts to the muster point), judging a running wave by the estimate instead of by what it cost, choosing the target by the estimate, falling back under the turrets when outgunned, focus-fire target scoring, matching a column's speed to its slowest member, and an early third supply hub.
 
 ## Engineering notes

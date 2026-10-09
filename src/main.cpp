@@ -225,7 +225,14 @@ static int evalAi(int games, u64 seed, int difficulty) {
         if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK") || getenv("ONEHOUR_BRAIN2")) { pro[0] = pro[1] = true; }
         static const int oldDiff = getenv("ONEHOUR_OLDDIFF") ? atoi(getenv("ONEHOUR_OLDDIFF")) : difficulty;   // the baseline may play at another difficulty
         int diffs[4] = { flip ? oldDiff : difficulty, flip ? difficulty : oldDiff, difficulty, difficulty };
-        int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, diffs, pro);
+        static const bool teams2v2 = getenv("ONEHOUR_EVALTEAMS") != nullptr;   // 2 against 2: two new commanders (armies 0 and 2) against two previous ones (1 and 3)
+        int w;
+        if (teams2v2) {
+            Faction fac4[4] = { fac[0], fac[1], fac[1], fac[0] }; bool pro4[4] = { !flip, flip, !flip, flip }; int team4[4] = { 0, 1, 0, 1 };
+            for (int p = 0; p < 4; p++) { g_ai.featMask[p] = (pro4[p] ? newMask : baseMask); g_ai.brainOverride[p] = nullptr; }
+            w = playAiGame(seed + i * 31, 4, fac4, brainOn, difficulty, 1500, team4, nullptr, nullptr, pro4);
+        } else
+        w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, diffs, pro);
         int newTeam = flip ? 1 : 0;
         const char* res;
         if (w < 0) { draws++; res = "unresolved"; }
