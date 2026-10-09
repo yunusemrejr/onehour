@@ -13,7 +13,7 @@ void AiManager::init(u64 seed) {
         bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
         ais[p].useBrain = ub;
-        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].init(p, seed + p * 7919); }
+        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].init(p, seed + p * 7919); }
     }
 }
 void AiManager::update() {
@@ -252,6 +252,14 @@ void AiPlayer::think() {
     int base = firstBuildOf(pl.faction);
     int ubase = firstUnitOf(pl.faction);
     float minutes = S.time / 60.0f;
+    // a commander with money in the bank does not wait for the clock: the timed gates for tech, airfields, upgrades and nukes run on 'effective' minutes
+    float tm = minutes;
+    if (pro && pl.difficulty >= 1) tm += clampf((pl.money - 4000.0f) / 2500.0f, 0.0f, 6.0f);
+    if (pro && S.time - incomeT >= 10.0f) {   // credits per second coming in (hauled supplies and income structures)
+        float inc = (float)(pl.harvested + pl.mined), r = (inc - incomeAt) / (S.time - incomeT);
+        incomeRate = incomeRate <= 0 ? r : 0.6f * incomeRate + 0.4f * r;
+        incomeAt = inc; incomeT = S.time;
+    }
 
     // ---------- survey
     int dozers = 0, harvesters = 0, armyCount = 0; float armyValue = 0;
@@ -379,6 +387,7 @@ void AiPlayer::think() {
         for (auto* h : supplyHubs) if (h->constructed && h->queue.empty()) { S.cmdTrain(S.refOf(*h), ubase + 1); break; }
     }
     int wantDozers = pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2);
+    if (pro && pl.difficulty >= 1) wantDozers += (pl.money > 6000 ? 1 : 0) + (pl.money > 14000 && pl.difficulty >= 2 ? 1 : 0);   // a rich army builds on several fronts at once
     int queuedDozer = 0;
     if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER) queuedDozer++;
     if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200)) S.cmdTrain(S.refOf(*hq), ubase + 0);
@@ -425,7 +434,7 @@ void AiPlayer::think() {
         if (!built && factories.empty()) built = tryBuild(base + BR_FACTORY, pl.basePos);
         if (!built) { int before = S.countRole(player, BR_POWER, false); managePower(); built = S.countRole(player, BR_POWER, false) != before; }
         // income structures pay for themselves in well under a minute: a smart commander raises them as soon as it has power and a first army
-        if (!built && smart && incomes < style.incomes && minutes > style.incomeFrom && powerPlants > 0 && !barracks.empty() && !factories.empty()) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
+        if (!built && smart && incomes < style.incomes && tm > style.incomeFrom && powerPlants > 0 && !barracks.empty() && !factories.empty()) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
         // defenses scale with time and difficulty
         int wantTurrets = std::min(pl.difficulty >= 3 ? 9 : (pl.difficulty == 2 ? 5 : 3), (int)(minutes / (pl.difficulty >= 3 ? 1.5f : (pl.difficulty == 2 ? 2.0f : 3.0f))));
         if (smart) wantTurrets = (int)(wantTurrets * style.def + 0.5f);
@@ -450,17 +459,33 @@ void AiPlayer::think() {
             built = tryBuild(base + kind, spot, 12);
             if (built) nextTurretKind++;
         }
-        if (!built && techs == 0 && minutes > (pl.difficulty >= 2 ? 4.0f : 6.0f) * style.tech && pl.money > 2600) built = tryBuild(base + BR_TECH, pl.basePos);
-        if (!built && airfields.empty() && minutes > (pl.difficulty >= 2 ? 6.0f : 9.0f) * style.air && pl.money > 2000) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
-        if (!built && factories.size() < 2 && minutes > (pl.brutal() ? 4 : 7) && pl.money > (pl.brutal() ? 3000 : 4500)) built = tryBuild(base + BR_FACTORY, pl.basePos);
+        if (!built && techs == 0 && tm > (pl.difficulty >= 2 ? 4.0f : 6.0f) * style.tech && pl.money > 2600) built = tryBuild(base + BR_TECH, pl.basePos);
+        if (!built && airfields.empty() && tm > (pl.difficulty >= 2 ? 6.0f : 9.0f) * style.air && pl.money > 2000) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
+        if (!built && factories.size() < 2 && tm > (pl.brutal() ? 4 : 7) && pl.money > (pl.brutal() ? 3000 : 4500)) built = tryBuild(base + BR_FACTORY, pl.basePos);
         // a smart commander with money piling up spends it on more production and a second airfield for the air doctrine
-        if (!built && smart && !threat && pl.money > (pl.brutal() ? 4500 : 6500) && minutes > 5) {
+        if (!built && smart && !pro && !threat && pl.money > (pl.brutal() ? 4500 : 6500) && minutes > 5) {
             if (factories.size() < (pl.difficulty >= 3 ? 4u : (pl.difficulty == 2 ? 3u : 2u))) built = tryBuild(base + BR_FACTORY, pl.basePos);
             else if (barracks.size() < 3) built = tryBuild(base + BR_BARRACKS, pl.basePos);
             else if (doctrine == DOC_AIR && airfields.size() < 2 && techs > 0) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
         }
+        // production capacity follows the income: a bank that keeps growing means too few factories and barracks to turn credits into fighters
+        // (and it is not put off by a fight at the door: the new buildings go up while the defenders hold)
+        if (!built && pro && pl.difficulty >= 1 && minutes > 1.2f && powerPlants > 0) {
+            float prodRate = 0;
+            for (auto* f : factories) prodRate += f->constructed ? 75.0f : 40.0f;
+            for (auto* b : barracks) prodRate += b->constructed ? 43.0f : 20.0f;
+            prodRate *= pl.buildMul();
+            static const unsigned facCap[4] = { 2, 3, 5, 7 }, barCap[4] = { 2, 3, 4, 5 };
+            bool starved = pl.money > 7000 || (pl.money > 3000 && prodRate < incomeRate * 0.9f);
+            if (starved) {
+                bool facFirst = factories.size() * 2 <= barracks.size() * 3 + 2;
+                if (factories.size() < facCap[pl.difficulty] && (facFirst || barracks.size() >= barCap[pl.difficulty])) built = tryBuild(base + BR_FACTORY, pl.basePos - enemyDir * 40);
+                if (!built && barracks.size() < barCap[pl.difficulty]) built = tryBuild(base + BR_BARRACKS, pl.basePos - enemyDir * 40);
+                if (!built && doctrine == DOC_AIR && airfields.size() < 2 && techs > 0 && pl.money > 5000) built = tryBuild(base + BR_AIRFIELD, pl.basePos);
+            }
+        }
         // expansion: a second hub near a farther pile once the closest piles thin out
-        if (!built && hubs < 2 && minutes > 8 && pl.money > 3000) {
+        if (!built && hubs < 2 && tm > 8 && pl.money > 3000) {
             Entity* pile = nullptr; float bd = 1e18f;
             for (auto& e : S.ents) {
                 if (!e.alive || e.kind != EK_RESOURCE) continue;
@@ -477,9 +502,9 @@ void AiPlayer::think() {
             }
         }
         // steady income: oil wells / bitcoin datacenters, then nuke ramps once the economy is comfortable
-        if (!built && incomes < (pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2)) && minutes > (pl.difficulty >= 2 ? 3.0f : 5.0f) && pl.money > 2200 && powerPlants > 0) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
-        if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 3 ? 7.0f : (pl.difficulty == 2 ? 9.0f : 13.0f)) * style.nuke && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
-        if (!built && barracks.size() < 2 && minutes > 10 && pl.money > 3500) built = tryBuild(base + BR_BARRACKS, pl.basePos);
+        if (!built && incomes < (pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2)) && tm > (pl.difficulty >= 2 ? 3.0f : 5.0f) && pl.money > 2200 && powerPlants > 0) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
+        if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && tm > (pl.difficulty >= 3 ? 7.0f : (pl.difficulty == 2 ? 9.0f : 13.0f)) * style.nuke && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
+        if (!built && barracks.size() < 2 && tm > 10 && pl.money > 3500) built = tryBuild(base + BR_BARRACKS, pl.basePos);
         // repair
         if (!built && !damaged.empty() && dz->order != O_BUILD) {   // (a dozer already mending something keeps at it; the job picker spreads the others)
             Entity* job = S.repairJob(*dz);
@@ -499,7 +524,7 @@ void AiPlayer::think() {
     if (!hq && dozers > 0 && S.countRole(player, BR_HQ, false) == 0) reserve = std::max(reserve, BUILDS[base + BR_HQ].cost + 200);   // bank the price of a new Command Core
     if (harvesters + queuedHarv < 2 && hubs > 0) reserve = std::max(reserve, 900);
     // save up for a nuke ramp once the tech structure stands
-    if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && minutes > (pl.difficulty >= 3 ? 6.5f : (pl.difficulty == 2 ? 8.0f : 12.0f)) && !threat) reserve = std::max(reserve, 5300);
+    if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && tm > (pl.difficulty >= 3 ? 6.5f : (pl.difficulty == 2 ? 8.0f : 12.0f)) && !threat) reserve = std::max(reserve, 5300);
     // a smart commander banks the price of the next income structure before spending on units
     if (smart && !threat && incomes < style.incomes && minutes > style.incomeFrom && powerPlants > 0 && !barracks.empty() && !factories.empty() && dz) reserve = std::max(reserve, BUILDS[base + BR_INCOME].cost + 250);
     // early game: economy and structures first, a modest guard force, then ramp
@@ -509,6 +534,7 @@ void AiPlayer::think() {
     else if (pl.difficulty >= 2) armyCap = minutes < rampStart ? 6 : (minutes < rampStart + 2.5f ? 14 : (minutes < rampStart + 5 ? 26 : 60));
     else armyCap = minutes < rampStart ? 4 : (minutes < rampStart + 2.5f ? 9 : (minutes < rampStart + 5 ? 16 : (pl.difficulty == 0 ? 24 : 40)));
     if (smart) armyCap = (int)(armyCap * style.army + 0.5f);
+    if (pro && pl.difficulty >= 1) armyCap += (int)clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f);   // surplus credits become soldiers, not a bank balance
     int queuedArmy = 0;
     for (auto* b : barracks) queuedArmy += (int)b->queue.size();
     for (auto* f : factories) queuedArmy += (int)f->queue.size();
@@ -530,7 +556,7 @@ void AiPlayer::think() {
     for (auto* f : factories) S.cmdSetRally(S.refOf(*f), rally);
 
     // ---------- tech structure: the Advanced Program, a map scan when nothing is known about the enemy, and the strike
-    if (techs > 0 && S.programAvailable(player) && minutes > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
+    if (techs > 0 && S.programAvailable(player) && tm > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
     // structure upgrades once the economy carries them: self-repair first, then the roof guns, then the rugged armour (easy skips the last two)
     if (techs > 0) {
         static const int order[UPG_COUNT] = { UPG_REPAIR, UPG_GUNS, UPG_RUGGED };
@@ -541,7 +567,7 @@ void AiPlayer::think() {
             if (pl.difficulty == 0 && u != UPG_REPAIR) continue;
             static const int upgMask = getenv("ONEHOUR_UPGMASK") ? atoi(getenv("ONEHOUR_UPGMASK")) : -1;   // (debug: bit u allows upgrade u)
             if (!(upgMask & (1 << u))) continue;
-            if (!S.upgradeAvailable(player, u) || minutes < from[u] * pace) continue;
+            if (!S.upgradeAvailable(player, u) || tm < from[u] * pace) continue;
             if (pl.money > UPGRADES[pl.faction][u].cost + (threat ? 3000 : 1500)) S.cmdUpgrade(player, u);
             break;   // one at a time, in order
         }

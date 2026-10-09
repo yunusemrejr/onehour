@@ -129,14 +129,14 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
 
 
 // Plays one AI-only game headless. Returns the winning team (or -1 when nobody won within maxSecs).
-static int playAiGame(u64 seed, int players, const Faction* fac, const bool* brain, int difficulty, int maxSecs, const int* teamIn = nullptr, const bool* smart = nullptr, const int* diffIn = nullptr) {
+static int playAiGame(u64 seed, int players, const Faction* fac, const bool* brain, int difficulty, int maxSecs, const int* teamIn = nullptr, const bool* smart = nullptr, const int* diffIn = nullptr, const bool* pro = nullptr) {
     bool ai[4] = { true, true, true, true };
     int diff[4] = { difficulty, difficulty, difficulty, difficulty };
     int team[4] = { 0, 1, 2, 3 };
     if (teamIn) for (int i = 0; i < 4; i++) team[i] = teamIn[i];
     if (diffIn) for (int i = 0; i < 4; i++) diff[i] = diffIn[i];
     g_sim.init(players, fac, ai, diff, team, seed);
-    for (int p = 0; p < 4; p++) { g_ai.brainEnabled[p] = brain[p]; g_ai.smartEnabled[p] = smart ? smart[p] : true; }
+    for (int p = 0; p < 4; p++) { g_ai.brainEnabled[p] = brain[p]; g_ai.smartEnabled[p] = smart ? smart[p] : true; g_ai.proEnabled[p] = pro ? pro[p] : true; }
     g_ai.init(seed);
     for (int t = 0; t < maxSecs * SIM_HZ && !g_sim.gameOver; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
     if (g_sim.gameOver) g_ai.finish(g_sim.winnerTeam);
@@ -209,8 +209,11 @@ static int evalAi(int games, u64 seed, int difficulty) {
         Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
         bool flip = (i >> 2) & 1;
         bool brainOn[4] = { true, true, true, true };
-        bool smart[4] = { !flip, flip, true, true };
-        int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart);
+        // the new commander (pro) against the previous generation (smart but not pro); ONEHOUR_EVALOLD=legacy plays the oldest one instead
+        static const bool legacy = getenv("ONEHOUR_EVALOLD") && getenv("ONEHOUR_EVALOLD")[0] == 'l';
+        bool smart[4] = { legacy ? !flip : true, legacy ? flip : true, true, true };
+        bool pro[4] = { !flip, flip, true, true };
+        int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, nullptr, pro);
         int newTeam = flip ? 1 : 0;
         const char* res;
         if (w < 0) { draws++; res = "unresolved"; }
