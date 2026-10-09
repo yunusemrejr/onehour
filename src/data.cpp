@@ -100,7 +100,7 @@ const BuildType BUILDS[B_COUNT] = {
 };
 
 const PowerType POWERS[F_COUNT] = {
-    { "EMP Strike",  "Disables enemy vehicles and structures in the area for 8s", 180.0f, 4.5f },
+    { "EMP Strike",  "Disables enemy vehicles and structures (tech included) for 8s and downs aircraft in the area", 180.0f, 4.5f },
     { "Shell Storm", "Rains artillery shells on the area for 4s",                 180.0f, 3.5f },
 };
 const ScanType SCANS[F_COUNT] = {

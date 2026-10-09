@@ -297,6 +297,7 @@ struct Sim {
     bool canAfford(int player, int cost) const { return players[player].money >= cost; }
     bool hasBuilding(int player, int buildType) const;
     bool hasRole(int player, BuildRole role) const;
+    bool techOnline(int player) const;   // a tech structure stands and no EMP has switched it off
     bool prereqMet(int player, int req) const { return req < 0 || hasBuilding(player, req); }
     bool unitAvailable(int player, int unitType) const;
     bool buildAvailable(int player, int buildType) const;

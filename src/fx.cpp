@@ -249,7 +249,7 @@ void Game::drawGroundFx() {
         if (f.type == FX_RUBBLE) {
             if (!onScreen(f.a.x, f.a.y, 140)) continue;
             int w = (int)f.b.x, h = (int)f.b.y;
-            int idx = w == 1 ? 0 : (w == 2 ? 1 : (w == 3 ? (h == 2 ? 2 : 3) : (w == 4 ? 4 : 5)));
+            int idx = w == 1 ? 0 : (w == 2 ? 1 : (w == 3 ? (h == 2 ? 2 : 3) : (w == 4 ? (h == 4 ? 5 : 4) : 6)));
             Vec2 s = worldToScreen(f.a);
             u8 al = (u8)(255 * clampf((1 - k) * 8.0f, 0, 1));
             g.draw(g.rubble[idx], s.x, s.y, 0, 1, rgb(255, 255, 255), al);

@@ -214,6 +214,10 @@ bool Sim::hasBuilding(int player, int buildType) const {
     for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.type == buildType && e.constructed) return true;
     return false;
 }
+bool Sim::techOnline(int player) const {   // a standing tech structure that is not switched off by an EMP strike
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.bt().role == BR_TECH && e.constructed && e.disabledUntil <= time) return true;
+    return false;
+}
 bool Sim::hasRole(int player, BuildRole role) const {
     for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.bt().role == role && e.constructed) return true;
     return false;
@@ -520,7 +524,7 @@ bool Sim::cmdPower(int player, Vec2 pos, bool force) {
     static int noPower = getenv("ONEHOUR_NOPOWER") ? 1 : 0;
     if (noPower) return false;
     if (time < pl.powerReady) return false;
-    if (!hasRole(player, BR_TECH)) return false;
+    if (!techOnline(player)) return false;
     const PowerType& pw = POWERS[pl.faction];
     pl.powerReady = time + pw.cooldown;
     if (pl.faction == F_CYBER) {
@@ -547,7 +551,7 @@ bool Sim::inFallout(Vec2 p, float margin) const {
 int Sim::dropsReady(int player) const {
     if (player < 0 || player >= numPlayers || time < players[player].dropReady) return 0;
     int n = 0;
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.dropTimer) n++;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.dropTimer) n++;
     return n;
 }
 float Sim::dropWait(int player) const {
@@ -609,7 +613,7 @@ bool Sim::cmdParadrop(int player, Vec2 pos, bool attackOn) {
     Player& pl = players[player];
     if (!pl.alive || time < pl.dropReady) return false;
     Entity* tech = nullptr;   // like the nuke ramps: every Data Center / Arms Lab has its own cooldown, so more of them means more drops
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.dropTimer) { tech = &e; break; }
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.dropTimer) { tech = &e; break; }
     if (!tech) return false;
     const DropType& dt = DROPS[pl.faction];
     pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
@@ -730,7 +734,7 @@ void Sim::updateAirlifts() {
 int Sim::aidsReady(int player) const {
     if (player < 0 || player >= numPlayers || players[player].isAI || !players[player].alive) return 0;
     int n = 0;
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.aidTimer) n++;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.aidTimer) n++;
     return n;
 }
 float Sim::aidWait(int player) const {
@@ -763,7 +767,7 @@ bool Sim::cmdAidDrop(int player, Vec2 pos) {
     Player& pl = players[player];
     if (pl.isAI || !pl.alive) return false;   // only a human player has it
     Entity* tech = nullptr;
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && time >= e.aidTimer) { tech = &e; break; }
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.aidTimer) { tech = &e; break; }
     if (!tech) return false;
     pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
     int who[MAX_PLAYERS];
@@ -965,7 +969,7 @@ void Sim::updateFallout() {
 
 bool Sim::programAvailable(int player) const {
     const Player& pl = players[player];
-    return !pl.advTech && !pl.researching && hasRole(player, BR_TECH);
+    return !pl.advTech && !pl.researching && techOnline(player);
 }
 
 bool Sim::cmdResearch(int player) {
@@ -981,7 +985,7 @@ bool Sim::cmdResearch(int player) {
 
 bool Sim::cmdScan(int player) {
     Player& pl = players[player];
-    if (time < pl.scanReady || !hasRole(player, BR_TECH)) return false;
+    if (time < pl.scanReady || !techOnline(player)) return false;
     const ScanType& sc = SCANS[pl.faction];
     pl.scanReady = time + sc.cooldown;
     pl.revealUntil = time + sc.duration;
@@ -994,7 +998,7 @@ bool Sim::cmdScan(int player) {
 bool Sim::upgradeAvailable(int player, int upg) const {
     if (player < 0 || player >= numPlayers || upg < 0 || upg >= UPG_COUNT) return false;
     const Player& pl = players[player];
-    return !pl.upg[upg] && !pl.upgBusy[upg] && hasRole(player, BR_TECH);
+    return !pl.upg[upg] && !pl.upgBusy[upg] && techOnline(player);
 }
 
 bool Sim::cmdUpgrade(int player, int upg) {
@@ -1022,7 +1026,7 @@ void Sim::finishUpgrade(int p, int upg) {
 void Sim::updateResearch() {
     for (int p = 0; p < numPlayers; p++) {
         Player& pl = players[p];
-        if (!hasRole(p, BR_TECH)) continue;            // paused while the tech structure is down
+        if (!techOnline(p)) continue;                  // paused while the tech structure is down or switched off
         float rate = 5 * SIM_DT * (pl.lowPower() ? 0.5f : 1.0f) * pl.buildMul();   // called every 5th tick
         if (pl.researching) {
             pl.researchProgress += rate / PROGRAMS[pl.faction].time;
@@ -1291,7 +1295,7 @@ void Sim::splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref att
     float r = std::max(radiusTiles, 0.05f) * TILE;
     std::vector<Entity*> hits;
     forEachNear(at, r, [&](Entity& t) {
-        if (t.kind == EK_RESOURCE || !(enemies(owner, t.owner) || (forced && t.owner >= 0))) return;
+        if (t.kind == EK_RESOURCE || !(enemies(owner, t.owner) || (forced && t.owner >= 0)) || &t == get(attacker)) return;   // (a force-fired blast never hits the gun that fired it)
         if (t.isAir() && !w.air) return;
         if (!t.isAir() && !w.ground) return;
         if (t.isUnit() && t.ut().sniper) { const Entity* at = get(attacker); if (at && !(at->isUnit() && at->ut().kind != UK_INF)) return; }   // an infantry or structure blast cannot find a sniper
@@ -2318,7 +2322,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_RETURN: {
         Entity* s = findSupplyBuilding(e);
-        if (!s) { e.order = O_IDLE; break; }
+        if (!s) { e.path.clear(); break; }   // no depot standing: it waits with its load and delivers once a new one is built
         float d = distToEntity(e.pos, *s);
         if (d <= HARVEST_REACH) {
             e.path.clear();
@@ -2610,7 +2614,12 @@ void Sim::checkVictory() {
     // once every human player is out the match is lost, even if a computer-controlled ally still stands
     int humans = 0, humansAlive = 0;
     for (int p = 0; p < numPlayers; p++) if (!players[p].isAI) { humans++; if (players[p].alive) humansAlive++; }
-    if (humans > 0 && humansAlive == 0) { gameOver = true; winnerTeam = aliveTeam; }
+    if (humans > 0 && humansAlive == 0) {
+        gameOver = true; winnerTeam = aliveTeam;
+        // (the first army standing may be the human's own computer ally: the winner is whoever of the other teams still stands)
+        int humanTeam = players[humanPlayer].team;
+        for (int p = 0; p < numPlayers; p++) if (players[p].alive && players[p].team != humanTeam) { winnerTeam = players[p].team; break; }
+    }
 }
 
 // ------------------------------------------------------------ main step

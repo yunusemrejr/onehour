@@ -574,7 +574,7 @@ void terrainOverview(const Canvas& world, Canvas& out) {
     for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) {
         float r = 0, g = 0, b = 0;
         for (int j = 0; j < f; j += 2) for (int i = 0; i < f; i += 2) { Color c = Canvas::unpack(world.px[(size_t)(y * f + j) * world.w + x * f + i]); r += c.r; g += c.g; b += c.b; }
-        float k = 1.0f / ((f / 2) * (f / 2));
-        out.px[y * out.w + x] = Canvas::pack(Color{(u8)(r * k), (u8)(g * k), (u8)(b * k), 255});
+        float k = 1.0f / (float)(((f + 1) / 2) * ((f + 1) / 2));   // (the loops above take (f + 1) / 2 samples a side)
+        out.px[y * out.w + x] = Canvas::pack(Color{(u8)clampf(r * k, 0, 255), (u8)clampf(g * k, 0, 255), (u8)clampf(b * k, 0, 255), 255});
     }
 }

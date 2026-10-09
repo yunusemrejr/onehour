@@ -22,7 +22,6 @@ private:
     Voice voices[MAX_VOICES];
     Voice ambient;
     float lastPlay[SND_COUNT] = {};
-    int playsThisFrame[SND_COUNT] = {};
     float camX = 0, camY = 0; int vw = SCREEN_W, vh = SCREEN_H;
     u32 dev = 0;
     bool muted = false;

@@ -326,8 +326,8 @@ void Gfx::buildBuildings() {
         site[t] = fromCanvasSmooth(s, sz.cx, sz.cy); site[t].dscale = 1.0f / BART_K;
         if (BUILDS[t].role == BR_NUKE) { Canvas a(sz.w, sz.h); artArmed(a, t); armed[t] = fromCanvasSmooth(a, sz.cx, sz.cy); armed[t].dscale = 1.0f / BART_K; }
     }
-    static const int RW[6] = { 1, 2, 3, 3, 4, 5 }, RH[6] = { 1, 2, 2, 3, 3, 3 };
-    for (int i = 0; i < 6; i++) {
+    static const int RW[7] = { 1, 2, 3, 3, 4, 4, 5 }, RH[7] = { 1, 2, 2, 3, 3, 4, 3 };
+    for (int i = 0; i < 7; i++) {
         int dw = RW[i] * TILE + BART_PAD_L + BART_PAD_R, dh = RH[i] * TILE + BART_PAD_T + BART_PAD_B;
         Canvas c(dw * BART_K, dh * BART_K);
         artRubble(c, RW[i], RH[i], 3000u + i);

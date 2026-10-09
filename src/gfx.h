@@ -99,7 +99,7 @@ struct Gfx {
     Sprite buildingTeam[B_COUNT];   // white-on-clear owner marks, drawn over the structure with the owner's colour modulated in
     Sprite site[B_COUNT];
     Sprite armed[B_COUNT];          // the warhead over a nuke ramp (only the nuke ramps have one)
-    Sprite rubble[6];               // scorched ruins by footprint class
+    Sprite rubble[7];               // scorched ruins by footprint class
     Sprite prop[4];                 // live-rotated structure props: cyber dish, clanker radar, pump jack beam, fan
     Sprite pile[3];
     Sprite shadowSmall, shadowLarge, blob, disc;

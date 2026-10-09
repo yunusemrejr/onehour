@@ -106,7 +106,8 @@ void Audio::synthAll() {
       for (int i = 0; i < n; i++) { float k = i / (float)n; s.buf[i] *= 0.7f + 0.3f * std::sin(k * 6.2831853f * 2 + 1.0f); }
       int fade = AUDIO_RATE / 4;
       for (int i = 0; i < fade; i++) { float k = i / (float)fade; s.buf[i] = s.buf[i] * k + s.buf[n - fade + i] * (1 - k); }
-      s.normalize(0.11f); ambientBuf = s.buf; }
+      s.normalize(0.11f);
+      ambientBuf.assign(s.buf.begin(), s.buf.begin() + (n - fade)); }   // (the loop ends where the blended head began, so the wrap-around has no step)
 }
 
 // ------------------------------------------------------------ device
@@ -179,7 +180,7 @@ void Audio::play(Sound s, Vec2 pos, bool isUi, float gain) {
         gr = gain * att * (1 + pan * 0.5f) * 0.5f;
     }
     SDL_LockAudioDevice(dev);
-    // throttle: the same sound at most ~every 40ms, and no more than 3 starts within a short window
+    // throttle: the same sound at most every 40ms (the oldest voice is stolen when all are busy)
     if (clock - lastPlay[s] < 0.04f) { SDL_UnlockAudioDevice(dev); return; }
     lastPlay[s] = clock;
     int slot = -1; float oldest = 1e18f;

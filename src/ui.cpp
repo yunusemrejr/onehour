@@ -426,7 +426,7 @@ void Game::cmdSelection(int kind, int id) {
     }
     case BK_SELL: { Entity* b = selectedBuilding(); if (b) { g_sim.cmdSell(g_sim.refOf(*b)); selection.clear(); } break; }
     case BK_RALLY: rallyMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
-    case BK_POWER: if (g_sim.time >= pl.powerReady && g_sim.hasRole(g_sim.humanPlayer, BR_TECH)) { powerMode = true; placingType = -1; attackMoveMode = false; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_POWER: if (g_sim.time >= pl.powerReady && g_sim.techOnline(g_sim.humanPlayer)) { powerMode = true; placingType = -1; attackMoveMode = false; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_NUKE: if (g_sim.nukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_AID: if (g_sim.aidsReady(g_sim.humanPlayer) > 0) { cancelModes(); aidMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
