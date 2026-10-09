@@ -58,7 +58,7 @@ void AiManager::init(u64 seed) {
         bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
         ais[p].useBrain = ub;
-        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].feat = featMask[p]; ais[p].init(p, seed + p * 7919); }
+        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].brain = brainOverride[p] ? brainOverride[p] : &g_brain; ais[p].feat = featMask[p]; ais[p].init(p, seed + p * 7919); }
     }
 }
 void AiManager::update() {
@@ -68,11 +68,11 @@ void AiManager::update() {
 void AiManager::finish(int winnerTeam) {
     for (int p = 0; p < MAX_PLAYERS; p++) {
         AiPlayer& a = ais[p];
-        if (a.player < 0 || !a.smart || !a.useBrain || !g_brain.learning || g_sim.players[p].difficulty < 1) continue;
+        if (a.player < 0 || !a.smart || !a.useBrain || !a.brain->learning || g_sim.players[p].difficulty < 1) continue;
         bool won = g_sim.players[p].team == winnerTeam;
         float reward = won ? 1.0f : 0.1f * std::min(1.0f, g_sim.time / 900.0f);
-        g_brain.learnDoctrine(a.doctrine, reward);
-        if (aiDebug()) fprintf(stderr, "[ai%d] doctrine %s %s -> reward %.2f (q now %.2f over %d games)\n", p, DOCTRINE_NAME[a.doctrine], won ? "won" : "lost", reward, g_brain.docQ[a.doctrine], g_brain.docN[a.doctrine]);
+        a.brain->learnDoctrine(a.docCtx, a.doctrine, reward);
+        if (aiDebug()) fprintf(stderr, "[ai%d] doctrine %s (context %d) %s -> reward %.2f (q now %.2f over %d games)\n", p, DOCTRINE_NAME[a.doctrine], a.docCtx, won ? "won" : "lost", reward, a.brain->ctxQ[a.docCtx][a.doctrine], a.brain->ctxN[a.docCtx][a.doctrine]);
     }
 }
 
@@ -82,7 +82,11 @@ void AiPlayer::init(int p, u64 seed) {
     if (smart) {
         // opening doctrine: learned from earlier matches (easy commanders just play it straight)
         int d = g_sim.players[p].difficulty;
-        doctrine = (useBrain && d >= 1) ? g_brain.pickDoctrine(rng) : (int)DOC_BALANCED;
+        // who it faces: the nearest army of the other teams (a person or a computer, and its faction)
+        int foe = -1; float fd = 1e18f;
+        for (int q = 0; q < MAX_PLAYERS; q++) if (q != p && g_sim.players[q].active && g_sim.enemies(p, q)) { float dd = dist2(g_sim.players[q].basePos, g_sim.players[p].basePos); if (dd < fd) { fd = dd; foe = q; } }
+        docCtx = foe >= 0 ? doctrineContext(!g_sim.players[foe].isAI, (int)g_sim.players[foe].faction) : 0;
+        doctrine = (useBrain && d >= 1) ? brain->pickDoctrine(rng, docCtx) : (int)DOC_BALANCED;
         Style& st = style;
         st.incomes = d <= 0 ? 2 : (d == 1 ? 3 : 4);
         st.incomeFrom = d >= 2 ? 1.2f : (d == 1 ? 1.8f : 3.0f);
@@ -181,7 +185,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
     float x[UNIT_F]; Brain::unitFeatures(fi, fv, fa, x);
     float avgEff = 0; int nEff = 0;
     for (auto& c : cands) {
-        if (useBrain && ablate() != 2) { avgEff += g_brain.unitEff(c.type, x); nEff++; }
+        if (useBrain && ablate() != 2) { avgEff += brain->unitEff(c.type, x); nEff++; }
         else if (pl.spentOn[c.type] > 0) { avgEff += pl.valueDealt[c.type] / pl.spentOn[c.type]; nEff++; }
     }
     avgEff = nEff ? avgEff / nEff : 0;
@@ -215,7 +219,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         float w = c.w / (1.0f + have * 0.25f) * rng.f(0.85f, 1.15f);
         if (estMax > 0.02f) w *= 0.4f + 1.2f * estGain[k] / estMax;
         if (useBrain && ablate() != 2) {
-            if (avgEff > 0) w *= clampf(0.65f + 0.7f * (g_brain.unitEff(c.type, x) / avgEff), 0.5f, 1.8f);
+            if (avgEff > 0) w *= clampf(0.65f + 0.7f * (brain->unitEff(c.type, x) / avgEff), 0.5f, 1.8f);
         } else if (pl.spentOn[c.type] >= 1500 && avgEff > 0) {
             float eff = pl.valueDealt[c.type] / pl.spentOn[c.type];
             w *= clampf(0.7f + 0.6f * (eff / avgEff), 0.5f, 1.8f);
@@ -245,7 +249,7 @@ Entity* AiPlayer::pickAttackTarget() {
     for (auto& e : g_sim.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner)) continue;
         if (!g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
-        float s = dist(e.pos, base) / TILE;
+        float s = dist(e.pos, hasFront ? humanFront : base) / TILE;   // (with a teammate's push under way, near their front rather than near home)
         if (e.isBuilding()) {
             BuildRole r = e.bt().role;
             if (smart && r == BR_NUKE) s -= 18; else if (smart && r == BR_INCOME) s -= 12;
@@ -289,7 +293,7 @@ void AiPlayer::endWave(float remainingValue) {
     float dealt = -waveDealt0; for (int u = 0; u < U_COUNT; u++) dealt += pl.valueDealt[u];
     float lost = std::max(0.0f, waveValue - remainingValue);
     bool success = dealt >= lost * 0.9f && dealt > 300;
-    if (useBrain) g_brain.learnWave(waveX, success);
+    if (useBrain) brain->learnWave(waveX, success);
     if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] wave result: dealt %.0f lost %.0f -> %s\n", player, g_sim.time, dealt, lost, success ? "success" : "failure");
 }
 
@@ -340,7 +344,8 @@ void AiPlayer::think() {
     float minutes = S.time / 60.0f;
     // a commander with money in the bank does not wait for the clock: the timed gates for tech, airfields, upgrades and nukes run on 'effective' minutes
     float tm = minutes;
-    if (on(FEAT_MACRO) && pl.difficulty >= 1) tm += clampf((pl.money - 4000.0f) / 2500.0f, 0.0f, 6.0f);
+    const float ease = pl.difficulty >= 2 ? 1.0f : 0.5f;   // Normal uses the spending engine at half strength: the full engine is Hard and Brutal's
+    if (on(FEAT_MACRO) && pl.difficulty >= 1) tm += ease * clampf((pl.money - 4000.0f) / 2500.0f, 0.0f, 6.0f);
     if (on(FEAT_MACRO) && S.time - incomeT >= 10.0f) {   // credits per second coming in (hauled supplies and income structures)
         float inc = (float)(pl.harvested + pl.mined), r = (inc - incomeAt) / (S.time - incomeT);
         incomeRate = incomeRate <= 0 ? r : 0.6f * incomeRate + 0.4f * r;
@@ -424,6 +429,28 @@ void AiPlayer::think() {
         }
     }
 
+    // a human teammate's push: where their fighters are out in the field and what they are up against
+    hasFront = false;
+    Entity* frontTarget = nullptr; int frontHuman = -1;
+    if (on(FEAT_ALLY) && pl.difficulty >= 1) {
+        Vec2 sum; int n = 0;
+        for (auto& e : S.ents) {
+            if (!e.alive || !e.isUnit() || e.isAir() || e.owner < 0 || e.owner == player || S.players[e.owner].isAI || S.players[e.owner].team != pl.team || e.ut().role != UR_COMBAT || e.weapon() < 0) continue;
+            sum += e.pos; n++; frontHuman = e.owner;
+        }
+        if (n >= 5) {
+            Vec2 c = sum * (1.0f / n);
+            if (dist(c, S.players[frontHuman].basePos) > 16 * TILE) {   // out in the field, not parked at home
+                float bd = 28 * TILE;
+                for (auto& e : S.ents) {
+                    if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+                    float d = dist(e.pos, c); if (d < bd) { bd = d; frontTarget = &e; }
+                }
+                if (frontTarget) { humanFront = c; hasFront = true; }
+            }
+        }
+    }
+
     // enemy mix, and periodic learning of per-type efficiency from the last interval
     {
         float tot = std::max(1, enemyInf + enemyVeh + enemyAir);
@@ -433,7 +460,7 @@ void AiPlayer::think() {
             float x[UNIT_F]; Brain::unitFeatures(mixFi, mixFv, mixFa, x);
             for (int u = 0; u < U_COUNT; u++) {
                 float ds = pl.spentOn[u] - prevSpent[u], dd = pl.valueDealt[u] - prevDealt[u];
-                if (ds >= 400 && useBrain) g_brain.learnUnit(u, x, dd / ds);
+                if (ds >= 400 && useBrain) brain->learnUnit(u, x, dd / ds);
                 if (ds >= 400) { prevSpent[u] = pl.spentOn[u]; prevDealt[u] = pl.valueDealt[u]; }
             }
         }
@@ -468,7 +495,7 @@ void AiPlayer::think() {
     int hubs = (int)supplyHubs.size();
     int wantHarv = pl.brutal() ? std::min(8, hubs * 4) : std::min(6, hubs * 3);
     // a hauler pays for itself in about half a minute and the piles are vast: a smart commander keeps a bigger fleet on the road
-    if (on(FEAT_ECON) && pl.difficulty >= 1) wantHarv = std::min(pl.brutal() ? 14 : 12, hubs * (pl.brutal() ? 7 : 6));
+    if (on(FEAT_ECON) && pl.difficulty >= 1) wantHarv = pl.difficulty == 1 ? std::min(8, hubs * 4) : std::min(pl.brutal() ? 14 : 12, hubs * (pl.brutal() ? 7 : 6));
     int queuedHarv = 0;
     for (auto* h : supplyHubs) for (int t : h->queue) if (UNITS[t].role == UR_HARVESTER) queuedHarv++;
     if (harvesters + queuedHarv < wantHarv) {
@@ -622,7 +649,7 @@ void AiPlayer::think() {
     else if (pl.difficulty >= 2) armyCap = minutes < rampStart ? 6 : (minutes < rampStart + 2.5f ? 14 : (minutes < rampStart + 5 ? 26 : 60));
     else armyCap = minutes < rampStart ? 4 : (minutes < rampStart + 2.5f ? 9 : (minutes < rampStart + 5 ? 16 : (pl.difficulty == 0 ? 24 : 40)));
     if (smart) armyCap = (int)(armyCap * style.army + 0.5f);
-    if (on(FEAT_MACRO) && pl.difficulty >= 1) armyCap += (int)clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f);   // surplus credits become soldiers, not a bank balance
+    if (on(FEAT_MACRO) && pl.difficulty >= 1) armyCap += (int)(ease * clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f));   // surplus credits become soldiers, not a bank balance
     int queuedArmy = 0;
     for (auto* b : barracks) queuedArmy += (int)b->queue.size();
     for (auto* f : factories) queuedArmy += (int)f->queue.size();
@@ -751,10 +778,20 @@ void AiPlayer::think() {
             std::vector<Ref> help;
             for (auto r : army) if (!attacking || std::find(wave.begin(), wave.end(), r) == wave.end()) help.push_back(r);
             if (help.size() >= 3) {
+                if (on(FEAT_ALLY) && S.time - lastAllyNote > 25.0f && S.humanPlayer >= 0 && !S.players[S.humanPlayer].isAI && S.players[S.humanPlayer].team == pl.team) { lastAllyNote = S.time; S.emit(EV_MSG, S.humanPlayer, SND_NONE, allyThreat->pos, "Ally: sending units to defend your base"); }
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] ALLY under attack near %d,%d: sending %d units\n", player, S.time, tileOf(allyThreat->pos.x), tileOf(allyThreat->pos.y), (int)help.size());
                 S.cmdMove(help, allyThreat->pos, true);
             }
         }
+    }
+
+    // a teammate is pushing out: the army moves up to the same front and fights beside theirs
+    if (frontTarget && !threat && !attacking && armyCount >= 6 && armyValue >= waveThreshold * 0.5f && S.time > regroupUntil && S.time - lastJoin > 30.0f) {
+        lastJoin = S.time; attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*frontTarget); wave = army; waveHasSample = false;
+        S.cmdMove(army, frontTarget->pos, true);
+        nextOrderTime = S.time + 6;
+        if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] JOIN the teammate's push at %d,%d with %d units\n", player, S.time, tileOf(frontTarget->pos.x), tileOf(frontTarget->pos.y), armyCount);
+        if (S.time - lastAllyNote > 20.0f) { lastAllyNote = S.time; S.emit(EV_MSG, frontHuman, SND_NONE, frontTarget->pos, "Ally: joining your attack"); }
     }
 
     // defense has priority
@@ -852,16 +889,16 @@ void AiPlayer::think() {
                 Rt = assaultRatio(army, tgt->pos, 11, false);
                 float Ra = assaultRatio(army, tgt->pos, 11, true);
                 Brain::waveFeaturesR(Rt, Ra, minutes, armyCount, x);
-                float p = g_brain.waveProb(x);
-                bool explore = useBrain && g_brain.learning && Rt > 0.8f && rng.f() < 0.12f;
+                float p = brain->waveProb(x);
+                bool explore = useBrain && brain->learning && Rt > 0.8f && rng.f() < 0.12f;
                 go = explore || (useBrain ? p >= 0.5f : Rt >= 1.35f) || (armyCount >= armyCap && Rt >= 1.0f);
                 if (aiDebug() && !go && (int)S.time % 30 == 0) fprintf(stderr, "[ai%d t=%.0f] holding: R=%.2f (all %.2f) p=%.2f\n", player, S.time, Rt, Ra, p);
             } else if (tgt) {
                 if (waveModel) {
-                    float p = g_brain.waveProb(x);
+                    float p = brain->waveProb(x);
                     float thr = 0.45f;   // the model can only hold a wave back, never launch a smaller one
                     // exploration: now and then launch (or hold) against the model's advice so it keeps seeing both outcomes
-                    bool explore = g_brain.learning && rng.f() < 0.15f;   // launch against its advice sometimes so it keeps seeing both outcomes
+                    bool explore = brain->learning && rng.f() < 0.15f;   // launch against its advice sometimes so it keeps seeing both outcomes
                     go = explore || p >= thr || armyCount >= armyCap;
                     if (aiDebug() && !go && (int)S.time % 30 == 0) fprintf(stderr, "[ai%d t=%.0f] holding: p=%.2f army %.0f vs defense %.0f\n", player, S.time, p, armyValue, defense);
                 } else {

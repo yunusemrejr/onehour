@@ -164,6 +164,7 @@ static int trainBrain(int games, u64 seed) {
             for (int k = 0; k < WAVE_F; k++) printf(" %.2f", g_brain.ww[k]);
             printf("\n   doctrines:");
             for (int d = 0; d < DOCTRINES; d++) printf(" %s %.2f (%d)", DOCTRINE_NAME[d], g_brain.docQ[d], g_brain.docN[d]);
+            for (int c = 0; c < DOC_CTX; c++) { printf("\n   vs %s %s:", c >= 2 ? "human" : "computer", c & 1 ? "Clanker" : "Cyber"); for (int d = 0; d < DOCTRINES; d++) printf(" %s %.2f (%d)", DOCTRINE_NAME[d], g_brain.ctxQ[c][d], g_brain.ctxN[c][d]); }
             printf("\n");
             if (!path.empty()) g_brain.save(path.c_str());
         }
@@ -217,8 +218,14 @@ static int evalAi(int games, u64 seed, int difficulty) {
         static const int baseMask = getenv("ONEHOUR_BASEMASK") ? atoi(getenv("ONEHOUR_BASEMASK")) : FEAT_DEFAULT;   // the baseline side plays with only these pro features
         static const int newMask = getenv("ONEHOUR_NEWMASK") ? atoi(getenv("ONEHOUR_NEWMASK")) : FEAT_DEFAULT;   // and the new side only these
         for (int p = 0; p < 4; p++) g_ai.featMask[p] = (p == (flip ? 0 : 1)) ? baseMask : newMask;
-        if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK")) { pro[0] = pro[1] = true; }
-        int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, nullptr, pro);
+        // ONEHOUR_BRAIN2=path|prior: the baseline side consults a different brain (a saved one, or the untrained prior), to measure what learning is worth
+        static Brain baseBrain; static bool baseLoaded = false;
+        if (!baseLoaded) { baseLoaded = true; const char* b2 = getenv("ONEHOUR_BRAIN2"); if (b2 && strcmp(b2, "prior") != 0) baseBrain.load(b2); baseBrain.learning = false; }
+        for (int p = 0; p < 4; p++) g_ai.brainOverride[p] = (getenv("ONEHOUR_BRAIN2") && p == (flip ? 0 : 1)) ? &baseBrain : nullptr;
+        if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK") || getenv("ONEHOUR_BRAIN2")) { pro[0] = pro[1] = true; }
+        static const int oldDiff = getenv("ONEHOUR_OLDDIFF") ? atoi(getenv("ONEHOUR_OLDDIFF")) : difficulty;   // the baseline may play at another difficulty
+        int diffs[4] = { flip ? oldDiff : difficulty, flip ? difficulty : oldDiff, difficulty, difficulty };
+        int w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, diffs, pro);
         int newTeam = flip ? 1 : 0;
         const char* res;
         if (w < 0) { draws++; res = "unresolved"; }
@@ -963,6 +970,49 @@ static bool jetTest(u64 seed) {
 // Aid Drop: the human player's own relief flight. Needs a tech structure, one flight per tech structure per cooldown, never available to a
 // computer army; nothing shoots the plane down (not even a nuke); the army nearest to the spot gets $20000 and a dozer, never the sender
 // (dropping on your own base still goes to the nearest other army), and an exact tie is drawn at random between the armies in it.
+// A computer ally on a human's team moves up to the front where the human's army is fighting. The human's tank column attack-moves to the nearest
+// enemy base; the ally starts with a dozen tanks of its own at home. With the cooperation on, they join the push; with it off they stay home.
+static bool allyTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "allytest: %s\n", m); return false; };
+    int atFront[2] = { 0, 0 }; bool msg[2] = { false, false };
+    for (int mode = 0; mode < 2; mode++) {   // 0 = cooperating, 1 = switched off
+        Faction fac[4] = { F_CYBER, F_CLANKER, F_CLANKER, F_CYBER };
+        bool ai[4] = { false, true, true, true }; int diff[4] = { 2, 2, 1, 1 }; int team[4] = { 0, 0, 1, 1 };
+        g_sim.init(4, fac, ai, diff, team, seed);
+        for (int p = 0; p < 4; p++) { g_ai.brainEnabled[p] = false; g_ai.featMask[p] = FEAT_DEFAULT; }
+        g_ai.featMask[1] = mode == 0 ? (FEAT_DEFAULT | FEAT_ALLY) : (FEAT_DEFAULT & ~FEAT_ALLY);
+        g_ai.init(seed);
+        std::fill(g_sim.players[1].explored.begin(), g_sim.players[1].explored.end(), 1);
+        int foe = 2; if (dist(g_sim.players[3].basePos, g_sim.players[0].basePos) < dist(g_sim.players[2].basePos, g_sim.players[0].basePos)) foe = 3;
+        Vec2 fb = g_sim.players[foe].basePos;
+        Vec2 toMe = (g_sim.players[0].basePos - fb).norm();
+        std::vector<Ref> column;
+        for (int k = 0; k < 12; k++) column.push_back(g_sim.spawnUnit(firstUnitOf(F_CYBER) + 5, 0, g_map.nearestFree(fb + toMe * (20 * TILE) + Vec2((k % 4) * 30.0f, (k / 4) * 30.0f), 6)));
+        for (int k = 0; k < 12; k++) g_sim.spawnUnit(firstUnitOf(F_CLANKER) + 5, 1, g_map.nearestFree(g_sim.players[1].basePos + (fb - g_sim.players[1].basePos).norm() * (6 * TILE) + Vec2((k % 4) * 30.0f, (k / 4) * 30.0f), 6));
+        g_sim.cmdMove(column, fb, true);
+        for (int t = 0; t < 100 * SIM_HZ && !g_sim.gameOver; t++) {
+            g_sim.step(); g_ai.update();
+            for (auto& ev : g_sim.events) if (ev.type == EV_MSG && ev.player == 0 && ev.msg.find("Ally") == 0) msg[mode] = true;
+            g_sim.events.clear();
+            if (t % SIM_HZ == 0) {   // the most ally fighters seen at the front (the human's column may well finish the outpost before the end)
+                int near = 0;
+                for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 1 && !e.isAir() && e.ut().role == UR_COMBAT && dist(e.pos, fb) < 32 * TILE) near++;
+                atFront[mode] = std::max(atFront[mode], near);
+            }
+            if (getenv("ONEHOUR_TESTDBG") && t % (10 * SIM_HZ) == 0) {
+                int h = 0, a = 0, aNear = 0; float md = 0;
+                for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && !e.isAir() && e.ut().role == UR_COMBAT) { if (e.owner == 0) h++; if (e.owner == 1) { a++; md += dist(e.pos, fb) / TILE; if (dist(e.pos, fb) < 32 * TILE) aNear++; } }
+                Entity* at = g_sim.get(g_ai.ais[1].attackTarget); printf("  mode %d t=%3ds: human tanks %d, ally tanks %d (mean distance to the front %.0f tiles, %d within 32) wave=%d target %s at %d,%d front %d,%d\n", mode, t / SIM_HZ, h, a, a ? md / a : 0.0f, aNear, (int)g_ai.ais[1].attacking, at ? (at->isBuilding() ? at->bt().name : at->ut().name) : "-", at ? tileOf(at->pos.x) : -1, at ? tileOf(at->pos.y) : -1, tileOf(fb.x), tileOf(fb.y));
+            }
+        }
+    }
+    printf("allytest: most ally fighters at the human's front: %d cooperating, %d switched off\n", atFront[0], atFront[1]);
+    if (atFront[0] < 6) return fail("the ally did not move up to the human's front");
+    if (atFront[1] > atFront[0] - 4) return fail("the cooperation made no difference");
+    if (!msg[0]) return fail("the ally never said it was joining");
+    return true;
+}
+
 static bool aidTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "aidtest: %s\n", m); return false; };
     for (int fi = 0; fi < 2; fi++) {
@@ -1408,17 +1458,33 @@ static bool brainTest() {
     bool again = c.load(path.c_str());
     remove(path.c_str());
     if (!again || c.unitSamples[U_K_DOZER] != 12 || c.unitSamples[U_K_TITAN] != 22 || c.unitSamples[U_C_TITAN] != 11) { remove(path.c_str()); return fail("a saved brain did not round-trip"); }
-    // doctrines: the bandit prefers what wins, keeps trying the rest, and the statistics survive a save and load (older files simply have none)
+    // doctrines: the bandit prefers what wins, keeps trying the rest, learns a separate favourite per opponent context, and the
+    // statistics survive a save and load (older files simply have none of the contexts)
     Brain d;
-    Rng rr(5); int picks[DOCTRINES] = {};
-    for (int k = 0; k < 400; k++) { int pk = d.pickDoctrine(rr); picks[pk]++; d.learnDoctrine(pk, pk == DOC_AIR ? 0.9f : 0.3f); }   // air wins 90% of the time, everything else 30%
-    if (picks[DOC_AIR] < 200 || picks[DOC_BALANCED] < 2 || picks[DOC_RUSH] < 2 || picks[DOC_TURTLE] < 2 || picks[DOC_BOOM] < 2) { fprintf(stderr, "picks: %d %d %d %d %d\n", picks[0], picks[1], picks[2], picks[3], picks[4]); remove(path.c_str()); return fail("the doctrine bandit neither exploits nor explores"); }
+    Rng rr(5); int picks[DOC_CTX][DOCTRINES] = {};
+    for (int k = 0; k < 800; k++) {
+        int ctx = k & 1 ? 3 : 0;   // a computer Cyber opponent, or a human Clanker one
+        int pk = d.pickDoctrine(rr, ctx); picks[ctx][pk]++;
+        int best = ctx == 0 ? DOC_AIR : DOC_RUSH;   // air wins 90% of the time against the first, rush against the second; everything else 30%
+        d.learnDoctrine(ctx, pk, pk == best ? 0.9f : 0.3f);
+    }
+    if (picks[0][DOC_AIR] < 200 || picks[3][DOC_RUSH] < 200) { fprintf(stderr, "picks ctx0: %d %d %d %d %d, ctx3: %d %d %d %d %d\n", picks[0][0], picks[0][1], picks[0][2], picks[0][3], picks[0][4], picks[3][0], picks[3][1], picks[3][2], picks[3][3], picks[3][4]); remove(path.c_str()); return fail("the doctrine bandit did not learn a favourite for each opponent"); }
+    for (int c = 0; c < DOC_CTX; c += 3) for (int k = 0; k < DOCTRINES; k++) if (picks[c][k] < 2) { remove(path.c_str()); return fail("the doctrine bandit stopped exploring"); }
     d.save(path.c_str());
     Brain e2; bool back = e2.load(path.c_str());
     remove(path.c_str());
     bool same = back; for (int k = 0; k < DOCTRINES && same; k++) same = e2.docN[k] == d.docN[k] && std::abs(e2.docQ[k] - d.docQ[k]) < 1e-3f;
+    for (int c = 0; c < DOC_CTX && same; c++) for (int k = 0; k < DOCTRINES && same; k++) same = e2.ctxN[c][k] == d.ctxN[c][k] && std::abs(e2.ctxQ[c][k] - d.ctxQ[c][k]) < 1e-3f;
     if (!same) return fail("doctrine statistics did not round-trip");
-    printf("braintest: ok (v2 weights migrated, jets start from the prior, v5 round-trips with doctrine statistics; bandit picks air %d / 400)\n", picks[DOC_AIR]);
+    // a context with no games leans on the overall table: the overall favourite is a sensible first guess
+    { Brain f; for (int k = 0; k < 30; k++) f.learnDoctrine(0, DOC_TURTLE, 0.9f); f.learning = false; Rng r2(9); if (f.pickDoctrine(r2, 1) != DOC_TURTLE) return fail("an untried context ignored the overall favourite"); }
+    // the wave model calibrates: where launching only pays off at a ratio of 2 or better, the odds at 1.5 must fall below the prior's
+    { Brain w; float x[WAVE_F]; Brain::waveFeaturesR(1.5f, 1.5f, 10, 30, x); float before = w.waveProb(x);
+      Rng r3(3);
+      for (int k = 0; k < 400; k++) { float R = r3.f(0.6f, 3.0f); Brain::waveFeaturesR(R, R, 10, 30, x); w.learnWave(x, R >= 2.0f); }
+      Brain::waveFeaturesR(1.5f, 1.5f, 10, 30, x); float mid = w.waveProb(x); Brain::waveFeaturesR(2.6f, 2.6f, 10, 30, x); float hi = w.waveProb(x);
+      if (!(mid < before - 0.1f && hi > 0.6f)) { fprintf(stderr, "wave odds at 1.5: %.2f -> %.2f, at 2.6: %.2f\n", before, mid, hi); return fail("the wave model did not calibrate to the outcomes"); } }
+    printf("braintest: ok (v2 weights migrated, jets start from the prior, v9 round-trips with per-opponent doctrine statistics; bandit picks air %d / 400 against computers and rush %d / 400 against people; the wave model calibrates)\n", picks[0][DOC_AIR], picks[3][DOC_RUSH]);
     return true;
 }
 
@@ -2192,6 +2258,7 @@ int main(int argc, char** argv) {
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
         else if (a == "--droptest") { g_map.generate(); return dropTest(seed) ? 0 : 1; }
+        else if (a == "--allytest") { g_map.generate(); return allyTest(seed) ? 0 : 1; }
         else if (a == "--aidtest") { g_map.generate(); return aidTest(seed) ? 0 : 1; }
         else if (a == "--supporttest") { g_map.generate(); return supportTest(seed) ? 0 : 1; }
         else if (a == "--airmatrix") { g_map.generate(); return airMatrixTest(seed) ? 0 : 1; }

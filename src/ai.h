@@ -5,8 +5,8 @@
 
 // Features of the pro commander, each switchable on its own so --evalai can measure what a single one is worth (ONEHOUR_BASEMASK)
 // (the estimate-based retreat was tried and measured no better than the cost-based one)
-enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALL = 0xFFFF,
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON };   // what ships
+enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALLY = 16, FEAT_ALL = 0xFFFF,
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY };   // what ships
 
 struct AiPlayer {
     int player = -1;
@@ -27,11 +27,13 @@ struct AiPlayer {
     std::vector<Ref> wave;      // units committed to the current attack
     Ref failedTarget; float failedAt = -1000;   // last target a wave broke against
 
+    Brain* brain = &g_brain;    // the learned components this commander consults (a different one per army only in --evalai)
     bool useBrain = true;       // false = the original hand-tuned heuristics only (baseline for evaluation)
     bool smart = true;          // false = the oldest generation of commander: no doctrines, nuke evasion, medics, bomber tactics, ally defence
     int feat = FEAT_DEFAULT;        // which pro features are on (see AiFeat)
     bool pro = true;            // false = the previous generation (baseline for --evalai): no spending engine, combat estimates, adaptive defence or scouting
     int doctrine = DOC_BALANCED;
+    int docCtx = 0;             // what the doctrine statistics were consulted for: who this commander faces (see doctrineContext)
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastBombRun = -100, lastAllyHelp = -100, lastNukeDodge = -100, retreatVotes = 0;
@@ -42,6 +44,8 @@ struct AiPlayer {
     float nextLearn = 30;
     float prevSpent[U_COUNT] = {}, prevDealt[U_COUNT] = {};
     float mixFi = 0.33f, mixFv = 0.33f, mixFa = 0.33f;
+    Vec2 humanFront; bool hasFront = false;   // where a human teammate's army is fighting (computer allies converge on it)
+    float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
 
     bool on(int f) const { return pro && (feat & f) != 0; }
@@ -65,6 +69,7 @@ struct AiManager {
     bool brainEnabled[MAX_PLAYERS] = { true, true, true, true };
     bool smartEnabled[MAX_PLAYERS] = { true, true, true, true };
     bool proEnabled[MAX_PLAYERS] = { true, true, true, true };
+    Brain* brainOverride[MAX_PLAYERS] = {};   // (--evalai: the baseline side plays with its own brain)
     int featMask[MAX_PLAYERS] = { FEAT_DEFAULT, FEAT_DEFAULT, FEAT_DEFAULT, FEAT_DEFAULT };
     void init(u64 seed);
     void update();

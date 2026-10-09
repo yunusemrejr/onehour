@@ -10,6 +10,7 @@ void Brain::reset() {
     for (int t = 0; t < U_COUNT; t++) { unitSamples[t] = 0; for (int i = 0; i < UNIT_F; i++) wu[t][i] = 0; wu[t][0] = 1.0f; }
     waveSamples = 0; games = 0;
     for (int d = 0; d < DOCTRINES; d++) { docQ[d] = 0.5f; docN[d] = 0; }
+    for (int c = 0; c < DOC_CTX; c++) for (int d = 0; d < DOCTRINES; d++) { ctxQ[c][d] = 0.5f; ctxN[c][d] = 0; }
 }
 
 void Brain::waveFeatures(float A, float D, float E, float minutes, int armyCount, float* x) {
@@ -28,11 +29,15 @@ void Brain::waveFeaturesR(float Rt, float Ra, float minutes, int armyCount, floa
 }
 static float sigmoid(float z) { return 1.0f / (1.0f + std::exp(-clampf(z, -12, 12))); }
 float Brain::waveProb(const float* x) const { float z = 0; for (int i = 0; i < WAVE_F; i++) z += ww[i] * x[i]; return sigmoid(z); }
+// Online logistic regression pulled toward the prior: waves only launch where the estimate already says they should win, so the outcomes cover a narrow
+// band of ratios and every single result is noisy. A small step and a pull back toward the calibrated weights let the model follow what the opponents
+// really do (it takes many waves to move far) without being thrown off by a lucky or unlucky few.
 void Brain::learnWave(const float* x, bool success) {
     if (!learning) return;
+    static const Brain prior;
     float p = waveProb(x), err = (success ? 1.0f : 0.0f) - p;
-    float lr = 0.25f / (1.0f + waveSamples * 0.02f) + 0.03f;     // decaying step, small floor to keep adapting
-    for (int i = 0; i < WAVE_F; i++) ww[i] = clampf(ww[i] + lr * err * x[i], -6, 6);
+    float lr = 0.06f / (1.0f + waveSamples * 0.02f) + 0.008f;
+    for (int i = 0; i < WAVE_F; i++) ww[i] = clampf(ww[i] + lr * (err * x[i] - 0.25f * (ww[i] - prior.ww[i])), -6, 6);
     waveSamples++;
 }
 
@@ -46,20 +51,29 @@ void Brain::learnUnit(int type, const float* x, float obs) {
     unitSamples[type]++;
 }
 
-int Brain::pickDoctrine(Rng& rng) const {
-    int total = 0; for (int d = 0; d < DOCTRINES; d++) total += docN[d];
+float Brain::doctrineValue(int ctx, int d) const {
+    const float K = 4.0f;   // the overall table counts as this many games in every context
+    ctx = clampi(ctx, 0, DOC_CTX - 1);
+    return (ctxN[ctx][d] * ctxQ[ctx][d] + K * docQ[d]) / (ctxN[ctx][d] + K);
+}
+int Brain::pickDoctrine(Rng& rng, int ctx) const {
+    ctx = clampi(ctx, 0, DOC_CTX - 1);
+    int total = 0; for (int d = 0; d < DOCTRINES; d++) total += ctxN[ctx][d];
     int best = DOC_BALANCED; float bs = -1e9f;
     for (int d = 0; d < DOCTRINES; d++) {
-        float bonus = learning ? 0.45f * std::sqrt(std::log((float)total + 2.0f) / (docN[d] + 1.0f)) : 0.0f;
-        float sc = docQ[d] + bonus + rng.f(0.0f, 0.04f);
+        float bonus = learning ? 0.45f * std::sqrt(std::log((float)total + 2.0f) / (ctxN[ctx][d] + 1.0f)) : 0.0f;
+        float sc = doctrineValue(ctx, d) + bonus + rng.f(0.0f, 0.04f);
         if (sc > bs) { bs = sc; best = d; }
     }
     return best;
 }
-void Brain::learnDoctrine(int d, float reward) {
+void Brain::learnDoctrine(int ctx, int d, float reward) {
     if (!learning || d < 0 || d >= DOCTRINES) return;
+    ctx = clampi(ctx, 0, DOC_CTX - 1);
     docN[d]++;
     docQ[d] += (reward - docQ[d]) / std::min(docN[d] + 1.0f, 24.0f);   // a running average that forgets slowly, so the table follows the player's habits
+    ctxN[ctx][d]++;
+    ctxQ[ctx][d] += (reward - ctxQ[ctx][d]) / std::min(ctxN[ctx][d] + 1.0f, 16.0f);
 }
 
 std::string Brain::defaultPath() {
@@ -75,13 +89,15 @@ std::string Brain::defaultPath() {
 bool Brain::save(const char* path) const {
     FILE* f = fopen(path, "w");
     if (!f) return false;
-    fprintf(f, "onehour-brain 8 %d %d\n", games, waveSamples);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
+    fprintf(f, "onehour-brain 9 %d %d\n", games, waveSamples);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
     for (int i = 0; i < WAVE_F; i++) fprintf(f, "%.5f ", ww[i]);
     fprintf(f, "\n");
     for (int t = 0; t < U_COUNT; t++) { fprintf(f, "%d", unitSamples[t]); for (int i = 0; i < UNIT_F; i++) fprintf(f, " %.5f", wu[t][i]); fprintf(f, "\n"); }
     fprintf(f, "doctrines");
     for (int d = 0; d < DOCTRINES; d++) fprintf(f, " %d %.5f", docN[d], docQ[d]);
     fprintf(f, "\n");
+    fprintf(f, "contexts\n");   // v9: the doctrine table per opponent context
+    for (int c = 0; c < DOC_CTX; c++) { for (int d = 0; d < DOCTRINES; d++) fprintf(f, " %d %.5f", ctxN[c][d], ctxQ[c][d]); fprintf(f, "\n"); }
     fclose(f);
     return true;
 }
@@ -91,7 +107,7 @@ bool Brain::load(const char* path) {
     if (!f) return false;
     Brain b;
     int ver = 0;
-    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 8);   // older layouts index a different unit table: start fresh
+    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 9);   // older layouts index a different unit table: start fresh
     for (int i = 0; ok && i < WAVE_F; i++) { float v = 0; ok = fscanf(f, "%f", &v) == 1; if (ver >= 8) b.ww[i] = v; }   // (v8: the wave features are the combat-estimate ratios; older weights mean something else, so the prior stays)
     if (ver < 8) b.waveSamples = 0;
     // v2 had 22 rows (11 per army, no jets): map them onto the new table, the jets keep the prior
@@ -106,6 +122,11 @@ bool Brain::load(const char* path) {
         bool dok = fscanf(f, "%15s", tag) == 1 && std::strcmp(tag, "doctrines") == 0;
         for (int d = 0; dok && d < DOCTRINES; d++) dok = fscanf(f, "%d %f", &b.docN[d], &b.docQ[d]) == 2;
         if (!dok) for (int d = 0; d < DOCTRINES; d++) { b.docN[d] = 0; b.docQ[d] = 0.5f; }
+        if (dok && ver >= 9) {   // (older files have no contexts: they start empty and lean on the overall table)
+            bool cok = fscanf(f, "%15s", tag) == 1 && std::strcmp(tag, "contexts") == 0;
+            for (int c = 0; cok && c < DOC_CTX; c++) for (int d = 0; cok && d < DOCTRINES; d++) cok = fscanf(f, "%d %f", &b.ctxN[c][d], &b.ctxQ[c][d]) == 2;
+            if (!cok) for (int c = 0; c < DOC_CTX; c++) for (int d = 0; d < DOCTRINES; d++) { b.ctxN[c][d] = 0; b.ctxQ[c][d] = 0.5f; }
+        }
     }
     fclose(f);
     if (!ok) return false;
