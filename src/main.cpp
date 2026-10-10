@@ -632,9 +632,10 @@ static bool rulesTest(u64 seed) {
         g_sim.destroy(*g_sim.get(tk), false); g_sim.destroy(*g_sim.get(enemySn), false);
         float sn0 = hpOf(sn); run(8);
         if (hpOf(sn) < sn0) return fail("infantry spotted and shot a sniper");
-        g_sim.spawnUnit(tankFoe, 2, sp + Vec2(150, 60)); run(8);
+        Ref tkNew = g_sim.spawnUnit(tankFoe, 2, sp + Vec2(150, 60)); run(8);
         if (hpOf(sn) < sn0) return fail("a vehicle spotted a sniper without a spy drone");
-        g_sim.spawnUnit(foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE, 2, sp + Vec2(160, 100)); run(10);
+        g_sim.spawnUnit(foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE, 2, g_sim.get(sn)->pos + Vec2(100, 60)); run(1);
+        g_sim.cmdAttack({tkNew}, sn); run(9);
         if (g_sim.get(sn) && hpOf(sn) >= sn0) return fail("a vehicle could not shoot a sniper that an enemy spy drone had found");
         // ---- aircraft: each kind kills aircraft
         for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().role == UR_COMBAT) g_sim.destroy(e, false);
@@ -2480,6 +2481,34 @@ int main(int argc, char** argv) {
             if (upgShow) for (int p = 0; p < g_sim.numPlayers; p++) for (int u = 0; u < UPG_COUNT; u++) g_sim.players[p].upg[u] = true;
             for (int t = 0; t < ticks; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
             Vec2 b = g_sim.players[std::min(viewPlayer, 3)].basePos;
+            Vec2 stealthCam; bool haveStealthCam = false;
+            if (getenv("ONEHOUR_STEALTH")) {   // ONEHOUR_STEALTH=1: an underground bunker whose garrison fires at an enemy tank, a loaded cargo lifter, a spy drone and a spy at work, near the viewed base
+                int vp = std::min(viewPlayer, g_sim.numPlayers - 1), foe = vp == 0 ? 1 : 0; Faction f = g_sim.players[vp].faction, ff = g_sim.players[foe].faction;
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                auto spot = [&](Vec2 at) { return g_map.nearestFree(at, 12); };
+                Vec2 c = spot(b + Vec2(0, 330));
+                int tx = tileOf(c.x) - 1, ty = tileOf(c.y) - 1;
+                for (int r = 0; r < 12 && !g_sim.canPlace(vp, f == F_CYBER ? B_C_BUNKER : B_K_BUNKER, tx, ty); r++) { tx += (r % 2) ? 1 : -1; ty += (r % 3) ? 0 : 1; }
+                Ref bk = g_sim.placeBuilding(f == F_CYBER ? B_C_BUNKER : B_K_BUNKER, vp, tx, ty, true);
+                Vec2 bp = g_sim.get(bk)->pos;
+                std::vector<Ref> gar;
+                for (int i = 0; i < 24; i++) gar.push_back(g_sim.spawnUnit(firstUnitOf(f) + (i % 3 == 0 ? 3 : 2), vp, spot(bp + Vec2((i % 8 - 4) * 20.0f, 60.0f + (i / 8) * 20.0f))));
+                g_sim.cmdEnter(gar, bk);
+                for (int t = 0; t < 20 * 8; t++) { g_sim.step(); g_sim.events.clear(); }
+                Ref tk = g_sim.spawnUnit(firstUnitOf(ff) + 5, foe, spot(bp + Vec2(150, 40)));
+                Ref tk2 = g_sim.spawnUnit(firstUnitOf(ff) + 5, foe, spot(bp + Vec2(170, 110)));
+                (void)tk; (void)tk2;
+                Ref ch = g_sim.spawnUnit(f == F_CYBER ? U_C_CARGO : U_K_CARGO, vp, bp + Vec2(-230, -30)); g_sim.get(ch)->alt = 1; g_sim.get(ch)->angle = 0.4f;
+                std::vector<Ref> load; for (int i = 0; i < 12; i++) load.push_back(g_sim.spawnUnit(firstUnitOf(f) + 2, vp, spot(bp + Vec2(-230 + (i % 6) * 14.0f, 20.0f + (i / 6) * 14.0f))));
+                load.push_back(g_sim.spawnUnit(firstUnitOf(f) + 5, vp, spot(bp + Vec2(-300, 30))));
+                g_sim.cmdEnter(load, ch);
+                Ref sd = g_sim.spawnUnit(f == F_CYBER ? U_C_SDRONE : U_K_SDRONE, vp, bp + Vec2(-90, -120)); g_sim.get(sd)->alt = 1;
+                g_sim.spawnUnit(f == F_CYBER ? U_C_SPY : U_K_SPY, vp, spot(bp + Vec2(-60, 80)));
+                g_sim.spawnUnit(f == F_CYBER ? U_C_SNIPER : U_K_SNIPER, vp, spot(bp + Vec2(60, -90)));
+                for (int t = 0; t < 20 * 6; t++) { g_sim.step(); g_sim.events.clear(); }
+                stealthCam = Vec2(clampf(bp.x - SCREEN_W / 2 + 40, 0, WORLD_W - SCREEN_W), clampf(bp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); haveStealthCam = true;
+                g_game.selection.clear(); g_game.selection.push_back(bk); g_game.selection.push_back(ch);
+            }
             if (const char* hs = getenv("ONEHOUR_HELI")) {   // ONEHOUR_HELI=N: N helicopters of the viewed army hover over its base, a few more parked at an airfield
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), ht = g_sim.players[vp].faction == F_CYBER ? (int)U_C_HELI : (int)U_K_AIR, n = std::max(1, atoi(hs));
                 std::vector<Ref> hs2;
@@ -2503,6 +2532,7 @@ int main(int argc, char** argv) {
                 printf("action at tile %d,%d (projectiles %zu, fx %zu, lastDamaged %.1f at t=%.1f)\n", tileOf(b.x), tileOf(b.y), g_sim.projs.size(), g_sim.fx.size(), best, g_sim.time);
             }
             g_game.cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+            if (haveStealthCam) g_game.cam = stealthCam;
             g_game.renderAlpha = 1;
             if (viewPlayer != 0 || getenv("ONEHOUR_REVEAL")) { std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1); }
             if (const char* cm = getenv("ONEHOUR_CAM")) {   // ONEHOUR_CAM=tx,ty: centre the view on a map tile

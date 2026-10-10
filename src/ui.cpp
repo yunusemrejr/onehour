@@ -1061,8 +1061,8 @@ void Game::drawEntity(Entity& e) {
                 else {
                     bool firing = e.passengers.size() > 0 && g_sim.time - e.lastDamaged < 4.0f;
                     float open = firing ? 3.0f : 0.0f;
-                    g.fillCircle(hc.x, hc.y, 15.0f, rgb(40, 44, 48));
-                    g.fillCircle(hc.x - open, hc.y, 13.0f, rgb(94, 100, 106)); g.fillCircle(hc.x - open - 1, hc.y - 1, 10.5f, rgb(122, 128, 134));
+                    g.fillCircle(hc.x, hc.y, 15.0f, rgb(46, 50, 56));
+                    g.fillCircle(hc.x - open, hc.y, 13.0f, rgb(138, 146, 154)); g.fillCircle(hc.x - open - 1, hc.y - 1, 10.5f, rgb(176, 184, 192));
                     g.fill((int)(hc.x - 13), (int)(hc.y - 1), 26, 2, rgb(40, 44, 48));
                     if (open > 0) { g.fill((int)(hc.x - 4), (int)(hc.y - 12), 8, 24, rgb(14, 14, 16)); g.glowAdd(hc.x, hc.y, 12, Color{255, 180, 80, 70}); }
                     Color rim = hf > 0.6f ? hudAccent(bt.faction) : (hf > 0.3f ? rgb(240, 200, 60) : rgb(230, 70, 60));
@@ -1560,7 +1560,7 @@ void Game::renderHud() {
             // portrait
             g.bevelPanel(INFO_X + 8, hy + 14, 68, 68, shade(base, 0.55f), false);
             if (e->isUnit()) {
-                float psc = (e->ut().jet ? 1.6f : 2.0f) / artScale(e->type);   // the big elite units and the long jets are scaled to sit inside the frame
+                float psc = (e->ut().jet ? 1.6f : (e->ut().cargoCap > 0 ? 1.55f : 2.0f)) / artScale(e->type);   // the big elite units and the long jets are scaled to sit inside the frame
                 g.draw(g.unitBody[e->type][slotOf(e->owner)], INFO_X + 42, hy + 48, 0, psc);
                 if (g.unitTurret[e->type][slotOf(e->owner)].tex) g.draw(g.unitTurret[e->type][slotOf(e->owner)], INFO_X + 42, hy + 48, 0, psc);
             } else {
