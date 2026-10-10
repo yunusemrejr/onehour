@@ -2,6 +2,7 @@
 #include "sim.h"
 #include "map.h"
 #include "ui.h"
+#include "ai.h"
 
 static bool g_ok = true;
 static bool failMsg(const char* m) { fprintf(stderr, "stealthtest: %s\n", m); g_ok = false; return false; }
@@ -429,14 +430,15 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
     return true;
 }
 
-// an army reduced to hidden things (snipers, spy drones, a bunker and its garrison) is out of the game: nobody could ever finish it off
+// an army whose last things are hidden (snipers, a spy drone, a bunker and its garrison) is still in the game: the enemy has to find them. When the
+// bunker falls its garrison comes out onto the ground and counts too; the army is out only when the last of it is dead
 static bool lastHiddenTest(Faction me, Faction foe, u64 seed) {
     freshScene(me, foe, seed);
     for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.kind != EK_RESOURCE) g_sim.destroy(e, false);   // (the enemy's base is gone)
     Vec2 mid = openField();
     int sniperFoe = foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER, sdroneFoe = foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE, bunkerFoe = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
     Ref tank = spawnAt(firstUnitOf(foe) + 5, 1, mid + Vec2(-200, 0));   // a visible unit keeps the army in the game
-    spawnAt(sniperFoe, 1, mid); spawnAt(sdroneFoe, 1, mid + Vec2(200, 0));
+    Ref sn = spawnAt(sniperFoe, 1, mid), sd = spawnAt(sdroneFoe, 1, mid + Vec2(200, 0));
     Ref bk = placeAt(bunkerFoe, 1, mid + Vec2(0, 10 * TILE));
     CHECK(bk.valid(), "no spot for the bunker");
     std::vector<Ref> garrison; for (int i = 0; i < 4; i++) garrison.push_back(spawnAt(firstUnitOf(foe) + 2, 1, g_sim.get(bk)->pos + Vec2((i - 2) * 20.0f, 3 * TILE)));
@@ -444,9 +446,96 @@ static bool lastHiddenTest(Faction me, Faction foe, u64 seed) {
     CHECK(g_sim.garrisonInfantry(*g_sim.get(bk)) == 4, "the garrison did not get in");
     run(2); CHECK(g_sim.players[1].alive, "an army with a visible tank was eliminated");
     g_sim.destroy(*g_sim.get(tank), false);
+    run(60);
+    CHECK(g_sim.players[1].alive && !g_sim.gameOver, "a sniper, a spy drone and a bunker nobody had found ended the game");
+    // the bunker falls: the garrison is out in the open, and the army still stands
+    g_sim.destroy(*g_sim.get(bk), true);
     run(2);
-    CHECK(!g_sim.players[1].alive && g_sim.gameOver, "an army with nothing but hidden sniper, spy drone and bunker was not eliminated");
-    printf("stealthtest %s: last hidden units ok\n", FACTION_NAME[me]);
+    CHECK(g_sim.players[1].alive, "an army was eliminated while its garrison, sniper and drone still stood");
+    int out = 0; for (Ref r : garrison) if (alive(r) && g_sim.get(r)->owner == 1 && !g_sim.get(r)->carrier.valid()) out++;
+    CHECK(out == 4, "the garrison did not come out of a fallen bunker");
+    for (Ref r : garrison) if (alive(r)) { g_sim.destroy(*g_sim.get(r), false); run(1); }
+    run(2); CHECK(g_sim.players[1].alive, "an army with a sniper and a spy drone left was eliminated");
+    g_sim.destroy(*g_sim.get(sn), false); run(1);
+    CHECK(g_sim.players[1].alive, "an army with a spy drone left was eliminated");
+    g_sim.destroy(*g_sim.get(sd), false);
+    run(2);
+    CHECK(!g_sim.players[1].alive && g_sim.gameOver, "an army with nothing left was not eliminated");
+    printf("stealthtest %s: hidden last units ok\n", FACTION_NAME[me]);
+    return true;
+}
+
+// aircraft cannot finish a bunker: once its hatch is gone and its body is at the floor they stop attacking it (they would hover over it doing nothing);
+// while the hatch stands they still shoot it, and ground units can grind it below the floor
+static bool bunkerFloorTest(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);
+    Vec2 mid = openField();
+    int bunkerFoe = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER, sdroneMe = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+    int gunship = me == F_CYBER ? U_C_HELI : U_K_AIR, tankMe = firstUnitOf(me) + 5;
+    Ref bk = placeAt(bunkerFoe, 1, mid);
+    CHECK(bk.valid(), "no spot for the bunker");
+    Vec2 bp = g_sim.get(bk)->pos;
+    Ref sd = spawnAt(sdroneMe, 0, bp + Vec2(0, 5 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
+    run(2);
+    CHECK(g_sim.visibleTo(*g_sim.get(bk), 0), "a spy drone did not reveal the bunker");
+    // ---- a gunship ordered onto a bunker far outside its sight flies there (it must not turn back for its pad: helicopters never run dry)
+    Ref far = spawnAt(gunship, 0, bp + Vec2(0, -30 * TILE)); if (Entity* a = g_sim.get(far)) a->alt = 4;
+    float far0 = dist(g_sim.get(far)->pos, bp);
+    g_sim.cmdAttack({far}, bk);
+    run(8);
+    CHECK(alive(far) && dist(g_sim.get(far)->pos, bp) < far0 - 8 * TILE, "a gunship ordered onto a far bunker did not fly toward it");
+    g_sim.destroy(*g_sim.get(far), false);
+    // ---- the hatch still stands: the gunship keeps shooting it
+    Ref heli = spawnAt(gunship, 0, bp + Vec2(0, -4 * TILE)); if (Entity* a = g_sim.get(heli)) a->alt = 4;
+    g_sim.cmdAttack({heli}, bk);
+    CHECK(g_sim.get(heli)->order == O_ATTACK, "a gunship could not be ordered to attack a revealed bunker");
+    Entity* B = g_sim.get(bk);
+    B->hatch = 600; B->hp = B->maxHp * BUNKER_FLOOR;
+    run(4);
+    CHECK(g_sim.get(bk)->hatch < 600, "a gunship did not shoot the hatch of a bunker at its floor");
+    // ---- the hatch is gone: the gunship gives up instead of hovering over the bunker
+    B = g_sim.get(bk); B->hatch = 0; B->hp = B->maxHp * BUNKER_FLOOR;
+    run(4);
+    CHECK(alive(heli) && g_sim.get(heli)->order != O_ATTACK, "a gunship kept attacking a bunker it can no longer hurt");
+    float floorHp = g_sim.get(bk)->hp;
+    g_sim.cmdAttack({heli}, bk);
+    run(2);
+    CHECK(g_sim.get(heli)->order != O_ATTACK, "a gunship was ordered onto a bunker it cannot hurt and stayed on it");
+    CHECK(g_sim.get(bk)->hp == floorHp, "a gunship damaged a bunker below its floor");
+    // ---- a tank on the ground still grinds the bunker below the floor
+    Ref tank = spawnAt(tankMe, 0, bp + Vec2(3 * TILE, 0));
+    g_sim.cmdAttack({tank}, bk);
+    run(12);
+    CHECK(!alive(bk) || g_sim.get(bk)->hp < floorHp, "a tank could not hurt a bunker at its floor");
+    printf("stealthtest %s: bunker floor ok\n", FACTION_NAME[me]);
+    return true;
+}
+
+// the computer commander hunts: the human has nothing left but a hidden bunker, so the computer army sweeps the ground around its base until its
+// spy drone finds the bunker, then destroys it and the human is out
+static bool huntTest(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);   // player 0 is the human, player 1 the computer
+    g_ai.init(seed);
+    for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.kind != EK_RESOURCE) g_sim.destroy(e, false);   // (the human's base is gone)
+    int bunkerMe = me == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    Ref bk = placeAt(bunkerMe, 0, g_sim.players[0].basePos);
+    CHECK(bk.valid(), "no spot for the human's bunker");
+    Entity* B = g_sim.get(bk);
+    B->hatch = 0; B->hp = B->maxHp * BUNKER_FLOOR + 200.0f;   // (nearly down already: this test is about the search, not the siege)
+    int tankFoe = firstUnitOf(foe) + 5, sdroneFoe = foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+    for (int i = 0; i < 4; i++) spawnAt(tankFoe, 1, g_sim.players[1].basePos + Vec2(i * 30.0f, 4 * TILE));
+    Ref sd = spawnAt(sdroneFoe, 1, g_sim.players[1].basePos + Vec2(0, 6 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
+    bool revealed = false, dead = false;
+    for (int t = 0; t < 20 * 900 && !dead; t++) {
+        g_sim.step(); g_ai.update(); g_sim.events.clear();
+        if (!alive(bk)) { dead = true; break; }
+        if (g_sim.visibleTo(*g_sim.get(bk), 1)) revealed = true;
+    }
+    CHECK(revealed, "the computer's army never found the human's hidden bunker");
+    CHECK(dead, "the computer never destroyed the hidden bunker it had found");
+    run(2);
+    CHECK(!g_sim.players[0].alive && g_sim.gameOver, "the human was not out once the hidden bunker fell");
+    printf("stealthtest %s: computer hunt ok\n", FACTION_NAME[me]);
     return true;
 }
 
@@ -463,6 +552,8 @@ bool stealthTest(u64 seed) {
         if (!infantryTest(me, foe, seed + 50 + fi)) return false;
         if (!uiNewTest(me, foe, seed + 60 + fi)) return false;
         if (!lastHiddenTest(me, foe, seed + 70 + fi)) return false;
+        if (!bunkerFloorTest(me, foe, seed + 80 + fi)) return false;
+        if (!huntTest(me, foe, seed + 90 + fi)) return false;
     }
     printf("stealthtest: ok\n");
     return g_ok;

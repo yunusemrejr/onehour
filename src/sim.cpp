@@ -372,7 +372,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
             cmdMove({r}, t->pos, false); continue;
         }
         if (ut.weapon < 0 || !canTarget(*e, *t)) { cmdMove({r}, t->pos, false); continue; }
-        if (e->isAir() && e->ammo <= 0) { e->targetEnt = target; e->order = O_REARM; e->leashed = false; continue; }
+        if (e->isAir() && e->ammo <= 0 && ut.ammo > 0) { e->targetEnt = target; e->order = O_REARM; e->leashed = false; continue; }   // (helicopters like the Hornet never run dry: they attack at once)
         e->order = O_ATTACK; e->postOrder = e->zoneR > 0 ? O_GUARDAREA : O_IDLE; e->targetEnt = target; e->engaged = NOREF; e->leashed = false;
         e->repathTimer = 0;
     }
@@ -1104,6 +1104,9 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
     if (t.fall > 0) return false;   // still under the parachute
     if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, bunkers, spy drones)
+    // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
+    // structures would hover over it or shoot at it for nothing, so they do not pick it
+    if (t.isBuilding() && t.constructed && t.bt().role == BR_BUNKER && t.hatch <= 0 && t.hp <= t.maxHp * BUNKER_FLOOR + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;
     if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper
     if (!enemies(e.owner, t.owner)) {   // a friendly is only a legal target for the one the human ordered it to hit
         if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
@@ -2993,9 +2996,10 @@ void Sim::checkVictory() {
     for (int p = 0; p < numPlayers; p++) {
         Player& pl = players[p];
         if (!pl.alive) continue;
+        // an army is out only when nothing of its own still stands: a hidden sniper, spy drone or bunker counts (the enemy has to find it),
+        // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too
         bool any = false;
-        // (hidden things alone do not keep an army in the game: a last sniper, spy drone or bunker that nobody can find would stall the match forever)
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !stealthOf(e) && !e.carrier.valid()) { any = true; break; }
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE) { any = true; break; }
         if (!any) { pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]); }
     }
     if (!anyDied) return;

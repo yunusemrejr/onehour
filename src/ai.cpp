@@ -242,6 +242,17 @@ float AiPlayer::enemyStrengthNear(Vec2 p, float radiusTiles) {
     return v;
 }
 
+// Some enemy still stands and every living thing of it is a hidden kind (a sniper, a spy drone, a bunker, or a unit aboard a bunker or transport)
+static bool enemyOnlyHidden(int player) {
+    bool any = false;
+    for (auto& e : g_sim.ents) {
+        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || !g_sim.enemies(player, e.owner)) continue;
+        if (!Sim::stealthOf(e) && !e.carrier.valid()) return false;
+        any = true;
+    }
+    return any;
+}
+
 Entity* AiPlayer::pickAttackTarget() {
     // Prefer economy and production of the main enemy; fall back to anything known
     Entity* best = nullptr; float bs = 1e18f;
@@ -669,8 +680,10 @@ void AiPlayer::think() {
         if ((int)medics.size() + queuedMed < std::min(3, 1 + armyCount / 14))
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
     }
-    // spy drones: the only thing that finds hidden snipers and underground bunkers. A smart commander keeps one (two from Hard) with its army
-    if (on(FEAT_SPECIAL) && pl.difficulty >= 1 && techs > 0 && tm > 5.0f && armyCount >= 6 && pl.money - reserve > 1200) {
+    // spy drones: the only thing that finds hidden snipers and underground bunkers. A smart commander keeps one (two from Hard) with its army.
+    // When the enemy has nothing else left, every level keeps one: without a drone the hunt for its hidden things can never succeed
+    bool hunting = enemyOnlyHidden(player);
+    if (on(FEAT_SPECIAL) && (pl.difficulty >= 1 || hunting) && techs > 0 && tm > 5.0f && (armyCount >= 6 || hunting) && pl.money - reserve > 1200) {
         int droneType = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, queued = 0;
         for (auto* a : airfields) for (int t : a->queue) if (t == droneType) queued++;
         if ((int)scouts.size() + queued < (pl.difficulty >= 2 ? 2 : 1))
@@ -821,7 +834,7 @@ void AiPlayer::think() {
         // a base under real attack outranks a wave in progress (the wave resumes once the threat is gone)
         if (attacking && threatCount >= 4) defenders = army;
         if (!defenders.empty()) S.cmdMove(defenders, threat->pos, true);
-        for (auto r : aircraft) { Entity* a = S.get(r); if (a && a->ammo > 0 && a->order == O_IDLE) S.cmdAttack({r}, S.refOf(*threat)); }
+        for (auto r : aircraft) { Entity* a = S.get(r); if (a && (a->ammo > 0 || a->ut().ammo <= 0) && a->order == O_IDLE) S.cmdAttack({r}, S.refOf(*threat)); }   // (helicopters that never run dry answer too)
         if (attacking && armyValue < waveValue * 0.5f) { endWave(armyValue); attacking = false; wave.clear(); }
     } else if (attacking) {
         // prune the wave and measure what is left of it
@@ -934,6 +947,15 @@ void AiPlayer::think() {
                 nextOrderTime = S.time + 6;
             }
         }
+        // only the enemy's hidden things are left (a bunker, snipers, spy drones): nothing is in sight to attack, so the army sweeps the ground around its
+        // base, where the spy drones trailing it find what hides there. Without this the match would stall with the army idle at home
+        if (hunting && !helpingAlly && armyCount > 0 && mainEnemy >= 0 && S.time > huntAt) {
+            huntAt = S.time + 20.0f;
+            Vec2 c = S.players[mainEnemy].basePos + Vec2(rng.f(-1, 1), rng.f(-1, 1)) * (rng.f(3.0f, 15.0f) * TILE);
+            huntPoint = g_map.nearestFree(c, 20);
+            if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] HUNT the enemy's hidden forces at %d,%d with %d units\n", player, S.time, tileOf(huntPoint.x), tileOf(huntPoint.y), armyCount);
+            S.cmdMove(army, huntPoint, true);
+        }
         // harassment: hard AIs send a small fast squad after enemy harvesters
         if (pl.difficulty >= 2 && minutes > (pl.brutal() ? 3 : 4) && S.time - lastHarass > (pl.brutal() ? 55 : 90) && armyCount >= 5) {
             Entity* h = nullptr; float bd = 1e18f;
@@ -1029,6 +1051,7 @@ void AiPlayer::think() {
         for (auto& e : S.ents) {
             if (!e.alive || !S.enemies(player, e.owner) || e.kind == EK_RESOURCE) continue;
             if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
+            if (!S.canTarget(*a, e)) continue;   // (a bunker at its floor, or a target the craft cannot shoot: it would only fly there and idle)
             float s = dist(e.pos, a->pos) / TILE;
             if (e.isUnit()) { if (e.ut().role == UR_HARVESTER) s -= 12; else if (e.ut().kind == UK_VEH) s -= 6; else if (e.ut().kind == UK_AIR) s -= 8; }
             else { if (e.bt().role == BR_AATURRET) s += 25; else if (e.bt().role == BR_POWER) s -= 6; else if (e.bt().role == BR_TURRET) s += 6; }

@@ -26,6 +26,7 @@ struct AiPlayer {
     float nextOrderTime = 0;
     std::vector<Ref> wave;      // units committed to the current attack
     Ref failedTarget; float failedAt = -1000;   // last target a wave broke against
+    Vec2 huntPoint; float huntAt = -1000;       // where the army sweeps when only the enemy's hidden things are left, and when to pick the next spot
 
     Brain* brain = &g_brain;    // the learned components this commander consults (a different one per army only in --evalai)
     bool useBrain = true;       // false = the original hand-tuned heuristics only (baseline for evaluation)

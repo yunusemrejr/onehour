@@ -278,6 +278,7 @@ struct Sim {
     // ---- stealth, transports, bunkers, spies
     static int stealthOf(const Entity& e);                       // StealthClass of a unit or structure (bunkers count once built)
     bool visibleTo(const Entity& e, int player) const;           // can this player see e? (always, unless e is stealthy and no detector of the player's team is close)
+    bool canTarget(const Entity& e, const Entity& t, int wpn = -1) const;   // may e shoot t right now (visible, in the right class, not a bunker it cannot hurt); wpn: a weapon other than the entity's own (a roof gun)
     bool canBoard(const Entity& u, const Entity& carrier) const; // may u climb aboard right now (room left, right kind of unit)?
     int cargoUsed(const Entity& carrier) const;                  // transport slots taken
     int garrisonInfantry(const Entity& bunker) const;
@@ -383,7 +384,6 @@ private:
     Entity* acquireTarget(Entity& e, float range, int wpn = -1);
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);
-    bool canTarget(const Entity& e, const Entity& t, int wpn = -1) const;   // wpn: a weapon other than the entity's own (a roof gun)
     void finishBuilding(Entity& b);
     void spawnFromQueue(Entity& b);
     Entity* findSupplyBuilding(Entity& h);

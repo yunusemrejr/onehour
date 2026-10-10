@@ -130,7 +130,7 @@ enemy team (not drawn, not on the minimap, not selectable, not a legal target, u
 | Bomber and attack drones (Wraith Drone, Vulture Gunship, Hornet Gunship) | enemy spy drones only | 3.5 tiles ("your own drones need to be there") |
 | everything else (soldiers, tanks, jets, turrets, lifters) | nothing | - |
 
-A sniper or spy drone that leaves the detector's range is lost again after a couple of seconds; a **bunker stays known for 25 seconds** after the drone moves on, so a force has time to attack it. Detection is shared by the whole team. An army reduced to nothing but hidden things (snipers, spy drones, a bunker and its garrison) is out of the game: nobody could ever finish it off.
+A sniper or spy drone that leaves the detector's range is lost again after a couple of seconds; a **bunker stays known for 25 seconds** after the drone moves on, so a force has time to attack it. Detection is shared by the whole team. An army is **out of the game only when nothing of its own still stands**. Hidden things count: a sniper, a spy drone or a bunker that nobody has found keeps the game going until the enemy finds it (a bunker alone is not a defeat), and so does whatever sits inside a bunker or a transport.
 The **spy drone** ($900, Drone Pad / Airstrip, needs the tech structure) is a small unarmed hovering stealth helicopter, 15 tiles of sight, fragile (220 hp), needs no pad. Because only enemy drones can spot it, anti-air batteries and fighters never shoot at it
 until a drone of the enemy is practically on top of it. The AI keeps one (two from Hard) with its army.
 
@@ -149,7 +149,8 @@ hit tanks and aircraft, snipers pick off infantry), and heals slowly. The rest o
 - the **hatch** (2800 hp) takes the damage first; once it is blown off the garrison cannot shoot, though it stays safe. A **nuke wrecks the hatch and hurts the bunker, but can never destroy it**, however many land (buried deep): the same goes for aircraft, bombs, turrets, shells and fallout, none of which takes it below 10% of its health;
 - only **infantry and vehicles can destroy a bunker**, and it is very hard: 30000 hp and plating that stops 78% of what gets past the hatch (a column of fifteen tanks needs several minutes; they only see it while a spy drone is nearby);
 - a **dozer inside** patches the hatch (6% a second) and the bunker once out of fire for three seconds; any dozer next to it mends it too;
-- when the bunker is destroyed (or captured by a spy) **the whole garrison is back on the ground, exposed**.
+- when the bunker is destroyed (or captured by a spy) **the whole garrison is back on the ground, exposed**; it still counts, so the army is only beaten once the bunker **and** everybody who was inside are dead;
+- aircraft and turrets stop picking a bunker whose hatch is gone and whose body sits at the floor: they cannot hurt it any more, so they no longer hover over it (ground units keep grinding it).
 
 **Veterancy and rocket infantry** — infantry earn promotions: **Veteran** after 4 kills (+25% health, +20% damage) and **Elite** after 10 (+50% health, +40% damage), shown as chevrons beside the health bar, in the bunker as well. The **RPG Trooper** is the rocket infantryman:
 its rocket hits **vehicles and aircraft hard** (64 damage, 1.3x against tanks, 1.6x against aircraft, faster missile) and works from inside a bunker alongside the rest of the garrison. `--stealthtest` covers all of the above.
@@ -262,7 +263,7 @@ Beyond the learned parts the commander plays tactically:
 - **Anti-air**: batteries follow the enemy's aircraft and airfields and are placed beside the structures most worth protecting.
 - **Medics** (one per 14 fighters, up to three) trail the army and are never sent ahead as part of a wave.
 - **Waves** break off when the fighting around them is clearly lost (two bad readings in a row), not only when half of them are dead.
-- **Special forces**: from Hard (one spy drone from Normal) the commander keeps spy drones with its army, since they are the only thing that finds hidden snipers and underground bunkers, and trains two spies that go for the most valuable structure nobody is guarding (`AiFeat` `FEAT_SPECIAL`: over 88 mirror games it beat the same commander without it 14-2, 72 unresolved). It does not use cargo lifters or bunkers itself.
+- **Special forces**: from Hard (one spy drone from Normal) the commander keeps spy drones with its army, since they are the only thing that finds hidden snipers and underground bunkers. When the enemy has only hidden things left, every level builds one and the army sweeps the ground around the enemy base until the drone finds them (the hunt). It trains two spies that go for the most valuable structure nobody is guarding (`AiFeat` `FEAT_SPECIAL`: over 88 mirror games it beat the same commander without it 14-2, 72 unresolved). It does not use cargo lifters or bunkers itself.
 - **Allies**: a computer ally defends *your* base too (it sends most of its army to wherever enemy fighters are closing on a teammate's structures), shares its vision with you, and
   plays at the difficulty set for it. When *you* push out (five or more of your fighters away from home, near an enemy structure) it moves its army up to the same front and picks its next targets near it,
   telling you so ("Ally: joining your attack", "Ally: sending units to defend your base"). `--allytest` covers it.
