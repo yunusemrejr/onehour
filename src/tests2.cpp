@@ -429,6 +429,27 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
     return true;
 }
 
+// an army reduced to hidden things (snipers, spy drones, a bunker and its garrison) is out of the game: nobody could ever finish it off
+static bool lastHiddenTest(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);
+    for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.kind != EK_RESOURCE) g_sim.destroy(e, false);   // (the enemy's base is gone)
+    Vec2 mid = openField();
+    int sniperFoe = foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER, sdroneFoe = foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE, bunkerFoe = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    Ref tank = spawnAt(firstUnitOf(foe) + 5, 1, mid + Vec2(-200, 0));   // a visible unit keeps the army in the game
+    spawnAt(sniperFoe, 1, mid); spawnAt(sdroneFoe, 1, mid + Vec2(200, 0));
+    Ref bk = placeAt(bunkerFoe, 1, mid + Vec2(0, 10 * TILE));
+    CHECK(bk.valid(), "no spot for the bunker");
+    std::vector<Ref> garrison; for (int i = 0; i < 4; i++) garrison.push_back(spawnAt(firstUnitOf(foe) + 2, 1, g_sim.get(bk)->pos + Vec2((i - 2) * 20.0f, 3 * TILE)));
+    g_sim.cmdEnter(garrison, bk); run(12);
+    CHECK(g_sim.garrisonInfantry(*g_sim.get(bk)) == 4, "the garrison did not get in");
+    run(2); CHECK(g_sim.players[1].alive, "an army with a visible tank was eliminated");
+    g_sim.destroy(*g_sim.get(tank), false);
+    run(2);
+    CHECK(!g_sim.players[1].alive && g_sim.gameOver, "an army with nothing but hidden sniper, spy drone and bunker was not eliminated");
+    printf("stealthtest %s: last hidden units ok\n", FACTION_NAME[me]);
+    return true;
+}
+
 bool stealthTest(u64 seed) {
     g_map.generate();
     g_ok = true;
@@ -441,6 +462,7 @@ bool stealthTest(u64 seed) {
         if (!lifterTest(me, foe, seed + 40 + fi)) return false;
         if (!infantryTest(me, foe, seed + 50 + fi)) return false;
         if (!uiNewTest(me, foe, seed + 60 + fi)) return false;
+        if (!lastHiddenTest(me, foe, seed + 70 + fi)) return false;
     }
     printf("stealthtest: ok\n");
     return g_ok;

@@ -2994,7 +2994,8 @@ void Sim::checkVictory() {
         Player& pl = players[p];
         if (!pl.alive) continue;
         bool any = false;
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE) { any = true; break; }
+        // (hidden things alone do not keep an army in the game: a last sniper, spy drone or bunker that nobody can find would stall the match forever)
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !stealthOf(e) && !e.carrier.valid()) { any = true; break; }
         if (!any) { pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]); }
     }
     if (!anyDied) return;

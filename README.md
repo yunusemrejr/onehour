@@ -130,7 +130,7 @@ enemy team (not drawn, not on the minimap, not selectable, not a legal target, u
 | Bomber and attack drones (Wraith Drone, Vulture Gunship, Hornet Gunship) | enemy spy drones only | 3.5 tiles ("your own drones need to be there") |
 | everything else (soldiers, tanks, jets, turrets, lifters) | nothing | - |
 
-A sniper or spy drone that leaves the detector's range is lost again after a couple of seconds; a **bunker stays known for 25 seconds** after the drone moves on, so a force has time to attack it. Detection is shared by the whole team.
+A sniper or spy drone that leaves the detector's range is lost again after a couple of seconds; a **bunker stays known for 25 seconds** after the drone moves on, so a force has time to attack it. Detection is shared by the whole team. An army reduced to nothing but hidden things (snipers, spy drones, a bunker and its garrison) is out of the game: nobody could ever finish it off.
 The **spy drone** ($900, Drone Pad / Airstrip, needs the tech structure) is a small unarmed hovering stealth helicopter, 15 tiles of sight, fragile (220 hp), needs no pad. Because only enemy drones can spot it, anti-air batteries and fighters never shoot at it
 until a drone of the enemy is practically on top of it. The AI keeps one (two from Hard) with its army.
 
