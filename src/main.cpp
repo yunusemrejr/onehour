@@ -20,7 +20,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --autotest, --bombtest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --autotest, --bombtest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -568,6 +568,7 @@ static bool hqTest(u64 seed) {
 
 // Rules added in the friendly-fire / sniper / air-power pass: forced fire on friends (humans only), snipers and who can spot them,
 // both aircraft kinds fighting aircraft, and the per-structure paradrop cooldown.
+bool stealthTest(u64 seed);   // tests2.cpp: stealth, spies, cargo lifters, underground bunkers, rocket infantry
 static bool rulesTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "rulestest: %s\n", m); return false; };
     auto run = [](int sec) { for (int t = 0; t < 20 * sec; t++) { g_sim.step(); g_sim.events.clear(); } };
@@ -632,7 +633,9 @@ static bool rulesTest(u64 seed) {
         float sn0 = hpOf(sn); run(8);
         if (hpOf(sn) < sn0) return fail("infantry spotted and shot a sniper");
         g_sim.spawnUnit(tankFoe, 2, sp + Vec2(150, 60)); run(8);
-        if (g_sim.get(sn) && hpOf(sn) >= sn0) return fail("a vehicle could not spot and shoot a sniper");
+        if (hpOf(sn) < sn0) return fail("a vehicle spotted a sniper without a spy drone");
+        g_sim.spawnUnit(foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE, 2, sp + Vec2(160, 100)); run(10);
+        if (g_sim.get(sn) && hpOf(sn) >= sn0) return fail("a vehicle could not shoot a sniper that an enemy spy drone had found");
         // ---- aircraft: each kind kills aircraft
         for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().role == UR_COMBAT) g_sim.destroy(e, false);
         for (int kind = 0; kind < 2; kind++) {
@@ -2325,6 +2328,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
+        else if (a == "--stealthtest") return stealthTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
         else if (a == "--autotest") { g_map.generate(); return autoTest(seed) ? 0 : 1; }

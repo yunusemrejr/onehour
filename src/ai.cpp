@@ -197,7 +197,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         for (auto& e : g_sim.ents) {
             if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || (!e.isUnit() && !e.isBuilding())) continue;
             if (e.owner == player) { if (e.isUnit() && e.ut().role == UR_COMBAT) A.add(e, 1.0f); }
-            else if (g_sim.enemies(player, e.owner) && g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) {
+            else if (g_sim.enemies(player, e.owner) && (g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) {
                 if (e.isBuilding() && e.weapon() < 0) { float h = e.hp * 0.15f; B.hp += h; B.hpBy[AR_STRUCT] += h; }   // the objective: a little of every structure
                 else B.add(e, e.isBuilding() ? 0.6f : 1.0f);
             }
@@ -248,7 +248,7 @@ Entity* AiPlayer::pickAttackTarget() {
     Vec2 base = g_sim.players[player].basePos;
     for (auto& e : g_sim.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner)) continue;
-        if (!g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+        if (!(g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) continue;
         float s = dist(e.pos, hasFront ? humanFront : base) / TILE;   // (with a teammate's push under way, near their front rather than near home)
         if (e.isBuilding()) {
             BuildRole r = e.bt().role;
@@ -277,7 +277,7 @@ float AiPlayer::assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float r
     for (auto r : attackers) { Entity* e = S.get(r); if (e) A.add(*e, 1.0f); }
     for (auto& e : S.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner)) continue;
-        if (!S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+        if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
         float d = dist(e.pos, at) / TILE;
         if (e.isBuilding()) { if (d <= radiusTiles) B.add(e, 1.0f); }
         else if (e.isUnit()) B.add(e, wholeEnemy ? 1.0f : (d <= radiusTiles ? 1.0f : (d <= radiusTiles * 2.5f ? 0.65f : 0.3f)));
@@ -354,7 +354,7 @@ void AiPlayer::think() {
 
     // ---------- survey
     int dozers = 0, harvesters = 0, armyCount = 0; float armyValue = 0;
-    std::vector<Ref> army, idleArmy, aircraft, haulers, medics;
+    std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged;
     int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0;
@@ -364,6 +364,9 @@ void AiPlayer::think() {
             const UnitType& ut = e.ut();
             if (ut.role == UR_DOZER) dozers++;
             else if (ut.role == UR_HARVESTER) { harvesters++; haulers.push_back(S.refOf(e)); }
+            else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
+            else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and stay with the army
+            else if (ut.role == UR_TRANSPORT) {}                             // (the commander has no use for cargo choppers)
             else if (ut.kind == UK_AIR) aircraft.push_back(S.refOf(e));
             else if (smart && ut.role == UR_HEALER) medics.push_back(S.refOf(e));   // medics trail the army instead of leading the charge
             else { army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e); if (e.order == O_IDLE) idleArmy.push_back(S.refOf(e)); }
@@ -380,6 +383,7 @@ void AiPlayer::think() {
             case BR_TECH: techs++; break;
             case BR_INCOME: incomes++; break;
             case BR_NUKE: ramps++; break;
+            case BR_BUNKER: break;
             }
         }
     }
@@ -392,7 +396,7 @@ void AiPlayer::think() {
     for (auto& e : S.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner)) continue;
         int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
-        if (!S.explored(player, tx, ty)) continue;
+        if (!S.explored(player, tx, ty) || !S.visibleTo(e, player)) continue;   // (stealthy enemies stay unknown until a spy drone finds them)
         if (e.isUnit()) {
             const UnitType& ut = e.ut();
             if (ut.role == UR_COMBAT) {
@@ -443,7 +447,7 @@ void AiPlayer::think() {
             if (dist(c, S.players[frontHuman].basePos) > 16 * TILE) {   // out in the field, not parked at home
                 float bd = 28 * TILE;
                 for (auto& e : S.ents) {
-                    if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+                    if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
                     float d = dist(e.pos, c); if (d < bd) { bd = d; frontTarget = &e; }
                 }
                 if (frontTarget) { humanFront = c; hasFront = true; }
@@ -665,6 +669,20 @@ void AiPlayer::think() {
         if ((int)medics.size() + queuedMed < std::min(3, 1 + armyCount / 14))
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
     }
+    // spy drones: the only thing that finds hidden snipers and underground bunkers. A smart commander keeps one (two from Hard) with its army
+    if (smart && pl.difficulty >= 1 && techs > 0 && tm > 5.0f && armyCount >= 6 && pl.money - reserve > 1200) {
+        int droneType = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, queued = 0;
+        for (auto* a : airfields) for (int t : a->queue) if (t == droneType) queued++;
+        if ((int)scouts.size() + queued < (pl.difficulty >= 2 ? 2 : 1))
+            for (auto* a : airfields) if (a->constructed && a->queue.empty() && S.cmdTrain(S.refOf(*a), droneType)) break;
+    }
+    // spies: two of them on Hard and Brutal, to take structures nobody is guarding
+    if (smart && pl.difficulty >= 2 && techs > 0 && tm > 6.5f && armyCount >= 8 && pl.money - reserve > 1500) {
+        int spyType = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, queued = 0;
+        for (auto* b : barracks) for (int t : b->queue) if (t == spyType) queued++;
+        if ((int)spies.size() + queued < 2)
+            for (auto* b : barracks) if (b->constructed && b->queue.empty() && S.cmdTrain(S.refOf(*b), spyType)) break;
+    }
     for (auto* a : airfields) if (a->constructed && a->queue.empty() && pl.money - reserve > 2500 && (int)aircraft.size() < style.airCap) { int t = chooseUnit(BR_AIRFIELD, enemyInf, enemyVeh, enemyAir); if (t >= 0) S.cmdTrain(S.refOf(*a), t); }
     // rally new units toward the front
     for (auto* b : barracks) S.cmdSetRally(S.refOf(*b), rally);
@@ -707,7 +725,7 @@ void AiPlayer::think() {
         std::vector<Entity*> cand;
         for (auto& e : S.ents) {
             if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.isAir()) continue;
-            if (!S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+            if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             cand.push_back(&e);
         }
         float R = NUKE_RADIUS * TILE;
@@ -730,7 +748,7 @@ void AiPlayer::think() {
         // legacy: fire at the densest cluster of enemy structures we know about
         Vec2 bestPos; float bestScore = 0;
         for (auto& e : S.ents) {
-            if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+            if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             float score = 0;
             for (auto& o : S.ents) if (o.alive && S.enemies(player, o.owner) && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 0.8f) score += o.isUnit() ? UNITS[o.type].cost : BUILDS[o.type].cost * 0.6f;
             for (auto& o : S.ents) if (o.alive && o.owner == player && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 1.1f) score -= 4000;   // never nuke our own people
@@ -919,13 +937,44 @@ void AiPlayer::think() {
         // harassment: hard AIs send a small fast squad after enemy harvesters
         if (pl.difficulty >= 2 && minutes > (pl.brutal() ? 3 : 4) && S.time - lastHarass > (pl.brutal() ? 55 : 90) && armyCount >= 5) {
             Entity* h = nullptr; float bd = 1e18f;
-            for (auto& e : S.ents) if (e.alive && e.isUnit() && S.enemies(player, e.owner) && e.ut().role == UR_HARVESTER && S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) { float d = dist2(e.pos, pl.basePos); if (d < bd) { bd = d; h = &e; } }
+            for (auto& e : S.ents) if (e.alive && e.isUnit() && S.enemies(player, e.owner) && e.ut().role == UR_HARVESTER && (S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) { float d = dist2(e.pos, pl.basePos); if (d < bd) { bd = d; h = &e; } }
             if (h) {
                 lastHarass = S.time;
                 std::vector<Ref> squad;
                 for (auto r : army) { Entity* e = S.get(r); if (e && e->ut().kind == UK_VEH && e->ut().speed >= 70) { squad.push_back(r); if ((int)squad.size() >= (pl.brutal() ? 4 : 2)) break; } }
                 if (!squad.empty()) S.cmdAttack(squad, S.refOf(*h));
             }
+        }
+    }
+    // spy drones trail the army (their detectors reveal what hides near the fighting); without an army they hover over the base
+    for (auto r : scouts) {
+        Entity* d = S.get(r);
+        if (!d || (S.tick + d->gen) % 6 != 0 || d->order == O_MOVE) continue;
+        Vec2 c = pl.basePos; int n = 0;
+        if (armyCount >= 4) { c = Vec2(); for (auto ar : army) { Entity* a = S.get(ar); if (a && !a->carrier.valid()) { c += a->pos; n++; } } if (n) c = c * (1.0f / n); else c = pl.basePos; }
+        if (dist(d->pos, c) > 4.5f * TILE) S.cmdMove({r}, c, false);
+    }
+    // spies go for the structure that is worth most and guarded least (nothing armed within six tiles), and the second one tags along
+    if (!spies.empty() && S.time - lastSpyOrder > 5.0f) {
+        lastSpyOrder = S.time;
+        Entity* best = nullptr; float bs = -1e18f;
+        for (auto& e : S.ents) {
+            if (!e.alive || !e.isBuilding() || !e.constructed || !S.enemies(player, e.owner) || !(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
+            float w = 1.0f;
+            switch (e.bt().role) { case BR_NUKE: w = 2.2f; break; case BR_INCOME: w = 1.7f; break; case BR_TECH: w = 1.4f; break; case BR_FACTORY: case BR_AIRFIELD: w = 1.3f; break; case BR_SUPPLY: w = 1.2f; break; case BR_POWER: w = 1.1f; break; case BR_HQ: w = 0.8f; break; default: break; }
+            float armed = 0;
+            S.forEachNear(e.pos, 6.5f * TILE, [&](Entity& g) {
+                if (g.kind == EK_RESOURCE || g.owner < 0 || !(g.owner == e.owner || S.players[g.owner].team == S.players[e.owner].team)) return;
+                if (g.weapon() >= 0 && (g.isBuilding() ? g.constructed : g.ut().role == UR_COMBAT)) armed += g.isBuilding() ? 1.5f : 1.0f;
+            });
+            Entity* sp = S.get(spies[0]);
+            float sc = BUILDS[e.type].cost * w * 0.4f - 900.0f * armed - (sp ? dist(e.pos, sp->pos) / TILE * 12.0f : 0.0f);
+            if (sc > bs) { bs = sc; best = &e; }
+        }
+        if (best && bs > -400.0f) {
+            std::vector<Ref> idle;
+            for (auto r : spies) { Entity* sp = S.get(r); if (sp && sp->order != O_CAPTURE && !sp->carrier.valid()) idle.push_back(r); }
+            if (!idle.empty()) S.cmdCapture(idle, S.refOf(*best));
         }
     }
     // bombers (smart): wait until a flight is loaded, then go together for what hurts most and sits under the least flak:
@@ -944,7 +993,7 @@ void AiPlayer::think() {
             Entity* best = nullptr; float bestScore = 300.0f;
             for (auto& e : S.ents) {
                 if (!e.alive || e.kind == EK_RESOURCE || e.isAir() || !S.enemies(player, e.owner)) continue;
-                if (!S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+                if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
                 float v = 0;
                 if (e.isBuilding()) {
                     float w = 1.0f;
@@ -979,7 +1028,7 @@ void AiPlayer::think() {
         Entity* best = nullptr; float bs = 1e18f;
         for (auto& e : S.ents) {
             if (!e.alive || !S.enemies(player, e.owner) || e.kind == EK_RESOURCE) continue;
-            if (!S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+            if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             float s = dist(e.pos, a->pos) / TILE;
             if (e.isUnit()) { if (e.ut().role == UR_HARVESTER) s -= 12; else if (e.ut().kind == UK_VEH) s -= 6; else if (e.ut().kind == UK_AIR) s -= 8; }
             else { if (e.bt().role == BR_AATURRET) s += 25; else if (e.bt().role == BR_POWER) s -= 6; else if (e.bt().role == BR_TURRET) s += 6; }

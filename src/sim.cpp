@@ -2452,15 +2452,22 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     case O_ENTER: {   // walk to a cargo chopper / bunker and climb aboard
         Entity* c = get(e.targetEnt);
         if (!c || !canBoard(e, *c)) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); break; }
-        float reach = c->isBuilding() ? 22.0f : c->radius() + 34.0f;
+        float reach = c->isBuilding() ? 40.0f : c->radius() + 44.0f;   // (a crowd cannot all stand at the door: whoever is close enough climbs in)
         bool open = c->isBuilding() ? (c->constructed && !c->unloading) : (c->order == O_IDLE && !c->unloading && c->disabledUntil <= time);   // a lifter takes people while it hovers in place
         if (distToEntity(e.pos, *c) <= reach && open) { board(e, *c); break; }
-        Vec2 goal = c->isBuilding() ? g_map.nearestFree(c->pos + Vec2(0, c->bt().h * TILE * 0.5f + 14), 6) : g_map.nearestFree(c->pos, 6);
+        Vec2 toMe = (e.pos - c->pos).norm();   // each soldier heads for the side of the door it is on, so a crowd spreads around the bunker instead of jamming on one face
+        Vec2 goal = c->isBuilding() ? g_map.nearestFree(c->pos + toMe * (std::max(c->bt().w, c->bt().h) * TILE * 0.5f + 22.0f), 6) : g_map.nearestFree(c->pos + toMe * (c->radius() * 0.5f), 6);
         if (e.pathIdx >= e.path.size() || (e.repathTimer <= 0 && dist(e.path.back(), goal) > TILE * 0.8f)) requestPath(e, goal);
         Vec2 before = e.pos;
         moveAlong(e, ut.speed);
         if (dist(e.pos, before) < 0.05f) e.actionTimer += SIM_DT; else e.actionTimer = 0;
-        if (e.actionTimer > 12.0f) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; }   // cannot get there
+        if (e.actionTimer > 1.5f) {   // blocked (a crowd at the door, something in the way): try another spot around the carrier
+            float a = rng.f(0, 6.2832f), rr = (c->isBuilding() ? std::max(c->bt().w, c->bt().h) * TILE * 0.5f : c->radius() * 0.5f) + 22.0f;
+            requestPath(e, g_map.nearestFree(c->pos + Vec2(std::cos(a), std::sin(a)) * rr, 5));
+            e.actionTimer = 0.4f;
+        }
+        e.stuckTimer += (e.actionTimer > 0 ? SIM_DT : -e.stuckTimer);
+        if (e.stuckTimer > 20.0f) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; e.stuckTimer = 0; }   // cannot get there
         break;
     }
     case O_CAPTURE: {   // spy: walk up to an enemy structure and take it

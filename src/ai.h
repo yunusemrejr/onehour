@@ -36,6 +36,7 @@ struct AiPlayer {
     int docCtx = 0;             // what the doctrine statistics were consulted for: who this commander faces (see doctrineContext)
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
+    float lastSpyOrder = -100;     // when the spies were last sent after a structure
     float lastBombRun = -100, lastAllyHelp = -100, lastNukeDodge = -100, retreatVotes = 0;
     int dodges = 0, medicsBuilt = 0;   // statistics for the self-play reports
     float waveX[WAVE_F] = {};   // features at launch, for learning from the outcome
