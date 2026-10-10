@@ -45,6 +45,7 @@ struct Game {
     bool dropMode = false;          // picking a paradrop zone
     bool aidMode = false;           // picking the spot for an Aid Drop
     bool rallyMode = false;
+    bool dropoffMode = false;       // picking the spot where a cargo chopper sets down and unloads
     bool areaMode = false;          // picking the circle a selection should guard / gather in
     bool areaDrag = false; Vec2 areaStart; float areaRadius = 0;
     struct ZoneFlash { Vec2 pos; float r; float time; bool gather; };

@@ -229,6 +229,9 @@ void Gfx::bakeTerrain() {
     Canvas c(WORLD_W, WORLD_H);
     terrainBake(c);
     worldTerrain = fromCanvas(c, 0, 0);
+    if (const char* wp = getenv("ONEHOUR_WORLDBMP")) {   // debugging: dump the baked ground (ONEHOUR_WORLDBMP=file.bmp)
+        if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(c.px.data(), c.w, c.h, 32, c.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, wp); SDL_FreeSurface(sf); }
+    }
     Canvas mini(232, 232);
     terrainOverview(c, mini);
     minimapTerrain = fromCanvasSmooth(mini, 0, 0);

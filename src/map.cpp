@@ -32,8 +32,8 @@ static void paintDisc(Map& m, float cx, float cy, float r, u8 t, bool onlyIf(u8)
         }
     }
 }
-static void paintRoad(Map& m, float x0, float y0, float x1, float y1, float halfW) {
-    m.roads.push_back({x0, y0, x1, y1, halfW});
+static void paintRoad(Map& m, float x0, float y0, float x1, float y1, float halfW, bool bridge = false) {
+    if (!bridge) m.roads.push_back({x0, y0, x1, y1, halfW});
     float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
     int steps = (int)(len * 2) + 1;
     for (int i = 0; i <= steps; i++) {
@@ -45,7 +45,8 @@ static void paintRoad(Map& m, float x0, float y0, float x1, float y1, float half
             float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
             if (dx * dx + dy * dy <= halfW * halfW) {
                 u8& c = m.tiles[y * MAP_W + x];
-                if (c != T_WATER) c = T_ROAD;
+                if (c == T_WATER && bridge) m.bridge[y * MAP_W + x] = 1;
+                if (c != T_WATER || bridge) c = T_ROAD;
             }
         }
     }
@@ -64,6 +65,7 @@ void Map::generate() {
         tiles[y * MAP_W + x] = t;
         variant[y * MAP_W + x] = (u8)(hash2(x, y, SEED + 99) * 255);
         blocked[y * MAP_W + x] = 0;
+        bridge[y * MAP_W + x] = 0;
     }
     // Central lake with sandy shore
     paintDisc(*this, 40, 40, 10.5f, T_SAND);
@@ -113,6 +115,54 @@ void Map::generate() {
     paintRoad(*this, 13, 67, 67, 67, 1.0f);
     paintRoad(*this, 12, 13, 12, 67, 1.0f);
     paintRoad(*this, 67, 13, 67, 67, 1.0f);
+
+    // Rivers: four meandering streams leave the lake towards the map edge (one per quadrant, mirrored). Roads that cross them become bridges and
+    // every river has a sandy ford besides, so nothing is cut off, but armies funnel through the crossings.
+    {
+        struct Pt { float x, y; };
+        static const Pt NW[] = { {31, 35}, {26.5f, 36.2f}, {22, 36.8f}, {18.5f, 34.5f}, {16, 31.5f}, {12.5f, 29.6f}, {8, 30.4f}, {4.5f, 32.4f}, {1, 31.5f} };
+        const int N = (int)(sizeof(NW) / sizeof(NW[0]));
+        for (int q = 0; q < 4; q++) {
+            auto tf = [&](Pt p) { return Pt{ (q & 1) ? 79 - p.x : p.x, (q & 2) ? 79 - p.y : p.y }; };
+            std::vector<Pt> pts;   // Catmull-Rom through the control points
+            for (int i = 0; i < N - 1; i++) {
+                Pt a = NW[std::max(0, i - 1)], b = NW[i], c = NW[i + 1], d = NW[std::min(N - 1, i + 2)];
+                for (int k = 0; k < 8; k++) {
+                    float t = k / 8.0f, t2 = t * t, t3 = t2 * t;
+                    auto cr = [&](float p0, float p1, float p2, float p3) { return 0.5f * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3); };
+                    pts.push_back(tf(Pt{cr(a.x, b.x, c.x, d.x), cr(a.y, b.y, c.y, d.y)}));
+                }
+            }
+            pts.push_back(tf(NW[N - 1]));
+            for (size_t i = 0; i < pts.size(); i++) {   // banks first (grass and dirt only), then the water on top
+                float w = 1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q);
+                paintDisc(*this, pts[i].x, pts[i].y, w + 0.9f, T_SAND, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT; });
+            }
+            for (size_t i = 0; i < pts.size(); i++) {
+                float w = 1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q);
+                paintDisc(*this, pts[i].x, pts[i].y, w, T_WATER, [](u8 t) { return t != T_ROCK; });
+            }
+            size_t fi = pts.size() * 9 / 20;   // the ford: a narrow sandy shallows strip laid across the stream
+            Pt f = pts[fi], d{ pts[fi + 2].x - pts[fi - 2].x, pts[fi + 2].y - pts[fi - 2].y };
+            float dl = std::sqrt(d.x * d.x + d.y * d.y); d.x /= dl; d.y /= dl;
+            for (float t = -3.2f; t <= 3.2f; t += 0.25f) for (float u = -0.9f; u <= 0.9f; u += 0.3f) {
+                int fx = (int)(f.x - d.y * t + d.x * u), fy = (int)(f.y + d.x * t + d.y * u);
+                if (inMap(fx, fy) && tiles[fy * MAP_W + fx] == T_WATER) tiles[fy * MAP_W + fx] = T_SAND;
+            }
+        }
+        // bridges: every road is laid over the water again
+        for (auto& rs : roads) paintRoad(*this, rs.x0, rs.y0, rs.x1, rs.y1, rs.halfW, true);
+        // square off ragged deck ends: a road tile touching the deck both along and across it joins it
+        for (int pass = 0; pass < 2; pass++) {
+            for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++) {
+                int i = y * MAP_W + x;
+                if (tiles[i] != T_ROAD || bridge[i]) continue;
+                bool h = bridge[i - 1] || bridge[i + 1], v = bridge[i - MAP_W] || bridge[i + MAP_W];
+                if (h && v) bridge[i] = 2;
+            }
+            for (int i = 0; i < MAP_W * MAP_H; i++) if (bridge[i] == 2) bridge[i] = 1;
+        }
+    }
 
     // Tree clusters from noise, kept off roads, bases, and the shore
     for (int y = 2; y < MAP_H - 2; y++) for (int x = 2; x < MAP_W - 2; x++) {

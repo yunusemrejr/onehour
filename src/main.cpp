@@ -759,7 +759,7 @@ static bool autoTest(u64 seed) {
         }
         // ---- an incoming nuke: a human army's tanks drive out of the circle, an army nobody commands stays and burns
         {
-            Vec2 gz = freeAt(mid + Vec2(0, 4 * TILE));
+            Vec2 gz = freeAt(Vec2(28 * TILE, 20 * TILE));   // open meadow between the NW base and the lake
             std::vector<Ref> mine, theirs;
             for (int i = 0; i < 4; i++) {
                 float a = i * 1.5708f;
@@ -2319,6 +2319,11 @@ int main(int argc, char** argv) {
         else if (a == "--upgradetest") { g_map.generate(); return upgradeTest(seed) ? 0 : 1; }
         else if (a == "--helitest") { g_map.generate(); return heliTest(seed) ? 0 : 1; }
         else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
+        else if (a == "--mapdump") {   // ASCII tile map: . grass, : dirt, s sand, = road, B bridge, ~ water, ^ rock, T tree
+            g_map.generate();
+            for (int y = 0; y < MAP_H; y++) { for (int x = 0; x < MAP_W; x++) { int t = g_map.tile(x, y); putchar(g_map.bridge[y * MAP_W + x] ? 'B' : ".. :s=~^T"[t == T_GRASS2 ? 0 : (t == T_GRASS ? 0 : (t == T_DIRT ? 3 : (t == T_SAND ? 4 : (t == T_ROAD ? 5 : (t == T_WATER ? 6 : (t == T_ROCK ? 7 : 8))))))]); } putchar('\n'); }
+            return 0;
+        }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }

@@ -12,6 +12,7 @@ struct Map {
     u8 tiles[MAP_W * MAP_H];
     u8 blocked[MAP_W * MAP_H];      // bit0 terrain, bit1 structure, bit2 resource pile
     u8 variant[MAP_W * MAP_H];      // visual variation
+    u8 bridge[MAP_W * MAP_H];       // road laid over a river (drawn as a timber deck)
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
     std::vector<SupplySpot> supplies;
     std::vector<RoadSeg> roads;

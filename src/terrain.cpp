@@ -162,6 +162,7 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
 }
 
 // ---------------------------------------------------------------- trees and props
+inline bool inMapPx(int x, int y) { return x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H; }
 Canvas downsample2(const Canvas& big) {
     Canvas out(big.w / 2, big.h / 2);
     for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) {
@@ -257,6 +258,95 @@ Canvas makeBoulder(float R, u32 seed) {
     a.poly(top, shade(base, 1.14f), R * 0.5f, 0.55f);
     a.line(cx - R * 0.2f, cy + R * 0.1f, cx + R * 0.3f, cy + R * 0.5f, 0.5f, rgba(rgb(40, 38, 34), 120));
     if (r.f() < 0.5f) a.ell(cx + R * 0.3f, cy + R * 0.35f, R * 0.35f, R * 0.18f, rgba(rgb(78, 100, 56), 130), 1, 0);   // moss on the shaded side
+    return downsample2(big);
+}
+
+// Decorative props baked into the ground. kind: 0 fallen log, 1 ruined wall, 2 standing stone, 3 burnt-out hulk, 4 lily pad, 5 broken pillar, 6 stump
+Canvas makeProp(int kind, float R, u32 seed) {
+    int S = (int)(R * 2 + 14);
+    Canvas big(S * 2, S * 2);
+    Art a(big, rgb(255, 255, 255), 2.0f);
+    Rng r(seed);
+    float cx = S * 0.5f, cy = S * 0.5f;
+    switch (kind) {
+    case 0: {   // fallen log, with a cut end ring and a couple of broken branches
+        float an = r.f(-0.5f, 0.5f), L = R * 1.1f, th = R * 0.2f;
+        float ax = cx - std::cos(an) * L, ay = cy - std::sin(an) * L, bx = cx + std::cos(an) * L, by = cy + std::sin(an) * L;
+        a.shadowCircle(cx, cy, L * 0.55f, 2, 3, 3, 45);
+        Color bark = shade(rgb(92, 66, 44), r.f(0.85f, 1.1f));
+        a.cap(ax, ay, bx, by, th, bark, th * 0.9f, 0.7f);
+        a.line(ax + (bx - ax) * 0.1f, ay + (by - ay) * 0.1f - th * 0.3f, ax + (bx - ax) * 0.9f, ay + (by - ay) * 0.9f - th * 0.3f, 0.6f, rgba(rgb(150, 120, 86), 120));
+        a.ell(bx, by, th * 0.55f, th * 0.9f, rgb(190, 158, 112), 1, 0.3f);
+        a.ring(bx, by, th * 0.35f, 0.5f, rgba(rgb(120, 90, 60), 200), 0.5f, 0);
+        for (int i = 0; i < 2; i++) { float t = r.f(0.25f, 0.75f), px = ax + (bx - ax) * t, py = ay + (by - ay) * t, s = i ? 1.0f : -1.0f; a.cap(px, py, px - std::sin(an) * s * th * 2.2f, py + std::cos(an) * s * th * 2.2f, th * 0.3f, shade(bark, 0.9f), 0.5f, 0.5f); }
+        break;
+    }
+    case 1: {   // a stretch of ruined wall: a few mortared blocks of different height and a collapsed heap
+        float an = r.f(-0.35f, 0.35f);
+        int n = 4 + (int)r.range(0, 3);
+        a.shadowCircle(cx, cy + 2, R * 0.5f, 3, 4, 3, 35);
+        for (int i = 0; i < n; i++) {
+            float t = (i - (n - 1) * 0.5f) * R * 0.34f, px = cx + std::cos(an) * t, py = cy + std::sin(an) * t;
+            float h = r.f(0.8f, 1.6f) * ((i == 0 || i == n - 1) ? 0.6f : 1.0f);
+            Color c = shade(rgb(150, 142, 128), r.f(0.82f, 1.1f));
+            a.box(px, py - h * R * 0.12f, R * 0.17f, R * 0.12f + h * R * 0.12f, 1.2f, c, 2.0f, 0.65f);
+            a.line(px - R * 0.15f, py - h * R * 0.12f, px + R * 0.15f, py - h * R * 0.12f, 0.6f, rgba(shade(c, 1.25f), 200));
+        }
+        for (int i = 0; i < 6; i++) a.poly({ {cx + r.f(-R * 0.6f, R * 0.6f), cy + R * 0.2f + r.f(0, R * 0.2f)}, {cx + r.f(-R * 0.6f, R * 0.6f) + 3, cy + R * 0.25f}, {cx + r.f(-R * 0.6f, R * 0.6f), cy + R * 0.34f} }, shade(rgb(130, 124, 112), r.f(0.8f, 1.1f)), 1.0f, 0.5f);
+        a.ell(cx - R * 0.1f, cy + R * 0.3f, R * 0.4f, R * 0.12f, rgba(rgb(80, 104, 56), 140), 1, 0);   // grass creeping over the rubble
+        break;
+    }
+    case 2: {   // standing stone
+        float h = R * r.f(0.7f, 1.05f), w = R * r.f(0.18f, 0.26f);
+        a.shadowCircle(cx, cy + R * 0.1f, R * 0.5f, 4, 5, 3, 85);
+        Color c = shade(rgb(118, 114, 106), r.f(0.88f, 1.08f));
+        a.poly({ {cx - w, cy + R * 0.25f}, {cx - w * 0.8f, cy + R * 0.25f - h}, {cx + w * 0.2f, cy + R * 0.25f - h - 2}, {cx + w, cy + R * 0.25f - h * 0.8f}, {cx + w * 1.1f, cy + R * 0.25f} }, c, w * 0.9f, 0.8f);
+        a.line(cx - w * 0.2f, cy + R * 0.1f, cx + w * 0.1f, cy - h * 0.5f, 0.6f, rgba(rgb(46, 44, 40), 110));
+        a.ell(cx, cy + R * 0.25f, w * 1.3f, w * 0.4f, rgba(rgb(78, 100, 56), 150), 1, 0);
+        break;
+    }
+    case 3: {   // burnt-out vehicle hull: scorched, no turret, wheels gone
+        float an = r.f(-0.8f, 0.8f), ca = std::cos(an), sa = std::sin(an);
+        a.shadowCircle(cx, cy, R * 0.6f, 2, 3, 4, 70);
+        a.ell(cx, cy, R * 0.95f, R * 0.7f, rgba(rgb(24, 20, 16), 70), 5, 0);
+        auto rot = [&](float x, float y) { return P{ cx + x * ca - y * sa, cy + x * sa + y * ca }; };
+        float hl = R * 0.8f, hw = R * 0.42f;
+        a.poly({ rot(-hl, -hw), rot(hl * 0.85f, -hw), rot(hl, -hw * 0.4f), rot(hl, hw * 0.4f), rot(hl * 0.85f, hw), rot(-hl, hw) }, rgb(60, 56, 52), 3.0f, 0.7f);
+        for (int s = -1; s <= 1; s += 2) { P p0 = rot(-hl, s * hw * 1.18f), p1 = rot(hl, s * hw * 1.18f); a.cap(p0.x, p0.y, p1.x, p1.y, hw * 0.22f, rgb(36, 34, 32), 1.2f, 0.5f); }
+        P t = rot(-hl * 0.1f, 0); a.ell(t.x, t.y, hw * 0.75f, hw * 0.6f, rgb(40, 38, 36), 2.0f, 0.6f);
+        P q = rot(hl * 0.3f, hw * 0.1f); a.ell(q.x, q.y, hw * 0.5f, hw * 0.4f, rgb(22, 20, 18), 1.0f, 0.3f);   // blown-out hatch
+        for (int i = 0; i < 3; i++) { P u = rot(r.f(-hl, hl), r.f(-hw, hw)); a.dot(u.x, u.y, r.f(0.8f, 1.8f), rgb(120, 62, 30)); }   // rust
+        break;
+    }
+    case 4: {   // lily pad (R ~ 5), a flower on some
+        float rr = R * 0.7f, notch = r.f(0, 6.28f);
+        Color g = shade(rgb(64, 130, 62), r.f(0.85f, 1.15f));
+        a.shadowCircle(cx, cy, rr, 1, 1.5f, 1.5f, 60);
+        std::vector<P> v; v.push_back({cx, cy});
+        for (int i = 0; i <= 14; i++) { float t = notch + 0.35f + i * (6.28f - 0.7f) / 14.0f; v.push_back({cx + std::cos(t) * rr, cy + std::sin(t) * rr * 0.8f}); }
+        a.poly(v, g, 1.4f, 0.5f);
+        a.line(cx, cy, cx + std::cos(notch + 3.14f) * rr * 0.8f, cy + std::sin(notch + 3.14f) * rr * 0.6f, 0.4f, rgba(rgb(34, 84, 40), 160));
+        if (r.f() < 0.4f) { a.dot(cx + 1, cy - 1, rr * 0.35f, rgb(246, 232, 236)); a.dot(cx + 1, cy - 1, rr * 0.16f, rgb(244, 200, 80)); }
+        break;
+    }
+    case 5: {   // broken pillar on a square base
+        a.shadowCircle(cx, cy + R * 0.1f, R * 0.5f, 4, 5, 3, 85);
+        Color c = shade(rgb(166, 158, 142), r.f(0.9f, 1.08f));
+        a.box(cx, cy + R * 0.16f, R * 0.3f, R * 0.12f, 1, shade(c, 0.9f), 1.6f, 0.6f);
+        float h = R * r.f(0.35f, 0.7f);
+        a.box(cx, cy + R * 0.05f - h * 0.5f, R * 0.17f, h * 0.5f + R * 0.06f, 1, c, 2.0f, 0.8f);
+        a.poly({ {cx - R * 0.17f, cy + R * 0.05f - h}, {cx - R * 0.02f, cy + R * 0.05f - h - 3}, {cx + R * 0.1f, cy + R * 0.05f - h}, {cx + R * 0.17f, cy + R * 0.05f - h + 2}, {cx, cy + R * 0.05f - h + 3} }, shade(c, 1.1f), 1, 0.4f);
+        a.poly({ {cx + R * 0.25f, cy + R * 0.2f}, {cx + R * 0.5f, cy + R * 0.18f}, {cx + R * 0.45f, cy + R * 0.3f} }, shade(c, 0.85f), 1, 0.5f);
+        break;
+    }
+    default: {   // stump
+        a.shadowCircle(cx, cy, R * 0.5f, 2, 3, 3, 70);
+        a.ell(cx, cy + 1, R * 0.4f, R * 0.3f, rgb(84, 60, 40), 2, 0.7f);
+        a.ell(cx, cy - 1.2f, R * 0.36f, R * 0.26f, rgb(188, 154, 108), 1, 0.3f);
+        a.ring(cx, cy - 1.2f, R * 0.2f, 0.5f, rgba(rgb(120, 90, 58), 180), 0.5f, 0);
+        break;
+    }
+    }
     return downsample2(big);
 }
 
@@ -531,6 +621,108 @@ void terrainBake(Canvas& world) {
         float cx = sp.tx * TILE + TILE * 0.5f, cy = sp.ty * TILE + TILE * 0.5f;
         for (int i = 0; i < 40; i++) { float an = r.f(0, 6.28f), d = r.f(10, 44); world.fillCircle(cx + std::cos(an) * d, cy + std::sin(an) * d * 0.8f, r.f(1.5f, 4), rgb(70, 54, 36, 80)); }
         for (int k = 0; k < 2; k++) for (float a = 0; a < 6.2f; a += 0.05f) { float rr = 34 + k * 5; world.set((int)(cx + std::cos(a) * rr), (int)(cy + std::sin(a) * rr * 0.8f), rgb(60, 46, 32, 70)); }
+    }
+
+
+    // ---- bridges: timber decks over the rivers with rails, posts and a shadow on the water below
+    for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
+        if (!g_map.bridge[ty * MAP_W + tx]) continue;
+        int x0 = tx * TILE, y0 = ty * TILE;
+        for (int y = 0; y < TILE; y++) for (int x = 0; x < TILE; x++) {   // planks
+            float pl = nz.v((x0 + x) * 0.9f, (y0 + y) * 0.1f), g = 0.86f + 0.22f * pl;
+            bool seamH = (y % 8) == 0, seamV = ((x0 + x + (((y0 + y) / 8) & 1) * 12) % 24) == 0;
+            Color c = shade(rgb(142, 108, 74), g * (seamH || seamV ? 0.6f : 1.0f));
+            world.set(x0 + x, y0 + y, c);
+        }
+    }
+    for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
+        if (!g_map.bridge[ty * MAP_W + tx]) continue;
+        int x0 = tx * TILE, y0 = ty * TILE;
+        auto off = [&](int ox, int oy) { return !g_map.bridge[(ty + oy) * MAP_W + tx + ox] && g_map.tile(tx + ox, ty + oy) == T_WATER; };
+        struct Side { int ox, oy; };
+        static const Side SD[4] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
+        for (int sdI = 0; sdI < 4; sdI++) {
+            if (!off(SD[sdI].ox, SD[sdI].oy)) continue;
+            bool horiz = SD[sdI].oy != 0;
+            for (int u = 0; u < TILE; u++) {   // rail: a dark beam with a lit top edge, drop shadow outwards
+                for (int t = 0; t < 4; t++) {
+                    int px = horiz ? x0 + u : x0 + (SD[sdI].ox < 0 ? t : TILE - 1 - t), py = horiz ? y0 + (SD[sdI].oy < 0 ? t : TILE - 1 - t) : y0 + u;
+                    world.set(px, py, t == 0 ? rgb(176, 140, 98) : (t == 3 ? rgb(70, 50, 34) : rgb(104, 76, 52)));
+                }
+                for (int t = 4; t < 9; t++) {
+                    int px = horiz ? x0 + u : x0 + (SD[sdI].ox < 0 ? -(t - 3) : TILE - 1 + (t - 3)), py = horiz ? y0 + (SD[sdI].oy < 0 ? -(t - 3) : TILE - 1 + (t - 3)) : y0 + u;
+                    if (inMapPx(px, py)) { Color p = Canvas::unpack(world.px[(size_t)py * W + px]); world.px[(size_t)py * W + px] = Canvas::pack(shade(p, 1.0f - 0.35f * (1.0f - (t - 4) / 5.0f))); }
+                }
+                if (u % 10 == 4) for (int dt = 0; dt < 5; dt++) for (int dw = 0; dw < 3; dw++) {   // posts
+                    int px = horiz ? x0 + u + dw : x0 + (SD[sdI].ox < 0 ? dt - 1 : TILE - 4 + dt), py = horiz ? y0 + (SD[sdI].oy < 0 ? dt - 1 : TILE - 4 + dt) : y0 + u + dw;
+                    world.set(px, py, dw == 0 ? rgb(170, 134, 94) : rgb(86, 62, 42));
+                }
+            }
+        }
+    }
+    // ---- props
+    {
+        std::vector<Canvas> logs, walls, stones, hulks, pads, pillars, stumps;
+        for (int i = 0; i < 5; i++) logs.push_back(makeProp(0, 16.0f + i * 2, 7100u + i));
+        for (int i = 0; i < 5; i++) walls.push_back(makeProp(1, 24.0f + i * 2, 7200u + i));
+        for (int i = 0; i < 5; i++) stones.push_back(makeProp(2, 18.0f + i * 2, 7300u + i));
+        for (int i = 0; i < 4; i++) hulks.push_back(makeProp(3, 20.0f + i * 2, 7400u + i));
+        for (int i = 0; i < 6; i++) pads.push_back(makeProp(4, 7.0f + i * 0.8f, 7500u + i));
+        for (int i = 0; i < 4; i++) pillars.push_back(makeProp(5, 24.0f + i * 2, 7600u + i));
+        for (int i = 0; i < 4; i++) stumps.push_back(makeProp(6, 14.0f + i * 1.5f, 7700u + i));
+        auto put = [&](const Canvas& c, float x, float y) { blitOver(world, c, (int)(x - c.w * 0.5f), (int)(y - c.h * 0.5f)); };
+        auto clearOf = [&](float x, float y, float baseR, float supR) {
+            for (auto& s : g_map.starts) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < baseR * TILE) return false;
+            for (auto& s : g_map.supplies) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < supR) return false;
+            return true;
+        };
+        auto flat = [&](float x, float y) {   // open ground with no rock, water, road or tree within a tile
+            for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) { int t = tileAt(x + i * TILE, y + j * TILE); if (t != T_GRASS && t != T_GRASS2 && t != T_DIRT) return false; }
+            return true;
+        };
+        Rng pr(9137);
+        // lily pads on the river shallows (not the deep lake)
+        for (int i = 0; i < 2600; i++) {
+            float x = pr.f(8, W - 8.0f), y = pr.f(8, H - 8.0f);
+            if (tileAt(x, y) != T_WATER || tileAt(x + 12, y) != T_WATER || tileAt(x - 12, y) != T_WATER || tileAt(x, y + 12) != T_WATER || tileAt(x, y - 12) != T_WATER) continue;
+            if (hyp(x - 40.0f * TILE, y - 40.0f * TILE) < 9.0f * TILE) continue;
+            if (nz.v(x * 0.012f + 31, y * 0.012f + 5) < 0.45f) continue;
+            if (g_map.bridge[clampi(tileOf(y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(x), 0, MAP_W - 1)]) continue;
+            put(pads[pr.range(0, 5)], x, y);
+        }
+        // fallen logs and stumps near the trees, logs on river banks
+        int placed = 0;
+        for (int i = 0; i < 4000 && placed < 90; i++) {
+            float x = pr.f(40, W - 40.0f), y = pr.f(40, H - 40.0f);
+            if (!flat(x, y) || !clearOf(x, y, 9, 90)) continue;
+            bool nearTree = false;
+            for (int j = -2; j <= 2 && !nearTree; j++) for (int k = -2; k <= 2; k++) if (tileAt(x + k * TILE, y + j * TILE) == T_TREE) { nearTree = true; break; }
+            bool nearWater = false;
+            for (int j = -3; j <= 3 && !nearWater; j++) for (int k = -3; k <= 3; k++) if (tileAt(x + k * TILE, y + j * TILE) == T_WATER) { nearWater = true; break; }
+            if (!nearTree && !nearWater && pr.f() > 0.08f) continue;
+            if (pr.f() < 0.35f) put(stumps[pr.range(0, 3)], x, y); else put(logs[pr.range(0, 4)], x, y);
+            placed++;
+        }
+        // ruins, standing stones, and the husks of an old fight: scattered, mirrored where it counts for fairness
+        struct Site { float tx, ty; int what; };
+        static const Site SITES[] = {   // one quadrant; mirrored into the other three. what: 0 ruin, 1 stone circle, 2 hulks
+            {24, 17, 0}, {30, 8.5f, 1}, {8, 22, 2}, {25, 31, 2}, {19, 47, 0}, {6.5f, 54, 1}
+        };
+        for (int q = 0; q < 4; q++) for (const Site& st : SITES) {
+            float tx = (q & 1) ? 79 - st.tx : st.tx, ty = (q & 2) ? 79 - st.ty : st.ty, cx = tx * TILE, cy = ty * TILE;
+            if (!clearOf(cx, cy, 8, 80)) continue;
+            Rng sr((u64)(q * 977 + st.tx * 31 + st.ty * 7));
+            if (st.what == 0) {   // a ruined courtyard: wall runs round a square with pillar stumps at the corners
+                int k = 0;
+                for (int sd = 0; sd < 4; sd++) { float ax = sd < 2 ? (sd ? 1 : -1) : 0, ay = sd >= 2 ? (sd == 3 ? 1 : -1) : 0; float px = cx + ax * 52 * (sd < 2 ? 1 : 0) + (sd < 2 ? 0 : (sr.f() - 0.5f) * 30), py = cy + ay * 52 + (sd < 2 ? (sr.f() - 0.5f) * 30 : 0); if (openGround(px, py)) put(walls[k++ % 5], px, py); }
+                for (int c4 = 0; c4 < 4; c4++) { float px = cx + ((c4 & 1) ? 56 : -56), py = cy + ((c4 & 2) ? 56 : -56); if (openGround(px, py) && sr.f() < 0.8f) put(pillars[sr.range(0, 3)], px, py); }
+            } else if (st.what == 1) {   // stones in a ring
+                int n = 7;
+                for (int i = 0; i < n; i++) { float an = i * 6.2831853f / n + 0.3f, px = cx + std::cos(an) * 46, py = cy + std::sin(an) * 40; if (flat(px, py) && sr.f() < 0.88f) put(stones[sr.range(0, 4)], px, py); }
+            } else {   // wrecks scattered on and beside the road
+                for (int i = 0; i < 3; i++) { float px = cx + sr.f(-70, 70), py = cy + sr.f(-50, 50); int t = tileAt(px, py); if (t == T_WATER || t == T_ROCK || t == T_TREE) continue; put(hulks[sr.range(0, 3)], px, py); }
+            }
+        }
     }
 
     // ---- boulders: scattered where open ground meets rock, plus a few strays

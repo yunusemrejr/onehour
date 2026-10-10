@@ -3,7 +3,7 @@
 
 Game g_game;
 
-enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID };
+enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF };
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -15,6 +15,8 @@ static const char* kindHotkey(int kind, int id) {
     case BK_NUKE: return "K";
     case BK_DROP: return "P";
     case BK_AID: return "D";
+    case BK_UNLOAD: return "U";
+    case BK_DROPOFF: return "D";
     case BK_ATTACKMOVE: return "A";
     case BK_STOP: return "S";
     case BK_AREA: return "G";
@@ -153,7 +155,7 @@ void Game::processEvents() {
 }
 
 void Game::cleanSelection() {
-    selection.erase(std::remove_if(selection.begin(), selection.end(), [&](Ref r) { Entity* e = g_sim.get(r); return !e || e->owner != g_sim.humanPlayer; }), selection.end());
+    selection.erase(std::remove_if(selection.begin(), selection.end(), [&](Ref r) { Entity* e = g_sim.get(r); return !e || e->owner != g_sim.humanPlayer || e->carrier.valid(); }), selection.end());
     for (auto& g : groups) g.erase(std::remove_if(g.begin(), g.end(), [&](Ref r) { return !g_sim.get(r); }), g.end());
 }
 
@@ -192,6 +194,7 @@ Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
         if (ownOnly && e.owner != g_sim.humanPlayer) continue;
+        if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier, or hidden (stealth)
         if (e.owner != g_sim.humanPlayer && e.kind != EK_RESOURCE && !g_sim.explored(g_sim.humanPlayer, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
         float d;
         if (e.isBuilding()) {
@@ -231,7 +234,7 @@ void Game::selectBox(Vec2 a, Vec2 b, bool add) {
     float x0 = std::min(a.x, b.x), x1 = std::max(a.x, b.x), y0 = std::min(a.y, b.y), y1 = std::max(a.y, b.y);
     bool any = false;
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isUnit() || e.owner != g_sim.humanPlayer) continue;
+        if (!e.alive || !e.isUnit() || e.owner != g_sim.humanPlayer || e.carrier.valid()) continue;
         if (e.pos.x < x0 || e.pos.x > x1 || e.pos.y < y0 || e.pos.y > y1) continue;
         Ref r = g_sim.refOf(e);
         if (std::find(selection.begin(), selection.end(), r) == selection.end()) { selection.push_back(r); any = true; }
@@ -247,7 +250,7 @@ void Game::selectSameType(Entity* e) {
     if (!e || !e->isUnit() || e->owner != g_sim.humanPlayer) return;
     selection.clear();
     for (auto& o : g_sim.ents) {
-        if (!o.alive || !o.isUnit() || o.owner != e->owner || o.type != e->type) continue;
+        if (!o.alive || !o.isUnit() || o.owner != e->owner || o.type != e->type || o.carrier.valid()) continue;
         Vec2 s = worldToScreen(o.pos);
         if (s.x < -20 || s.y < -20 || s.x > SCREEN_W + 20 || s.y > VIEW_H + 20) continue;
         selection.push_back(g_sim.refOf(o));
@@ -284,6 +287,11 @@ void Game::issueRightClick(Vec2 w) {
     if (t && t->owner >= 0 && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE && !selectedBuilding()) {   // an ally: go to it (Ctrl or Force Fire to attack it)
         g_sim.cmdMove(selection, t->pos, false); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
+    }
+    if (t && t->owner == g_sim.humanPlayer && ((t->isBuilding() && t->bt().role == BR_BUNKER) || (t->isUnit() && t->ut().cargoCap > 0))) {   // climb aboard a cargo chopper / bunker
+        std::vector<Ref> riders; Ref tr = g_sim.refOf(*t);
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o != t && g_sim.canBoard(*o, *t)) riders.push_back(r); }
+        if (!riders.empty()) { g_sim.cmdEnter(riders, tr); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
     }
     if (t && t->kind == EK_RESOURCE && selectionHasRole(UR_HARVESTER)) { g_sim.cmdHarvest(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
     if (t && t->isBuilding() && t->owner == g_sim.humanPlayer && selectionHasRole(UR_DOZER)) { g_sim.cmdAssist(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
@@ -376,6 +384,13 @@ void Game::buildButtons() {
             snprintf(tip, sizeof tip, "Launch Nuke  [K]  Obliterates a %d tile radius and leaves lethal radiation for over a minute. One warhead per ramp every 5 minutes%s", (int)NUKE_RADIUS, pl.lowPower() ? "  (LOW POWER)" : "");
             add(BK_NUKE, 0, rdy > 0, "Launch Nuke", tip);
         }
+        if (role == BR_BUNKER) {
+            snprintf(tip, sizeof tip, "Unload  [U]  Everybody climbs out onto the ground (%d soldiers, %d dozer inside)", g_sim.garrisonInfantry(*b), g_sim.garrisonDozers(*b));
+            add(BK_UNLOAD, 0, !b->passengers.empty(), "Unload", tip);
+            add(BK_RALLY, 0, true, "Rally", "Set the point soldiers walk to when they climb out (right-click ground while selected)");
+            add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
+            return;
+        }
         if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY) add(BK_RALLY, 0, true, "Rally", "Set rally point (right-click ground while selected)");
         add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
         return;
@@ -392,8 +407,12 @@ void Game::buildButtons() {
         }
         return;
     }
-    bool combat = false;
-    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; }
+    bool combat = false, lifter = false;
+    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; if (e && e->isUnit() && e->ut().cargoCap > 0) lifter = true; }
+    if (lifter) {
+        add(BK_UNLOAD, 0, true, "Unload", "Unload  [U]  Set down where it hovers and let everybody out. Load a lifter by right-clicking it with soldiers or vehicles selected");
+        add(BK_DROPOFF, 0, true, "Drop Off", "Drop Off  [D]  Pick a spot: the lifter flies there, sets down and unloads");
+    }
     bool haul = selectionHasRole(UR_HARVESTER);
     if (combat) add(BK_ATTACKMOVE, 0, true, "Attack Move", "Attack-move: engage everything on the way  [A]");
     if (combat) add(BK_FORCE, 0, true, "Force Fire", "Force fire: click any unit or structure, your own or an ally's included, to attack it on purpose (or hold Ctrl and right-click). Allies never shoot back  [F]");
@@ -404,7 +423,7 @@ void Game::buildButtons() {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
 }
 
 void Game::clickButton(const Button& b) {
@@ -437,6 +456,13 @@ void Game::cmdSelection(int kind, int id) {
     case BK_FORCE: cancelModes(); forceMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_AREA: areaMode = true; areaDrag = false; placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_STOP: g_sim.cmdStop(selection); g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_UNLOAD: {
+        int n = 0;
+        for (auto r : selection) { Entity* e = g_sim.get(r); if (e && !e->passengers.empty()) { g_sim.cmdUnload(r, false, Vec2()); n++; } }
+        g_audio.play(n ? SND_CLICK : SND_CANT, Vec2(), true);
+        break;
+    }
+    case BK_DROPOFF: cancelModes(); dropoffMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_CANCEL: placingType = -1; break;
     }
 }
@@ -579,7 +605,7 @@ void Game::gameEvent(const SDL_Event& e) {
         SDL_Keycode k = e.key.keysym.sym;
         u16 mod = e.key.keysym.mod;
         if (k == SDLK_ESCAPE) {
-            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || aidMode || rallyMode || areaMode) cancelModes();
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || aidMode || rallyMode || areaMode || dropoffMode) cancelModes();
             else if (showHelp) showHelp = false;
             else openPauseMenu();
             return;
@@ -593,7 +619,7 @@ void Game::gameEvent(const SDL_Event& e) {
             // select all combat units on screen
             selection.clear();
             for (auto& o : g_sim.ents) {
-                if (!o.alive || !o.isUnit() || o.owner != g_sim.humanPlayer || o.ut().role != UR_COMBAT) continue;
+                if (!o.alive || !o.isUnit() || o.owner != g_sim.humanPlayer || o.ut().role != UR_COMBAT || o.carrier.valid()) continue;
                 Vec2 s = worldToScreen(o.pos);
                 if (s.x < 0 || s.y < 0 || s.x > SCREEN_W || s.y > VIEW_H) continue;
                 selection.push_back(g_sim.refOf(o));
@@ -623,6 +649,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 else if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
                 else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) { powerMode = false; forceLatch = false; } }
                 else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp, forceFireKey())) { nukeMode = false; forceLatch = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
+                else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
                 else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, wp)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else cam = Vec2(clampf(wp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(wp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -654,6 +681,7 @@ void Game::gameEvent(const SDL_Event& e) {
             if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w, forceFireKey())) { nukeMode = false; forceLatch = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; forceLatch = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
             if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, w)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, w); } dropoffMode = false; g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
             if (attackMoveMode) { issueAttackMove(w); attackMoveMode = false; return; }
             if (forceMode) { if (issueForceFire(w)) forceMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (rallyMode) { Entity* b = selectedBuilding(); if (b) g_sim.cmdSetRally(g_sim.refOf(*b), w); rallyMode = false; return; }
@@ -662,7 +690,7 @@ void Game::gameEvent(const SDL_Event& e) {
             return;
         }
         if (btn == SDL_BUTTON_RIGHT) {
-            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || aidMode || rallyMode || areaMode) { cancelModes(); return; }
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || aidMode || rallyMode || areaMode || dropoffMode) { cancelModes(); return; }
             issueRightClick(w);
             return;
         }
@@ -993,6 +1021,7 @@ static void hpBar(Gfx& g, float x, float y, float w, float frac, bool big = fals
 
 void Game::drawEntity(Entity& e) {
     Gfx& g = g_gfx;
+    if (e.carrier.valid()) return;   // aboard a carrier
     Vec2 p = worldToScreen(entPos(e));
     bool selected = std::find(selection.begin(), selection.end(), g_sim.refOf(e)) != selection.end();
     int owner = e.owner < 0 ? 0 : e.owner;
@@ -1025,6 +1054,21 @@ void Game::drawEntity(Entity& e) {
             }
         } else {
             g.draw(s, p.x, p.y, 0, 1, tint);
+            if (bt.role == BR_BUNKER) {   // the surface hatch: two steel leaves that lie flat; blown off, only a scorched hole remains. Its health shows as the rim light
+                float hf = e.hatchMax > 0 ? e.hatch / e.hatchMax : 0;
+                Vec2 hc = p;
+                if (hf <= 0) { g.fillCircle(hc.x, hc.y, 15.0f, rgb(22, 20, 18)); g.fillCircle(hc.x, hc.y, 11.0f, rgb(8, 8, 8)); g.circle(hc.x, hc.y, 15.0f, rgb(90, 76, 60), 20); }
+                else {
+                    bool firing = e.passengers.size() > 0 && g_sim.time - e.lastDamaged < 4.0f;
+                    float open = firing ? 3.0f : 0.0f;
+                    g.fillCircle(hc.x, hc.y, 15.0f, rgb(40, 44, 48));
+                    g.fillCircle(hc.x - open, hc.y, 13.0f, rgb(94, 100, 106)); g.fillCircle(hc.x - open - 1, hc.y - 1, 10.5f, rgb(122, 128, 134));
+                    g.fill((int)(hc.x - 13), (int)(hc.y - 1), 26, 2, rgb(40, 44, 48));
+                    if (open > 0) { g.fill((int)(hc.x - 4), (int)(hc.y - 12), 8, 24, rgb(14, 14, 16)); g.glowAdd(hc.x, hc.y, 12, Color{255, 180, 80, 70}); }
+                    Color rim = hf > 0.6f ? hudAccent(bt.faction) : (hf > 0.3f ? rgb(240, 200, 60) : rgb(230, 70, 60));
+                    g.circle(hc.x, hc.y, 15.0f, rim, 24);
+                }
+            }
             if (g.buildingTeam[e.type].tex) { Color tc = playerColor(owner); if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
             drawBuildingAnim(e, p, disabled);
             // rotating heads for defenses
@@ -1052,6 +1096,11 @@ void Game::drawEntity(Entity& e) {
             if (e.hasRally && e.constructed) { Vec2 r = worldToScreen(e.rally); g.line(p.x, p.y, r.x, r.y, rgb(120, 255, 120, 160)); g.circle(r.x, r.y, 5, rgb(120, 255, 120)); }
         }
         if (selected || e.hp < e.maxHp || !e.constructed) hpBar(g, fx, fy - 8, fw, e.constructed ? e.hp / e.maxHp : e.progress, true);
+        if (bt.role == BR_BUNKER && e.constructed && (selected || !e.passengers.empty())) {   // garrison: soldiers inside / 50
+            int inf = g_sim.garrisonInfantry(e);
+            char gb[24]; snprintf(gb, sizeof gb, "%d/%d%s", inf, BUNKER_INF_CAP, g_sim.garrisonDozers(e) > 0 ? " +D" : "");
+            g.text((int)(p.x - g.textW(gb, 1) / 2), (int)(fy + fh + 4), gb, rgb(240, 240, 240));
+        }
         if (disabled) g.text((int)p.x - 9, (int)p.y - 4, "EMP", rgb(160, 220, 255));
         return;
     }
@@ -1067,6 +1116,7 @@ void Game::drawEntity(Entity& e) {
         g.draw(g.shadowLarge, p.x + 5, p.y + 5, 0, 0.9f * cs * (0.6f + 0.4f * fallK), rgb(255, 255, 255), 110);
     }
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
+    const u8 ghost = Sim::stealthOf(e) ? (u8)150 : (u8)255;   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near)
     if (air) {
         // shadow: the aircraft's own silhouette, thrown to the south-east and sliding closer as it settles onto the pad
         g.draw(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, 1, rgb(0, 0, 0), (u8)(70 + 40 * (1 - alt)));
@@ -1123,7 +1173,7 @@ void Game::drawEntity(Entity& e) {
             emitP(e.pos.x - std::cos(th) * 18, e.pos.y - std::sin(th) * 18 - 14 * alt, 0, 0, fxRng.f(1.1f, 1.7f), 2.4f, 7.5f, rgb(238, 244, 248, 150), PK_CONTRAIL, (u8)fxRng.range(0, 3), 0, 0.3f, fxRng.f(0, 6), 0.1f);
         }
     }
-    g.draw(*bs, p.x, p.y, e.angle, 1, mod);
+    g.draw(*bs, p.x, p.y, e.angle, 1, mod, ghost);
     const Sprite& tur = g.unitTurret[e.type][slotOf(owner)];
     if (tur.tex) {
         // the barrel kicks back for a moment after every shot
@@ -1154,12 +1204,36 @@ void Game::drawEntity(Entity& e) {
     }
     if (ut.kind == UK_AIR && ut.heli) {   // main rotor: motion-blur disc plus a spinning blade pair over the hub
         float spin = paused || disabled ? 0.4f : wallTime * (ut.faction == F_CYBER ? -42.0f : 38.0f);
-        Vec2 hub = ut.faction == F_CYBER ? p : Vec2(p.x - 2, p.y);
-        g.draw(g.rotorDisc, hub.x, hub.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
-        g.draw(g.rotorBlades, hub.x, hub.y, spin, 1, ut.faction == F_CYBER ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
+        if (ut.cargoCap > 0) {   // a cargo lifter has two big rotors, fore and aft
+            Vec2 fw(std::cos(e.angle), std::sin(e.angle));
+            for (int k = -1; k <= 1; k += 2) {
+                Vec2 hub = p + fw * (k * 21.0f);
+                g.draw(g.rotorDisc, hub.x, hub.y, 0, 1.55f, rgb(255, 255, 255), disabled ? 40 : 235);
+                g.draw(g.rotorBlades, hub.x, hub.y, spin * (float)k, 1.55f, ut.faction == F_CYBER ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
+            }
+        } else if (ut.role == UR_SCOUT) {   // a spy drone: a small, faint rotor
+            g.draw(g.rotorDisc, p.x, p.y, 0, 0.6f, rgb(255, 255, 255), (u8)(disabled ? 30 : 150));
+            g.draw(g.rotorBlades, p.x, p.y, spin * 1.3f, 0.6f, rgb(200, 240, 255), 110);
+        } else {
+            Vec2 hub = ut.faction == F_CYBER ? p : Vec2(p.x - 2, p.y);
+            g.draw(g.rotorDisc, hub.x, hub.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
+            g.draw(g.rotorBlades, hub.x, hub.y, spin, 1, ut.faction == F_CYBER ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
+        }
     }
     if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
-    if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10, p.y - e.radius() - 7, 20, e.hp / e.maxHp);
+    if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10, p.y - e.radius() - 7, 20 + (ut.cargoCap > 0 ? 24.0f : 0.0f), e.hp / e.maxHp);
+    if (e.rank > 0) {   // veteran / elite chevrons beside the health bar
+        Color cc = e.rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255);
+        for (int k = 0; k < e.rank; k++) { float cx = p.x + 12 + k * 4, cy = p.y - e.radius() - 5; g.line(cx - 2, cy - 1, cx, cy + 1, cc); g.line(cx, cy + 1, cx + 2, cy - 1, cc); }
+    }
+    if (ut.role == UR_SPY && e.order == O_CAPTURE && e.actionTimer > 0) {   // capture progress
+        const Entity* tb = g_sim.get(e.targetEnt);
+        if (tb) hpBar(g, p.x - 14, p.y - e.radius() - 12, 28, e.actionTimer / g_sim.captureTime(*tb));
+    }
+    if (ut.cargoCap > 0 && (selected || !e.passengers.empty())) {   // how full a lifter is: one pip per five places
+        int used = g_sim.cargoUsed(e), pips = ut.cargoCap / 5;
+        for (int k = 0; k < pips; k++) g.fill((int)p.x - pips * 2 + k * 4, (int)(p.y - e.radius() - 12), 3, 3, k * 5 < used ? rgb(240, 205, 90) : rgb(70, 74, 80));
+    }
     if (selected && air && ut.ammo > 0) for (int k = 0; k < ut.ammo; k++) g.fill((int)p.x - 10 + k * 3, (int)p.y - e.radius() - 11, 2, 2, k < e.ammo ? rgb(255, 230, 120) : rgb(80, 80, 80));
 }
 
@@ -1273,6 +1347,7 @@ void Game::renderWorld() {
         if (!e.alive) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
         if (!rev && e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
+        if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier / hidden by stealth
         if (e.kind == EK_RESOURCE || e.isBuilding()) drawEntity(e);
         else if (e.isAir() || e.fall > 0) air.push_back(&e);
         else ground.push_back(&e);
@@ -1281,7 +1356,7 @@ void Game::renderWorld() {
     for (auto* e : ground) drawEntity(*e);
     // flags: every finished structure flies its owner's flag from a mast on the roof edge (over units, under aircraft)
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isBuilding() || !e.constructed || e.owner < 0) continue;
+        if (!e.alive || !e.isBuilding() || !e.constructed || e.owner < 0 || e.bt().role == BR_BUNKER) continue;   // (a bunker flies no flag: it is underground)
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
         if (!rev && e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
         const BuildType& bt = e.bt();
@@ -1402,6 +1477,7 @@ void Game::drawMinimap(int x, int y, int size) {
         int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
         if (e.kind == EK_RESOURCE) { if (rev || ex[ty * MAP_W + tx]) g.fill((int)(x + tx * sc), (int)(y + ty * sc), 2, 2, rgb(230, 200, 90)); continue; }
         if (!rev && e.owner != g_sim.humanPlayer && !ex[ty * MAP_W + tx]) continue;
+        if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
         Color c = playerColor(e.owner);
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
@@ -1502,19 +1578,31 @@ void Game::renderHud() {
                 else if (ut.weapon >= 0) { const Weapon& w = WEAPONS[ut.weapon]; snprintf(buf, sizeof buf, "%s  dmg %d  range %.1f%s%s", w.name, (int)w.dmg, w.range, w.air ? "  AA" : "", w.ground ? "" : "  air only"); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.role == UR_HARVESTER) { snprintf(buf, sizeof buf, "Cargo $%d / %d", e->cargo, SUPPLY_PER_TRIP); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.ammo > 0) { snprintf(buf, sizeof buf, "Ammo %d / %d", e->ammo, ut.ammo); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
+                if (ut.cargoCap > 0) { snprintf(buf, sizeof buf, "Cargo %d / %d places   %d aboard   (right-click it with units selected to load)", g_sim.cargoUsed(*e), ut.cargoCap, (int)e->passengers.size()); g.text(INFO_X + 86, hy + 70, buf, rgb(240, 205, 90)); }
+                if (ut.role == UR_SPY) g.text(INFO_X + 86, hy + 70, "Right-click an enemy structure to capture it", rgb(240, 205, 90));
+                if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
+                else if (ut.kind == UK_INF && ut.weapon >= 0) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
+                if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : "STEALTH: only enemy spy drones see it", rgb(150, 220, 255));
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);
             } else {
                 const BuildType& bt = e->bt();
                 if (bt.power != 0) { snprintf(buf, sizeof buf, "Power %+d", bt.power); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
+                if (bt.role == BR_BUNKER && e->constructed) {
+                    snprintf(buf, sizeof buf, "Garrison %d / %d soldiers   Dozer %s", g_sim.garrisonInfantry(*e), BUNKER_INF_CAP, g_sim.garrisonDozers(*e) ? "inside" : "none"); g.text(INFO_X + 86, hy + 58, buf, rgb(240, 205, 90));
+                    if (e->hatch > 0) snprintf(buf, sizeof buf, "Hatch %d / %d: the garrison fires from it", (int)e->hatch, (int)e->hatchMax);
+                    else snprintf(buf, sizeof buf, "HATCH DESTROYED: the garrison cannot fire (a dozer inside or beside the bunker patches it)");
+                    g.text(INFO_X + 86, hy + 70, buf, e->hatch > 0 ? hudDim() : rgb(255, 140, 120));
+                    g.text(INFO_X + 86, hy + 84, "STEALTH: only an enemy spy drone finds it. Nukes cannot destroy it", rgb(150, 220, 255));
+                }
                 if (e->owner >= 0 && e->constructed) {   // structure upgrades of its army
                     const Player& op = g_sim.players[e->owner];
                     std::string ups;
                     for (int u = 0; u < UPG_COUNT; u++) if (op.upg[u]) { if (!ups.empty()) ups += "  "; ups += UPGRADES[op.faction][u].name; }
                     if (!ups.empty()) g.text(INFO_X + 86 + (bt.power != 0 ? 70 : 0), hy + 58, ups.c_str(), accent);
                 }
-                { char d[96]; snprintf(d, sizeof d, "%.*s", e->queue.empty() ? 76 : 38, bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
+                if (bt.role != BR_BUNKER) { char d[96]; snprintf(d, sizeof d, "%.*s", e->queue.empty() ? 76 : 38, bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
                 if (bt.role == BR_TECH && e->constructed) {
                     const ProgramType& pg = PROGRAMS[pl.faction];
                     if (pl.advTech) snprintf(buf, sizeof buf, "%s: researched, special units unlocked", pg.name);

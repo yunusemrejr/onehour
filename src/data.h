@@ -33,7 +33,15 @@ struct Weapon {
 };
 
 enum UnitKind { UK_INF = 0, UK_VEH, UK_AIR };
-enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER, UR_HEALER };
+enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER, UR_HEALER,
+                UR_SPY,         // unarmed infantry that captures enemy structures
+                UR_SCOUT,       // stealth spy drone: unarmed, sees what nothing else can
+                UR_TRANSPORT }; // cargo chopper: carries infantry and vehicles
+// Stealth classes: a stealthy unit or structure is invisible to an enemy (cannot be seen, selected or shot) unless one of the enemy's
+// own detectors is close enough. Detector masks say which classes a unit can see.
+enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers and underground bunkers: only a spy drone finds them
+                    ST_DRONE = 2 };                  // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
+static const int DET_SPOTTER = 1, DET_DRONE = 2;
 
 enum UnitTypeId {
     U_C_DOZER = 0, U_C_HARV, U_C_INF1, U_C_INF2, U_C_INF3, U_C_TANK, U_C_VOLT, U_C_RAIL, U_C_AIR, U_C_ELITE, U_C_TITAN, U_C_JET,
@@ -41,14 +49,18 @@ enum UnitTypeId {
     U_C_MEDIC, U_K_MEDIC,   // field medics sit after both armies' blocks so every earlier id stays put
     U_C_SNIPER, U_K_SNIPER, // so do the snipers
     U_C_HELI,               // and the Cyber attack helicopter (the Clanker helicopter is the Vulture Gunship, U_K_AIR)
+    U_C_SPY, U_K_SPY,       // spies: capture enemy structures
+    U_C_SDRONE, U_K_SDRONE, // stealth spy drones
+    U_C_CARGO, U_K_CARGO,   // cargo choppers
     U_COUNT
 };
 
-enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIRFIELD, BR_TECH, BR_TURRET, BR_AATURRET, BR_INCOME, BR_NUKE };
+enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIRFIELD, BR_TECH, BR_TURRET, BR_AATURRET, BR_INCOME, BR_NUKE, BR_BUNKER };
 
 enum BuildTypeId {
     B_C_HQ = 0, B_C_POWER, B_C_SUPPLY, B_C_BARRACKS, B_C_FACTORY, B_C_AIRFIELD, B_C_TECH, B_C_LASER, B_C_PATRIOT, B_C_MINER, B_C_NUKE,
     B_K_HQ, B_K_POWER, B_K_SUPPLY, B_K_BARRACKS, B_K_FACTORY, B_K_AIRFIELD, B_K_TECH, B_K_MG, B_K_ROCKET, B_K_OILWELL, B_K_NUKE,
+    B_C_BUNKER, B_K_BUNKER,   // the underground bunkers sit after both armies' blocks so every earlier id stays put
     B_COUNT
 };
 
@@ -75,7 +87,13 @@ struct UnitType {
     int bomber;         // 1 = carries bombs: flies bombing runs over ground targets (sticks of heavy bombs), uses its gun on aircraft
     int sniper;         // 1 = sniper: shoots only infantry (never another sniper) and can only be spotted and hit by vehicles and aircraft
     int heli;           // 1 = helicopter: hovers and turns on the spot; every other aircraft is fixed-wing and never stands still in the air
+    int stealth;        // StealthClass: invisible to an enemy that has no detector close enough
+    float detect;       // tiles: how far this unit finds stealthy enemies (0 = it finds none)
+    int detectMask;     // which StealthClass es it finds (DET_SPOTTER / DET_DRONE bits)
+    int cargoCap;       // transport: cargo slots (an infantryman takes one, see cargoSize)
 };
+// Cargo slots a unit takes in a transport: infantry 1, light vehicles 4, tanks 6, super-heavy walkers 10 (aircraft cannot be carried)
+inline int cargoSize(const UnitType& u) { return u.kind == UK_INF ? 1 : (u.kind == UK_VEH ? (u.hp >= 1500 ? 10 : (u.armor == AR_HEAVY ? 6 : 4)) : 0); }
 
 struct BuildType {
     const char* name;
@@ -135,6 +153,20 @@ static const int   AID_MONEY = 20000;
 static const float AID_COOLDOWN = 60.0f;      // seconds, per tech structure (more of them, more flights)
 static const int   AID_CRATES = 5;            // crates in one drop (the dozer comes out of the middle one)
 static const float AID_RADIUS = 3.0f;         // tiles: the crates come down within this of the spot
+
+// Underground Bunker: a deep, hidden shelter that holds up to 50 infantry and one dozer. The garrison fires from a metal hatch on the surface;
+// the hatch can be blown off (a nuke does it) which silences the bunker, but only infantry and vehicles can ever destroy the bunker itself.
+static const int   BUNKER_INF_CAP = 50, BUNKER_DOZER_CAP = 1;
+static const float BUNKER_HATCH_HP = 2800.0f;     // the surface opening
+static const float BUNKER_PLATING = 0.22f;        // share of the damage that reaches the buried bunker once the hatch is gone
+static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky, radiation and nukes can never take it below this share of its health
+static const float BUNKER_LINGER = 25.0f;         // seconds a bunker a spy drone found stays known after the drone has moved on
+static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
+// Spies
+static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
+static const float SPY_REACH = 22.0f;             // px from the structure's edge
+// Veterancy of infantry: kills promote a soldier
+static const int   VET_KILLS = 4, ELITE_KILLS = 10;
 
 static const int START_CASH = 10000;
 static const int SUPPLY_PER_TRIP = 300;

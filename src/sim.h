@@ -6,7 +6,10 @@
 #include <functional>
 
 enum EntKind : u8 { EK_UNIT = 0, EK_BUILDING, EK_RESOURCE };
-enum Order : u8 { O_IDLE = 0, O_MOVE, O_ATTACKMOVE, O_ATTACK, O_HARVEST, O_RETURN, O_BUILD, O_REARM, O_GUARDPOS, O_GUARDAREA };
+enum Order : u8 { O_IDLE = 0, O_MOVE, O_ATTACKMOVE, O_ATTACK, O_HARVEST, O_RETURN, O_BUILD, O_REARM, O_GUARDPOS, O_GUARDAREA,
+                  O_ENTER,      // walk to a transport / bunker (targetEnt) and climb aboard
+                  O_CAPTURE,    // spy: take the enemy structure targetEnt
+                  O_UNLOAD };   // transport: fly to 'target' and let the passengers out there
 
 struct Ref {
     i32 idx = -1; u32 gen = 0;
@@ -94,6 +97,15 @@ struct Entity {
     bool hasRally = false;
     // resource
     int amount = 0;
+    // stealth, carriers, veterancy
+    Ref carrier;                      // stowed aboard this transport / bunker: off the map, not drawn, cannot be hit, acts only as part of its host
+    std::vector<Ref> passengers;      // transport / bunker: who is aboard
+    float hatch = 0, hatchMax = 0;    // bunker: health of the surface opening the garrison fires from (0 = blown off, the garrison is silent)
+    bool unloading = false;           // transport / bunker: letting the passengers out one at a time
+    float unloadTimer = 0;
+    float detUntil[MAX_PLAYERS] = {}; // stealthy entity: sim time until which each player can see it (a detector close by keeps it up to date)
+    u8 rank = 0;                      // infantry veterancy: 0 recruit, 1 veteran, 2 elite
+    u16 kills = 0;
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -263,6 +275,17 @@ struct Sim {
     bool cmdBuild(Ref dozer, int buildType, int tx, int ty);  // places a foundation and sends the dozer
     void cmdAssist(const std::vector<Ref>& sel, Ref building); // dozer: continue construction or repair
     bool cmdTrain(Ref building, int unitType);
+    // ---- stealth, transports, bunkers, spies
+    static int stealthOf(const Entity& e);                       // StealthClass of a unit or structure (bunkers count once built)
+    bool visibleTo(const Entity& e, int player) const;           // can this player see e? (always, unless e is stealthy and no detector of the player's team is close)
+    bool canBoard(const Entity& u, const Entity& carrier) const; // may u climb aboard right now (room left, right kind of unit)?
+    int cargoUsed(const Entity& carrier) const;                  // transport slots taken
+    int garrisonInfantry(const Entity& bunker) const;
+    int garrisonDozers(const Entity& bunker) const;
+    void cmdEnter(const std::vector<Ref>& sel, Ref carrier);     // walk to a cargo chopper / bunker and board it
+    void cmdUnload(Ref carrier, bool atSpot, Vec2 spot);         // let everybody out: here, or after flying to 'spot' (cargo choppers)
+    void cmdCapture(const std::vector<Ref>& sel, Ref building);  // spies take an enemy structure
+    float captureTime(const Entity& b) const;                    // seconds a spy needs to take structure b
     void cmdCancelTrain(Ref building, int queueIndex);
     void cmdSetRally(Ref building, Vec2 p);
     void cmdSell(Ref building);
@@ -340,6 +363,15 @@ private:
     void updateResearch();
     void finishUpgrade(int player, int upg);
     void updateRoofGun(Entity& b, bool powered);
+    void updateDetection();                              // detectors (spy drones, up-close drones) reveal stealthy enemies to their whole team
+    void updateBunker(Entity& b);                        // garrison: heals, repairs the hatch, fires from the hatch, lets soldiers out
+    void updateCarrierUnload(Entity& c);                 // one passenger out every few ticks while 'unloading'
+    void board(Entity& u, Entity& c);
+    void ejectAll(Entity& c, bool lost);                 // everybody out onto the ground (lost: aboard a downed aircraft they die instead)
+    void ejectOne(Entity& c, Entity& u, int slot);
+    void captureBuilding(Entity& b, Entity& spy);
+    void hatchBlown(Entity& b);
+    void awardKill(Ref killer, const Entity& victim);    // infantry earn promotions
     void separateUnits();
     void checkVictory();
     void moveAlong(Entity& e, float speed);
