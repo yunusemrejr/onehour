@@ -90,6 +90,7 @@ struct Game {
     void screenshot(const char* path);
     void spawnFromFx();
     void updateParticles(float dt);
+    friend bool uiNewTest(Faction, Faction, u64);   // tests2.cpp drives the real input code
 private:
     float accumulator = 0;
     void processEvents();

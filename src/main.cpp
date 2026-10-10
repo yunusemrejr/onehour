@@ -81,7 +81,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             alive++;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "NaN position at tick %d\n", t); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "entity out of world at tick %d\n", t); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "hp above max at tick %d\n", t); return false; }
             // a fixed-wing aircraft away from its airfield never flies slower than its stall speed (it circles instead of hovering)
             size_t ix = (size_t)(&e - &g_sim.ents[0]);
@@ -118,6 +118,11 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
         printf("  P%d: team %d diff %d doctrine %s, mined $%d, income structures %d, nuke ramps %d, nuke dodges %d, medics built %d, upgrades %d%d%d\n", p, pl.team, pl.difficulty, DOCTRINE_NAME[g_ai.ais[p].doctrine], pl.mined, g_sim.countRole(p, BR_INCOME, false), g_sim.countRole(p, BR_NUKE, false), g_ai.ais[p].dodges, g_ai.ais[p].medicsBuilt, (int)pl.upg[UPG_RUGGED], (int)pl.upg[UPG_GUNS], (int)pl.upg[UPG_REPAIR]);
         printf("  P%d: built %d lost %d kills %d structures killed %d harvested %d alive=%d | program %d, elites bought %d/%d, titans %d, drones/gunships %d, jets %d\n", p, pl.unitsBuilt, pl.unitsLost, pl.unitsKilled, pl.structuresKilled, pl.harvested, (int)pl.alive,
                (int)pl.advTech, (int)(pl.spentOn[ubase + 9] / UNITS[ubase + 9].cost), (int)(pl.spentOn[ubase + 9] > 0), (int)(pl.spentOn[ubase + 10] / UNITS[ubase + 10].cost), (int)(pl.spentOn[ubase + 8] / UNITS[ubase + 8].cost), (int)(pl.spentOn[ubase + 11] / UNITS[ubase + 11].cost));
+        {   // the special forces: spies, spy drones, snipers (ids sit after both armies' blocks)
+            int sp = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, sd = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, sn = pl.faction == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+            int caps = pl.structuresKilled;   // (captures count as structures taken)
+            printf("      special forces bought: spies %d, spy drones %d, snipers %d (structures taken or destroyed %d)\n", (int)(pl.spentOn[sp] / UNITS[sp].cost), (int)(pl.spentOn[sd] / UNITS[sd].cost), (int)(pl.spentOn[sn] / UNITS[sn].cost), caps);
+        }
         if (getenv("ONEHOUR_DEBUG")) {
             printf("      value dealt per credit:");
             for (int u = 0; u < U_COUNT; u++) if (pl.spentOn[u] > 0) printf(" %s %.2f (spent %d)", UNITS[u].name, pl.valueDealt[u] / pl.spentOn[u], (int)pl.spentOn[u]);
@@ -2243,7 +2248,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 20);
+            int c = rng.range(0, 25);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2267,6 +2272,11 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 19: g_sim.cmdUpgrade(rng.range(-1, 2) == 0 ? 0 : rng.range(-1, 4), rng.range(-1, UPG_COUNT)); break;
             case 18: g_sim.players[0].dropReady = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding()) e.dropTimer = std::min(e.dropTimer, g_sim.time + 3.0f); g_sim.cmdParadrop(0, where()); break;
             case 20: g_sim.cmdAidDrop(rng.range(-1, 4), where()); break;   // (any player id: only the human's may ever fly)
+            case 21: { Ref c2 = anyEnt(rng.range(-2, 3), 3); g_sim.cmdEnter(sel(), c2); break; }                                  // board a lifter / bunker (anybody's, or nothing)
+            case 22: { Ref c2 = anyEnt(0, 3); g_sim.cmdUnload(c2, rng.range(0, 1) == 0, where()); break; }
+            case 23: { Ref b2 = anyEnt(rng.range(-2, 3), 2); g_sim.cmdCapture(sel(), b2); break; }
+            case 24: { int ty = U_C_SPY + rng.range(0, 5); g_sim.spawnUnit(ty, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, g_sim.players[0].basePos + Vec2(rng.f(-200, 200), rng.f(-200, 200))); break; }   // the new kinds, for whoever
+            case 25: { int bt = B_C_BUNKER + rng.range(0, 1); int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, tx, ty, rng.range(0, 1) == 0); break; }
             }
         }
         g_sim.step(); g_ai.update(); g_sim.events.clear();
@@ -2275,7 +2285,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             if (!e.alive) continue;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "fuzz: NaN position at tick %d (%s)\n", t, e.isUnit() ? e.ut().name : "?"); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "fuzz: entity out of world at tick %d (%s %.0f,%.0f)\n", t, e.isUnit() ? e.ut().name : "building", e.pos.x, e.pos.y); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "fuzz: hp above max at tick %d\n", t); return false; }
             if (e.isUnit() && e.ammo < 0) { fprintf(stderr, "fuzz: negative ammo\n"); return false; }
             if (e.kind != EK_RESOURCE && g_sim.players[e.owner >= 0 ? e.owner : 0].money < -1) { fprintf(stderr, "fuzz: negative money at tick %d\n", t); return false; }

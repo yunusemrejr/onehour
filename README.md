@@ -30,11 +30,11 @@ column, Enter starts.
 
 **Cyber Army** — electric and optical. Pulse rifles, laser troopers, shock troopers, Photon Tanks,
 Volt Walkers (arc lightning, anti-infantry/anti-air), Railgun Tanks (long range, pierces a line),
-Wraith Drones, Hornet Gunships (attack helicopter), Laser Turrets and Patriot Batteries. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop, Aid Drop,
+Wraith Drones, Hornet Gunships (attack helicopter), Laser Turrets and Patriot Batteries. Stealth and special forces: the Ghost Sniper, Infiltrator (spy), Ghost Drone (stealth spy drone), Atlas Lifter (cargo helicopter) and the Deep Bunker. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop, Aid Drop,
 Overclock Program → Ion Lancer and Aegis Titan super-heavy walker; structure upgrades Rugged Nanoshell, Defense Lasers, Nanite Repair).
 
 **Clanker Army** — diesel and gunpowder. Riflemen, RPG troopers, heavy gunners, Brute Tanks,
-Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries.
+Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries. Stealth and special forces: the Sniper, Spy, Recon Drone (stealth spy drone), Mammoth Lifter (cargo helicopter) and the Underground Bunker.
 Tech structure: Arms Lab (Shell Storm, Recon Flight, Paradrop, Aid Drop, Heavy Ordnance → Grenadier and Behemoth; structure upgrades Rugged Bulwark, Bunker Guns, Repair Crews).
 
 **Base defenses** (Laser Turret, Patriot Battery, Gun Nest, Rocket Battery) are fortified: 5200 to 6800 hp each (more than a Command Core) and
@@ -116,9 +116,43 @@ itself) looks after itself and its friends twice a second:
 Units jammed in a one-tile gap between structures (two haulers head-on, a soldier standing in a lane) now slip past each other instead of shoving forever.
 
 **Snipers** — both armies train one at the Barracks / Command Post once the tech structure stands: the **Ghost Sniper** (Cyber, needle rifle) and the **Sniper** (Clanker, rifle).
-$550, fragile, long sight, 11.5 tile range: they kill any infantryman in a couple of shots and can shoot nothing else, not vehicles, structures, aircraft or other snipers. Only
-**vehicles and aircraft can spot and hit a sniper**: infantry, turrets and the splash of infantry weapons never find one, so a sniper is safe from soldiers and at the mercy of a
-tank or a drone. The AI builds them against infantry-heavy enemies.
+$550, fragile, long sight, 11.5 tile range: they kill any infantryman in a couple of shots and can shoot nothing else, not vehicles, structures, aircraft or other snipers. A sniper is **stealth**:
+nothing sees it, not soldiers, not tanks, not turrets, not even aircraft. **Only an enemy spy drone finds it** (see below), and only for as long as the drone stays within nine tiles;
+until then it cannot be selected, targeted or shot (an area blast that happens to land on it, and a nuke, still hurt it). It stays hidden while it fires. The AI builds them against infantry-heavy enemies and
+builds spy drones to find yours.
+
+**Stealth, detection and spy drones** — three kinds of things hide from the enemy: snipers, finished underground bunkers (class *spotter*) and the spy drone itself (class *drone*). A hidden thing is invisible to the
+enemy team (not drawn, not on the minimap, not selectable, not a legal target, unknown to the computer commanders; its own side sees it as a faint ghost). It becomes visible only while one of the enemy team's **detectors** is close enough:
+
+| Detector | Finds | Range |
+| --- | --- | --- |
+| **Spy drone** (Ghost Drone / Recon Drone) | snipers, bunkers and enemy spy drones | 9 tiles |
+| Bomber and attack drones (Wraith Drone, Vulture Gunship, Hornet Gunship) | enemy spy drones only | 3.5 tiles ("your own drones need to be there") |
+| everything else (soldiers, tanks, jets, turrets, lifters) | nothing | - |
+
+A sniper or spy drone that leaves the detector's range is lost again after a couple of seconds; a **bunker stays known for 25 seconds** after the drone moves on, so a force has time to attack it. Detection is shared by the whole team.
+The **spy drone** ($900, Drone Pad / Airstrip, needs the tech structure) is a small unarmed hovering stealth helicopter, 15 tiles of sight, fragile (220 hp), needs no pad. Because only enemy drones can spot it, anti-air batteries and fighters never shoot at it
+until a drone of the enemy is practically on top of it. The AI keeps one (two from Hard) with its army.
+
+**Spies** — the **Infiltrator** (Cyber) and the **Spy** (Clanker): $650, Barracks / Command Post, needs the tech structure. Unarmed, fragile, quick. Select one and right-click an enemy structure: it walks up and **captures it**
+after 4 s + 0.7 s per footprint tile (8 s for a Barracks, 15 s for a Command Core); a progress bar shows over the spy and the owner gets an alarm. The structure changes hands with everything on it: the production queue is
+refunded to the old owner, a bunker's garrison is turned out onto the ground, its health carries over. The spy **survives** the capture and can take the next one; if it is killed first, nothing changes. A captured production structure
+trains the new owner's units, a captured power plant, supply hub, tech structure or nuke ramp works for its new owner. The AI sends two spies (Hard and up) after valuable structures nobody is guarding. A hidden bunker can only be captured once a spy drone has found it.
+
+**Cargo lifters** — the **Atlas Lifter** (Cyber) and the **Mammoth Lifter** (Clanker): $2600, Drone Pad / Airstrip, needs the tech structure. A huge tandem-rotor helicopter, 2400-2600 hp, unarmed, 40 cargo places (soldier 1, light vehicle 4, tank 6,
+super-heavy walker 10: for example 30 soldiers, a tank and a light vehicle, or six tanks and four soldiers). Select soldiers or vehicles and right-click the lifter: they walk to it and climb aboard while it hovers. Select the lifter and press **U** to set down where it is and let
+everybody out, or **D** (Drop Off) and click a spot: it flies there, sets down and unloads (soldiers first, vehicles after). A lifter shot down in the air takes everyone aboard with it; one on the ground lets them climb out. Use it to put a spy, a dozer or an army behind the enemy lines.
+
+**Underground bunkers** — the **Deep Bunker** (Cyber) and the **Underground Bunker** (Clanker): $2500, built by a dozer, needs a Barracks. Only a small steel hatch (2x2 tiles) shows on the surface, and not even that to the enemy: a finished bunker is **stealth**, found
+only by an enemy spy drone. It holds **50 infantry and one dozer** (right-click the bunker with soldiers or a dozer selected; U unloads, the rally point is where they walk to). Everybody inside is untouchable. In a fight the whole garrison **fires from the hatch**, each soldier with its own weapon (rocket troopers
+hit tanks and aircraft, snipers pick off infantry), and heals slowly. The rest of the rules:
+- the **hatch** (2800 hp) takes the damage first; once it is blown off the garrison cannot shoot, though it stays safe. A **nuke wrecks the hatch and hurts the bunker, but can never destroy it**, however many land (buried deep): the same goes for aircraft, bombs, turrets, shells and fallout, none of which takes it below 10% of its health;
+- only **infantry and vehicles can destroy a bunker**, and it is very hard: 30000 hp and plating that stops 78% of what gets past the hatch (a column of fifteen tanks needs several minutes; they only see it while a spy drone is nearby);
+- a **dozer inside** patches the hatch (6% a second) and the bunker once out of fire for three seconds; any dozer next to it mends it too;
+- when the bunker is destroyed (or captured by a spy) **the whole garrison is back on the ground, exposed**.
+
+**Veterancy and rocket infantry** — infantry earn promotions: **Veteran** after 4 kills (+25% health, +20% damage) and **Elite** after 10 (+50% health, +40% damage), shown as chevrons beside the health bar, in the bunker as well. The **RPG Trooper** is the rocket infantryman:
+its rocket hits **vehicles and aircraft hard** (64 damage, 1.3x against tanks, 1.6x against aircraft, faster missile) and works from inside a bunker alongside the rest of the garrison. `--stealthtest` covers all of the above.
 
 **Aircraft** — each army has a cheap, fast, fragile bomber (Wraith Drone / Vulture Gunship: $850, 520 / 560 hp, 340 / 300 px/s) and an expensive, fast, powerful fighter-bomber
 (Specter Jet / Talon Jet: $2400, 1500 / 1550 hp, 560 / 540 px/s, 10 passes a sortie). Both kinds hit air and ground: the bombers carpet-bomb the ground and shoot aircraft down with
@@ -179,7 +213,9 @@ switches powered defenses off, exactly the pressure Zero Hour puts on you.
 | Select a turret / battery, or hover any defense | shows the area it covers (ground, air, or both; grey when unpowered; enemy defenses in red). The range also follows the cursor while you place a defense |
 | Ctrl+0–9 / 0–9 | assign / recall control group (Alt+#: jump to it) |
 | Arrows, screen edge, middle drag, wheel | scroll, Home: your base |
-| Dozer selected | build menu with hotkeys (including `C`: a new Command Core / Post); click the ground to place, Shift to place several |
+| Dozer selected | build menu with hotkeys (including `C`: a new Command Core / Post, `U`: Underground Bunker); click the ground to place, Shift to place several |
+| Spy selected, right-click an enemy structure | capture it |
+| Soldiers / dozer selected, right-click your bunker or cargo lifter | climb aboard; with the bunker or lifter selected `U` unloads, lifter `D` then click: fly there and drop everybody off |
 | Structure selected | train units (hotkeys shown), Del sells |
 | X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program, P paradrop, D aid drop, U / G / E structure upgrades with a tech structure selected |
 | Space | pause, + / - game speed (x0.5 to x4), F1 help, F2 mute, F11 fullscreen, F12 screenshot |
@@ -261,7 +297,7 @@ reacts to the muster point), judging a running wave by the estimate instead of b
   headless; `--train N` self-plays N games to train the AI brain, `--eval N` pits the learned AI against the plain heuristic AI;
   `--soundcheck` prints statistics for the synthesized sounds; `--hqtest` rebuilds a lost Command Core (human dozer and AI), `--jettest` flies
   the jets (speed, banking, strafing, rearming), `--econtest` and `--areatest` cover income structures, nukes and area orders, and `--bench [N]`
-  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--helitest` builds 18 helicopters from one airfield (and checks they park on helipads with a gap between them, stop side by side on a group move, hover still on posts of their own when guarding a small circle, and that planes still wait for a pad), `--aidtest` covers the Aid Drop, `--allytest` covers a computer ally moving up to the front where your army fights, `--haultest` covers haulers escaping a raider and returning to work, `--upgradetest` covers the structure upgrades (research rules, Rugged under one and two nukes and under a massive assault, roof guns against aircraft, vehicles and infantry, self-repair on structures but never units, upgrades lasting after the tech structure falls) and dozers sharing out repairs, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_AID=N` (an aid drop near the enemy base; + `ONEHOUR_CAMBACK=px`, `ONEHOUR_CAMPLANE=1`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, `ONEHOUR_HELI=N` (N helicopters of the viewed army over its base; `ONEHOUR_HELIGUARD=1` has them guard a small circle there), `ONEHOUR_UPG=1|raid` (every army starts with all structure upgrades; `raid` then sends aircraft and tanks into the viewed base), and `--sheet FILE`
+  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--helitest` builds 18 helicopters from one airfield (and checks they park on helipads with a gap between them, stop side by side on a group move, hover still on posts of their own when guarding a small circle, and that planes still wait for a pad), `--aidtest` covers the Aid Drop, `--stealthtest` covers stealth snipers and spy drones, spy captures, cargo lifters, underground bunkers (garrison, hatch, nukes, destruction) and promotions, `--allytest` covers a computer ally moving up to the front where your army fights, `--haultest` covers haulers escaping a raider and returning to work, `--upgradetest` covers the structure upgrades (research rules, Rugged under one and two nukes and under a massive assault, roof guns against aircraft, vehicles and infantry, self-repair on structures but never units, upgrades lasting after the tech structure falls) and dozers sharing out repairs, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_AID=N` (an aid drop near the enemy base; + `ONEHOUR_CAMBACK=px`, `ONEHOUR_CAMPLANE=1`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, `ONEHOUR_HELI=N` (N helicopters of the viewed army over its base; `ONEHOUR_HELIGUARD=1` has them guard a small circle there), `ONEHOUR_UPG=1|raid` (every army starts with all structure upgrades; `raid` then sends aircraft and tanks into the viewed base), and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
 **Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura

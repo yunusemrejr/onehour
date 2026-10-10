@@ -1,6 +1,7 @@
 // One Hour - headless tests of the stealth / spy / cargo chopper / underground bunker / infantry pass (--stealthtest)
 #include "sim.h"
 #include "map.h"
+#include "ui.h"
 
 static bool g_ok = true;
 static bool failMsg(const char* m) { fprintf(stderr, "stealthtest: %s\n", m); g_ok = false; return false; }
@@ -354,6 +355,80 @@ static bool infantryTest(Faction me, Faction foe, u64 seed) {
     return true;
 }
 
+// The same things through the real input code: selecting, right-clicking, the command buttons and their hotkeys
+bool uiNewTest(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);
+    Vec2 mid = openField();
+    g_game.cancelModes(); g_game.selection.clear();
+    g_game.cam = Vec2(clampf(mid.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+    int bunkerType = me == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    auto labels = [&]() { g_game.buildButtons(); std::string l; for (auto& b : g_game.buttons) { l += b.label; l += "|"; } return l; };
+    // ---- the dozer's build menu has the bunker, on its own hotkey
+    Ref dz = spawnAt(firstUnitOf(me), 0, mid + Vec2(0, 5 * TILE));
+    placeAt(firstBuildOf(me) + BR_BARRACKS, 0, mid + Vec2(0, 12 * TILE));   // (the bunker needs a Barracks)
+    g_game.selection.push_back(dz);
+    CHECK(labels().find(BUILDS[bunkerType].name) != std::string::npos, "the dozer's build menu has no bunker");
+    g_game.hotkey(SDLK_u, 0);
+    CHECK(g_game.placingType == bunkerType, "U did not pick the bunker from the dozer's build menu");
+    g_game.cancelModes();
+    // ---- right-click the bunker with soldiers selected: they climb in; a hidden enemy bunker cannot be picked
+    Ref bk = placeAt(bunkerType, 0, mid);
+    std::vector<Ref> men;
+    for (int i = 0; i < 6; i++) men.push_back(spawnAt(firstUnitOf(me) + 2, 0, g_sim.get(bk)->pos + Vec2((i - 3) * 20.0f, 3 * TILE)));
+    g_game.selection = men;
+    g_game.issueRightClick(g_sim.get(bk)->pos);
+    CHECK(g_sim.get(men[0])->order == O_ENTER, "a right-click on my bunker did not send the soldiers in");
+    run(20);
+    CHECK(g_sim.garrisonInfantry(*g_sim.get(bk)) == 6, "the soldiers did not climb into the bunker");
+    g_game.cleanSelection();
+    CHECK(g_game.selection.empty(), "soldiers inside a bunker stayed selected");
+    g_game.selection.clear(); g_game.selection.push_back(bk);
+    std::string l = labels();
+    CHECK(l.find("Unload") != std::string::npos && l.find("Rally") != std::string::npos, "a selected bunker has no Unload button");
+    g_game.hotkey(SDLK_u, 0);
+    run(4);
+    CHECK(g_sim.garrisonInfantry(*g_sim.get(bk)) == 0, "the Unload button did not let the garrison out");
+    int bt2 = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    Ref enemyBk = placeAt(bt2, 1, mid + Vec2(10 * TILE, 0));
+    CHECK(enemyBk.valid(), "no spot for the enemy bunker");
+    CHECK(g_game.pickEntity(g_sim.get(enemyBk)->pos, false) == nullptr, "an undiscovered enemy bunker can be clicked");
+    int sdroneMe = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+    Ref sd = spawnAt(sdroneMe, 0, g_sim.get(enemyBk)->pos + Vec2(0, 3 * TILE)); g_sim.get(sd)->alt = 1;
+    run(1);
+    CHECK(g_game.pickEntity(g_sim.get(enemyBk)->pos, false) != nullptr, "a bunker a spy drone found cannot be clicked");
+    // ---- spies: right-click on an enemy structure = capture
+    int spyMe = me == F_CYBER ? U_C_SPY : U_K_SPY;
+    Ref spy = spawnAt(spyMe, 0, g_sim.get(enemyBk)->pos + Vec2(0, 5 * TILE));
+    g_game.selection.clear(); g_game.selection.push_back(spy);
+    g_game.issueRightClick(g_sim.get(enemyBk)->pos);
+    CHECK(g_sim.get(spy)->order == O_CAPTURE, "a right-click on an enemy structure did not send the spy to capture it");
+    // ---- a cargo lifter: soldiers board by right-click, the buttons unload and drop off
+    int cargo = me == F_CYBER ? U_C_CARGO : U_K_CARGO;
+    Ref ch = spawnAt(cargo, 0, mid + Vec2(-10 * TILE, 0)); g_sim.get(ch)->alt = 1;
+    std::vector<Ref> crew;
+    for (int i = 0; i < 4; i++) crew.push_back(spawnAt(firstUnitOf(me) + 2, 0, g_sim.get(ch)->pos + Vec2((i - 2) * 20.0f, 2 * TILE)));
+    g_game.selection = crew;
+    g_game.issueRightClick(g_sim.get(ch)->pos);
+    run(15);
+    CHECK(g_sim.get(ch)->passengers.size() == 4, "soldiers did not board the lifter after a right-click");
+    g_game.selection.clear(); g_game.selection.push_back(ch);
+    l = labels();
+    CHECK(l.find("Unload") != std::string::npos && l.find("Drop Off") != std::string::npos, "a selected lifter has no Unload / Drop Off buttons");
+    g_game.hotkey(SDLK_d, 0);
+    CHECK(g_game.dropoffMode, "D did not start picking a drop-off spot");
+    Vec2 spot = g_map.nearestFree(mid + Vec2(-10 * TILE, -6 * TILE), 20);
+    Vec2 sc = g_game.worldToScreen(spot);
+    g_game.mouseX = (int)sc.x; g_game.mouseY = (int)sc.y;
+    SDL_Event ev; memset(&ev, 0, sizeof ev); ev.type = SDL_MOUSEBUTTONDOWN; ev.button.button = SDL_BUTTON_LEFT;
+    g_game.gameEvent(ev);
+    CHECK(!g_game.dropoffMode && g_sim.get(ch)->order == O_UNLOAD, "clicking the ground did not send the lifter to drop its troops");
+    run(30);
+    CHECK(g_sim.get(ch)->passengers.empty(), "the lifter did not unload at the chosen spot");
+    g_game.selection.clear(); g_game.cancelModes();
+    printf("stealthtest %s: controls ok\n", FACTION_NAME[me]);
+    return true;
+}
+
 bool stealthTest(u64 seed) {
     g_map.generate();
     g_ok = true;
@@ -365,6 +440,7 @@ bool stealthTest(u64 seed) {
         if (!bunkerCapture(me, foe, seed + 30 + fi)) return false;
         if (!lifterTest(me, foe, seed + 40 + fi)) return false;
         if (!infantryTest(me, foe, seed + 50 + fi)) return false;
+        if (!uiNewTest(me, foe, seed + 60 + fi)) return false;
     }
     printf("stealthtest: ok\n");
     return g_ok;

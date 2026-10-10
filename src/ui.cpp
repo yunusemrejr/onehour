@@ -1096,7 +1096,11 @@ void Game::drawEntity(Entity& e) {
             if (e.hasRally && e.constructed) { Vec2 r = worldToScreen(e.rally); g.line(p.x, p.y, r.x, r.y, rgb(120, 255, 120, 160)); g.circle(r.x, r.y, 5, rgb(120, 255, 120)); }
         }
         if (selected || e.hp < e.maxHp || !e.constructed) hpBar(g, fx, fy - 8, fw, e.constructed ? e.hp / e.maxHp : e.progress, true);
-        if (bt.role == BR_BUNKER && e.constructed && (selected || !e.passengers.empty())) {   // garrison: soldiers inside / 50
+        if (bt.role == BR_BUNKER && e.constructed && e.owner >= 0 && g_sim.players[e.owner].team != g_sim.players[g_sim.humanPlayer].team) {   // a hidden enemy bunker a spy drone has found
+            g.circle(p.x, p.y, fw * 0.62f + 2.0f * std::sin(wallTime * 7.0f), rgb(110, 230, 255), 28);
+            g.text((int)p.x - 20, (int)(fy - 20), "BUNKER SPOTTED", rgb(110, 230, 255));
+        }
+        if (bt.role == BR_BUNKER && e.constructed && e.owner >= 0 && g_sim.players[e.owner].team == g_sim.players[g_sim.humanPlayer].team && (selected || !e.passengers.empty())) {   // garrison: soldiers inside / 50
             int inf = g_sim.garrisonInfantry(e);
             char gb[24]; snprintf(gb, sizeof gb, "%d/%d%s", inf, BUNKER_INF_CAP, g_sim.garrisonDozers(e) > 0 ? " +D" : "");
             g.text((int)(p.x - g.textW(gb, 1) / 2), (int)(fy + fh + 4), gb, rgb(240, 240, 240));
@@ -1125,6 +1129,16 @@ void Game::drawEntity(Entity& e) {
         g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
         if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
         p.y -= lift;
+    }
+    if (Sim::stealthOf(e) && e.owner >= 0 && g_sim.players[e.owner].team != g_sim.players[g_sim.humanPlayer].team) {   // a stealthy enemy one of your detectors has found: marked while it is spotted
+        float pulse = 0.65f + 0.35f * std::sin(wallTime * 7.0f + (float)e.gen);
+        float gy = p.y + (air ? 14 * alt : 0) + 2;
+        g.circle(p.x, gy, e.radius() + 6 + 2 * pulse, rgb(110, 230, 255), 18);
+        g.text((int)p.x - 12, (int)(p.y - e.radius() - 20), "SPOTTED", rgb(110, 230, 255));
+    }
+    if (selected && ut.detect > 0 && ut.role == UR_SCOUT) {   // a selected spy drone shows how far it finds hidden snipers and bunkers
+        float gy = p.y + (air ? 14 * alt : 0);
+        g.dashedCircle(p.x, gy, ut.detect * TILE, rgb(110, 230, 255), wallTime * 18.0f);
     }
     if (selected) {   // a soft ring on the ground under the unit (not under its altitude), squashed a little for the viewing angle
         float rr = (e.radius() + 5) * 2.0f, gy = p.y + (air ? 14 * alt : 0) + lift + 2;
@@ -1714,8 +1728,8 @@ void Game::renderHud() {
     }
     if (showHelp) {
         int hx = SCREEN_W / 2 - 312, hy0 = std::max(30, VIEW_H / 2 - 170);
-        g.fill(hx, hy0, 624, 316, rgb(8, 10, 14, 235));
-        g.box(hx, hy0, 624, 316, accent);
+        g.fill(hx, hy0, 624, 364, rgb(8, 10, 14, 235));
+        g.box(hx, hy0, 624, 364, accent);
         g.text(hx + 16, hy0 + 12, "ONE HOUR - controls", rgb(255, 255, 255), 2);
         const char* lines[] = {
             "Left click / drag box      select units (double-click: all of that type on screen)",
@@ -1730,6 +1744,10 @@ void Game::renderHud() {
             "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
             "Tech structure            X strike, V map scan (30s), R Advanced Program, P paradrop, D aid drop",
+            "Spy selected              right-click an enemy structure to capture it (the spy survives)",
+            "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",
+            "Bunker / lifter selected  U unloads; D (lifter) flies to a spot you click and drops everybody off",
+            "Stealth                    snipers and bunkers show only to an enemy spy drone",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",
             "",
             "Supplies: haulers carry $300 per trip to a Supply Hub/Depot.",
