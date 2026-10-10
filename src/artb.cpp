@@ -668,6 +668,49 @@ void nukeClanker(Bld& b) {   // launch ramp with a missile on its rail, exhaust 
     b.a.grain(0, 0, (float)W, (float)H, 0.12f, 79);
 }
 
+// 2x2: the surface of an underground bunker. A flat reinforced apron with hazard borders, a steel-rimmed pit in the middle (the hatch leaves
+// are drawn live over it, so the pit itself stays dark) and vents or hatch covers in the corners. Cyber: grey-blue concrete with cyan lights.
+// Clanker: sandy concrete, sandbags at two corners and rusty yellow stripes.
+void bunkerBase(Bld& b) {
+    int W = b.W, H = b.H;
+    bool cy = b.cy;
+    Color slab = cy ? rgb(104, 118, 136) : rgb(190, 170, 122), seam = cy ? rgb(62, 72, 88) : rgb(124, 108, 78);
+    Color hz1 = cy ? rgb(232, 188, 62) : rgb(204, 156, 56), hz2 = cy ? rgb(36, 36, 32) : rgb(96, 72, 44);
+    Color hatch = cy ? C_STEEL : rgb(108, 84, 62);
+    b.pad(cy ? rgb(84, 96, 112) : rgb(176, 156, 110), seam, 0.12f, 4);
+    b.hazard(3, 3, W - 6.0f, 2.6f, 5, hz1, hz2); b.hazard(3, H - 5.6f, W - 6.0f, 2.6f, 5, hz1, hz2);
+    b.hazard(3, 5.6f, 2.6f, H - 11.2f, 5, hz1, hz2); b.hazard(W - 5.6f, 5.6f, 2.6f, H - 11.2f, 5, hz1, hz2);
+    b.a.rect(7, 7, W - 14.0f, H - 14.0f, 2.5f, slab, 1.8f, 0.45f);
+    b.a.line(7, 22, W - 7.0f, 22, 0.5f, rgba(seam, 120)); b.a.line(7, 46, W - 7.0f, 46, 0.5f, rgba(seam, 120));
+    b.a.grain(7, 7, W - 7.0f, H - 7.0f, 0.10f, 91);
+    // the pit: a dark steel rim and a black well
+    b.a.circle(32, 32, 19.5f, cy ? rgb(56, 62, 72) : rgb(92, 84, 66), 2.2f, 0.55f);
+    b.a.circle(32, 32, 17, rgb(8, 9, 11), 1.6f, 0.2f);
+    for (int i = 0; i < 8; i++) { float an = i * 0.7854f; b.a.dot(32 + std::cos(an) * 23.0f, 32 + std::sin(an) * 23.0f, 0.9f, shade(seam, 1.6f)); }   // bolts round the rim
+    // corner features: a vent grille (TL), an ammunition hatch (TR) and a second vent (BR)
+    auto vent = [&](float x, float y, float w, float h) { b.vent(x, y, w, h, shade(slab, 1.6f)); };
+    auto plate = [&](float x, float y, float s) {
+        b.a.rect(x, y, s, s, 1.2f, hatch, 1.4f, 0.5f);
+        b.a.line(x + 1.6f, y + 1.6f, x + s - 1.6f, y + s - 1.6f, 0.5f, rgba(BLACK, 80));
+        for (float dx : { 1.6f, s - 1.6f }) for (float dy : { 1.6f, s - 1.6f }) b.a.dot(x + dx, y + dy, 0.6f, shade(hatch, 1.5f));
+    };
+    if (cy) {
+        vent(9, 9, 10, 6); plate(46, 8, 9); vent(46, 47, 9, 6);
+        for (float p : { 11.0f, 53.0f }) b.light(p, 32, 1.1f, C_CYAN, 120);
+        b.light(32, 10.5f, 1.1f, C_CYAN, 120);
+        b.light(12, 52, 1.0f, C_CYAN, 90);
+        b.mark(24, 53.5f, 16, 2.6f);
+    } else {
+        // sandbags along the top-left and bottom-right corners, two rows deep
+        b.sandbags(5, 12, 19, 12, 2); b.sandbags(7, 16, 7, 26, 2);
+        b.sandbags(W - 5.0f, H - 12.0f, W - 19.0f, H - 12.0f, 2); b.sandbags(W - 7.0f, H - 26.0f, W - 7.0f, H - 16.0f, 2);
+        plate(46, 8, 9); vent(9, 47, 10, 6);
+        b.rust(12, 40, 22, 50, 6, 60); b.rust(44, 14, 52, 24, 4, 60);
+        b.mark(24, 53.5f, 16, 2.6f);
+    }
+    b.a.grain(0, 0, (float)W, (float)H, 0.08f, 93);
+}
+
 }  // namespace
 
 // ================================================================= entry points
@@ -693,6 +736,7 @@ void artBuilding(Canvas& c, Canvas& mask, int type) {
     case BR_AATURRET: cy ? patriotCyber(b)  : rocketBase(b);      break;
     case BR_INCOME:   cy ? minerCyber(b)    : oilwell(b);         break;
     case BR_NUKE:     cy ? nukeCyber(b)     : nukeClanker(b);     break;
+    case BR_BUNKER:   bunkerBase(b);                                 break;
     }
     c.outline(rgb(8, 10, 14, 150));
 }

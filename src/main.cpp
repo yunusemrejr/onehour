@@ -2373,9 +2373,9 @@ int main(int argc, char** argv) {
             int fac = atoi(bl) & 1; float sc = getenv("ONEHOUR_BLDSCALE") ? (float)atof(getenv("ONEHOUR_BLDSCALE")) : 1.0f;
             int first = fac == 0 ? B_C_HQ : B_K_HQ, only = getenv("ONEHOUR_BLDONLY") ? atoi(getenv("ONEHOUR_BLDONLY")) : -1;
             float x = 10, y = 6, rowH = 0;
-            for (int i = 0; i < BUILDS_PER_FACTION; i++) {
+            for (int i = 0; i <= BUILDS_PER_FACTION; i++) {   // the last slot is the faction's underground bunker (its ids sit after both blocks)
                 if (only >= 0 && i != only) continue;
-                int t = first + i; const BuildType& bt = BUILDS[t];
+                int t = i < BUILDS_PER_FACTION ? first + i : (fac == 0 ? (int)B_C_BUNKER : (int)B_K_BUNKER); const BuildType& bt = BUILDS[t];
                 float w = (bt.w * TILE + 20) * sc, h = (bt.h * TILE + 44) * sc;
                 if (x + w > SCREEN_W - 4) { x = 10; y += rowH + 4; rowH = 0; }
                 float cx = x + (BART_PAD_L + bt.w * TILE * 0.5f) * sc - 6 * sc, cy = y + (BART_PAD_T + bt.h * TILE * 0.5f) * sc - 6 * sc;
@@ -2384,6 +2384,31 @@ int main(int argc, char** argv) {
                 if (bt.role == BR_TURRET) g.draw(g.turretHead[fac == 0 ? 0 : 1], cx, cy, 0.6f, sc);
                 if (bt.role == BR_AATURRET) g.draw(g.turretHead[fac == 0 ? 2 : 3], cx, cy, 0.6f, sc);
                 x += w; rowH = std::max(rowH, h);
+            }
+            g_game.screenshot(sheetPath);
+            printf("wrote %s\n", sheetPath);
+            g_gfx.shutdown(); SDL_Quit(); return 0;
+        }
+        if (getenv("ONEHOUR_NEW")) {   // the new designs at 5x: spy, spy drone and cargo lifter, Cyber row then Clanker row; a 1x strip of all six below
+            const int ids[2][3] = { { U_C_SPY, U_C_SDRONE, U_C_CARGO }, { U_K_SPY, U_K_SDRONE, U_K_CARGO } };
+            const float sc = 5.0f, colX[3] = { 150, 400, 730 }, rowY[2] = { 165, 455 };
+            for (int row = 0; row < 2; row++) for (int col = 0; col < 3; col++) {
+                int t = ids[row][col]; float x = colX[col], y = rowY[row];
+                g.draw(g.unitBody[t][0], x, y, 0, sc);
+                if (t == U_C_SDRONE || t == U_K_SDRONE) { g.draw(g.rotorDisc, x, y, 0, 0.6f * sc, rgb(255, 255, 255), 150); g.draw(g.rotorBlades, x, y, 0.5f, 0.6f * sc, rgb(200, 240, 255), 110); }
+                if (t == U_C_CARGO || t == U_K_CARGO) for (int k = -1; k <= 1; k += 2) {
+                    g.draw(g.rotorDisc, x + k * 20.8f * sc, y, 0, 1.55f * sc, rgb(255, 255, 255), 235);
+                    g.draw(g.rotorBlades, x + k * 20.8f * sc, y, 0.5f * k, 1.55f * sc, row == 0 ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
+                }
+            }
+            for (int i = 0; i < 6; i++) {   // the 1x strip: Cyber then Clanker, same three designs
+                int t = ids[i / 3][i % 3]; float x = 40 + i * 75, y = 600;
+                g.draw(g.unitBody[t][0], x, y, 0, 1);
+                if (t == U_C_SDRONE || t == U_K_SDRONE) { g.draw(g.rotorDisc, x, y, 0, 0.6f, rgb(255, 255, 255), 150); g.draw(g.rotorBlades, x, y, 0.5f, 0.6f, rgb(200, 240, 255), 110); }
+                if (t == U_C_CARGO || t == U_K_CARGO) for (int k = -1; k <= 1; k += 2) {
+                    g.draw(g.rotorDisc, x + k * 20.8f, y, 0, 1.55f, rgb(255, 255, 255), 235);
+                    g.draw(g.rotorBlades, x + k * 20.8f, y, 0.5f * k, 1.55f, i < 3 ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
+                }
             }
             g_game.screenshot(sheetPath);
             printf("wrote %s\n", sheetPath);
