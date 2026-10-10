@@ -81,7 +81,7 @@ void Game::startGame() {
     selection.clear();
     for (auto& g : groups) g.clear();
     messages.clear();
-    parts.clear(); decals.clear(); nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
+    parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
     placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
@@ -1096,6 +1096,19 @@ void Game::drawEntity(Entity& e) {
         emitP(e.pos.x + back.x + fxRng.f(-3, 3), e.pos.y + back.y + fxRng.f(-3, 3), back.norm().x * 14 + fxRng.f(-6, 6), back.norm().y * 14 + fxRng.f(-6, 6), fxRng.f(0.6f, 1.0f), sz, sz * 2.6f,
               road ? rgb(150, 150, 152, 150) : rgb(178, 150, 108, 170), PK_DUST, (u8)fxRng.range(0, 2), 0, 1.4f, fxRng.f(0, 6), fxRng.f(-0.6f, 0.6f));
     }
+    // tracks press into soft ground: a pair of short dark dashes behind a moving vehicle (none on asphalt), fading over a quarter of a minute
+    if (!air && ut.kind == UK_VEH && moving && frameDt > 0 && fxRng.f() < 9.0f * frameDt) {
+        int tl = g_map.tile(clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1));
+        if (tl == T_DIRT || tl == T_SAND || tl == T_GRASS || tl == T_GRASS2) {
+            Vec2 fw(std::cos(e.angle), std::sin(e.angle)), side(-fw.y, fw.x);
+            float off = e.radius() * 0.55f, life = tl == T_SAND ? 9.0f : (tl == T_DIRT ? 16.0f : 8.0f);
+            for (int sd = -1; sd <= 1; sd += 2) {
+                Tread t{ e.pos.x - fw.x * e.radius() * 0.5f + side.x * off * sd, e.pos.y - fw.y * e.radius() * 0.5f + side.y * off * sd, e.angle, 0, life, (u8)fxRng.range(0, 1) };
+                if (treads.size() < 360) treads.push_back(t);
+                else { treads[treadHead] = t; treadHead = (treadHead + 1) % treads.size(); }
+            }
+        }
+    }
     // jets: afterburner flame, glow and a vapour trail while they are moving fast
     if (air && ut.jet && spd > 120 && !disabled) {
         float burn = clampf((spd - 120) / 360.0f, 0, 1), th = e.angle;
@@ -1525,7 +1538,7 @@ void Game::renderHud() {
                     }
                     snprintf(buf, sizeof buf, "%s %d%%", UNITS[e->queue[0]].name, (int)(e->queueProgress * 100)); g.text(INFO_X + 330, hy + 104, buf, hudText());
                 } else if (e->constructed && (bt.role == BR_BARRACKS || bt.role == BR_FACTORY || bt.role == BR_AIRFIELD || bt.role == BR_HQ || bt.role == BR_SUPPLY)) g.text(INFO_X + 330, hy + 58, "Production idle", hudDim());
-                if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + (bt.role == BR_TECH ? 110 : 98), "LOW POWER: reduced output", rgb(255, 140, 120));
+                if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + (bt.role == BR_TECH || bt.role == BR_NUKE || bt.role == BR_INCOME ? 110 : 98), "LOW POWER: reduced output", rgb(255, 140, 120));
                 if (bt.role == BR_INCOME && e->constructed) {
                     bool half = pl.lowPower() && bt.power < 0;
                     int amt = pl.faction == F_CYBER ? 75 : 60;

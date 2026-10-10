@@ -125,6 +125,21 @@ void Gfx::buildEffects() {
         }
         fxs.scorch[v] = fromCanvasSmooth(c, 48, 48);
     }
+    for (int v = 0; v < 2; v++) {   // tread marks: a short pressed-in dash, the track cleats showing as darker bars (v 1 is a worn, broken one)
+        Canvas c(24, 8);
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 24; x++) {
+            float dx = (x + 0.5f - 12) / 12.0f, dy = (y + 0.5f - 4) / 4.0f;
+            float e = std::max(std::fabs(dx) * 0.9f, std::fabs(dy));
+            float a = clampf((1.0f - e) / 0.35f, 0, 1);
+            float cleat = (x % 4 < 2) ? 1.0f : 0.55f;
+            float n = fb(x * 0.3f + v * 9, y * 0.3f, 640 + v);
+            if (v == 1 && n < 0.42f) a *= 0.25f;
+            a *= cleat;
+            if (a <= 0.01f) continue;
+            c.px[y * 24 + x] = Canvas::pack(Color{34, 28, 20, (u8)(a * 100)});
+        }
+        fxs.tread[v] = fromCanvasSmooth(c, 12, 4);
+    }
     for (int v = 0; v < 3; v++) {   // cloud shadows: big soft irregular blobs
         Canvas c(128, 128);
         for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
@@ -188,6 +203,7 @@ void Game::updateParticles(float dt) {
     }
     for (size_t i = 0; i < parts.size();) { if (parts[i].age >= parts[i].life) { parts[i] = parts.back(); parts.pop_back(); } else i++; }
     for (auto& d : decals) d.age += dt;
+    for (auto& t : treads) t.age += dt;
     decals.erase(std::remove_if(decals.begin(), decals.end(), [](const Decal& d) { return d.age >= d.life; }), decals.end());
 }
 
@@ -243,6 +259,12 @@ void Game::drawGroundFx() {
         float k = d.age / d.life, a = 255 * clampf((1 - k) * 4.0f, 0, 1) * 0.85f;
         Vec2 s = worldToScreen(Vec2(d.x, d.y));
         g.draw(g.fxs.scorch[d.kind % 3], s.x, s.y, d.rot, d.r * 2.0f / 96.0f, rgb(255, 255, 255), (u8)a);
+    }
+    for (auto& t : treads) {
+        if (t.age >= t.life || !onScreen(t.x, t.y, 16)) continue;
+        float k = t.age / t.life, a = 255 * clampf((1 - k) * 2.5f, 0, 1) * clampf(t.age * 6.0f + 0.3f, 0, 1);
+        Vec2 s = worldToScreen(Vec2(t.x, t.y));
+        g.draw(g.fxs.tread[t.kind & 1], s.x, s.y, t.rot, 0.55f, rgb(255, 255, 255), (u8)a);
     }
     for (auto& f : g_sim.fx) {
         float k = f.t / f.life;

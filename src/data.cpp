@@ -80,11 +80,11 @@ const BuildType BUILDS[B_COUNT] = {
     { "Barracks",        "B", F_CYBER, BR_BARRACKS, 1800, 500,  12, 3, 2, -1, 7,  -1, -1,        "Trains infantry" },
     { "Assembly Plant",  "F", F_CYBER, BR_FACTORY,  2800, 2000, 25, 4, 3, -3, 7,  -1, B_C_POWER, "Builds vehicles" },
     { "Drone Pad",       "A", F_CYBER, BR_AIRFIELD, 3400, 1000, 20, 5, 3, -2, 8,  -1, B_C_FACTORY,"Builds and rearms Wraith Drones" },
-    { "Data Center",     "E", F_CYBER, BR_TECH,     2000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank; EMP Strike, Orbital Scan, Airlift Drop, Aid Drop, Overclock, structure upgrades" },
+    { "Data Center",     "E", F_CYBER, BR_TECH,     2000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank, strike powers and structure upgrades" },
     { "Laser Turret",    "L", F_CYBER, BR_TURRET,   5200, 1000, 14, 1, 1, -3, 8,  7,  B_C_POWER, "Fortified ground defense laser, needs power: short reach, very hard to kill" },
-    { "Patriot Battery", "T", F_CYBER, BR_AATURRET, 6800, 1200, 16, 2, 2, -3, 9,  8,  B_C_POWER, "Fortified missile defense, brutal against air, good on ground, very hard to kill" },
+    { "Patriot Battery", "T", F_CYBER, BR_AATURRET, 6800, 1200, 16, 2, 2, -3, 9,  8,  B_C_POWER, "Fortified missile defense: brutal vs air, good vs ground, very hard to kill" },
     { "Bitcoin Datacenter","M", F_CYBER, BR_INCOME,  1600, 1600, 22, 3, 2, -5, 7, -1, B_C_POWER, "Mines $450 every 5s (max 4), half rate on low power" },
-    { "Nuke Ramp",       "K", F_CYBER, BR_NUKE,     2600, 5000, 40, 3, 3, -6, 8, -1, B_C_TECH,  "Launches a devastating nuke every 5 min per ramp (key K): huge blast, mushroom cloud, lingering radiation" },
+    { "Nuke Ramp",       "K", F_CYBER, BR_NUKE,     2600, 5000, 40, 3, 3, -6, 8, -1, B_C_TECH,  "A nuke every 5 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 
     { "Command Post",    "C", F_CLANKER, BR_HQ,       5200, 3000, 45, 4, 4, 0,  10, -1, -1,        "Trains Dozers. A Dozer can raise another one if this falls (max 3)" },
     { "Diesel Generator","P", F_CLANKER, BR_POWER,    1500, 800,  12, 3, 2, 10, 7,  -1, -1,        "Provides 10 power" },
@@ -92,11 +92,11 @@ const BuildType BUILDS[B_COUNT] = {
     { "Barracks",        "B", F_CLANKER, BR_BARRACKS, 2000, 500,  12, 3, 2, -1, 7,  -1, -1,        "Trains infantry" },
     { "War Factory",     "F", F_CLANKER, BR_FACTORY,  3000, 2000, 25, 4, 3, -3, 7,  -1, B_K_POWER, "Builds vehicles" },
     { "Airstrip",        "A", F_CLANKER, BR_AIRFIELD, 3600, 1000, 20, 5, 3, -2, 8,  -1, B_K_FACTORY,"Builds and rearms Vulture Gunships" },
-    { "Arms Lab",        "E", F_CLANKER, BR_TECH,     2200, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher; Shell Storm, Recon Flight, Paradrop, Aid Drop, Ordnance, structure upgrades" },
+    { "Arms Lab",        "E", F_CLANKER, BR_TECH,     2200, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher, strike powers and structure upgrades" },
     { "Gun Nest",        "N", F_CLANKER, BR_TURRET,   6400, 900,  14, 1, 1, -1, 8,  16, -1,        "Fortified machine gun bunker, ground and light air, very hard to kill" },
     { "Rocket Battery",  "T", F_CLANKER, BR_AATURRET, 5600, 1200, 16, 2, 2, -3, 9,  17, B_K_POWER, "Fortified rocket defense, ground and air, very hard to kill" },
     { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
-    { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "Launches a devastating nuke every 5 min per ramp (key K): huge blast, mushroom cloud, lingering radiation" },
+    { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "A nuke every 5 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 };
 
 const PowerType POWERS[F_COUNT] = {

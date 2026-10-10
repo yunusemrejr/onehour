@@ -2530,6 +2530,16 @@ int main(int argc, char** argv) {
                 g_game.cam = Vec2(clampf(mid.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 g_game.selection.clear(); g_game.selection.push_back(jets[0]);
             }
+            if (const char* ts = getenv("ONEHOUR_TREADS")) {   // showcase: a column of tanks driving across open ground, rendered frame by frame so their track marks and dust build up (ONEHOUR_TREADS=frames)
+                Faction f0 = g_sim.players[0].faction; Vec2 bp = g_sim.players[0].basePos;
+                std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
+                std::vector<Ref> col; Vec2 st = g_map.nearestFree(bp + Vec2(300, 160), 20);
+                for (int i = 0; i < 4; i++) col.push_back(g_sim.spawnUnit(firstUnitOf(f0) + 5, 0, g_map.nearestFree(st + Vec2(0, i * 34), 10)));
+                g_sim.cmdMove(col, g_map.nearestFree(st + Vec2(260, 60), 20), true);
+                g_game.cam = Vec2(clampf(st.x + 120 - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(st.y + 40 - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                int n = std::max(10, atoi(ts));
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; g_game.render(); g_game.updateParticles(SIM_DT); }
+            }
             if (getenv("ONEHOUR_BOMBS")) {   // showcase: three bombers working over an enemy outpost (ONEHOUR_BOMBS=N ticks into the raid)
                 Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction; int bb0 = firstBuildOf(f0), bb1 = firstBuildOf(f1);
                 Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;

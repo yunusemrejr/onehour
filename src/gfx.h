@@ -105,7 +105,7 @@ struct Gfx {
     Sprite shadowSmall, shadowLarge, blob, disc;
     Sprite blobAdd;                 // additive radial glow (muzzle light, fire glow, beacons)
     // baked effect sprites: smoke and dust puffs, fireball frames, flame tongues, muzzle stars, sparks, shock rings, beams, debris, scorch decals
-    struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], missile, missileK, cloud[3], billow[4]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead
+    struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], tread[2], missile, missileK, cloud[3], billow[4]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead
     Sprite waterFx[4];              // seamless animated caustics laid over open water
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
     static const int FLAG_W = 24, FLAG_H = 15;

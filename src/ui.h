@@ -26,6 +26,7 @@ struct Message { std::string text; float time; Color color; };
 enum PKind : u8 { PK_SMOKE = 0, PK_DUST, PK_DEBRIS, PK_CONTRAIL, PK_SPARK, PK_FLAME, PK_RING, PK_GLOW };
 struct Particle { float x, y, vx, vy, ay, drag, age, life, s0, s1, rot, vrot; Color col; u8 kind, var; };
 struct Decal { float x, y, r, rot, age, life; u8 kind; };       // ground scorch marks
+struct Tread { float x, y, rot, age, life; u8 kind; };          // a short dark track-pressed dash left by a vehicle on soft ground
 
 struct Game {
     GameState state = GS_MENU;
@@ -74,6 +75,8 @@ struct Game {
     std::vector<Ping> pings;
     std::vector<Particle> parts;
     std::vector<Decal> decals;
+    std::vector<Tread> treads;      // ring of fading tread marks (capped)
+    size_t treadHead = 0;
     float nukeFlash = 0;            // seconds of white-out left after a tactical nuke goes off on screen
     float frameDt = 0;              // wall time this frame, zero while paused (drives particle emission and ageing)
     Rng fxRng{ 0xFA11 };
