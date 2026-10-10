@@ -47,8 +47,13 @@ const CkTone CK_TONES[12] = {
 };
 
 // type < 0 selects the neutral default palette (structures' turret heads)
-// position inside the army's block; the medics live after both blocks but are drawn as the 13th design
-static int unitLocal(int type) { return type == U_C_HELI ? 14 : type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction); }
+// position inside the army's block; the medics live after both blocks but are drawn as the 13th design. The newest designs follow the
+// Cyber helicopter in pairs: spies 15, spy drones 16, cargo lifters 17 (Cyber first in each pair, as everywhere else).
+static int unitLocal(int type) {
+    if (type == U_C_HELI) return 14;
+    if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
+    return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
+}
 
 void setTone(int type) {
     CYH = CYH0; CYP = CYP0; CYD = CYD0; CYG = CYG0; CYW = CYW0; CYM = CYM0;
@@ -523,6 +528,114 @@ void gunshipBody(Art& A) {   // Vulture Gunship: fuselage, tail boom, stub wings
     teamDot(A, 21.5f, 32, 2.7f);
 }
 
+// Spy (Infiltrator / Spy): the infantry body with no rifle. Cyber is a black bodysuit with a glowing visor and a hacking slab; Clanker is a
+// long trench coat whose tails swing with the stride, a brimmed hat and a briefcase. Walk frames 1/2 swing the feet.
+void spyBody(Art& A, bool cy, int frame) {
+    float step = frame == 0 ? 0 : (frame == 1 ? 3.0f : -3.0f);
+    if (cy) {
+        Color suit = rgb(46, 50, 60), sleeve = rgb(62, 66, 78), boot = rgb(16, 18, 24);
+        A.ell(32 + step, 28, 3.6f, 2.4f, boot, 1.4f, 0.4f);
+        A.ell(32 - step, 36, 3.6f, 2.4f, boot, 1.4f, 0.4f);
+        A.ell(32.5f, 32, 6.0f, 9.0f, suit, 3.0f, 0.55f);                                     // bodysuit: slimmer than a trooper
+        A.line(31.5f, 25, 31.5f, 39, 0.9f, rgba(CYG, 170));                                    // spine seam, faintly lit
+        A.cap(33.5f, 32 - 7.6f, 40.0f, 28.4f, 2.0f, sleeve, 1.4f, 0.5f);                       // empty left hand, forward
+        A.cap(33.5f, 32 + 7.6f, 41.0f, 35.0f, 2.0f, sleeve, 1.4f, 0.5f);                       // right hand on the hacking slab
+        A.box(43.8f, 35.6f, 3.0f, 2.2f, 0.6f, rgb(24, 26, 32), 1.2f, 0.5f);                     // hacking slab
+        A.box(44.2f, 35.6f, 1.6f, 1.2f, 0.3f, CYG, 0.6f, 0.2f); A.glow(44.4f, 35.6f, 5.0f, rgba(CYG, 110));
+        A.circle(33.5f, 32, 4.6f, rgb(30, 33, 40), 2.0f, 0.6f);                                 // hood
+        A.line(30.5f, 28.4f, 30.5f, 35.6f, 0.6f, rgba(CYG, 110));                               // shoulder seam
+        A.box(37.4f, 32, 1.2f, 3.0f, 0.5f, CYG, 1, 0.2f); A.glow(38.2f, 32, 5.0f, rgba(CYG, 110));   // visor
+        teamDot(A, 28.4f, 32, 2.0f);
+    } else {
+        Color coat = rgb(178, 152, 104), coatD = rgb(120, 98, 62), boot = rgb(44, 36, 28);
+        A.ell(32 + step, 28, 3.6f, 2.4f, boot, 1.4f, 0.4f);
+        A.ell(32 - step, 36, 3.6f, 2.4f, boot, 1.4f, 0.4f);
+        float tl = step * 0.7f;   // the coat's front and back tails swing opposite each other
+        A.poly({ {18 - tl, 25.5f}, {25, 21.8f}, {40, 21.4f}, {46.5f + tl, 24.5f}, {47 + tl, 39.5f}, {40, 42.6f}, {25, 42.2f}, {18 - tl, 38.5f} }, coat, 2.4f, 0.55f);
+        A.line(37, 22.5f, 41.5f, 31, 0.8f, rgba(coatD, 200)); A.line(37, 41.5f, 41.5f, 33, 0.8f, rgba(coatD, 200));   // lapels
+        A.line(21, 32, 45, 32, 0.7f, rgba(coatD, 160));                                        // belt
+        A.box(23.2f, 32, 1.2f, 9.0f, 0.6f, coatD, 1.0f, 0.4f);                                 // turned-up collar at the back
+        A.line(40.5f, 22.5f, 44, 24, 0.6f, rgba(coatD, 150)); A.line(40.5f, 41.5f, 44, 40, 0.6f, rgba(coatD, 150));   // hem seams
+        A.dot(35.5f, 27.5f, 0.6f, coatD); A.dot(35.5f, 36.5f, 0.6f, coatD);                     // buttons
+        A.dot(29.5f, 25.0f, 1.0f, shade(coat, 1.15f)); A.dot(29.5f, 39.0f, 1.0f, shade(coat, 1.15f));   // shoulder tabs
+        A.cap(33, 32 - 8.3f, 40, 28.6f, 2.0f, coatD, 1.4f, 0.5f);                               // sleeves
+        A.cap(33, 32 + 8.3f, 40.5f, 35.2f, 2.0f, coatD, 1.4f, 0.5f);
+        A.box(43.6f, 35.8f, 3.6f, 2.4f, 0.6f, rgb(96, 62, 38), 1.6f, 0.5f);                    // briefcase
+        A.line(42.2f, 34.4f, 45, 34.4f, 0.5f, rgba(rgb(60, 38, 22), 200));
+        A.dot(45.0f, 35.8f, 0.6f, rgb(214, 176, 80));
+        A.circle(33.5f, 32, 7.0f, rgb(58, 44, 30), 2.2f, 0.5f);                                // brim, seen from above
+        A.circle(33.5f, 32, 4.4f, rgb(86, 64, 42), 1.8f, 0.5f);                                // crown
+        teamDot(A, 33.5f, 32, 2.0f);
+    }
+}
+
+// Ghost Drone (Cyber) / Recon Drone (Clanker): a small matte pod on four stub arms with ducted rotor pods at the tips, a sensor lens at the
+// nose and a tail boom. The rotor is drawn live over the hub at the centre.
+void spyDroneBody(Art& A, bool cy) {
+    Color body = cy ? rgb(28, 30, 38) : rgb(64, 68, 54), arm = cy ? rgb(44, 46, 56) : rgb(86, 90, 70), duct = cy ? rgb(10, 11, 16) : rgb(40, 42, 32);
+    Color lens = cy ? CYG0 : rgb(255, 176, 60);
+    A.cap(25, 32, 15, 32, 1.1f, arm, 1.0f, 0.5f);                                              // tail boom
+    A.box(14.6f, 32, 1.1f, 4.6f, 0.5f, arm, 1.0f, 0.4f);                                       // tail fin
+    A.line(24, 30, 19, 24.5f, 0.5f, rgba(lens, 150));                                          // faint antenna
+    for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) {
+        float ex = 32 + sx * 13.5f, ey = 32 + sy * 13.5f;
+        A.cap(32 + sx * 5, 32 + sy * 4, ex, ey, 1.2f, arm, 1.0f, 0.5f);                        // stub arm
+        A.circle(ex, ey, 3.6f, arm, 1.6f, 0.5f);
+        A.circle(ex, ey, 2.4f, duct, 1.0f, 0.2f);
+        A.ring(ex, ey, 2.4f, 0.4f, rgba(lens, cy ? 150 : 110), 0.5f, 0);
+    }
+    A.ell(32, 32, 8.0f, 6.0f, body, 2.4f, 0.6f);                                               // pod
+    A.ell(31.5f, 32, 4.4f, 3.4f, shade(body, 1.35f), 1.4f, 0.4f);                              // top deck
+    A.circle(38.5f, 32, 2.5f, duct, 1.4f, 0.5f);                                               // sensor dome
+    A.dot(38.8f, 31.6f, 1.1f, lens); A.glow(39.0f, 32, 5.0f, rgba(lens, 140));
+    teamDot(A, 28.0f, 32, 1.9f);
+}
+
+// Atlas Lifter (Cyber) / Mammoth Lifter (Clanker): a huge tandem-rotor cargo helicopter. The rotors are drawn live over the two hubs; the
+// sprite is the fuselage with its rear loading ramp, glazed nose, side sponsons, engine pods and the hub fairings. Faces +x.
+void cargoBody(Art& A, bool cy) {
+    const float HUB = 16.8f;   // rotor hubs sit 20.8 screen px either side of the centre: 20.8 / (UNIT_SCALE * the lifter's scale of 2)
+    Color hull = cy ? rgb(196, 206, 216) : rgb(96, 104, 64), hullD = cy ? rgb(96, 106, 122) : rgb(60, 66, 40);
+    Color ramp = cy ? rgb(92, 100, 114) : rgb(156, 90, 48), glass = rgb(18, 52, 74), hubC = cy ? rgb(70, 78, 92) : rgb(70, 72, 56);
+    Color trim = cy ? rgb(110, 232, 255) : rgb(232, 186, 58);
+    // side sponsons, then the fuselage capsule over them
+    for (int s = -1; s <= 1; s += 2) {
+        A.box(28, 32 + s * 10.6f, 15, 2.4f, 1.2f, hullD, 1.6f, 0.5f);
+        for (int i = 0; i < 6; i++) {
+            if (cy) A.box(16 + i * 4.6f, 32 + s * 10.6f, 1.2f, 1.0f, 0.3f, i % 2 ? trim : hullD, 0.6f, 0.2f);   // hazard-trimmed sponson edge
+            else A.dot(16 + i * 4.6f, 32 + s * 10.6f, 0.45f, rgba(hullD, 200));
+        }
+    }
+    A.cap(12, 32, 52, 32, 8.6f, hull, 3.4f, 0.6f);     // the fuselage capsule; its tail is hidden by the ramp
+    // emitter strips (Cyber) or hazard trim along the nose and sides (Clanker)
+    if (cy) { A.line(14, 25.0f, 50, 25.0f, 0.9f, rgba(trim, 210)); A.line(14, 39.0f, 50, 39.0f, 0.9f, rgba(trim, 210)); A.glow(30, 25, 8, rgba(trim, 60)); A.glow(30, 39, 8, rgba(trim, 60)); }
+    else {
+        for (int i = 0; i < 4; i++) { A.box(44 + i * 3.4f, 24.3f, 1.4f, 1.0f, 0.2f, i % 2 ? trim : hullD, 0.6f, 0.2f); A.box(44 + i * 3.4f, 39.7f, 1.4f, 1.0f, 0.2f, i % 2 ? trim : hullD, 0.6f, 0.2f); }
+        A.line(10, 24.4f, 12, 24.4f, 0.8f, rgba(trim, 220)); A.line(10, 39.6f, 12, 39.6f, 0.8f, rgba(trim, 220));
+        for (int i = 0; i < 9; i++) A.dot(14 + i * 4.4f, 27.6f, 0.55f, rgba(hullD, 210));   // rivets
+        for (int i = 0; i < 9; i++) A.dot(14 + i * 4.4f, 36.4f, 0.55f, rgba(hullD, 210));
+    }
+    // rear loading ramp, let down at the tail: a wedge with its hinge and the tread lines of the ramp
+    A.poly({ {10, 24.6f}, {1.8f, 27.2f}, {1.8f, 36.8f}, {10, 39.4f} }, ramp, 1.6f, 0.5f);
+    A.line(3.4f, 28.4f, 3.4f, 35.6f, 0.5f, rgba(hullD, 170));
+    for (int i = 0; i < 3; i++) A.line(5.4f + i * 1.6f, 25.8f, 5.4f + i * 1.6f, 38.2f, 0.3f, rgba(hullD, 90));
+    // glazed cockpit at the nose, with a glint
+    A.ell(56, 32, 4.6f, 6.0f, glass, 2.0f, 0.6f);
+    A.ell(57.2f, 30.4f, 2.0f, 0.9f, rgba(rgb(200, 230, 245), 190), 1, 0);
+    A.line(52, 32, 61, 32, 0.6f, rgba(hullD, 150));
+    // engine pods on the rear pylon, one either side of the hub
+    for (int s = -1; s <= 1; s += 2) { A.ell(32 - HUB, 32 + s * 9.6f, 3.6f, 2.8f, hullD, 1.4f, 0.5f); A.dot(32 - HUB - 0.8f, 32 + s * 9.6f, 0.8f, cy ? trim : rgb(255, 180, 60)); }
+    // hub fairings: a steel collar and a bright mast cap
+    for (int s = -1; s <= 1; s += 2) {
+        float hx = 32 + s * HUB;
+        A.circle(hx, 32, 5.2f, hubC, 2.0f, 0.55f);
+        A.circle(hx, 32, 2.8f, shade(hubC, 1.5f), 1.4f, 0.5f);
+        A.dot(hx, 32, 1.0f, cy ? trim : rgb(255, 214, 124));
+    }
+    teamDot(A, 36, 32, 2.8f);
+    A.grain(4, 20, 60, 44, cy ? 0.04f : 0.14f, cy ? 201 : 202);
+}
+
 
 // ---------------------------------------------------------------- detail layer
 // Extra geometry drawn over every base sprite: soldier kit, hull skirts, stowage, vents, lamps, markings and weathering. It sits in its own layer so the
@@ -667,10 +780,14 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 12: medicBody(A, cy, frame); break;
     case 13: sniperBody(A, cy, frame); break;
     case 14: hornetBody(A); break;
+    case 15: spyBody(A, cy, frame); break;
+    case 16: spyDroneBody(A, cy); break;
+    case 17: cargoBody(A, cy); break;
     }
+    // the new designs draw all their own detail, so the generic soldier and vehicle layers stay off them
     if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
-    else if (local != 8 && local != 11 && local != 12 && local != 13 && local != 14) vehicleDetail(A, cy, local);
-    enhance(c, local == 8 || local == 11 || local == 14 ? 0.45f : 0.7f);
+    else if (local != 8 && local <= 10) vehicleDetail(A, cy, local);
+    enhance(c, local == 8 || local == 11 || local == 14 || local == 16 || local == 17 ? 0.45f : 0.7f);
     if (local == 8 && !cy) c.outline(rgb(10, 12, 14, 150)); else c.outline(rgb(8, 10, 14, 200));
 }
 
@@ -975,5 +1092,7 @@ float artScale(int type) {
     if (local == 10) return 1.26f;   // Aegis Titan / Behemoth
     if (local == 11) return 1.28f;   // supersonic jets: long and slender, drawn large enough to read at a glance
     if (local == 9) return 1.06f;    // elite infantry
+    if (local == 17) return 2.0f;    // cargo lifters: the biggest airframes on the field
+    if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }
