@@ -262,6 +262,7 @@ Beyond the learned parts the commander plays tactically:
 - **Anti-air**: batteries follow the enemy's aircraft and airfields and are placed beside the structures most worth protecting.
 - **Medics** (one per 14 fighters, up to three) trail the army and are never sent ahead as part of a wave.
 - **Waves** break off when the fighting around them is clearly lost (two bad readings in a row), not only when half of them are dead.
+- **Special forces**: from Hard (one spy drone from Normal) the commander keeps spy drones with its army, since they are the only thing that finds hidden snipers and underground bunkers, and trains two spies that go for the most valuable structure nobody is guarding (`AiFeat` `FEAT_SPECIAL`: over 88 mirror games it beat the same commander without it 14-2, 72 unresolved). It does not use cargo lifters or bunkers itself.
 - **Allies**: a computer ally defends *your* base too (it sends most of its army to wherever enemy fighters are closing on a teammate's structures), shares its vision with you, and
   plays at the difficulty set for it. When *you* push out (five or more of your fighters away from home, near an enemy structure) it moves its army up to the same front and picks its next targets near it,
   telling you so ("Ally: joining your attack", "Ally: sending units to defend your base"). `--allytest` covers it.

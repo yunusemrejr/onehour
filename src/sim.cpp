@@ -2860,6 +2860,7 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     b.disabledUntil = std::max(b.disabledUntil, time + 3.0f);
     b.attacker = NOREF; b.lastDamaged = -100;
     for (int q = 0; q < MAX_PLAYERS; q++) b.detUntil[q] = 0;
+    { Ref bref = refOf(b); for (auto& u : ents) if (u.alive && u.isUnit() && u.home == bref) u.home = NOREF; }   // aircraft based here must find another airfield: they never land on an enemy pad
     players[to].structuresKilled++;
     if (from >= 0) players[from].structuresLost++;
     for (int k = 0; k < 10; k++) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-b.radius(), b.radius()), rng.f(-b.radius(), b.radius())), Vec2(), -rng.f(0, 0.4f), 0.5f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 5});

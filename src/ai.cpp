@@ -949,10 +949,10 @@ void AiPlayer::think() {
     // spy drones trail the army (their detectors reveal what hides near the fighting); without an army they hover over the base
     for (auto r : scouts) {
         Entity* d = S.get(r);
-        if (!d || (S.tick + d->gen) % 6 != 0 || d->order == O_MOVE) continue;
+        if (!d) continue;
         Vec2 c = pl.basePos; int n = 0;
         if (armyCount >= 4) { c = Vec2(); for (auto ar : army) { Entity* a = S.get(ar); if (a && !a->carrier.valid()) { c += a->pos; n++; } } if (n) c = c * (1.0f / n); else c = pl.basePos; }
-        if (dist(d->pos, c) > 4.5f * TILE) S.cmdMove({r}, c, false);
+        if (dist(d->pos, c) > 4.5f * TILE && !(d->order == O_MOVE && dist(d->target, c) < 3.0f * TILE)) S.cmdMove({r}, c, false);
     }
     // spies go for the structure that is worth most and guarded least (nothing armed within six tiles), and the second one tags along
     if (!spies.empty() && S.time - lastSpyOrder > 5.0f) {
