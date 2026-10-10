@@ -11,6 +11,12 @@ One map, two armies, you against one to three AI opponents, with an optional com
 Requirements: g++, make, and the SDL2 runtime (`libsdl2-2.0-0`). SDL2 headers are vendored
 under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of the box.
 
+## The map
+
+One 80x80 map: a central lake ringed by road, four base quadrants split by rock ridges with a choke gap each, and a river leaving the lake into every quadrant (mirrored, so no side is favoured).
+Roads cross the rivers on timber bridges and each river also has a sandy ford, so crossings are chokepoints but nothing is walled off. The ground is dotted with fallen logs and stumps, lily pads on the
+river shallows, ruined courtyards, stone circles and burnt-out vehicle hulks (decoration only, units drive over them). `--mapdump` prints the tile map; `ONEHOUR_WORLDBMP=file.bmp` dumps the baked ground.
+
 ## Skirmish setup
 
 The main menu is a small table: **You** (your army), **Ally**, **Enemy 1-3** and **Teams**. Every opposing army picks its own army (Cyber, Clanker, Random, or Off
