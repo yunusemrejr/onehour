@@ -1307,7 +1307,10 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         // "base under attack" style notice, throttled per player (state lives in Player so a new game starts clean)
         if (time - pl.lastNotice > 10.0f) {
             pl.lastNotice = time;
-            emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack");
+            // shot by something hidden (a sniper, a garrisoned bunker) that none of our detectors has found: say so, it needs a spy drone
+            bool hidden = false;
+            if (attU) { const Entity* src = attU->carrier.valid() ? get(attU->carrier) : attU; hidden = src && stealthOf(*src) && !visibleTo(*src, tgt.owner); }
+            emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, hidden ? (tgt.isBuilding() ? "Our base is under fire from a hidden enemy: a spy drone can find it" : "Our forces are under fire from a hidden enemy: a spy drone can find it") : (tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack"));
             for (int q = 0; q < numPlayers; q++)   // human teammates hear about it too (an AI ally being hit)
                 if (q != tgt.owner && !players[q].isAI && players[q].team == pl.team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Your ally's base is under attack" : "Your ally's forces are under attack");
         }
@@ -2823,7 +2826,7 @@ void Sim::updateBunker(Entity& b) {
             if (t->isBuilding() && !t->constructed) score += 1.0f;
             if (score < bs) { bs = score; best = t; }
         }
-        if (best) tryFire(*u, *best);
+        if (best) { tryFire(*u, *best); b.cooldown2 = 0.6f; }   // (the hatch leaves stay open while the garrison is shooting: see drawEntity)
     }
 }
 
@@ -2861,9 +2864,14 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     if (from >= 0) players[from].structuresLost++;
     for (int k = 0; k < 10; k++) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-b.radius(), b.radius()), rng.f(-b.radius(), b.radius())), Vec2(), -rng.f(0, 0.4f), 0.5f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 5});
     fx.push_back({FX_RING, b.pos, b.pos, 0, 0.9f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), b.radius() * 1.3f});
-    emit(EV_BUILD_DONE, to, SND_BUILD_DONE, b.pos, "Structure captured");
-    if (from >= 0) emit(EV_UNDER_ATTACK, from, SND_ATTACKED, b.pos, "A spy captured one of our structures");
-    if (from >= 0) for (int q = 0; q < numPlayers; q++) if (q != from && players[q].team == players[from].team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, b.pos, "A spy captured a structure of your ally");
+    char msg[96];
+    snprintf(msg, sizeof msg, "Captured an enemy %s", b.bt().name);
+    emit(EV_MSG, to, SND_NONE, b.pos, msg);
+    emit(EV_SOUND, to, SND_BUILD_DONE, b.pos);
+    snprintf(msg, sizeof msg, "A spy captured our %s", b.bt().name);
+    if (from >= 0) emit(EV_UNDER_ATTACK, from, SND_ATTACKED, b.pos, msg);
+    snprintf(msg, sizeof msg, "A spy captured your ally's %s", b.bt().name);
+    if (from >= 0) for (int q = 0; q < numPlayers; q++) if (q != from && players[q].team == players[from].team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, b.pos, msg);
     updatePower();
 }
 

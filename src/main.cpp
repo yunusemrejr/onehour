@@ -1518,6 +1518,18 @@ static bool brainTest() {
     bool again = c.load(path.c_str());
     remove(path.c_str());
     if (!again || c.unitSamples[U_K_DOZER] != 12 || c.unitSamples[U_K_TITAN] != 22 || c.unitSamples[U_C_TITAN] != 11) { remove(path.c_str()); return fail("a saved brain did not round-trip"); }
+    // a v9 file (29 unit rows, from before the spies, spy drones and cargo lifters) loads with the newcomers on the prior
+    {
+        FILE* g9 = fopen(path.c_str(), "w");
+        if (!g9) return fail("cannot write the temporary brain file");
+        fprintf(g9, "onehour-brain 9 7 11\n"); for (int i = 0; i < WAVE_F; i++) fprintf(g9, "0.5 "); fprintf(g9, "\n");
+        for (int r = 0; r < 29; r++) fprintf(g9, "%d %.3f 0.100 0.200 0.300\n", r + 100, 1.5f);
+        fprintf(g9, "doctrines"); for (int d9 = 0; d9 < DOCTRINES; d9++) fprintf(g9, " 3 0.60000"); fprintf(g9, "\ncontexts\n");
+        for (int c9 = 0; c9 < DOC_CTX; c9++) { for (int d9 = 0; d9 < DOCTRINES; d9++) fprintf(g9, " 1 0.50000"); fprintf(g9, "\n"); }
+        fclose(g9);
+        Brain b9; bool ok9 = b9.load(path.c_str()); remove(path.c_str());
+        if (!ok9 || b9.games != 7 || b9.unitSamples[U_C_HELI] != 128 || b9.unitSamples[U_C_SPY] != 0 || b9.wu[U_K_CARGO][0] != 1.0f) return fail("a v9 brain file did not load with the new units on the prior");
+    }
     // doctrines: the bandit prefers what wins, keeps trying the rest, learns a separate favourite per opponent context, and the
     // statistics survive a save and load (older files simply have none of the contexts)
     Brain d;
@@ -1544,7 +1556,7 @@ static bool brainTest() {
       for (int k = 0; k < 400; k++) { float R = r3.f(0.6f, 3.0f); Brain::waveFeaturesR(R, R, 10, 30, x); w.learnWave(x, R >= 2.0f); }
       Brain::waveFeaturesR(1.5f, 1.5f, 10, 30, x); float mid = w.waveProb(x); Brain::waveFeaturesR(2.6f, 2.6f, 10, 30, x); float hi = w.waveProb(x);
       if (!(mid < before - 0.1f && hi > 0.6f)) { fprintf(stderr, "wave odds at 1.5: %.2f -> %.2f, at 2.6: %.2f\n", before, mid, hi); return fail("the wave model did not calibrate to the outcomes"); } }
-    printf("braintest: ok (v2 weights migrated, jets start from the prior, v9 round-trips with per-opponent doctrine statistics; bandit picks air %d / 400 against computers and rush %d / 400 against people; the wave model calibrates)\n", picks[0][DOC_AIR], picks[3][DOC_RUSH]);
+    printf("braintest: ok (v2 weights migrated, jets start from the prior, v10 round-trips (v9 files still load) with per-opponent doctrine statistics; bandit picks air %d / 400 against computers and rush %d / 400 against people; the wave model calibrates)\n", picks[0][DOC_AIR], picks[3][DOC_RUSH]);
     return true;
 }
 

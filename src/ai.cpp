@@ -670,14 +670,14 @@ void AiPlayer::think() {
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
     }
     // spy drones: the only thing that finds hidden snipers and underground bunkers. A smart commander keeps one (two from Hard) with its army
-    if (smart && pl.difficulty >= 1 && techs > 0 && tm > 5.0f && armyCount >= 6 && pl.money - reserve > 1200) {
+    if (on(FEAT_SPECIAL) && pl.difficulty >= 1 && techs > 0 && tm > 5.0f && armyCount >= 6 && pl.money - reserve > 1200) {
         int droneType = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, queued = 0;
         for (auto* a : airfields) for (int t : a->queue) if (t == droneType) queued++;
         if ((int)scouts.size() + queued < (pl.difficulty >= 2 ? 2 : 1))
             for (auto* a : airfields) if (a->constructed && a->queue.empty() && S.cmdTrain(S.refOf(*a), droneType)) break;
     }
     // spies: two of them on Hard and Brutal, to take structures nobody is guarding
-    if (smart && pl.difficulty >= 2 && techs > 0 && tm > 6.5f && armyCount >= 8 && pl.money - reserve > 1500) {
+    if (on(FEAT_SPECIAL) && pl.difficulty >= 2 && techs > 0 && tm > 6.5f && armyCount >= 8 && pl.money - reserve > 1500) {
         int spyType = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, queued = 0;
         for (auto* b : barracks) for (int t : b->queue) if (t == spyType) queued++;
         if ((int)spies.size() + queued < 2)

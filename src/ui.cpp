@@ -1059,7 +1059,7 @@ void Game::drawEntity(Entity& e) {
                 Vec2 hc = p;
                 if (hf <= 0) { g.fillCircle(hc.x, hc.y, 15.0f, rgb(22, 20, 18)); g.fillCircle(hc.x, hc.y, 11.0f, rgb(8, 8, 8)); g.circle(hc.x, hc.y, 15.0f, rgb(90, 76, 60), 20); }
                 else {
-                    bool firing = e.passengers.size() > 0 && g_sim.time - e.lastDamaged < 4.0f;
+                    bool firing = e.cooldown2 > 0;   // the garrison is shooting: the leaves stand open
                     float open = firing ? 3.0f : 0.0f;
                     g.fillCircle(hc.x, hc.y, 15.0f, rgb(46, 50, 56));
                     g.fillCircle(hc.x - open, hc.y, 13.0f, rgb(138, 146, 154)); g.fillCircle(hc.x - open - 1, hc.y - 1, 10.5f, rgb(176, 184, 192));
