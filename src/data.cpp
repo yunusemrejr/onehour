@@ -34,6 +34,7 @@ const Weapon WEAPONS[] = {
     /* 29 */{ "Defense Laser",   58, 7.5f, 0, 0.80f, PJ_LASER,  0,    true, true,  {1.0f, 1.00f, 0.80f, 0.00f, 1.6f}, 1, 0,    SND_LASER,       rgb(130, 236, 255) },
     /* 30 */{ "Defense MG",      15, 7.5f, 0, 0.15f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.5f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
     /* 31 */{ "Hornet Lasers",   36, 6.0f, 0, 0.60f, PJ_LASER,  0,    true, true,  {1.0f, 1.10f, 0.85f, 0.60f, 1.3f}, 2, 0,    SND_LASER,       rgb(120, 236, 255) },
+    /* 32 */{ "Bunker Minigun",   9, 7.0f, 0, 0.08f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.4f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -105,8 +106,8 @@ const BuildType BUILDS[B_COUNT] = {
     { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
     { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "A nuke every 5 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 
-    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 30000, 2500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Fabricator. The garrison fires from a metal hatch. A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
-    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 30000, 2500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Dozer. The garrison fires from a metal hatch. A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
+    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 30000, 2500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Fabricator. The garrison fires from a metal hatch. Runs by itself: earns $50 every 5s, mends itself, two miniguns on the hatch and a small nuke (a fifth of a full one, every 90s). A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
+    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 30000, 2500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Dozer. The garrison fires from a metal hatch. Runs by itself: earns $50 every 5s, mends itself, two miniguns on the hatch and a small nuke (a fifth of a full one, every 90s). A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
 };
 
 const PowerType POWERS[F_COUNT] = {

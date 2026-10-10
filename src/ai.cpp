@@ -328,7 +328,7 @@ void AiPlayer::dodgeNukes() {
     for (auto& n : S.nukes) {
         bool hurts = S.nukeHurts(n, player);   // (a human ally's nuke hurts us too: get out of the way, never hit back)
         if (!hurts || n.t < notice || n.t > Sim::NUKE_FLIGHT - 0.5f) continue;
-        float safe = (NUKE_RADIUS + 2.0f) * TILE;
+        float safe = Sim::nukeRadius(n) + 2.0f * TILE;
         for (auto& e : S.ents) {
             if (!e.alive || e.owner != player || !e.isUnit() || e.isAir()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger)
             if (dist(e.pos, n.pos) > safe) continue;
@@ -733,16 +733,15 @@ void AiPlayer::think() {
     }
 
     // ---------- nukes
-    if (smart && ramps > 0 && S.nukesReady(player) > 0) {
-        // a warhead kills ground units and small structures in the blast and wrecks the big ones: aim at whatever it would cost the enemy most
+    // a warhead kills ground units and small structures in the blast and wrecks the big ones: aim at whatever it would cost the enemy most
+    auto nukeSpot = [&](float R, float& bestScore) {
         std::vector<Entity*> cand;
         for (auto& e : S.ents) {
             if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.isAir()) continue;
             if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             cand.push_back(&e);
         }
-        float R = NUKE_RADIUS * TILE;
-        Vec2 bestPos; float bestScore = 0;
+        Vec2 bestPos; bestScore = 0;
         for (auto* c : cand) {
             float score = 0;
             for (auto* o : cand) {
@@ -756,7 +755,12 @@ void AiPlayer::think() {
             for (auto& o : S.ents) if (o.alive && o.isAir() && o.owner >= 0 && !S.enemies(player, o.owner) && dist(c->pos, o.pos) < R) score -= UNITS[o.type].cost * 1.2f;   // and every aircraft in the blast falls, ours too
             if (score > bestScore) { bestScore = score; bestPos = c->pos; }
         }
-        if (bestScore >= (pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f))) S.cmdNuke(player, bestPos);
+        return bestPos;
+    };
+    float nukeBar = pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f);
+    if (smart && ramps > 0 && S.nukesReady(player) > 0) {
+        float bestScore; Vec2 bestPos = nukeSpot(NUKE_RADIUS * TILE, bestScore);
+        if (bestScore >= nukeBar) S.cmdNuke(player, bestPos);
     } else if (!smart && ramps > 0 && S.nukesReady(player) > 0) {
         // legacy: fire at the densest cluster of enemy structures we know about
         Vec2 bestPos; float bestScore = 0;
@@ -768,6 +772,11 @@ void AiPlayer::think() {
             if (score > bestScore) { bestScore = score; bestPos = e.pos; }
         }
         if (bestScore >= 3500.0f) S.cmdNuke(player, bestPos);
+    }
+    // a bunker's small missile (a computer army only has one by capturing a bunker): a smaller circle, so a lower bar
+    if (smart && S.miniNukesReady(player) > 0 && (S.tick & 7) == (u32)(player & 7)) {
+        float bestScore; Vec2 bestPos = nukeSpot(NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE), bestScore);
+        if (bestScore >= nukeBar * 0.4f) S.cmdMiniNuke(player, bestPos);
     }
 
     // ---------- paradrop: reinforce a base under attack, or land on the objective of a wave that is under way (never into a wall of flak)

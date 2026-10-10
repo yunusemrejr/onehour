@@ -3,7 +3,7 @@
 
 Game g_game;
 
-enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF };
+enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF, BK_MININUKE };
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -13,6 +13,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_SCAN: return "V";
     case BK_RESEARCH: return "R";
     case BK_NUKE: return "K";
+    case BK_MININUKE: return "K";
     case BK_DROP: return "P";
     case BK_AID: return "D";
     case BK_UNLOAD: return "U";
@@ -84,7 +85,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -385,6 +386,9 @@ void Game::buildButtons() {
             add(BK_NUKE, 0, rdy > 0, "Launch Nuke", tip);
         }
         if (role == BR_BUNKER) {
+            float mw = g_sim.miniNukeWait(g_sim.humanPlayer);
+            snprintf(tip, sizeof tip, "Launch Mini Nuke  [K]  A bunker's own missile, a fifth of a full warhead (%.1f tile radius, same strength per spot, leaves radiation). Needs no power or ramp; one per bunker every %d s. Launching gives the bunker away for %d s%s", NUKE_RADIUS * std::sqrt(MINI_NUKE_SCALE), (int)MINI_NUKE_COOLDOWN, (int)MINI_NUKE_REVEAL, mw > 0 ? "  (reloading)" : "");
+            add(BK_MININUKE, 0, g_sim.miniNukesReady(g_sim.humanPlayer) > 0, "Mini Nuke", tip);
             snprintf(tip, sizeof tip, "Unload  [U]  Everybody climbs out onto the ground (%d soldiers, %d dozer inside)", g_sim.garrisonInfantry(*b), g_sim.garrisonDozers(*b));
             add(BK_UNLOAD, 0, !b->passengers.empty(), "Unload", tip);
             add(BK_RALLY, 0, true, "Rally", "Set the point soldiers walk to when they climb out (right-click ground while selected)");
@@ -422,8 +426,21 @@ void Game::buildButtons() {
     add(BK_STOP, 0, true, "Stop", "Stop and hold position  [S]");
 }
 
+bool Game::launchNuke(Vec2 at) {
+    if (nukeMini) {
+        Ref from = NOREF;
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o->isBuilding() && o->bt().role == BR_BUNKER && o->owner == g_sim.humanPlayer && o->constructed && g_sim.time >= o->siloTimer) { from = r; break; } }
+        if (!g_sim.cmdMiniNuke(g_sim.humanPlayer, at, forceFireKey(), from)) return false;
+        addMessage("Mini nuke launched", rgb(255, 120, 90));
+        return true;
+    }
+    if (!g_sim.cmdNuke(g_sim.humanPlayer, at, forceFireKey())) return false;
+    addMessage("Nuclear missile launched", rgb(255, 120, 90));
+    return true;
+}
+
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
 }
 
 void Game::clickButton(const Button& b) {
@@ -447,6 +464,7 @@ void Game::cmdSelection(int kind, int id) {
     case BK_RALLY: rallyMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_POWER: if (g_sim.time >= pl.powerReady && g_sim.techOnline(g_sim.humanPlayer)) { powerMode = true; placingType = -1; attackMoveMode = false; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_NUKE: if (g_sim.nukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_MININUKE: if (g_sim.miniNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeMini = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_AID: if (g_sim.aidsReady(g_sim.humanPlayer) > 0) { cancelModes(); aidMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
@@ -648,7 +666,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 if (areaMode) applyArea(wp, AREA_DEFAULT_R);
                 else if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
                 else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) { powerMode = false; forceLatch = false; } }
-                else if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, wp, forceFireKey())) { nukeMode = false; forceLatch = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } }
+                else if (nukeMode) { if (launchNuke(wp)) { nukeMode = false; nukeMini = false; forceLatch = false; } }
                 else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
                 else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, wp)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
@@ -678,7 +696,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 return;
             }
             if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) { powerMode = false; forceLatch = false; } else g_audio.play(SND_CANT, Vec2(), true); return; }
-            if (nukeMode) { if (g_sim.cmdNuke(g_sim.humanPlayer, w, forceFireKey())) { nukeMode = false; forceLatch = false; addMessage("Nuclear missile launched", rgb(255, 120, 90)); } else { nukeMode = false; forceLatch = false; g_audio.play(SND_CANT, Vec2(), true); } return; }
+            if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; forceLatch = false; return; }
             if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, w)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, w); } dropoffMode = false; g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
@@ -922,6 +940,9 @@ void Game::drawRangeRings() {
             const BuildType& bt = e->bt();
             bool powered = !(pl.lowPower() && bt.power < 0) && e->disabledUntil <= g_sim.time;
             rangeRing(sp, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, powered, false, false);
+        } else if (e->isBuilding() && e->constructed && e->bt().role == BR_BUNKER) {
+            const BuildType& bt = e->bt();
+            rangeRing(sp, WEAPONS[W_BUNKER_MINIGUN].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, W_BUNKER_MINIGUN, "Miniguns", e->hatch > 0 && e->disabledUntil <= g_sim.time, false, false);
         } else if (e->isBuilding() && g_sim.roofGun(*e) >= 0) {
             const BuildType& bt = e->bt();
             rangeRing(sp, WEAPONS[g_sim.roofGun(*e)].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, g_sim.roofGun(*e), WEAPONS[g_sim.roofGun(*e)].name, e->disabledUntil <= g_sim.time, false, false);
@@ -1071,6 +1092,18 @@ void Game::drawEntity(Entity& e) {
             }
             if (g.buildingTeam[e.type].tex) { Color tc = playerColor(owner); if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
             drawBuildingAnim(e, p, disabled);
+            if (bt.role == BR_BUNKER && e.constructed && e.hatchMax > 0 && e.hatch > 0) {   // the two miniguns on the hatch
+                for (int gi = 0; gi < BUNKER_GUNS; gi++) {
+                    Vec2 gp = p + (g_sim.bunkerGunPos(e, gi) - e.pos);
+                    Vec2 d(std::cos(e.gunAng[gi]), std::sin(e.gunAng[gi]));
+                    int mx = (int)gp.x, my = (int)gp.y;   // (solid squares: the soft blob sprites would melt into the steel plate)
+                    g.fill(mx - 6, my - 5, 12, 12, rgb(10, 12, 16, 150));
+                    g.fill(mx - 5, my - 6, 10, 10, rgb(30, 34, 40));
+                    g.fill(mx - 4, my - 5, 8, 8, disabled ? rgb(90, 96, 108) : rgb(120, 130, 142));
+                    g.thickLine(gp.x, gp.y - 1, gp.x + d.x * 13, gp.y - 1 + d.y * 13, rgb(18, 20, 24), 3.0f);
+                    g.fill(mx - 1, my - 3, 3, 3, hudAccent(bt.faction));
+                }
+            }
             // rotating heads for defenses
             if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
             else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);
@@ -1308,9 +1341,10 @@ void Game::renderWorld() {
     if (nukeMode) {
         Vec2 m = Vec2(mouseX, mouseY);
         float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f);
-        g.discFill(m.x, m.y, NUKE_RADIUS * TILE, rgb(255, 60, 40, (int)(34 * pulse)));
-        g.circle(m.x, m.y, NUKE_RADIUS * TILE, rgb(255, 90, 60), 48);
-        g.circle(m.x, m.y, NUKE_RADIUS * TILE * 0.35f, rgb(255, 200, 90), 32);
+        float nr = NUKE_RADIUS * TILE * (nukeMini ? std::sqrt(MINI_NUKE_SCALE) : 1.0f);
+        g.discFill(m.x, m.y, nr, rgb(255, 60, 40, (int)(34 * pulse)));
+        g.circle(m.x, m.y, nr, rgb(255, 90, 60), 48);
+        g.circle(m.x, m.y, nr * 0.35f, rgb(255, 200, 90), 32);
     }
     if (dropMode) {
         Vec2 m = Vec2(mouseX, mouseY);
@@ -1445,7 +1479,7 @@ void Game::renderWorld() {
         else snprintf(buf, sizeof buf, "FORCE FIRE: pick a unit or structure");
         g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 120, 90));
     }
-    else if (nukeMode) g.text(mouseX + 12, mouseY - 4, "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)", rgb(255, 100, 70));
+    else if (nukeMode) g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)", rgb(255, 100, 70));
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (aidMode) {
         int who[MAX_PLAYERS]; int n = g_sim.aidCandidates(g_sim.humanPlayer, screenToWorld(mouseX, mouseY), who);
@@ -1609,6 +1643,10 @@ void Game::renderHud() {
                     else snprintf(buf, sizeof buf, "HATCH DESTROYED: the garrison cannot fire (a dozer inside or beside the bunker patches it)");
                     g.text(INFO_X + 86, hy + 70, buf, e->hatch > 0 ? hudDim() : rgb(255, 140, 120));
                     g.text(INFO_X + 86, hy + 84, "STEALTH: only an enemy spy drone finds it. Nukes cannot destroy it", rgb(150, 220, 255));
+                    float mw = std::max(0.0f, e->siloTimer - g_sim.time);
+                    if (mw > 0) snprintf(buf, sizeof buf, "Mini nuke loading: %d:%02d", (int)mw / 60, (int)mw % 60); else snprintf(buf, sizeof buf, "MINI NUKE READY  (K to launch)");
+                    g.text(INFO_X + 86, hy + 96, buf, mw > 0 ? rgb(255, 200, 120) : rgb(255, 110, 90));
+                    snprintf(buf, sizeof buf, "Income $%d / %ds   2 miniguns   self-repair", (int)(BUNKER_INCOME * pl.econMul()), (int)BUNKER_INCOME_INTERVAL); g.text(INFO_X + 86, hy + 108, buf, rgb(240, 220, 130));
                 }
                 if (e->owner >= 0 && e->constructed) {   // structure upgrades of its army
                     const Player& op = g_sim.players[e->owner];
@@ -1881,9 +1919,10 @@ void Game::drawNukes() {
         Vec2 tgt = worldToScreen(n.pos);
         // warning zone
         float pulse = 0.5f + 0.5f * std::sin(wallTime * 9.0f);
-        g.discFill(tgt.x, tgt.y, NUKE_RADIUS * TILE, rgb(255, 60, 40, (int)(20 + 26 * pulse)));
-        g.dashedCircle(tgt.x, tgt.y, NUKE_RADIUS * TILE, rgb(255, 90, 60), wallTime * 30.0f);
-        char buf[32]; snprintf(buf, sizeof buf, "NUKE %ds", (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
+        float nr = Sim::nukeRadius(n);
+        g.discFill(tgt.x, tgt.y, nr, rgb(255, 60, 40, (int)(20 + 26 * pulse)));
+        g.dashedCircle(tgt.x, tgt.y, nr, rgb(255, 90, 60), wallTime * 30.0f);
+        char buf[32]; snprintf(buf, sizeof buf, "%s %ds", n.scale < 1.0f ? "MINI NUKE" : "NUKE", (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
         g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, rgb(255, 230, 200));
         // the missile: rises from the ramp on a long arc and falls on the target
         auto world = [&](float u) { Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; };

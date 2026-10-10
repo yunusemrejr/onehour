@@ -162,6 +162,20 @@ static const float BUNKER_PLATING = 0.22f;        // share of the damage that re
 static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky, radiation and nukes can never take it below this share of its health
 static const float BUNKER_LINGER = 25.0f;         // seconds a bunker a spy drone found stays known after the drone has moved on
 static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
+// A bunker runs by itself, needing no power, no other structure and no supplies: it earns a little money, mends itself, mounts two
+// miniguns on its hatch and keeps one small nuclear missile (a fifth of a Nuke Ramp's warhead) ready.
+static const int   BUNKER_INCOME = 50;            // credits per payout
+static const float BUNKER_INCOME_INTERVAL = 5.0f; // seconds between payouts
+static const float BUNKER_REGEN = 0.0015f;        // fraction of max health the body mends per second ...
+static const float BUNKER_HATCH_REGEN = 0.005f;   // ... and the hatch: both only once the bunker has been left alone for BUNKER_REGEN_DELAY seconds
+static const float BUNKER_REGEN_DELAY = 4.0f;
+static const float BUNKER_HATCH_REFIT = 30.0f;   // a blown-off hatch is refitted by the bunker itself this long after the last hit (a dozer does it faster)
+static const int   BUNKER_GUNS = 2;               // miniguns on the hatch (they stop when the hatch is blown off, like the garrison)
+static const int   W_BUNKER_MINIGUN = 32;         // WEAPONS index of those miniguns
+static const float MINI_NUKE_SCALE = 0.2f;        // a bunker's missile: a fifth of the blast area (radius NUKE_RADIUS * sqrt(scale)), same strength per spot
+static const float MINI_NUKE_COOLDOWN = 90.0f;    // seconds between two launches of one bunker
+static const float MINI_NUKE_ARM = 30.0f;         // seconds after a bunker is finished before its first missile is ready
+static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch gives the bunker away to the enemy (the missile climbs out of its hatch)
 // Spies
 static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
 static const float SPY_REACH = 22.0f;             // px from the structure's edge

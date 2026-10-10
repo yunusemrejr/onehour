@@ -101,6 +101,10 @@ struct Entity {
     Ref carrier;                      // stowed aboard this transport / bunker: off the map, not drawn, cannot be hit, acts only as part of its host
     std::vector<Ref> passengers;      // transport / bunker: who is aboard
     float hatch = 0, hatchMax = 0;    // bunker: health of the surface opening the garrison fires from (0 = blown off, the garrison is silent)
+    float siloTimer = 0;              // bunker: sim time its next missile is ready
+    float gunCd[2] = {0, 0};          // bunker: cooldown, target and facing of each of its two miniguns
+    Ref gunTgt[2];
+    float gunAng[2] = {0, 0};
     bool unloading = false;           // transport / bunker: letting the passengers out one at a time
     float unloadTimer = 0;
     float detUntil[MAX_PLAYERS] = {}; // stealthy entity: sim time until which each player can see it (a detector close by keeps it up to date)
@@ -198,7 +202,8 @@ struct Sim {
     struct Storm { Vec2 pos; float radius; int owner; float t; int shellsLeft; float nextShell; bool force = false; };
     std::vector<Storm> storms;
     // tactical nukes in flight: launched from a Nuke Ramp, they detonate at 'pos' after NUKE_FLIGHT seconds
-    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; };   // force: the human chose to hit friendly ground too
+    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE)
+    static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
     // paradrop: a cargo plane crosses the map over the target and releases its load on parachutes (it can be shot down by anti-air)
@@ -292,6 +297,7 @@ struct Sim {
     void cmdSell(Ref building);
     bool cmdPower(int player, Vec2 pos, bool force = false);
     bool cmdNuke(int player, Vec2 pos, bool force = false);       // fires one ready Nuke Ramp at pos
+    bool cmdMiniNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready bunker's small missile at pos (from that bunker if it is ready)
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
     int dropsReady(int player) const;         // tech structures that can send a paradrop right now (after the opening delay)
     float dropWait(int player) const;         // seconds until the soonest paradrop is ready (0 = ready, -1 = no tech structure)
@@ -303,6 +309,9 @@ struct Sim {
     int aidCandidates(int sender, Vec2 at, int* out) const;
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
+    int miniNukesReady(int player) const;     // bunkers whose missile is ready
+    float miniNukeWait(int player) const;     // seconds until the soonest bunker missile is ready (0 = ready, -1 = no bunker)
+    Vec2 bunkerGunPos(const Entity& b, int i) const;   // where each of a bunker's two miniguns sits (world px)
     bool atIncomeLimit(int player, int buildType) const;
     bool atBuildLimit(int player, int buildType) const;   // income structures and Command Cores are capped per player
     bool cmdScan(int player);                 // tech structure: reveal the whole map for SCANS[].duration
@@ -365,6 +374,7 @@ private:
     void finishUpgrade(int player, int upg);
     void updateRoofGun(Entity& b, bool powered);
     void updateDetection();                              // detectors (spy drones, up-close drones) reveal stealthy enemies to their whole team
+    void updateBunkerSelf(Entity& b);                    // the bunker's own business: income, mending, miniguns
     void updateBunker(Entity& b);                        // garrison: heals, repairs the hatch, fires from the hatch, lets soldiers out
     void updateCarrierUnload(Entity& c);                 // one passenger out every few ticks while 'unloading'
     void board(Entity& u, Entity& c);

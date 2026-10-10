@@ -81,7 +81,7 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.progress = instant ? 1.0f : 0.0f;
     e.hp = instant ? e.maxHp : e.maxHp * 0.1f;
     e.rally = e.pos + Vec2(0, b.h * TILE * 0.5f + 40);
-    if (b.role == BR_BUNKER && instant) { e.hatchMax = e.hatch = BUNKER_HATCH_HP; }
+    if (b.role == BR_BUNKER && instant) { e.hatchMax = e.hatch = BUNKER_HATCH_HP; e.siloTimer = time + MINI_NUKE_ARM; }
     e.angle = -1.5708f;
     e.turret2 = 2.4f;   // (the roof gun idles looking out over a corner)
     g_map.setStructure(tx, ty, b.w, b.h, true);
@@ -601,6 +601,41 @@ bool Sim::cmdNuke(int player, Vec2 pos, bool force) {
     return true;
 }
 
+// A bunker's own missile: needs no power, no ramp and no other structure. The bunker stays hidden except for a few seconds after a launch.
+int Sim::miniNukesReady(int player) const {
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_BUNKER && time >= e.siloTimer && e.disabledUntil <= time) n++;
+    return n;
+}
+float Sim::miniNukeWait(int player) const {
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_BUNKER) {
+        float w = std::max(0.0f, std::max(e.siloTimer - time, e.disabledUntil - time));
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+bool Sim::cmdMiniNuke(int player, Vec2 pos, bool force, Ref from) {
+    if (player < 0 || player >= numPlayers) return false;
+    force = force && !players[player].isAI;
+    auto ready = [&](const Entity& e) { return e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_BUNKER && time >= e.siloTimer && e.disabledUntil <= time; };
+    Entity* silo = get(from);
+    if (!silo || !ready(*silo)) {
+        silo = nullptr;
+        for (auto& e : ents) if (ready(e)) { silo = &e; break; }
+    }
+    if (!silo) return false;
+    silo->siloTimer = time + MINI_NUKE_COOLDOWN;
+    nukes.push_back({silo->pos, pos, player, 0, force, MINI_NUKE_SCALE});
+    emit(EV_SOUND, -1, SND_ROCKET, silo->pos);
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) {
+        silo->detUntil[p] = std::max(silo->detUntil[p], time + MINI_NUKE_REVEAL);   // the missile climbs out of the hatch: whoever sees the launch knows where it is
+        emit(EV_MSG, p, SND_ATTACKED, pos, "TACTICAL NUCLEAR LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Small nuclear missile incoming!");
+    }
+    return true;
+}
+
 // ------------------------------------------------------------ paradrop
 // A transport's track: the line from the sender's base through the target (straight across the map's middle when the target is next to
 // the base), entering from beyond the map edge at least a few hundred pixels before the target. Returns the heading; 'start' the entry.
@@ -868,7 +903,7 @@ void Sim::updateNukes() {
 }
 
 void Sim::nukeBlast(const Nuke& n) {
-    float R = NUKE_RADIUS * TILE;
+    float R = nukeRadius(n);
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
@@ -1842,7 +1877,7 @@ bool Sim::dodgeDanger(Entity& e) {
         bool hurts = nukeHurts(n, e.owner);
         float left = NUKE_FLIGHT - n.t;
         if (!hurts || n.t < 1.0f || left < 0.3f) continue;
-        float R = (NUKE_RADIUS + 1.5f) * TILE;
+        float R = nukeRadius(n) + 1.5f * TILE;
         if (dist(e.pos, n.pos) > R) continue;
         if (e.order == O_MOVE && dist(e.target, n.pos) > R) return false;   // already on its way out
         Vec2 away = e.pos - n.pos; float l = away.len();
@@ -2535,7 +2570,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
 // ------------------------------------------------------------ buildings
 void Sim::finishBuilding(Entity& b) {
     b.constructed = true; b.progress = 1; b.hp = std::max(b.hp, b.maxHp);
-    if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; }
+    if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; b.siloTimer = time + MINI_NUKE_ARM; }
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
     b.actionTimer = 0;
     if (b.bt().role == BR_NUKE) b.actionTimer = time + 60.0f;   // arming time for the first warhead
@@ -2582,7 +2617,7 @@ void Sim::updateBuilding(Entity& b) {
         if ((tick + b.gen) % 40 == 0) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-bt.w * 12.0f, bt.w * 12.0f), rng.f(-bt.h * 12.0f, bt.h * 12.0f)), Vec2(), 0, 0.3f, pl.faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
     }
     if (pl.upg[UPG_GUNS] && bt.role != BR_BUNKER) updateRoofGun(b, powered);
-    if (bt.role == BR_BUNKER) updateBunker(b);
+    if (bt.role == BR_BUNKER) { updateBunkerSelf(b); updateBunker(b); }
     if (bt.role == BR_INCOME) {
         b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
         if (b.actionTimer >= INCOME_INTERVAL) {
@@ -2773,6 +2808,43 @@ void Sim::hatchBlown(Entity& b) {
     for (int k = 0; k < 8; k++) fx.push_back({FX_DEBRIS, b.pos, b.pos, 0, rng.f(0.6f, 1.2f), rgb(120, 122, 126), rng.f(2, 5), Vec2(rng.f(-150, 150), rng.f(-190, -50))});
     emit(EV_SOUND, -1, SND_EXPLODE_L, b.pos);
     if (b.owner >= 0) emit(EV_MSG, b.owner, SND_NONE, b.pos, "Bunker hatch destroyed: the garrison cannot fire (a dozer inside or beside it can patch it)");
+}
+
+Vec2 Sim::bunkerGunPos(const Entity& b, int i) const {
+    return b.pos + Vec2((i == 0 ? -0.34f : 0.34f) * b.bt().w * TILE, 0.0f);   // on the plate either side of the hatch
+}
+
+// What a bunker does without anybody inside it and without any help: it earns a little money, mends itself, and its two miniguns
+// shoot at whatever comes in reach (ground and air). Nothing here asks for power, supplies or another structure.
+void Sim::updateBunkerSelf(Entity& b) {
+    Player& pl = players[b.owner];
+    b.actionTimer += SIM_DT;
+    if (b.actionTimer >= BUNKER_INCOME_INTERVAL) {
+        b.actionTimer -= BUNKER_INCOME_INTERVAL;
+        int amt = (int)(BUNKER_INCOME * pl.econMul());
+        pl.money += amt; pl.mined += amt;
+    }
+    if (time - b.lastDamaged >= BUNKER_REGEN_DELAY) {
+        b.hp = std::min(b.maxHp, b.hp + b.maxHp * BUNKER_REGEN * SIM_DT);
+        if (b.hatchMax > 0 && (b.hatch > 0 || time - b.lastDamaged >= BUNKER_HATCH_REFIT)) b.hatch = std::min(b.hatchMax, b.hatch + b.hatchMax * (b.hatch > 0 ? BUNKER_HATCH_REGEN * SIM_DT : 0.05f));
+    }
+    const Weapon& w = WEAPONS[W_BUNKER_MINIGUN];
+    float reach = (w.range + 0.2f) * TILE;
+    for (int i = 0; i < BUNKER_GUNS; i++) {
+        if (b.gunCd[i] > 0) b.gunCd[i] -= SIM_DT;
+        if (b.hatch <= 0) { b.gunTgt[i] = NOREF; continue; }   // the guns sit on the hatch: blown off, they are silent
+        Entity* t = get(b.gunTgt[i]);
+        if (!t || !enemies(b.owner, t->owner) || !canTarget(b, *t, W_BUNKER_MINIGUN) || distToEntity(b.pos, *t) > reach) {
+            t = nullptr; b.gunTgt[i] = NOREF;
+            if ((tick + b.gen + i) % 3 == 0) { t = acquireTarget(b, w.range, W_BUNKER_MINIGUN); if (t) b.gunTgt[i] = refOf(*t); }
+        }
+        if (!t) continue;
+        Vec2 muzzle = bunkerGunPos(b, i);
+        b.gunAng[i] = std::atan2(t->pos.y - muzzle.y, t->pos.x - muzzle.x);
+        if (b.gunCd[i] > 0) continue;
+        fireWeapon(b, *t, w, &muzzle);
+        b.gunCd[i] = w.cooldown;
+    }
 }
 
 void Sim::updateBunker(Entity& b) {

@@ -42,6 +42,8 @@ struct Game {
     bool forceLatch = false;        // F while aiming a strike power: the blast hits friendly ground too (same as holding Ctrl)
     bool powerMode = false;
     bool nukeMode = false;          // picking a nuke target
+    bool nukeMini = false;          // ... for a bunker's small missile
+    bool launchNuke(Vec2 at);       // fires the missile (a selected ready bunker's, else any ready one); false if none could go
     bool dropMode = false;          // picking a paradrop zone
     bool aidMode = false;           // picking the spot for an Aid Drop
     bool rallyMode = false;

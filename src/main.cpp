@@ -2260,7 +2260,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 25);
+            int c = rng.range(0, 26);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2278,6 +2278,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 12: if (rng.range(0, 5) == 0) { Ref b = anyEnt(0, 2); g_sim.cmdSell(b); } break;
             case 13: g_sim.cmdPower(0, where()); break;
             case 14: g_sim.cmdNuke(0, where()); break;
+            case 26: { Ref b2 = anyEnt(rng.range(-1, 2), 3); g_sim.cmdMiniNuke(rng.range(-1, 4), where(), rng.range(0, 1) == 0, b2); break; }   // a bunker's small missile (any player id, any structure, or nothing)
             case 15: g_sim.cmdScan(0); break;
             case 16: g_sim.cmdResearch(0); break;
             case 17: { int bt = rng.range(0, B_COUNT - 1); g_sim.canPlace(0, bt, rng.range(-5, MAP_W + 5), rng.range(-5, MAP_H + 5)); g_sim.unitAvailable(0, rng.range(0, U_COUNT - 1)); g_sim.buildAvailable(0, bt); break; }
