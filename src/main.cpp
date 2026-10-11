@@ -52,7 +52,8 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
         g_sim.events.clear();
         if (const char* tr = getenv("ONEHOUR_TRACE")) { int ti = 0, t0 = 0, t1 = 0; sscanf(tr, "%d,%d,%d", &ti, &t0, &t1); if (t >= t0 * SIM_HZ && t < t1 * SIM_HZ) { traceIdx = ti; traceUntil = t + 2; } }
         if (traceIdx >= 0 && t < traceUntil && t % 30 == 0 && getenv("ONEHOUR_TRACENEAR")) { Entity& e = g_sim.ents[traceIdx]; for (auto& o : g_sim.ents) if (o.alive && &o != &e && o.kind != EK_RESOURCE && g_sim.distToEntity(e.pos, o) < 48) fprintf(stderr, "    near: %s P%d %s order %d pos %.1f,%.1f\n", o.isUnit() ? o.ut().name : o.bt().name, o.owner, o.isUnit() ? "unit" : "bld", (int)o.order, o.pos.x, o.pos.y); int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y); for (int dy = -3; dy <= 4; dy++) { fprintf(stderr, "    "); for (int dx = -4; dx <= 4; dx++) { int x = cx + dx, y = cy + dy; fputc(!inMap(x, y) ? ' ' : (dx == 0 && dy == 0) ? '@' : g_map.passable(x, y) ? '.' : (g_map.blocked[y * MAP_W + x] & 2) ? 'B' : (g_map.blocked[y * MAP_W + x] & 4) ? 'R' : '#', stderr); } fputc('\n', stderr); } }
-        if (traceIdx >= 0 && t < traceUntil && t % (getenv("ONEHOUR_TRACEALL") ? 1 : 3) == 0) { Entity& e = g_sim.ents[traceIdx]; Entity* tg = g_sim.get(e.targetEnt); if (e.isUnit() && e.isAir()) { const Entity* hh = e.home.idx >= 0 && e.home.idx < (int)g_sim.ents.size() ? &g_sim.ents[e.home.idx] : nullptr; fprintf(stderr, "  air: order %d zoneR %.0f loiterUntil %.1f alt %.2f airspeed %.0f ammo %d hp %.0f disabled %.1f home %d (idx %d gen %u/%u alive %d %s dist %.0f) ang %.2f\n", (int)e.order, e.zoneR, e.loiterUntil - g_sim.time, e.alt, e.airspeed, e.ammo, e.hp, e.disabledUntil - g_sim.time, g_sim.get(e.home) ? 1 : 0, e.home.idx, e.home.gen, hh ? hh->gen : 0, hh ? (int)hh->alive : -1, hh && hh->kind == EK_BUILDING ? hh->bt().name : "-", hh ? dist(hh->pos, e.pos) : -1.0f, e.angle); } fprintf(stderr, "  trace t=%d order %d post %d pos %.1f,%.1f path %zu/%zu target %s(%d) cooldown %.2f stuck %.2f cargo %d act %.2f\n", t, (int)e.order, (int)e.postOrder, e.pos.x, e.pos.y, e.pathIdx, e.path.size(), tg ? (tg->isBuilding() ? tg->bt().name : tg->kind == EK_RESOURCE ? "pile" : tg->ut().name) : "-", tg ? tg->amount : 0, e.cooldown, e.stuckTimer, e.cargo, e.actionTimer); }
+        if (traceIdx >= 0 && t < traceUntil && t % (getenv("ONEHOUR_TRACEALL") ? 1 : 3) == 0) { Entity& e = g_sim.ents[traceIdx]; Entity* tg = g_sim.get(e.targetEnt); if (e.isUnit() && e.ut().naval) { int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y); fprintf(stderr, "  ship: airspeed %.1f angle %.2f nav (rows y-1..y+1, cols x-1..x+1):", e.airspeed, e.angle); for (int dy = -1; dy <= 1; dy++) { fprintf(stderr, " "); for (int dx = -1; dx <= 1; dx++) fputc(g_map.navTile(cx + dx, cy + dy) ? 'w' : (g_map.tiles[(cy + dy) * MAP_W + cx + dx] == T_WATER ? 'S' : '#'), stderr); } fprintf(stderr, "  wp %.0f,%.0f\n", e.pathIdx < e.path.size() ? e.path[e.pathIdx].x : -1.0f, e.pathIdx < e.path.size() ? e.path[e.pathIdx].y : -1.0f); }
+            if (e.isUnit() && e.isAir()) { const Entity* hh = e.home.idx >= 0 && e.home.idx < (int)g_sim.ents.size() ? &g_sim.ents[e.home.idx] : nullptr; fprintf(stderr, "  air: order %d zoneR %.0f loiterUntil %.1f alt %.2f airspeed %.0f ammo %d hp %.0f disabled %.1f home %d (idx %d gen %u/%u alive %d %s dist %.0f) ang %.2f\n", (int)e.order, e.zoneR, e.loiterUntil - g_sim.time, e.alt, e.airspeed, e.ammo, e.hp, e.disabledUntil - g_sim.time, g_sim.get(e.home) ? 1 : 0, e.home.idx, e.home.gen, hh ? hh->gen : 0, hh ? (int)hh->alive : -1, hh && hh->kind == EK_BUILDING ? hh->bt().name : "-", hh ? dist(hh->pos, e.pos) : -1.0f, e.angle); } fprintf(stderr, "  trace t=%d order %d post %d pos %.1f,%.1f path %zu/%zu target %s(%d) cooldown %.2f stuck %.2f cargo %d act %.2f\n", t, (int)e.order, (int)e.postOrder, e.pos.x, e.pos.y, e.pathIdx, e.path.size(), tg ? (tg->isBuilding() ? tg->bt().name : tg->kind == EK_RESOURCE ? "pile" : tg->ut().name) : "-", tg ? tg->amount : 0, e.cooldown, e.stuckTimer, e.cargo, e.actionTimer); }
         if (stuckCheck && t % 40 == 0) {
             if (stuckRecs.size() < g_sim.ents.size()) stuckRecs.resize(g_sim.ents.size());
             for (size_t i = 0; i < g_sim.ents.size(); i++) {
@@ -586,6 +587,7 @@ bool strikeJetTest(u64 seed);
 bool antiNukeTest(u64 seed);
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
+void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow);   // tests3.cpp: ONEHOUR_AIR=strike|drop|nuke --shot scenes
 static bool rulesTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "rulestest: %s\n", m); return false; };
     auto run = [](int sec) { for (int t = 0; t < 20 * sec; t++) { g_sim.step(); g_sim.events.clear(); } };
@@ -2789,6 +2791,12 @@ int main(int argc, char** argv) {
                         if (hit) { g_game.selection.push_back(g_sim.refOf(e)); if (w != "ship" || g_game.selection.size() >= 3) break; }
                     }
                 }
+            }
+            if (const char* air = getenv("ONEHOUR_AIR")) {   // ONEHOUR_AIR=strike|drop|nuke, ONEHOUR_AIRTICKS=n: the strike fighters over a cluster, a jeep drop on the silk, or an anti-nuke ring meeting a warhead
+                Ref follow; airShowcase(std::min(viewPlayer, g_sim.numPlayers - 1), air, stealthCam, follow); haveStealthCam = true;
+                int n = getenv("ONEHOUR_AIRTICKS") ? atoi(getenv("ONEHOUR_AIRTICKS")) : 40;
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); }
+                if (Entity* fe = g_sim.get(follow)) stealthCam = Vec2(clampf(fe->pos.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(fe->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
             }
             if (haveStealthCam) g_game.cam = stealthCam;
             g_game.renderAlpha = 1;

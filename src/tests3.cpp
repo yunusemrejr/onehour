@@ -607,3 +607,36 @@ void navyShowcase(int vp, Vec2& camOut) {
     placeNear3(f == F_CYBER ? B_C_ANTINUKE : B_K_ANTINUKE, vp, shoreSpot + Vec2(4 * TILE, 3 * TILE));
     camOut = Vec2(clampf(mid.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
 }
+
+// ONEHOUR_AIR=strike|drop|nuke --shot (ONEHOUR_AIRTICKS=n ticks after the call): the Hotline Strike with its two fighters over an enemy cluster, a jeep drop on its
+// parachutes, or an anti-nuke defence ring meeting a warhead. Sets the scene up and returns the camera centre; the caller steps and renders.
+void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow) {
+    int foe = vp == 0 ? 1 : 0;
+    Faction f = g_sim.players[vp].faction, ff = g_sim.players[foe].faction;
+    for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+    g_sim.players[vp].money = 400000; g_sim.players[vp].dropReady = 0;
+    for (int u = 0; u < UPG_COUNT; u++) g_sim.players[vp].upg[u] = true;
+    g_sim.players[vp].advTech = true;
+    Vec2 spot = g_map.nearestFree(lakePoint(0, -17), 10);
+    flattenArena(spot, 14, 12);
+    std::string w = which;
+    placeNear3(firstBuildOf(f) + BR_TECH, vp, g_sim.players[vp].basePos + Vec2(8 * TILE, 8 * TILE));
+    placeNear3(firstBuildOf(f) + BR_FACTORY, vp, g_sim.players[vp].basePos + Vec2(0, 9 * TILE));
+    givePower3(vp);
+    if (w == "strike") {
+        for (int i = 0; i < 12; i++) { Ref r = g_sim.spawnUnit(firstUnitOf(ff) + (i % 3 == 0 ? 5 : 2), foe, spot + Vec2((i % 4 - 1.5f) * 34.0f, (i / 4 - 1) * 34.0f)); g_sim.get(r)->disabledUntil = 1e9f; }
+        for (int i = 0; i < 2; i++) placeNear3(firstBuildOf(ff) + BR_POWER, foe, spot + Vec2((i * 2 - 1) * 150.0f, 100.0f));
+        g_sim.cmdPhoneStrike(vp, spot);
+    } else if (w == "drop") {
+        g_sim.cmdParadrop(vp, spot, false);
+    } else {   // nuke: a defence ring and a warhead on its way to a cluster in the middle of it
+        int anT = ff == F_CYBER ? B_C_ANTINUKE : B_K_ANTINUKE;
+        for (int k = 0; k < 4; k++) { float a = k * 1.5708f + 0.3f; placeNear3(anT, foe, spot + Vec2(std::cos(a), std::sin(a)) * (7.5f * TILE)); }
+        givePower3(foe);
+        for (int i = 0; i < 8; i++) g_sim.spawnUnit(firstUnitOf(ff) + 5, foe, spot + Vec2((i % 4 - 1.5f) * 36.0f, (i / 4 - 0.5f) * 36.0f));
+        g_sim.nukes.push_back({g_sim.players[vp].basePos, spot, vp, Sim::NUKE_FLIGHT - 5.2f, false});
+    }
+    camOut = Vec2(clampf(spot.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(spot.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
+    follow = NOREF;
+    if (w == "strike") for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().temp && e.owner == vp) { follow = g_sim.refOf(e); break; }
+}

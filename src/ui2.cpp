@@ -199,9 +199,10 @@ void Game::drawInterceptors() {
             Vec2 sp = worldToScreen(w + off);
             if (sp.x < -60 || sp.y < -60 || sp.x > SCREEN_W + 60 || sp.y > VIEW_H + 60) continue;
             int fr = ((int)(wallTime * 20) + i * 2) % 6;
-            g.draw(g.fxs.flame[fr], sp.x, sp.y - 5, 0, 0.5f + 0.4f * h1, rgb(255, 190, 120), 230);
-            g.glowAdd(sp.x, sp.y, 9 + 6 * h1, Color{255, 140, 60, 160});
-            g.fillCircle(sp.x, sp.y, 1.6f + 1.2f * h3, rgb(60, 56, 52));
+            g.draw(g.fxs.flame[fr], sp.x, sp.y - 6, 0, 0.75f + 0.55f * h1, rgb(255, 190, 120), 235);
+            g.glowAdd(sp.x, sp.y, 14 + 8 * h1, Color{255, 140, 60, 175});
+            g.glowAdd(sp.x, sp.y, 5 + 2 * h3, Color{255, 240, 200, 200});
+            g.fillCircle(sp.x, sp.y, 2.0f + 1.4f * h3, rgb(60, 56, 52));
             if (frameDt > 0 && fxRng.f() < 8.0f * frameDt) emitP(w.x + off.x, w.y + off.y, fxRng.f(-10, 10), fxRng.f(-20, -4), fxRng.f(1.0f, 1.8f), 3, 10, rgb(70, 66, 62, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.6f, fxRng.f(0, 6), 0.2f);
         }
         (void)k; (void)k0;

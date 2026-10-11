@@ -227,6 +227,39 @@ void Map::generate() {
     }
 }
 
+bool Map::wouldPlug(int tx, int ty, int w, int h) const {
+    const int R = 6;
+    int x0 = std::max(0, tx - R), y0 = std::max(0, ty - R), x1 = std::min(MAP_W - 1, tx + w - 1 + R), y1 = std::min(MAP_H - 1, ty + h - 1 + R);
+    int W = x1 - x0 + 1, H = y1 - y0 + 1;
+    auto regions = [&](bool withFootprint) {
+        static u8 seen[(2 * 6 + 8) * (2 * 6 + 8)];
+        memset(seen, 0, (size_t)W * H);
+        int count = 0;
+        static int stack[(2 * 6 + 8) * (2 * 6 + 8)];
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
+            int li = (y - y0) * W + (x - x0);
+            bool inF = x >= tx && x < tx + w && y >= ty && y < ty + h;
+            if (seen[li] || blocked[y * MAP_W + x] != 0 || (withFootprint && inF)) continue;
+            count++;
+            int sp = 0; stack[sp++] = li; seen[li] = 1;
+            while (sp > 0) {
+                int c = stack[--sp], cx = x0 + c % W, cy = y0 + c / W;
+                static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++) {
+                    int nx = cx + DX[k], ny = cy + DY[k];
+                    if (nx < x0 || ny < y0 || nx > x1 || ny > y1) continue;
+                    int nl = (ny - y0) * W + (nx - x0);
+                    bool nF = nx >= tx && nx < tx + w && ny >= ty && ny < ty + h;
+                    if (seen[nl] || blocked[ny * MAP_W + nx] != 0 || (withFootprint && nF)) continue;
+                    seen[nl] = 1; stack[sp++] = nl;
+                }
+            }
+        }
+        return count;
+    };
+    return regions(true) > regions(false);
+}
+
 void Map::setStructure(int x, int y, int w, int h, bool on) {
     for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
         if (!inMap(i, j)) continue;
@@ -382,11 +415,12 @@ static u32 nGen = 1;
 // land (a ship sent to shell a shore target sails to the closest it can get).
 bool Map::findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) const {
     out.clear();
-    Vec2 sf = nearestWater(from, 6), gt = nearestWater(to, 14);
+    Vec2 sf = nearestWater(from, 6), gt = nearestWater(to, 14, true);
+    if (!navTile(tileOf(gt.x), tileOf(gt.y))) gt = nearestWater(to, 60, true);   // a goal far inland: head for the closest point of the lake
     int sx = clampi(tileOf(sf.x), 0, MAP_W - 1), sy = clampi(tileOf(sf.y), 0, MAP_H - 1);
     int gx = clampi(tileOf(gt.x), 0, MAP_W - 1), gy = clampi(tileOf(gt.y), 0, MAP_H - 1);
     if (!navTile(sx, sy) || !navTile(gx, gy)) return false;
-    if (sx == gx && sy == gy) { out.push_back(gt); return true; }
+    if (sx == gx && sy == gy) { if (dist(from, sf) > 3.0f) out.push_back(sf); out.push_back(gt); return true; }
     nGen++;
     if (nGen == 0) { memset(nVisit, 0, sizeof(nVisit)); memset(nClosed, 0, sizeof(nClosed)); nGen = 1; }
     struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
@@ -427,6 +461,7 @@ bool Map::findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes
     if (rev.empty()) return false;
     std::reverse(rev.begin(), rev.end());
     if (found) rev.back() = gt;
+    if (dist(from, sf) > 3.0f) out.push_back(sf);   // a ship hugging the shore first sails to the open water beside it (a straight line from where it is might cross the beach)
     Vec2 cur = sf;   // string pulling over open water
     size_t i = 0;
     while (i < rev.size()) {

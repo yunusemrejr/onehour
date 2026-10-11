@@ -300,6 +300,7 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
         Vec2 out = g_map.nearestWater(buildingCenter(buildType, tx, ty), 7, true);   // and ships must have open lake to sail out into
         if (!g_map.navOpen(tileOf(out.x), tileOf(out.y))) return false;
     }
+    if (g_map.wouldPlug(tx, ty, b.w, b.h)) return false;   // never plug a corridor or seal a pocket: units must still get through
     // units standing on the footprint are pushed off when placed; no check needed
     return true;
 }
@@ -965,6 +966,7 @@ bool Sim::cmdPhoneStrike(int player, Vec2 pos) {
         e.alt = 1; e.airspeed = UNITS[jetType].speed * 0.9f;
         Vec2 d = pos - from;
         e.angle = e.turret = d.len() > 1.0f ? std::atan2(d.y, d.x) : 0.0f;
+        e.guardPos = pos + perp * ((k * 2 - 1) * 1.7f * TILE);   // two lanes, a few tiles apart, across the called spot
         e.order = O_STRIKERUN; e.target = pos; e.ammo = UNITS[jetType].ammo; e.lifeUntil = time + STRIKE_LIFE; e.strikePass = 0; e.salvoLeft = 0; e.jetBreak = 0;
     }
     strikeMarks.push_back({pos, player, time});
@@ -1328,11 +1330,15 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
     if (e.isAir()) { e.path.push_back(dest); return true; }
     if (e.ut().naval) {   // ships plan over open water only
         bool ok = g_map.findNavalPath(e.pos, dest, e.path);
-        if (e.path.empty()) e.path.push_back(g_map.nearestWater(dest, 6));
+        if (e.path.empty()) e.path.push_back(g_map.nearestWater(e.pos, 20, true));   // (no way there: it only moves to the open water beside it, never along a straight line across the land)
         return ok;
     }
     bool ok = g_map.findPath(e.pos, dest, e.path);
-    if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4));   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
+    if (e.path.empty()) {   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
+        Vec2 fb = g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4);
+        if (!g_map.passable(tileOf(fb.x), tileOf(fb.y))) { fb = g_map.nearestFree(dest, 18); ok = g_map.findPath(e.pos, fb, e.path); }   // (a spot out in the lake: walk to the shore)
+        if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(fb.x), tileOf(fb.y)) && dist(fb, e.pos) <= 3.0f * TILE ? fb : e.pos);   // (a far goal it cannot reach at all: stay put, never push against the terrain in a straight line)
+    }
     return ok;
 }
 
@@ -1726,7 +1732,7 @@ void Sim::updateStorms() {
 
 // ------------------------------------------------------------ economy helpers
 static bool predSupply(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_SUPPLY; }
-static bool predPile(const Entity& e, void* ctx) { return e.kind == EK_RESOURCE && e.amount > 0 && !(ctx && ((const Sim*)ctx)->inFallout(e.pos)); }   // (haulers do not drive into radiation)
+static bool predPile(const Entity& e, void* ctx) { return e.kind == EK_RESOURCE && e.amount > 0 && !(ctx && ((const Sim*)ctx)->inFallout(e.pos, TILE * 0.5f)); }   // (haulers do not drive into radiation, nor park where idle units would walk out of it)
 static bool predAirfield(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.alive && e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_AIRFIELD; }   // (alive: never the ruins of a destroyed pad)
 
 Entity* Sim::findSupplyBuilding(Entity& h) { int o = h.owner; return nearestEntity(h.pos, 1e9f, predSupply, &o); }
@@ -1741,7 +1747,7 @@ Entity* Sim::findZonePile(Entity& h) {
         if (dist(e.pos, h.zone) > h.zoneR + TILE * 0.5f) continue;
         if (!exploredRaw(h.owner, clampi(e.tx, 0, MAP_W - 1), clampi(e.ty, 0, MAP_H - 1))) continue;   // haulers only work what their side has seen
         float d = dist2(h.pos, e.pos);
-        if (inFallout(e.pos)) d += 1e12f;   // radioactive piles come last
+        if (inFallout(e.pos, TILE * 0.5f)) d += 1e12f;   // radioactive piles come last
         if (d < bd) { bd = d; best = &e; }
     }
     return best;
@@ -2412,7 +2418,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             if ((tick + e.gen) % 10 == 0) {
                 Entity* best = nullptr; float bd = 14.0f * TILE;
                 forEachNear(e.pos, bd, [&](Entity& t) {
-                    if (&t == &e || t.owner != e.owner || !t.isUnit() || t.ut().role == UR_HEALER || t.hp >= t.maxHp * 0.98f) return;
+                    if (&t == &e || t.owner != e.owner || !t.isUnit() || t.ut().role == UR_HEALER || t.ut().naval || t.hp >= t.maxHp * 0.98f) return;   // (a medic cannot follow a ship out onto the lake)
                     float d = dist(t.pos, e.pos); if (d < bd) { bd = d; best = &t; }
                 });
                 if (best && bd > HEAL_RADIUS * TILE * 0.5f) { e.order = O_MOVE; e.target = g_map.nearestFree(best->pos, 6); e.targetEnt = NOREF; requestPath(e, e.target); }

@@ -150,9 +150,20 @@ void Sim::moveShip(Entity& e, float speed) {
     } else v = std::max(0.0f, v - speed * 1.2f * SIM_DT);   // nothing to steer for: glide to a halt
     e.airspeed = v;
     if (v > 0.5f) {
-        Vec2 np = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * (v * SIM_DT);
-        if (g_map.navTile(tileOf(np.x), tileOf(np.y))) e.pos = np;
-        else { e.airspeed = 0; if (steering && !e.path.empty()) requestPath(e, e.path.back()); }
+        const Vec2 step = Vec2(std::cos(e.angle), std::sin(e.angle)) * (v * SIM_DT);
+        const Vec2 np = e.pos + step, sx(np.x, e.pos.y), sy(e.pos.x, np.y);
+        auto wet = [](Vec2 q) { return g_map.navTile(tileOf(q.x), tileOf(q.y)); };
+        if (wet(np)) e.pos = np;
+        else if (wet(sx) || wet(sy)) {   // a hull brushing the shore slides along it while it turns away (it never stops dead on a tile edge)
+            e.pos = !wet(sy) ? sx : !wet(sx) ? sy : (std::abs(step.x) > std::abs(step.y) ? sx : sy);
+            e.airspeed = v * 0.85f;
+        } else {
+            e.airspeed = 0;
+            Vec2 ow = g_map.nearestWater(e.pos, 4);   // wedged into a corner: edge out toward the open water beside it
+            float od = dist(ow, e.pos);
+            if (od > 1.0f) { Vec2 q = e.pos + (ow - e.pos) * (std::min(od, 40.0f * SIM_DT) / od); if (wet(q)) e.pos = q; }
+            if (steering && !e.path.empty()) requestPath(e, e.path.back());
+        }
     }
 }
 
@@ -314,10 +325,11 @@ void Sim::strikeJetRun(Entity& e) {
         return;
     }
     if (e.jetBreak > 0) { e.jetBreak -= SIM_DT; airSteer(e, e.angle, ut.speed); return; }   // flying on past the target before swinging round
-    Vec2 to = e.target - e.pos;
+    Vec2 aim = e.guardPos.len2() > 1.0f ? e.guardPos : e.target;   // each fighter has its own lane across the spot (see cmdPhoneStrike)
+    Vec2 to = aim - e.pos;
     float D = to.len(), want = std::atan2(to.y, to.x);
     airSteer(e, want, ut.speed);
-    if (D < 640.0f && D > 220.0f && std::abs(angDelta(e.angle, want)) < 0.12f) { e.salvoLeft = STRIKE_SALVO; e.actionTimer = 0; }
+    if (D < 640.0f && D > 220.0f && std::abs(angDelta(e.angle, want)) < 0.12f) { e.salvoLeft = STRIKE_SALVO; e.actionTimer = 0; emit(EV_SOUND, e.owner, SND_JET, e.pos); }   // (a pass begins with the roar of the engines)
 }
 
 void Sim::updateStrikeMarks() {

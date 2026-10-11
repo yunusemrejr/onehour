@@ -27,8 +27,11 @@ struct Map {
     bool buildable(int x, int y) const {
         if (!inMap(x, y)) return false;
         u8 t = tiles[y * MAP_W + x];
-        return blocked[y * MAP_W + x] == 0 && t != T_WATER && t != T_ROCK && t != T_TREE;
+        return blocked[y * MAP_W + x] == 0 && t != T_WATER && t != T_ROCK && t != T_TREE && bridge[y * MAP_W + x] == 0;   // (nothing is built on a bridge deck: it would plug the crossing)
     }
+    // Would a w x h structure at (x, y) cut the ground around it in two (a corridor between rock and water, a gap between two other structures)? Counts the
+    // 4-connected regions of free ground in the window of a few tiles round the footprint before and after: more of them after means it would plug something.
+    bool wouldPlug(int x, int y, int w, int h) const;
     void setStructure(int x, int y, int w, int h, bool on);
     void setResource(int x, int y, bool on);
     float moveCost(int x, int y) const { return tiles[y * MAP_W + x] == T_ROAD ? 0.8f : 1.0f; }

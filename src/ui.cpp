@@ -1310,6 +1310,37 @@ void Game::drawEntity(Entity& e) {
             float wy = alt > 0.5f ? 1.0f : 0.0f; (void)wy;
             emitP(e.pos.x - std::cos(th) * 18, e.pos.y - std::sin(th) * 18 - 14 * alt, 0, 0, fxRng.f(1.1f, 1.7f), 2.4f, 7.5f, rgb(238, 244, 248, 150), PK_CONTRAIL, (u8)fxRng.range(0, 3), 0, 0.3f, fxRng.f(0, 6), 0.1f);
         }
+        if (ut.temp && !disabled) {   // a Hotline Strike fighter: twin afterburner cores, a shock cone of vapour round the airframe, wingtip vortices and a long hot contrail
+            Vec2 f(std::cos(th), std::sin(th)), sd(-f.y, f.x);
+            float wing = 24.0f * UNIT_SCALE * jsc;
+            Color hot = cyj ? rgb(190, 240, 255) : rgb(255, 214, 150);
+            for (int k = -1; k <= 1; k += 2) {
+                Vec2 nz = tail + sd * (k * 3.4f);
+                g.draw(g.fxs.flame[(fr + k + 3) % 6], nz.x, nz.y, th - 1.5708f, (0.5f + 0.9f * burn), hot, (u8)(120 + 135 * burn));
+                g.glowAdd(nz.x, nz.y, 6 + 7 * burn, Color{hot.r, hot.g, hot.b, (u8)(110 + 120 * burn)});
+            }
+            g.glowAdd(tail.x - f.x * 10, tail.y - f.y * 10, 20 + 16 * burn, Color{fc.r, fc.g, fc.b, (u8)(60 + 90 * burn)});
+            if (burn > 0.55f) {   // the Prandtl-Glauert cone: a pale ellipse of condensed air hugging the fuselage, trailing back from the wing roots
+                Vec2 cc = Vec2(p.x - f.x * 8.0f, p.y - f.y * 8.0f);
+                g.drawSized(g.fxs.cloud[1], cc.x, cc.y, 54.0f + 40.0f * burn, 22.0f + 8.0f * burn, th, rgb(244, 250, 255), (u8)(34 + 40 * burn));
+            }
+            if (frameDt > 0 && burn > 0.3f) {
+                for (int k = -1; k <= 1; k += 2) {   // vortices rolling off the wing tips
+                    if (fxRng.f() < 55.0f * frameDt) {
+                        Vec2 wt(e.pos.x - f.x * 6.0f + sd.x * k * wing, e.pos.y - f.y * 6.0f + sd.y * k * wing - 14 * alt);
+                        emitP(wt.x, wt.y, 0, 0, fxRng.f(0.9f, 1.5f), 1.4f, 4.5f, rgb(246, 250, 255, 130), PK_CONTRAIL, (u8)fxRng.range(0, 3), 0, 0.2f, fxRng.f(0, 6), 0.05f);
+                    }
+                }
+                if (fxRng.f() < 70.0f * frameDt) emitP(e.pos.x - f.x * 22.0f, e.pos.y - f.y * 22.0f - 14 * alt, 0, 0, fxRng.f(1.6f, 2.6f), 3.0f, 11.0f, rgb(236, 242, 248, 120), PK_CONTRAIL, (u8)fxRng.range(0, 3), 0, 0.3f, fxRng.f(0, 6), 0.08f);
+            }
+            if (e.salvoLeft > 0 && !paused) {   // rocket pods lighting up on the wings
+                for (int k = -1; k <= 1; k += 2) {
+                    Vec2 pod = Vec2(p.x + f.x * 6.0f + sd.x * k * wing * 0.62f, p.y + f.y * 6.0f + sd.y * k * wing * 0.62f);
+                    g.glowAdd(pod.x, pod.y, 11.0f, Color{255, 236, 190, 190});
+                    if (frameDt > 0 && fxRng.f() < 30.0f * frameDt) emitP(pod.x + cam.x, pod.y + cam.y, -f.x * 30, -f.y * 30, fxRng.f(0.8f, 1.4f), 3, 9, rgb(236, 232, 224, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.2f);
+                }
+            }
+        }
     }
     g.draw(*bs, p.x, p.y, e.angle, 1, mod, ghost);
     if (ut.naval) drawShipMounts(e, p, mod);
@@ -1569,10 +1600,12 @@ void Game::renderWorld() {
         } else if (w.proj == PJ_ROCKET) {
             Vec2 d = p.vel.norm();
             float ang = std::atan2(d.y, d.x);
-            Vec2 mid = s - d * 9.0f;
-            g.drawSized(g.fxs.streak, mid.x, mid.y, 22, 4.0f, ang, rgb(255, 214, 150), 255);
-            g.glowAdd(s.x, s.y, 7, Color{w.color.r, w.color.g, w.color.b, 150});
-            g.fillCircle(s.x, s.y, 1.9f, rgb(255, 250, 235));
+            bool strike = p.weapon == W_STRIKE_C || p.weapon == W_STRIKE_K;   // the strike fighters' rockets: longer, hotter, with a smoke line that hangs in the air
+            Vec2 mid = s - d * (strike ? 18.0f : 9.0f);
+            g.drawSized(g.fxs.streak, mid.x, mid.y, strike ? 44 : 22, strike ? 6.0f : 4.0f, ang, rgb(255, 214, 150), 255);
+            g.glowAdd(s.x, s.y, strike ? 12 : 7, Color{w.color.r, w.color.g, w.color.b, (u8)(strike ? 190 : 150)});
+            g.fillCircle(s.x, s.y, strike ? 2.4f : 1.9f, rgb(255, 250, 235));
+            if (strike && frameDt > 0 && fxRng.f() < 40.0f * frameDt) emitP(p.pos.x - d.x * 12, p.pos.y - d.y * 12, fxRng.f(-6, 6), fxRng.f(-6, 6), fxRng.f(1.2f, 2.0f), 3, 11, rgb(238, 236, 232, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.4f, fxRng.f(0, 6), 0.2f);
         } else {
             Vec2 d = p.vel.norm();
             float ang = std::atan2(d.y, d.x);
@@ -1672,6 +1705,18 @@ void Game::drawMinimap(int x, int y, int size) {
         if (a.downed || a.pos.x < 0 || a.pos.y < 0 || a.pos.x > WORLD_W || a.pos.y > WORLD_H) continue;
         int mx = (int)(x + a.pos.x / WORLD_W * size), my = (int)(y + a.pos.y / WORLD_H * size);
         g.fill(mx - 2, my - 2, 5, 5, rgb(250, 250, 250)); g.box(mx - 3, my - 3, 7, 7, rgb(150, 210, 250));
+    }
+    for (auto& n : g_sim.nukes) {   // warheads in flight: the circle they will hit (amber once one has been shot down: only its pieces fall)
+        float pr = Sim::nukeRadius(n) / WORLD_W * size;
+        g.circle(x + n.pos.x / WORLD_W * size, y + n.pos.y / WORLD_H * size, std::max(3.0f, pr), n.broken ? rgb(255, 200, 110) : rgb(255, 70, 50), 20);
+    }
+    for (auto& m : g_sim.strikeMarks) {   // a called air strike: a pulsing cross (green for your team's, red for an enemy's you can see)
+        bool mine = m.owner >= 0 && g_sim.players[m.owner].team == g_sim.players[g_sim.humanPlayer].team;
+        if (!mine && !rev && !ex[clampi(tileOf(m.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(m.pos.x), 0, MAP_W - 1)]) continue;
+        int mx = (int)(x + m.pos.x / WORLD_W * size), my = (int)(y + m.pos.y / WORLD_H * size);
+        Color c = mine ? rgb(120, 255, 150) : rgb(255, 86, 70);
+        int r = 3 + (((int)(wallTime * 4)) & 1);
+        g.line(mx - r, my, mx + r, my, c); g.line(mx, my - r, mx, my + r, c);
     }
     // recent attack pings: a blinking ring that fades over 8 seconds
     for (auto& p : pings) {
@@ -1925,9 +1970,9 @@ void Game::renderHud() {
         for (size_t i = 0; i < tl.size(); i++) g.text(tx + 6, ty + 4 + (int)i * 16, tl[i].c_str(), rgb(255, 255, 255));
     }
     if (showHelp) {
-        int hx = SCREEN_W / 2 - 312, hy0 = std::max(30, VIEW_H / 2 - 170);
-        g.fill(hx, hy0, 624, 364, rgb(8, 10, 14, 235));
-        g.box(hx, hy0, 624, 364, accent);
+        int hx = SCREEN_W / 2 - 312, hy0 = std::max(20, VIEW_H / 2 - 202);
+        g.fill(hx, hy0, 624, 396, rgb(8, 10, 14, 235));
+        g.box(hx, hy0, 624, 396, accent);
         g.text(hx + 16, hy0 + 12, "ONE HOUR - controls", rgb(255, 255, 255), 2);
         const char* lines[] = {
             "Left click / drag box      select units (double-click: all of that type on screen)",
@@ -1941,11 +1986,13 @@ void Game::renderHud() {
             "Structure selected         train units; right-click ground for rally; Del sells",
             "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
-            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop",
+            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop, U/G/E/N upgrades",
             "Spy selected              right-click an enemy structure to capture it (the spy survives)",
             "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",
             "Bunker / lifter selected  U unloads; D (lifter) flies to a spot you click and drops everybody off",
             "Stealth                    snipers and bunkers show only to an enemy spy drone",
+            "Lake                       Y: Naval Yard on the shore (ships sail on water only); Q: anti-nuke defence (30% chance each, more of them: likelier)",
+            "Jeep                       right-click it with soldiers: seven seats, they shoot from inside; drops carry loaded jeeps; N: Guard Drones upgrade",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",
             "",
             "Supplies: haulers carry $300 per trip to a Supply Hub/Depot.",
