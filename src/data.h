@@ -52,15 +52,24 @@ enum UnitTypeId {
     U_C_SPY, U_K_SPY,       // spies: capture enemy structures
     U_C_SDRONE, U_K_SDRONE, // stealth spy drones
     U_C_CARGO, U_K_CARGO,   // cargo choppers
+    U_C_JEEP, U_K_JEEP,     // jeeps: fast open-top transports that carry seven infantry who shoot from inside
+    U_C_DESTROYER, U_K_DESTROYER,   // warships of the lake (built at a Naval Yard on the shore)
+    U_C_CRUISER, U_K_CRUISER,       // missile ships
+    U_C_STRIKEJET, U_K_STRIKEJET,   // the two fighters a Hotline Strike brings: never built, they leave again when the run is over
     U_COUNT
 };
 
-enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIRFIELD, BR_TECH, BR_TURRET, BR_AATURRET, BR_INCOME, BR_NUKE, BR_BUNKER };
+enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIRFIELD, BR_TECH, BR_TURRET, BR_AATURRET, BR_INCOME, BR_NUKE, BR_BUNKER,
+                 BR_NAVAL,       // Naval Yard: on the shore of the lake, builds the ships
+                 BR_ANTINUKE,    // Anti-Nuke Laser / Anti-Nuke Missiles: small structures that shoot incoming warheads down
+                 BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
     B_C_HQ = 0, B_C_POWER, B_C_SUPPLY, B_C_BARRACKS, B_C_FACTORY, B_C_AIRFIELD, B_C_TECH, B_C_LASER, B_C_PATRIOT, B_C_MINER, B_C_NUKE,
     B_K_HQ, B_K_POWER, B_K_SUPPLY, B_K_BARRACKS, B_K_FACTORY, B_K_AIRFIELD, B_K_TECH, B_K_MG, B_K_ROCKET, B_K_OILWELL, B_K_NUKE,
     B_C_BUNKER, B_K_BUNKER,   // the underground bunkers sit after both armies' blocks so every earlier id stays put
+    B_C_NAVAL, B_K_NAVAL,     // Naval Yards
+    B_C_ANTINUKE, B_K_ANTINUKE,   // anti-nuke defences
     B_COUNT
 };
 
@@ -91,6 +100,10 @@ struct UnitType {
     float detect;       // tiles: how far this unit finds stealthy enemies (0 = it finds none)
     int detectMask;     // which StealthClass es it finds (DET_SPOTTER / DET_DRONE bits)
     int cargoCap;       // transport: cargo slots (an infantryman takes one, see cargoSize)
+    int naval;          // 1 = ship: lives and moves on water only (the lake), see Map::findNavalPath
+    float evade;        // 0..1: the share of weapon hits that miss it (the Hotline Strike fighters are very hard to shoot down)
+    int temp;           // 1 = a loan from a support power: cannot be built, selected or commanded, and leaves the map when its run is over
+    int drones;         // protector drones it flies with (see Sim::droneCount): they shoot down rockets and shells aimed at it
 };
 // Cargo slots a unit takes in a transport: infantry 1, light vehicles 4, tanks 6, super-heavy walkers 10 (aircraft cannot be carried)
 inline int cargoSize(const UnitType& u) { return u.kind == UK_INF ? 1 : (u.kind == UK_VEH ? (u.hp >= 1500 ? 10 : (u.armor == AR_HEAVY ? 6 : 4)) : 0); }
@@ -126,7 +139,10 @@ extern const ProgramType PROGRAMS[F_COUNT];
 
 // Structure upgrades researched at the tech structure (Data Center / Arms Lab). Once finished an upgrade lasts the whole match and
 // covers every structure the army owns, the ones standing and the ones it builds later, even if the tech structure falls afterwards.
-enum UpgradeId { UPG_RUGGED = 0, UPG_GUNS, UPG_REPAIR, UPG_COUNT };
+enum UpgradeId { UPG_RUGGED = 0, UPG_GUNS, UPG_REPAIR,
+                 UPG_DRONES,     // protector drones: every ship flies with a screen of them, and every jeep gets a second one
+                 UPG_COUNT };
+static const int UPG_STRUCTURE_COUNT = UPG_DRONES;   // the first three change what structures are; they and the Advanced Program set the drop tier
 struct UpgradeType { const char* name; const char* hotkey; const char* desc; int cost; float time; };
 extern const UpgradeType UPGRADES[F_COUNT][UPG_COUNT];
 static const float RUGGED_HP = 1.5f;          // Rugged: structure health multiplier
@@ -137,6 +153,9 @@ static const float RUGGED_NUKE = 0.55f;       // Rugged: fraction of max health 
 static const float SELF_REPAIR_RATE = 0.012f; // Self-Repair: fraction of max health a structure restores per second once out of combat
 static const float SELF_REPAIR_HOT = 0.25f;   // ... and the share of that rate it keeps while still taking fire
 static const float SELF_REPAIR_DELAY = 3.0f;  // seconds after the last hit before full-rate repair resumes
+static const int   W_JEEP_MG = 33;                        // the pintle gun of a jeep (WEAPONS index)
+static const int   W_DESTROYER_C = 34, W_DESTROYER_K = 35, W_CRUISER_C = 36, W_CRUISER_K = 37;   // the ships' guns and rocket salvos
+static const int   W_STRIKE_C = 38, W_STRIKE_K = 39;      // the rockets of the Hotline Strike fighters
 static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns of the Defense Guns upgrade (Cyber laser, Clanker machine gun)
 
 // Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes.
@@ -175,6 +194,41 @@ extern const StrikeType STRIKES[F_COUNT];
 // so it grows with the same ladder - a fresh tech structure sends a swarm, a finished arms race sends a bigger one. Every tier brings all
 // three kinds the power promises (helicopters, jets and a drone), so a strike called early is a real swarm too.
 static const int STRIKE_LOAD[DTI_COUNT][4] = { { 4, 2, 2, 1 }, { 5, 3, 3, 1 }, { 6, 4, 4, 2 } };
+
+// Hotline Strike fighters: with every call two special fighters (U_C_STRIKEJET / U_K_STRIKEJET) join the swarm. They are never built: a call
+// lends them to the army for one run. They cross the map at STRIKE_JET_SPEED, make STRIKE_PASSES passes over the called spot, fire a
+// salvo of STRIKE_SALVO unguided rockets on each, and leave. Very tough, and most hits on them miss (UnitType.evade).
+static const int   STRIKE_JETS = 2;
+static const int   STRIKE_PASSES = 3;
+static const int   STRIKE_SALVO = 12;
+static const float STRIKE_SPREAD = 2.4f;       // tiles: the radius of the circle a salvo is scattered over
+static const float STRIKE_LIFE = 60.0f;        // seconds after which a strike fighter that is still around is withdrawn
+
+// Jeeps: fast open-top transports. Up to JEEP_SEATS infantry ride inside and shoot from it with their own weapons; a jeep is also a gun.
+static const int   JEEP_SEATS = 7;
+static const int   DROP_JEEPS_MIN = 3, DROP_JEEPS_MAX = 10;   // an airdrop brings between these many loaded jeeps, by what the army has unlocked
+static const float JEEP_CASUALTIES = 0.35f;    // share of the crew killed when the jeep blows up (the rest climbs out hurt)
+
+// Protector drones: a screen of small drones that shoots down rockets and shells aimed at their host (ships, jeeps). Lasers and bullets are too
+// quick for them. Each drone fires once, then needs DRONE_RELOAD seconds; a salvo bigger than the screen gets through.
+static const int   SHIP_DRONES = 3;            // with the Guard Drones upgrade
+static const int   JEEP_DRONES = 1;            // a jeep flies with one; the Guard Drones upgrade adds a second (and gives every ship SHIP_DRONES)
+static const float DRONE_RANGE = 3.2f * TILE;  // px: how close to the host a projectile must come to be engaged
+static const float DRONE_RELOAD = 2.6f;
+static const float DRONE_CHANCE = 0.85f;
+
+// The lake: ships live on it and a Naval Yard must touch it (a body of at least NAVAL_WATER_MIN connected water tiles).
+static const int   NAVAL_WATER_MIN = 60;
+
+// Anti-nuke defences (Anti-Nuke Laser for Cyber, Anti-Nuke Missiles for Clanker): small structures that watch the sky over their area and shoot
+// down a warhead heading for it. Each one has its own chance of getting the warhead (the more of them, the likelier it is stopped); one that
+// is shot down still rains its pieces and its radiation on the target, but at ANTINUKE_FALLOFF of the damage.
+static const float ANTINUKE_COVER_C = 17.0f, ANTINUKE_COVER_K = 19.0f;   // tiles around the structure it protects: a warhead aimed inside is engaged
+static const float ANTINUKE_CHANCE = 0.30f;    // per defence per warhead
+static const float ANTINUKE_WINDOW = 4.6f;     // seconds before impact it opens fire (a warhead is detected "closing in")
+static const float ANTINUKE_RELOAD = 12.0f;    // seconds before the same defence can engage another warhead
+static const float ANTINUKE_FALLOFF = 0.30f;   // what a shot-down warhead still does: falling pieces and radiation
+static const int   ANTINUKE_MAX = 8;           // per player
 
 // Aid Drop: the human player's own power at the tech structure (Data Center / Arms Lab), never a computer army's. A white relief plane
 // nobody shoots at drops crates on parachutes; the army nearest to the spot, other than the sender, receives the money and a dozer.

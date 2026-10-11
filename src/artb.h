@@ -18,3 +18,5 @@ void artArmed(Canvas& c, int type);
 void artRubble(Canvas& c, int tilesW, int tilesH, u32 seed);
 // Small rotating props drawn live over a structure: 0 cyber radar dish, 1 clanker radar dish, 2 pump jack beam, 3 cooling fan.
 void artProp(Canvas& c, int which);
+// Naval Yards and anti-nuke defences (artb_naval.cpp). Paints the structure and its team mask; false for any other structure type.
+bool artNavalBuilding(Canvas& c, Canvas& mask, int type);

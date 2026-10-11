@@ -124,6 +124,7 @@ private:
     struct Button { int x, y, w, h; int kind; int id; bool enabled; const char* label; std::string tip; };
     std::vector<Button> buttons;
     void buildButtons();
+    void buildButtonsRaw();   // (the layout without the compact fit buildButtons applies past twelve buttons)
 public:
     void issueRightClick(Vec2 world);
     void buildButtonsPublic() { buildButtons(); }                 // test hooks

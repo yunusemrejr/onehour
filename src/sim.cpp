@@ -583,7 +583,7 @@ int Sim::dropTier(int player) const {
     if (player < 0 || player >= numPlayers) return 0;
     const Player& pl = players[player];
     int lvl = pl.advTech ? 1 : 0;                  // the Advanced Program is the first thing that deepens a drop
-    for (int u = 0; u < UPG_COUNT; u++) if (pl.upg[u]) lvl++;   // and every finished structure upgrade deepens it further
+    for (int u = 0; u < UPG_STRUCTURE_COUNT; u++) if (pl.upg[u]) lvl++;   // and every finished structure upgrade deepens it further (the guard drones change no structure)
     if (lvl >= 3) return 2;                         // Spearhead: the arms race is finished
     if (lvl >= 1) return 1;                         // Battle Group: something beyond the tech structure has opened up
     return 0;                                       // Reinforced: what a fresh tech structure can already send

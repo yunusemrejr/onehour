@@ -364,7 +364,7 @@ void AiPlayer::think() {
     }
 
     // ---------- survey
-    int dozers = 0, harvesters = 0, armyCount = 0; float armyValue = 0;
+    int dozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0;
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged;
@@ -380,6 +380,7 @@ void AiPlayer::think() {
             else if (ut.role == UR_TRANSPORT) {}                             // (the commander has no use for cargo choppers)
             else if (ut.kind == UK_AIR) aircraft.push_back(S.refOf(e));
             else if (smart && ut.role == UR_HEALER) medics.push_back(S.refOf(e));   // medics trail the army instead of leading the charge
+            else if (ut.naval) { shipsOrJeeps++; }                           // (the fleet is handled apart from the land army)
             else { army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e); if (e.order == O_IDLE) idleArmy.push_back(S.refOf(e)); }
         } else {
             if (e.constructed && e.hp < e.maxHp * 0.6f && !(smart && S.inFallout(e.pos))) damaged.push_back(&e);
@@ -705,12 +706,13 @@ void AiPlayer::think() {
     if (techs > 0 && S.programAvailable(player) && tm > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
     // structure upgrades once the economy carries them: self-repair first, then the roof guns, then the rugged armour (easy skips the last two)
     if (techs > 0) {
-        static const int order[UPG_COUNT] = { UPG_REPAIR, UPG_GUNS, UPG_RUGGED };
-        static const float from[UPG_COUNT] = { 13.0f, 11.0f, 8.0f };   // minutes, by UpgradeId
+        static const int order[UPG_COUNT] = { UPG_REPAIR, UPG_GUNS, UPG_RUGGED, UPG_DRONES };
+        static const float from[UPG_COUNT] = { 13.0f, 11.0f, 8.0f, 14.0f };   // minutes, by UpgradeId
         float pace = pl.difficulty >= 3 ? 0.55f : (pl.difficulty == 2 ? 0.75f : (pl.difficulty == 1 ? 1.0f : 1.6f));
         for (int k = 0; k < UPG_COUNT; k++) {
             int u = order[k];
             if (pl.difficulty == 0 && u != UPG_REPAIR) continue;
+            if (u == UPG_DRONES && shipsOrJeeps < 2) continue;   // the screen only pays for an army that has ships or jeeps
             static const int upgMask = getenv("ONEHOUR_UPGMASK") ? atoi(getenv("ONEHOUR_UPGMASK")) : -1;   // (debug: bit u allows upgrade u)
             if (!(upgMask & (1 << u))) continue;
             if (!S.upgradeAvailable(player, u) || tm < from[u] * pace) continue;

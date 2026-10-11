@@ -1,4 +1,5 @@
 #include "art.h"
+#include "art2.h"
 #include "paint.h"
 
 using namespace paint;
@@ -783,7 +784,12 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 15: spyBody(A, cy, frame); break;
     case 16: spyDroneBody(A, cy); break;
     case 17: cargoBody(A, cy); break;
+    case 18: artJeepBody(c, team, cy, frame); break;           // the jeeps, ships and strike fighters have their own files (art_jeep.cpp, art_ship.cpp, art_jet.cpp)
+    case 19: artShipBody(c, team, cy, false); break;
+    case 20: artShipBody(c, team, cy, true); break;
+    case 21: artStrikeJetBody(c, team, cy); break;
     }
+    if (local >= 18) return;   // (they paint, enhance and outline themselves)
     // the new designs draw all their own detail, so the generic soldier and vehicle layers stay off them
     if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
     else if (local != 8 && local <= 10) vehicleDetail(A, cy, local);
@@ -918,6 +924,7 @@ bool artUnitTurret(Canvas& c, int type, Color team) {
     bool cy = UNITS[type].faction == F_CYBER;
     int local = unitLocal(type);
     switch (local) {
+    case 19: case 20: return artShipMount(c, team, cy, local == 20);   // (the warship mounts; the jeeps and fighters have no rotating part)
     case 5:
         if (cy) {   // photon cannon turret
             A.circle(32, 32, 10.5f, rgba(CYD, 110), 1, 0);   // ring shadow
@@ -1093,6 +1100,10 @@ float artScale(int type) {
     if (local == 11) return 1.28f;   // supersonic jets: long and slender, drawn large enough to read at a glance
     if (local == 9) return 1.06f;    // elite infantry
     if (local == 17) return 2.0f;    // cargo lifters: the biggest airframes on the field
+    if (local == 18) return 1.2f;    // jeeps
+    if (local == 19) return 1.75f;   // destroyers
+    if (local == 20) return 1.95f;   // cruisers
+    if (local == 21) return 1.4f;    // Hotline Strike fighters
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

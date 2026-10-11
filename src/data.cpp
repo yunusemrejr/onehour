@@ -35,6 +35,13 @@ const Weapon WEAPONS[] = {
     /* 30 */{ "Defense MG",      15, 7.5f, 0, 0.15f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.5f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
     /* 31 */{ "Hornet Lasers",   36, 6.0f, 0, 0.60f, PJ_LASER,  0,    true, true,  {1.0f, 1.10f, 0.85f, 0.60f, 1.3f}, 2, 0,    SND_LASER,       rgb(120, 236, 255) },
     /* 32 */{ "Bunker Minigun",   9, 7.0f, 0, 0.08f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.4f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
+    /* 33 */{ "Jeep Gun",        12, 5.5f, 0, 0.20f, PJ_BULLET, 0,    true, true,  {1.3f, 0.45f, 0.22f, 0.15f, 0.45f}, 1, 950,  SND_MG,         rgb(255, 232, 150) },
+    /* 34 */{ "Pulse Cannons",   78, 8.5f, 0, 1.30f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 1.05f, 0.80f, 0.75f}, 2, 0,    SND_LASER_HEAVY, rgb(110, 232, 255) },
+    /* 35 */{ "Naval Guns",      92, 9.0f, 0, 1.90f, PJ_SHELL,  0.7f, true, true,  {1.0f, 1.10f, 1.05f, 0.85f, 0.55f}, 2, 560,  SND_CANNON,      rgb(255, 206, 120) },
+    /* 36 */{ "Cruise Missiles",125, 14.0f,3.0f, 5.5f, PJ_ROCKET, 1.25f,true, false, {1.0f, 1.10f, 1.05f, 1.35f, 0.0f}, 3, 540,  SND_ROCKET,      rgb(170, 244, 255) },
+    /* 37 */{ "Rocket Barrage",  96, 13.5f,3.0f, 4.8f, PJ_ROCKET, 1.0f, true, false, {1.0f, 1.10f, 1.05f, 1.35f, 0.0f}, 6, 500,  SND_ROCKET,      rgb(255, 196, 110) },
+    /* 38 */{ "Strike Rockets", 130, 11.0f,0, 0.00f, PJ_ROCKET, 1.5f, true, false, {1.1f, 1.20f, 1.10f, 1.40f, 0.0f}, 1, 1150, SND_ROCKET,      rgb(150, 240, 255) },
+    /* 39 */{ "Strike Rockets", 130, 11.0f,0, 0.00f, PJ_ROCKET, 1.5f, true, false, {1.1f, 1.20f, 1.10f, 1.40f, 0.0f}, 1, 1150, SND_ROCKET,      rgb(255, 190, 100) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -78,6 +85,18 @@ const UnitType UNITS[U_COUNT] = {
     { "Recon Drone",    "D", F_CLANKER, UK_AIR, UR_SCOUT,  AR_AIR,   220, 220, 900, 12, 15, 9, -1, 0, BR_AIRFIELD, B_K_TECH, "Stealth spy drone, no weapons: sees the whole area around it and finds hidden snipers and underground bunkers. Only enemy drones can spot it. Hovers, needs no pad", 0, 0, 0, 0, 1, ST_DRONE, 9.0f, DET_SPOTTER | DET_DRONE },
     { "Atlas Lifter",   "C", F_CYBER,   UK_AIR, UR_TRANSPORT, AR_AIR, 2400, 150, 2600, 22, 10, 26, -1, 0, BR_AIRFIELD, B_C_TECH, "Huge cargo helicopter: carries 40 infantry, or tanks and other vehicles (a tank takes 6 places, a super-heavy 10). Unarmed but tough. Load by right-clicking it, unload where it hovers", 0, 0, 0, 0, 1, ST_NONE, 0.0f, 0, 40 },
     { "Mammoth Lifter", "C", F_CLANKER, UK_AIR, UR_TRANSPORT, AR_AIR, 2600, 140, 2600, 22, 10, 26, -1, 0, BR_AIRFIELD, B_K_TECH, "Huge cargo helicopter: carries 40 infantry, or tanks and other vehicles (a tank takes 6 places, a super-heavy 10). Unarmed but tough. Load by right-clicking it, unload where it hovers", 0, 0, 0, 0, 1, ST_NONE, 0.0f, 0, 40 },
+
+    // jeeps: the same in both armies, only the look differs. Fields after cargoCap: naval, evade, temp, drones
+    { "Jeep",           "J", F_CYBER,   UK_VEH, UR_COMBAT, AR_LIGHT, 420, 126, 650, 9, 7, 12, W_JEEP_MG, 0, BR_FACTORY, -1, "Fast open-top jeep with a pintle gun and seven seats: infantry ride inside and shoot from it with their own weapons (rifles, rockets, grenades, sniper shots). A mini guard drone shoots rockets and shells down. Load it by right-clicking it with soldiers selected", 0, 0, 0, 0, 0, ST_NONE, 0.0f, 0, JEEP_SEATS, 0, 0.0f, 0, JEEP_DRONES },
+    { "Jeep",           "J", F_CLANKER, UK_VEH, UR_COMBAT, AR_LIGHT, 420, 126, 650, 9, 7, 12, W_JEEP_MG, 0, BR_FACTORY, -1, "Fast open-top jeep with a pintle gun and seven seats: infantry ride inside and shoot from it with their own weapons (rifles, rockets, grenades, sniper shots). A mini guard drone shoots rockets and shells down. Load it by right-clicking it with soldiers selected", 0, 0, 0, 0, 0, ST_NONE, 0.0f, 0, JEEP_SEATS, 0, 0.0f, 0, JEEP_DRONES },
+    // ships of the lake (a Naval Yard builds them); the Guard Drones upgrade gives each a screen of protector drones
+    { "Pulse Destroyer","D", F_CYBER,   UK_VEH, UR_COMBAT, AR_HEAVY, 1500, 72, 1800, 18, 9, 21, W_DESTROYER_C, 0, BR_NAVAL, -1, "Warship of the lake: twin pulse cannons burn ships, shore targets and aircraft out to 8.5 tiles. With the Guard Drones upgrade a screen of drones shoots down rockets and shells aimed at it. A nuke sinks it", 0, 0, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 1, 0.0f, 0, 0 },
+    { "Iron Destroyer", "D", F_CLANKER, UK_VEH, UR_COMBAT, AR_HEAVY, 1600, 68, 1800, 18, 9, 21, W_DESTROYER_K, 0, BR_NAVAL, -1, "Warship of the lake: twin naval guns shell ships, shore targets and aircraft out to 9 tiles. With the Guard Drones upgrade a screen of drones shoots down rockets and shells aimed at it. A nuke sinks it", 0, 0, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 1, 0.0f, 0, 0 },
+    { "Lancer Cruiser", "C", F_CYBER,   UK_VEH, UR_COMBAT, AR_HEAVY, 1200, 56, 2400, 24, 10, 22, W_CRUISER_C, 0, BR_NAVAL, B_C_TECH, "Missile ship: salvos of guided cruise missiles hit ships, vehicles and structures up to 14 tiles away (nothing closer than 3). Weak against aircraft. A nuke sinks it", 0, 0, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 1, 0.0f, 0, 0 },
+    { "Rocket Cruiser", "C", F_CLANKER, UK_VEH, UR_COMBAT, AR_HEAVY, 1300, 54, 2400, 24, 10, 22, W_CRUISER_K, 0, BR_NAVAL, B_K_TECH, "Missile ship: barrages of rockets hit ships, vehicles and structures up to 13.5 tiles away (nothing closer than 3). Weak against aircraft. A nuke sinks it", 0, 0, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 1, 0.0f, 0, 0 },
+    // the two fighters of a Hotline Strike: never built (no structure makes them), lent to the army for one run
+    { "Valkyrie",       "V", F_CYBER,   UK_AIR, UR_COMBAT, AR_AIR, 4200, 900, 4000, 0, 12, 15, W_STRIKE_C, 36, BR_NONE, -1, "Special strike fighter on loan from a Hotline Strike: fastest thing in the sky, three rocket passes over the called spot, armoured and nearly impossible to shoot down. It leaves when its run is over", 0, 1, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 0, 0.62f, 1, 0 },
+    { "Warhawk",        "V", F_CLANKER, UK_AIR, UR_COMBAT, AR_AIR, 4400, 880, 4000, 0, 12, 15, W_STRIKE_K, 36, BR_NONE, -1, "Special strike fighter on loan from a Hotline Strike: fastest thing in the sky, three rocket passes over the called spot, armoured and nearly impossible to shoot down. It leaves when its run is over", 0, 1, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 0, 0.58f, 1, 0 },
 };
 
 const BuildType BUILDS[B_COUNT] = {
@@ -108,6 +127,11 @@ const BuildType BUILDS[B_COUNT] = {
 
     { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 30000, 2500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Fabricator. The garrison fires from a metal hatch. Runs by itself: earns $50 every 5s, mends itself, two miniguns on the hatch and a small nuke (a fifth of a full one, every 90s). A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
     { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 30000, 2500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Dozer. The garrison fires from a metal hatch. Runs by itself: earns $50 every 5s, mends itself, two miniguns on the hatch and a small nuke (a fifth of a full one, every 90s). A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
+
+    { "Nano Drydock",   "Y", F_CYBER,   BR_NAVAL,    3000, 2200, 28, 3, 3, -3, 8, -1, B_C_FACTORY, "Naval Yard: must touch the lake. Builds the Pulse Destroyer and, with a Data Center, the Lancer Cruiser" },
+    { "Shipyard",       "Y", F_CLANKER, BR_NAVAL,    3200, 2200, 28, 3, 3, -3, 8, -1, B_K_FACTORY, "Naval Yard: must touch the lake. Builds the Iron Destroyer and, with an Arms Lab, the Rocket Cruiser" },
+    { "Anti-Nuke Laser","Q", F_CYBER,   BR_ANTINUKE, 1900, 1900, 20, 2, 2, -5, 9, -1, B_C_TECH, "Small tower that spots a nuclear warhead closing in on its 17 tile area and burns it from the sky. Every one has its own chance, so the more you build, the likelier a warhead is stopped. A warhead shot down still drops pieces and radiation: 30% of the damage. Needs power (max 8)" },
+    { "Anti-Nuke Missiles","Q", F_CLANKER, BR_ANTINUKE, 2100, 1800, 20, 2, 2, -2, 9, -1, B_K_TECH, "Small silo that spots a nuclear warhead closing in on its 19 tile area and launches interceptors at it. Every one has its own chance, so the more you build, the likelier a warhead is stopped. A warhead shot down still drops pieces and radiation: 30% of the damage (max 8)" },
 };
 
 const PowerType POWERS[F_COUNT] = {
@@ -126,15 +150,17 @@ const ProgramType PROGRAMS[F_COUNT] = {
 const UpgradeType UPGRADES[F_COUNT][UPG_COUNT] = {
     { { "Rugged Nanoshell", "U", "Every structure gets 50% more health and shrugs off half of all damage. One nuke can no longer flatten it: it takes two close nukes or a massive assault at once", 3000, 40.0f },
       { "Defense Lasers",   "G", "Every structure gets a roof laser that shoots down aircraft and burns vehicles and infantry", 3500, 45.0f },
-      { "Nanite Repair",    "E", "Every structure repairs itself over time (slower while under fire). Units still need Medic Rigs", 2000, 30.0f } },
+      { "Nanite Repair",    "E", "Every structure repairs itself over time (slower while under fire). Units still need Medic Rigs", 2000, 30.0f },
+      { "Aegis Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f } },
     { { "Rugged Bulwark",   "U", "Every structure gets 50% more health and shrugs off half of all damage. One nuke can no longer flatten it: it takes two close nukes or a massive assault at once", 3000, 40.0f },
       { "Bunker Guns",      "G", "Every structure gets a roof machine gun that shoots down aircraft and shreds infantry and vehicles", 3500, 45.0f },
-      { "Repair Crews",     "E", "Every structure repairs itself over time (slower while under fire). Units still need Field Medics", 2000, 30.0f } },
+      { "Repair Crews",     "E", "Every structure repairs itself over time (slower while under fire). Units still need Field Medics", 2000, 30.0f },
+      { "Flak Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f } },
 };
 
 const DropType DROPS[F_COUNT] = {
-    { "Airlift Drop", "A stealth cargo plane drops the force your Data Center can field right now on parachutes, anywhere you choose: soldiers and vehicles on the silk, aircraft take up guard over the zone. The load grows as you learn (2 min cooldown per Data Center)", 120.0f, 4.5f },
-    { "Paradrop",     "A cargo plane drops the force your Arms Lab can field right now on parachutes, anywhere you choose: soldiers and vehicles on the silk, aircraft take up guard over the zone. The load grows as you learn (2 min cooldown per Arms Lab)",          120.0f, 4.5f },
+    { "Airlift Drop", "A stealth cargo plane drops the force your Data Center can field right now on parachutes, anywhere you choose: soldiers and vehicles on the silk, aircraft take up guard over the zone. Three to ten jeeps, each with seven soldiers already inside, come with it. The load grows as you learn (2 min cooldown per Data Center)", 120.0f, 4.5f },
+    { "Paradrop",     "A cargo plane drops the force your Arms Lab can field right now on parachutes, anywhere you choose: soldiers and vehicles on the silk, aircraft take up guard over the zone. Three to ten jeeps, each with seven soldiers already inside, come with it. The load grows as you learn (2 min cooldown per Arms Lab)",          120.0f, 4.5f },
 };
 // Slots: entry 0 is the cheapest thing the army can put in that slot, the next entry the next step up, and so on. An army that has not
 // learned a step yet simply stops before it (Sim::dropManifest), so the pool may hold units it cannot field today.
@@ -158,8 +184,8 @@ const DropTierType DROP_TIERS[DTI_COUNT] = {
 };
 
 const StrikeType STRIKES[F_COUNT] = {
-    { "Hotline Strike", "One call to Cyber Command and every Hornet gunship, Wraith drone and Specter jet that can fly crosses the map to rake the spot you pick, then breaks off home. Needs a Data Center; one call per cooldown per Data Center" },
-    { "Hotline Strike", "One call to the battery and every Vulture gunship, Talon jet and recon drone that can fly crosses the map to rake the spot you pick, then breaks off home. Needs an Arms Lab; one call per cooldown per Arms Lab" },
+    { "Hotline Strike", "One call to Cyber Command: a swarm of Hornet gunships, Wraith drones and Specter jets crosses the map to rake the spot you pick, and two special Valkyrie strike fighters (not buildable, nearly impossible to shoot down) make three rocket passes over it. Needs a Data Center; one call per cooldown per Data Center" },
+    { "Hotline Strike", "One call to the battery: a swarm of Vulture gunships, Talon jets and a recon drone crosses the map to rake the spot you pick, and two special Warhawk strike fighters (not buildable, nearly impossible to shoot down) make three rocket passes over it. Needs an Arms Lab; one call per cooldown per Arms Lab" },
 };
 
 int firstUnitOf(Faction f) { return f == F_CYBER ? U_C_DOZER : U_K_DOZER; }

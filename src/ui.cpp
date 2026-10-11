@@ -37,6 +37,7 @@ static std::string armyName(int p) {
 
 // HUD layout: minimap left, command grid anchored right, the info panel takes whatever is between
 static const int MINIMAP_X = 8, MINIMAP_SIZE = 116, BTN_W = 120, BTN_H = 28, BTN_GAP = 3;
+static const int BTN_MAX = 15, BTN_H_COMPACT = 22;   // up to five rows of three; past four rows (12 buttons) every button shrinks to fit
 static const int INFO_X = 134;
 static inline int MINIMAP_Y_() { return SCREEN_H - HUD_H + 8; }
 static inline int GRID_X_() { return SCREEN_W - (3 * BTN_W + 2 * BTN_GAP) - 10; }
@@ -363,11 +364,16 @@ static std::vector<std::string> wrapTip(Gfx& g, const std::string& s, int maxW) 
 
 // ------------------------------------------------------------ command buttons
 void Game::buildButtons() {
+    buildButtonsRaw();
+    if ((int)buttons.size() > 12) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_COMPACT + BTN_GAP); buttons[i].h = BTN_H_COMPACT; }   // five rows do not fit at full height
+}
+
+void Game::buildButtonsRaw() {
     buttons.clear();
     Player& pl = g_sim.players[g_sim.humanPlayer];
     auto add = [&](int kind, int id, bool enabled, const char* label, const std::string& tip) {
         int i = (int)buttons.size();
-        if (i >= 12) return;
+        if (i >= BTN_MAX) return;
         Button b; b.x = GRID_X + (i % 3) * (BTN_W + BTN_GAP); b.y = GRID_Y + (i / 3) * (BTN_H + BTN_GAP); b.w = BTN_W; b.h = BTN_H;
         b.kind = kind; b.id = id; b.enabled = enabled; b.label = label; b.tip = tip;
         buttons.push_back(b);
@@ -1788,32 +1794,33 @@ void Game::renderHud() {
         Color bc = b.enabled ? (hover ? shade(base, 1.5f) : shade(base, 1.15f)) : shade(base, 0.7f);
         g.bevelPanel(b.x, b.y, b.w, b.h, bc, true);
         Color tc = b.enabled ? rgb(255, 255, 255) : hudDim();
-        g.text(b.x + 5, b.y + 4, b.label, tc);
+        const int ly = b.h >= BTN_H ? 4 : 3, sy = b.h >= BTN_H ? 15 : 12;   // label and second-line offsets (a compact button is tighter)
+        g.text(b.x + 5, b.y + ly, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
-        if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
+        if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(b.x + 5, b.y + sy, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
         if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE) {
             float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidWait(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikeWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
-            if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(b.x + 5, b.y + 15, buf, hudDim()); }
+            if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(b.x + 5, b.y + sy, buf, hudDim()); }
             else if (b.enabled) {
                 int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidsReady(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikesReady(g_sim.humanPlayer) : 1;
-                if (dn > 1) { snprintf(buf, sizeof buf, "READY x%d", dn); g.text(b.x + 5, b.y + 15, buf, accent); } else g.text(b.x + 5, b.y + 15, "READY", accent);
+                if (dn > 1) { snprintf(buf, sizeof buf, "READY x%d", dn); g.text(b.x + 5, b.y + sy, buf, accent); } else g.text(b.x + 5, b.y + sy, "READY", accent);
             }
         }
         if (b.kind == BK_RESEARCH) {
             const ProgramType& pg = PROGRAMS[pl.faction];
-            if (pl.advTech) g.text(b.x + 5, b.y + 15, "DONE", accent);
-            else if (pl.researching) { snprintf(buf, sizeof buf, "%d%%", (int)(pl.researchProgress * 100)); g.text(b.x + 5, b.y + 15, buf, accent); g.fill(b.x + 36, b.y + 18, (int)((b.w - 42) * clampf(pl.researchProgress, 0, 1)), 3, accent); }
-            else { snprintf(buf, sizeof buf, "$%d", pg.cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= pg.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
+            if (pl.advTech) g.text(b.x + 5, b.y + sy, "DONE", accent);
+            else if (pl.researching) { snprintf(buf, sizeof buf, "%d%%", (int)(pl.researchProgress * 100)); g.text(b.x + 5, b.y + sy, buf, accent); g.fill(b.x + 36, b.y + sy + 3, (int)((b.w - 42) * clampf(pl.researchProgress, 0, 1)), 3, accent); }
+            else { snprintf(buf, sizeof buf, "$%d", pg.cost); g.text(b.x + 5, b.y + sy, buf, pl.money >= pg.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
         }
         if (b.kind == BK_UPGRADE) {
             const UpgradeType& ug = UPGRADES[pl.faction][b.id];
             float pr = pl.upgProgress[b.id];
-            if (pl.upg[b.id]) g.text(b.x + 5, b.y + 15, "DONE", accent);
-            else if (pl.upgBusy[b.id]) { snprintf(buf, sizeof buf, "%d%%", (int)(pr * 100)); g.text(b.x + 5, b.y + 15, buf, accent); g.fill(b.x + 36, b.y + 18, (int)((b.w - 52) * clampf(pr, 0, 1)), 3, accent); }
-            else { snprintf(buf, sizeof buf, "$%d", ug.cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= ug.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
+            if (pl.upg[b.id]) g.text(b.x + 5, b.y + sy, "DONE", accent);
+            else if (pl.upgBusy[b.id]) { snprintf(buf, sizeof buf, "%d%%", (int)(pr * 100)); g.text(b.x + 5, b.y + sy, buf, accent); g.fill(b.x + 36, b.y + sy + 3, (int)((b.w - 52) * clampf(pr, 0, 1)), 3, accent); }
+            else { snprintf(buf, sizeof buf, "$%d", ug.cost); g.text(b.x + 5, b.y + sy, buf, pl.money >= ug.cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
         }
         const char* hk = kindHotkey(b.kind, b.id);
-        if (hk) g.text(b.x + b.w - 12, b.y + 15, hk, accent);
+        if (hk) g.text(b.x + b.w - 12, b.y + sy, hk, accent);
         if (b.kind == BK_BUILD && placingType == b.id) g.box(b.x, b.y, b.w, b.h, accent);
     }
     if (hoverButton >= 0) {

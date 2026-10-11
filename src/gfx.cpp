@@ -1,5 +1,6 @@
 #include "gfx.h"
 #include "art.h"
+#include "art2.h"
 #include "artb.h"
 #include "terrain.h"
 
@@ -299,6 +300,10 @@ void Gfx::buildUnits() {
     { Canvas c(ART_SIZE, ART_SIZE); artChute(c, rgb(110, 180, 240)); aidChute = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); aidChute.dscale = UNIT_SCALE; }
     { Canvas c(ART_SIZE, ART_SIZE); artCrate(c, false); crate = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); crate.dscale = UNIT_SCALE; }
     { Canvas c(ART_SIZE, ART_SIZE); artCrate(c, true); crateOpen = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); crateOpen.dscale = UNIT_SCALE; }
+    for (int f = 0; f < F_COUNT; f++) for (int p = 0; p < MAX_PLAYERS; p++) {
+        Canvas c(ART_SIZE, ART_SIZE); artGuardDrone(c, PLAYER_COLOR[p], f == F_CYBER);
+        guardDrone[f][p] = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); guardDrone[f][p].dscale = UNIT_SCALE;
+    }
     { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, false); rotorDisc = fromCanvasSmooth(c, 32, 32); rotorDisc.dscale = UNIT_SCALE; }
     { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, true); rotorBlades = fromCanvasSmooth(c, 32, 32); rotorBlades.dscale = UNIT_SCALE; }
 }

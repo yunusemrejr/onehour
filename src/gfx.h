@@ -91,6 +91,7 @@ struct Gfx {
     Sprite unitAnim[U_COUNT][MAX_PLAYERS][2];   // walk / track cycle frames
     Sprite unitTurret[U_COUNT][MAX_PLAYERS];
     Sprite rotorDisc, rotorBlades;
+    Sprite guardDrone[F_COUNT][MAX_PLAYERS];   // protector drones of jeeps and ships, by army look and owner colour
     Sprite cargoPlane[MAX_PLAYERS][F_COUNT];   // paradrop transport by owner colour and army look
     Sprite chute[MAX_PLAYERS];                 // parachute canopy by owner colour
     Sprite aidPlane, aidChute, crate, crateOpen;   // Aid Drop: the white relief plane, its sky-blue canopies and the wooden crates

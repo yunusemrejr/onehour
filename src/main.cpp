@@ -2,6 +2,8 @@
 #include "ui.h"
 #include "brain.h"
 #include "artb.h"
+#include "art.h"
+#include "art2.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <thread>
@@ -876,7 +878,7 @@ static bool nukeTest(u64 seed) {
         Vec2 gz = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 30);
         std::vector<Ref> air;
         int k = 0;
-        for (int u = 0; u < U_COUNT; u++) if (UNITS[u].faction == fac[victim] && UNITS[u].kind == UK_AIR) {
+        for (int u = 0; u < U_COUNT; u++) if (UNITS[u].faction == fac[victim] && UNITS[u].kind == UK_AIR && !UNITS[u].temp) {   // (the Hotline Strike fighters leave on their own and are never parked anywhere)
             air.push_back(g_sim.spawnUnit(u, victim, gz + Vec2((k % 4) * 40.0f - 60, (k / 4) * 40.0f - 20)));
             Ref mover = g_sim.spawnUnit(u, victim, gz + Vec2(-8 * TILE, 3 * TILE + k * 8.0f));
             g_sim.cmdMove({mover}, gz + Vec2(8 * TILE, 3 * TILE), false);   // crossing ground zero as it lands
@@ -1879,9 +1881,9 @@ static bool uiTest() {
         key(SDLK_d);
         if (g_game.aidMode) return fail("D armed the aid drop during its cooldown");
         g_sim.players[0].money = 20000;
-        key(SDLK_u); key(SDLK_g); key(SDLK_e);
-        for (int u = 0; u < UPG_COUNT; u++) if (!g_sim.players[0].upgBusy[u]) return fail("U / G / E did not start the structure upgrades");
-        if (g_sim.players[0].money != 20000 - UPGRADES[F_CLANKER][0].cost - UPGRADES[F_CLANKER][1].cost - UPGRADES[F_CLANKER][2].cost) return fail("upgrade costs not charged");
+        key(SDLK_u); key(SDLK_g); key(SDLK_e); key(SDLK_n);
+        for (int u = 0; u < UPG_COUNT; u++) if (!g_sim.players[0].upgBusy[u]) return fail("U / G / E / N did not start the structure upgrades");
+        { int spent = 0; for (int u = 0; u < UPG_COUNT; u++) spent += UPGRADES[F_CLANKER][u].cost; if (g_sim.players[0].money != 20000 - spent) return fail("upgrade costs not charged"); }
         for (int i = 0; i < 60 * 14; i++) frames(1);   // the plane crosses the map and the troops land (renders every frame: the plane, parachutes and drop circle)
         g_game.cam = Vec2(clampf(te->pos.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(te->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
         g_game.selection.clear(); g_game.selection.push_back(tech);
@@ -2553,9 +2555,9 @@ int main(int argc, char** argv) {
             int fac = atoi(bl) & 1; float sc = getenv("ONEHOUR_BLDSCALE") ? (float)atof(getenv("ONEHOUR_BLDSCALE")) : 1.0f;
             int first = fac == 0 ? B_C_HQ : B_K_HQ, only = getenv("ONEHOUR_BLDONLY") ? atoi(getenv("ONEHOUR_BLDONLY")) : -1;
             float x = 10, y = 6, rowH = 0;
-            for (int i = 0; i <= BUILDS_PER_FACTION; i++) {   // the last slot is the faction's underground bunker (its ids sit after both blocks)
+            for (int i = 0; i <= BUILDS_PER_FACTION + 2; i++) {   // then the faction's underground bunker, Naval Yard and anti-nuke defence (their ids sit after both blocks)
                 if (only >= 0 && i != only) continue;
-                int t = i < BUILDS_PER_FACTION ? first + i : (fac == 0 ? (int)B_C_BUNKER : (int)B_K_BUNKER); const BuildType& bt = BUILDS[t];
+                int t = i < BUILDS_PER_FACTION ? first + i : (i == BUILDS_PER_FACTION ? (fac == 0 ? (int)B_C_BUNKER : (int)B_K_BUNKER) : (i == BUILDS_PER_FACTION + 1 ? (fac == 0 ? (int)B_C_NAVAL : (int)B_K_NAVAL) : (fac == 0 ? (int)B_C_ANTINUKE : (int)B_K_ANTINUKE))); const BuildType& bt = BUILDS[t];
                 float w = (bt.w * TILE + 20) * sc, h = (bt.h * TILE + 44) * sc;
                 if (x + w > SCREEN_W - 4) { x = 10; y += rowH + 4; rowH = 0; }
                 float cx = x + (BART_PAD_L + bt.w * TILE * 0.5f) * sc - 6 * sc, cy = y + (BART_PAD_T + bt.h * TILE * 0.5f) * sc - 6 * sc;
@@ -2564,6 +2566,33 @@ int main(int argc, char** argv) {
                 if (bt.role == BR_TURRET) g.draw(g.turretHead[fac == 0 ? 0 : 1], cx, cy, 0.6f, sc);
                 if (bt.role == BR_AATURRET) g.draw(g.turretHead[fac == 0 ? 2 : 3], cx, cy, 0.6f, sc);
                 x += w; rowH = std::max(rowH, h);
+            }
+            g_game.screenshot(sheetPath);
+            printf("wrote %s\n", sheetPath);
+            g_gfx.shutdown(); SDL_Quit(); return 0;
+        }
+        if (getenv("ONEHOUR_NEWUNITS")) {   // jeeps, warships, strike fighters and protector drones, Cyber row then Clanker row, 4x; the jeep seats and ship mounts are marked; a 1x strip below
+            const int ids[2][4] = { { U_C_JEEP, U_C_DESTROYER, U_C_CRUISER, U_C_STRIKEJET }, { U_K_JEEP, U_K_DESTROYER, U_K_CRUISER, U_K_STRIKEJET } };
+            const float colX[4] = { 120, 360, 610, 880 }, rowY[2] = { 150, 400 };
+            for (int row = 0; row < 2; row++) for (int col = 0; col < 4; col++) {
+                int t = ids[row][col]; float x = colX[col], y = rowY[row], sc = 4.0f;
+                const UnitType& ut = UNITS[t];
+                float k = ut.naval ? 1.0f : 1.0f;
+                g.draw(g.unitBody[t][row], x, y, 0, sc * k);
+                if (ut.naval) {
+                    ShipMounts m = shipMounts(t == U_C_CRUISER || t == U_K_CRUISER);
+                    for (int i = 0; i < m.n; i++) g.draw(g.unitTurret[t][row], x + m.x[i] * UNIT_SCALE * artScale(t) * sc, y + m.y[i] * UNIT_SCALE * artScale(t) * sc, 0.4f, sc);
+                }
+                if (t == U_C_JEEP || t == U_K_JEEP) {
+                    for (int i = 0; i < 7; i++) g.fillCircle(x + (JEEP_SEAT_X[i] - 32) * UNIT_SCALE * sc, y + (JEEP_SEAT_Y[i] - 32) * UNIT_SCALE * sc, 2.6f * UNIT_SCALE * sc, i < 2 ? rgb(255, 200, 80) : rgb(255, 255, 255, 150));
+                    g.draw(g.unitAnim[t][row][0], x + 110, y, 0, sc); g.draw(g.unitAnim[t][row][1], x + 110, y + 75, 0, sc);
+                }
+            }
+            for (int row = 0; row < 2; row++) for (int p = 0; p < 4; p++) g.draw(g.guardDrone[row][p], 40 + (row * 4 + p) * 40, 560, 0, 3.0f);
+            for (int i = 0; i < 8; i++) {
+                int t = ids[i / 4][i % 4]; float x = 460 + i * 66, y = 600;
+                g.draw(g.unitBody[t][i / 4], x, y, 0, 1);
+                if (UNITS[t].naval) { ShipMounts m = shipMounts(t == U_C_CRUISER || t == U_K_CRUISER); for (int k = 0; k < m.n; k++) g.draw(g.unitTurret[t][i / 4], x + m.x[k] * UNIT_SCALE * artScale(t), y + m.y[k] * UNIT_SCALE * artScale(t), 0.4f, 1); }
             }
             g_game.screenshot(sheetPath);
             printf("wrote %s\n", sheetPath);
