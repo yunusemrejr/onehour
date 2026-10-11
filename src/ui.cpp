@@ -464,11 +464,14 @@ void Game::buildButtonsRaw() {
         }
         return;
     }
-    bool combat = false, lifter = false;
-    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; if (e && e->isUnit() && e->ut().cargoCap > 0) lifter = true; }
+    bool combat = false, lifter = false, jeep = false;
+    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; if (e && e->isUnit() && e->ut().cargoCap > 0) (e->ut().kind == UK_AIR ? lifter : jeep) = true; }
     if (lifter) {
         add(BK_UNLOAD, 0, true, "Unload", "Unload  [U]  Set down where it hovers and let everybody out. Load a lifter by right-clicking it with soldiers or vehicles selected");
         add(BK_DROPOFF, 0, true, "Drop Off", "Drop Off  [D]  Pick a spot: the lifter flies there, sets down and unloads");
+    } else if (jeep) {
+        bool aboard = false; for (auto r : selection) { Entity* e = g_sim.get(r); if (e && !e->passengers.empty()) aboard = true; }
+        add(BK_UNLOAD, 0, aboard, "Unload", "Unload  [U]  The jeep stops and everybody climbs out. Load it by right-clicking it with soldiers selected: seven seats, and the soldiers shoot from inside");
     }
     bool haul = selectionHasRole(UR_HARVESTER);
     if (combat) add(BK_ATTACKMOVE, 0, true, "Attack Move", "Attack-move: engage everything on the way  [A]");
@@ -1606,7 +1609,7 @@ void Game::renderWorld() {
         g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)", rgb(255, 100, 70));
         Vec2 wp = screenToWorld(mouseX, mouseY);
         int nd = g_sim.antiNukeCovering(wp, g_sim.humanPlayer, true);   // (only defences you have seen)
-        if (nd > 0) { char ab[96]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the warhead is shot down (30%% of the damage still falls)", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
+        if (nd > 0) { char ab[200]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the warhead is shot down (30%% of the damage still falls)", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
     }
     else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d aircraft and %d strike fighters to the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size(), STRIKE_JETS); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
@@ -1793,10 +1796,11 @@ void Game::renderHud() {
                     if (!powered) snprintf(buf, sizeof buf, "OFFLINE: %s", e->disabledUntil > g_sim.time ? "switched off by a pulse" : "no power");
                     else if (rw > 0) snprintf(buf, sizeof buf, "Reloading %ds", (int)std::ceil(rw));
                     else snprintf(buf, sizeof buf, "ARMED: covers %d tiles around it", (int)(bt.faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K));
-                    g.text(INFO_X + 86, hy + 58 + (bt.power != 0 ? 0 : 0), buf, powered && rw <= 0 ? accent : rgb(255, 200, 120));
+                    g.text(INFO_X + 86, hy + 70, buf, powered && rw <= 0 ? accent : rgb(255, 200, 120));
                     int foe = -1; for (int q = 0; q < g_sim.numPlayers; q++) if (g_sim.enemies(g_sim.humanPlayer, q)) { foe = q; break; }
                     int nd = foe >= 0 ? g_sim.antiNukeCovering(e->pos, foe) : 1;
-                    snprintf(buf, sizeof buf, "%d defence%s cover this spot: a warhead aimed here is shot down %d%% of the time (30%% of its damage still falls)", nd, nd == 1 ? "" : "s", (int)(100.0f * (1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)nd)) + 0.5f));
+                    if (nd > 0) snprintf(buf, sizeof buf, "%d defence%s cover this spot: a warhead aimed here is shot down %d%% of the time (30%% of its damage still falls)", nd, nd == 1 ? "" : "s", (int)(100.0f * (1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)nd)) + 0.5f));
+                    else snprintf(buf, sizeof buf, "No working defence covers this spot: a warhead aimed here would not be engaged");
                     g.text(INFO_X + 86, hy + 84, buf, hudDim());
                     snprintf(buf, sizeof buf, "%d of %d anti-nuke defences built", g_sim.countRole(g_sim.humanPlayer, BR_ANTINUKE, false), ANTINUKE_MAX); g.text(INFO_X + 86, hy + 96, buf, hudDim());
                 } else if (bt.role == BR_NAVAL && e->constructed) {
@@ -1827,7 +1831,7 @@ void Game::renderHud() {
                     }
                     snprintf(buf, sizeof buf, "%s %d%%", UNITS[e->queue[0]].name, (int)(e->queueProgress * 100)); g.text(INFO_X + 330, hy + 104, buf, hudText());
                 } else if (e->constructed && (bt.role == BR_BARRACKS || bt.role == BR_FACTORY || bt.role == BR_AIRFIELD || bt.role == BR_HQ || bt.role == BR_SUPPLY || bt.role == BR_NAVAL)) g.text(INFO_X + 330, hy + 58, "Production idle", hudDim());
-                if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + (bt.role == BR_TECH || bt.role == BR_NUKE || bt.role == BR_INCOME ? 110 : 98), "LOW POWER: reduced output", rgb(255, 140, 120));
+                if (pl.lowPower() && bt.power < 0 && bt.role != BR_ANTINUKE) g.text(INFO_X + 86, hy + (bt.role == BR_TECH || bt.role == BR_NUKE || bt.role == BR_INCOME || bt.role == BR_NAVAL ? 110 : 98), "LOW POWER: reduced output", rgb(255, 140, 120));
                 if (bt.role == BR_INCOME && e->constructed) {
                     bool half = pl.lowPower() && bt.power < 0;
                     int amt = pl.faction == F_CYBER ? 75 : 60;
@@ -1858,7 +1862,7 @@ void Game::renderHud() {
             if (i >= 32) break;
             int sx = INFO_X + 10 + (i % 16) * 32, sy = hy + 40 + (i / 16) * 40;
             g.bevelPanel(sx, sy, 30, 30, shade(base, 0.55f), false);
-            g.draw(g.unitBody[e->type][slotOf(e->owner)], sx + 15, sy + 15, 0, 0.85f);
+            g.draw(g.unitBody[e->type][slotOf(e->owner)], sx + 15, sy + 15, 0, 0.85f / std::max(1.0f, artScale(e->type) * 0.95f));   // (ships, jets and lifters are big sprites: they shrink to fit the cell)
             hpBar(g, sx, sy + 32, 30, e->hp / e->maxHp);
             i++;
         }

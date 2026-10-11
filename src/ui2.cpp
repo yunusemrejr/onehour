@@ -6,7 +6,6 @@
 #include "paint.h"
 using paint::hyp;
 
-static Color accentOf(Faction f) { return f == F_CYBER ? rgb(110, 230, 255) : rgb(222, 178, 60); }
 static float hash01(u32 a) { a ^= a >> 16; a *= 0x7feb352du; a ^= a >> 15; a *= 0x846ca68bu; a ^= a >> 16; return (a & 0xFFFF) / 65535.0f; }
 
 // ------------------------------------------------------------ warships

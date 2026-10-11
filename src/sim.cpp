@@ -56,7 +56,7 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e = Entity();
     e.gen = gen; e.alive = true; e.kind = EK_UNIT; e.type = type; e.owner = owner;
     const UnitType& t = UNITS[type];
-    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 12, true) : g_map.nearestFree(pos));
+    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 60, true) : g_map.nearestFree(pos));   // (a ship is always put on the lake, however far it is from where it was asked for)
     e.lastPos = e.pos; e.prevPos = e.pos;
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
@@ -446,7 +446,7 @@ void Sim::cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
             e.guardPos = slot;
             e.order = (e.ammo <= 0 && e.ut().ammo > 0) ? O_REARM : O_GUARDAREA;
         } else {
-            slot = g_map.nearestFree(slot, 6);
+            slot = e.ut().naval ? g_map.nearestWater(slot, 8) : g_map.nearestFree(slot, 6);   // a ship holds a slot on the water
             e.guardPos = slot; e.order = O_GUARDAREA;
             requestPath(e, slot);
         }
@@ -1152,6 +1152,12 @@ void Sim::nukeBlast(const Nuke& n) {
             } else {
                 float dmg = 6000.0f * f;
                 if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f);   // a warship is no match for a warhead anywhere in the blast: it goes down
+                if (!e->passengers.empty() && lessen(dmg, *e) >= e->hp) {   // a vehicle the blast destroys takes its crew with it (nobody climbs out of this one)
+                    std::vector<Ref> crew = e->passengers;
+                    for (Ref pr : crew) if (Entity* pu = get(pr)) { pu->carrier = NOREF; pu->pos = e->pos; destroy(*pu, true); }
+                    e = get(r); if (!e) continue;
+                    e->passengers.clear();
+                }
                 applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr);
                 e = get(r); if (!e) continue;
                 e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f * P);       // survivors are stunned by the pulse
@@ -1330,14 +1336,27 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
     return ok;
 }
 
+static inline float wrapAngle(float a);
 void Sim::moveAlong(Entity& e, float speed) {
     if (!e.isAir() && e.ut().naval) { moveShip(e, speed); return; }
     if (e.pathIdx >= e.path.size()) return;
     Vec2 wp = e.path[e.pathIdx];
     Vec2 d = wp - e.pos;
     float len = d.len();
-    float step = speed * SIM_DT;
-    if (len <= step + 0.5f) {
+    const float stepMax = speed * SIM_DT;
+    // A vehicle has weight: it builds up speed over about a third of a second, slows for the last stretch of its path and while its hull is still swinging
+    // round toward where it is going (the current speed is kept in 'airspeed', which a ground unit has no other use for)
+    float v = speed;
+    if (!e.isAir() && e.ut().kind == UK_VEH) {
+        float diff0 = std::abs(wrapAngle(std::atan2(d.y, d.x) - e.angle));
+        float vt = speed * clampf(1.3f - diff0 / 1.1f, 0.35f, 1.0f);
+        if (e.pathIdx + 1 >= e.path.size()) vt = std::min(vt, std::max(speed * 0.3f, len * 2.2f));
+        float a = speed * 3.2f * SIM_DT;
+        e.airspeed = e.airspeed < vt ? std::min(vt, e.airspeed + a) : std::max(vt, e.airspeed - a * 1.6f);
+        v = e.airspeed;
+    }
+    float step = v * SIM_DT;
+    if (len <= stepMax + 0.5f) {
         if (!e.isAir() && !g_map.passable(tileOf(wp.x), tileOf(wp.y))) { requestPath(e, e.path.back()); return; }
         e.pos = wp; e.pathIdx++;
         return;
@@ -1351,7 +1370,7 @@ void Sim::moveAlong(Entity& e, float speed) {
             Vec2 alt1(e.pos.x + dir.x * step, e.pos.y), alt2(e.pos.x, e.pos.y + dir.y * step);
             if (std::abs(dir.x) > 0.01f && g_map.passable(tileOf(alt1.x), tileOf(alt1.y))) np = alt1;
             else if (std::abs(dir.y) > 0.01f && g_map.passable(tileOf(alt2.x), tileOf(alt2.y))) np = alt2;
-            else { requestPath(e, e.path.back()); return; }
+            else { e.airspeed = 0; requestPath(e, e.path.back()); return; }
         }
     }
     e.pos = np;
@@ -2348,6 +2367,8 @@ void Sim::updateUnit(Entity& e) {
         airSteer(e, e.angle, std::max(e.airspeed, ut.speed * AIR_STALL));
     // a ship that has no order to steer by still has its way on: it glides to a halt
     if (ut.naval && e.alive && e.airspeed > 0.5f && e.pos.x == before.x && e.pos.y == before.y) moveShip(e, ut.speed);
+    // a land vehicle that did not move this tick has lost its speed (it stood still, or it was blocked)
+    else if (ut.kind == UK_VEH && !ut.naval && e.alive && e.airspeed > 0 && e.pos.x == before.x && e.pos.y == before.y) e.airspeed = std::max(0.0f, e.airspeed - ut.speed * 4.0f * SIM_DT);
 }
 
 // ------------------------------------------------------------ repairs
@@ -2601,7 +2622,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         if (d < w.minRange) {
             // back away from the target
             Vec2 away = (e.pos - t->pos).norm();
-            Vec2 dest = g_map.nearestFree(e.pos + away * TILE * 2.0f, 4);
+            Vec2 dest = ut.naval ? g_map.nearestWater(e.pos + away * TILE * 2.5f, 6) : g_map.nearestFree(e.pos + away * TILE * 2.0f, 4);
             if (e.repathTimer <= 0 || e.pathIdx >= e.path.size()) requestPath(e, dest);
             moveAlong(e, ut.speed);
         } else if (d <= w.range) {

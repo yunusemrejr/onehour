@@ -192,8 +192,33 @@ static bool nukesSinkShips(Faction me, Faction foe, u64 seed) {
     return true;
 }
 
+// The map after the lake grew: every base, every supply pile and every road is on one connected stretch of land (ships cannot cut anything off)
+static bool mapConnectivity() {
+    g_map.generate();
+    static std::vector<int> comp; comp.assign(MAP_W * MAP_H, 0);
+    int ncomp = 0; std::vector<int> size(1, 0);
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+        if (!g_map.terrainPassable(x, y) || comp[y * MAP_W + x]) continue;
+        int id = ++ncomp; size.push_back(0);
+        std::vector<int> st{ y * MAP_W + x }; comp[y * MAP_W + x] = id;
+        while (!st.empty()) {
+            int i = st.back(); st.pop_back(); size[id]++;
+            static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
+            for (int k = 0; k < 4; k++) { int nx = i % MAP_W + DX[k], ny = i / MAP_W + DY[k]; if (g_map.terrainPassable(nx, ny) && !comp[ny * MAP_W + nx]) { comp[ny * MAP_W + nx] = id; st.push_back(ny * MAP_W + nx); } }
+        }
+    }
+    int main = 1; for (int i = 1; i <= ncomp; i++) if (size[i] > size[main]) main = i;
+    for (auto& st : g_map.starts) CHECK3(comp[st.ty * MAP_W + st.tx] == main, "a base start is cut off from the rest of the land");
+    for (auto& sp : g_map.supplies) CHECK3(comp[sp.ty * MAP_W + sp.tx] == main, "a supply pile is cut off from the rest of the land");
+    int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main) stray += size[i];
+    if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "map: main land %d tiles, %d tiles in %d small pockets\n", size[main], stray, ncomp - 1);
+    CHECK3(stray <= 40, "the lake and rivers cut off pockets of land");
+    return true;
+}
+
 bool navyTest(u64 seed) {
     g_name3 = "navytest"; g_ok3 = true;
+    if (!mapConnectivity()) return false;
     for (int fi = 0; fi < 2; fi++) {
         Faction me = (Faction)fi, foe = (Faction)(1 - fi);
         if (!lakeAndShips(me, foe, seed + fi)) return false;
@@ -499,6 +524,50 @@ bool antiNukeTest(u64 seed) {
         printf("anti-nuke %s: ok (pieces take %.0f%% of a barracks and %.0f%% of a tank at ground zero where a whole warhead takes %.0f%%/%.0f%%)\n", FACTION_NAME[me], pieces.x * 100, pieces.y * 100, whole.x * 100, whole.y * 100);
     }
     printf("antinuketest: ok\n");
+    return g_ok3;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- vehicle dynamics
+// Land vehicles have weight: they build up speed over about a third of a second, ease in over the last stretch and slow while the hull swings round
+bool moveTest(u64 seed) {
+    g_name3 = "movetest"; g_ok3 = true;
+    lakeScene(F_CYBER, F_CLANKER, seed);
+    Vec2 start = g_map.nearestFree(lakePoint(-8, -17), 10);
+    flattenArena(start, 18, 8);
+    int tankT = U_C_TANK;
+    float vmax = UNITS[tankT].speed;
+    Ref t = g_sim.spawnUnit(tankT, 0, start);
+    Entity* e = g_sim.get(t); e->angle = 0;   // facing the way it will go
+    Vec2 goal = start + Vec2(12.0f * TILE, 0);
+    g_sim.cmdMove({t}, goal, false);
+    std::vector<float> speeds; float arrivedAt = -1;
+    for (int k = 0; k < 20 * 20; k++) {
+        Vec2 before = g_sim.get(t)->pos;
+        g_sim.step(); g_sim.events.clear();
+        float v = dist(g_sim.get(t)->pos, before) / SIM_DT;
+        speeds.push_back(v);
+        if (arrivedAt < 0 && dist(g_sim.get(t)->pos, goal) < 4.0f) arrivedAt = k * SIM_DT;
+    }
+    CHECK3(speeds[1] < vmax * 0.6f, "a tank leaps to full speed from a standstill");
+    CHECK3(speeds[12] > vmax * 0.93f, "a tank does not reach full speed within a second");
+    CHECK3(arrivedAt > 0 && arrivedAt < 12.0f * TILE / vmax + 2.0f, "a tank is slow to cover twelve tiles");
+    float lastV = 0; for (int k = (int)(arrivedAt * SIM_HZ) - 3; k >= 0 && k < (int)speeds.size() && k < (int)(arrivedAt * SIM_HZ); k++) lastV = std::max(lastV, speeds[k]);
+    CHECK3(lastV < vmax * 0.6f, "a tank arrives at full speed instead of easing in");
+    CHECK3(dist(g_sim.get(t)->pos, goal) < 6.0f, "a tank overshot its destination");
+    run3(1.0f);
+    CHECK3(g_sim.get(t)->airspeed < 1.0f, "a stopped tank keeps its speed");
+    // facing away from where it is sent: it slows while the hull swings round
+    Ref t2 = g_sim.spawnUnit(tankT, 0, start + Vec2(0, 3.0f * TILE));
+    g_sim.get(t2)->angle = 3.14159f;
+    g_sim.cmdMove({t2}, start + Vec2(12.0f * TILE, 3.0f * TILE), false);
+    float swingMax = 0; for (int k = 0; k < 4; k++) { Vec2 b = g_sim.get(t2)->pos; g_sim.step(); g_sim.events.clear(); swingMax = std::max(swingMax, dist(g_sim.get(t2)->pos, b) / SIM_DT); }
+    CHECK3(swingMax < vmax * 0.5f, "a tank facing the wrong way drives off at speed before its hull has turned");
+    // infantry are light on their feet: no ramp
+    Ref in = g_sim.spawnUnit(U_C_INF1, 0, start + Vec2(0, -3.0f * TILE));
+    g_sim.cmdMove({in}, start + Vec2(10.0f * TILE, -3.0f * TILE), false);
+    Vec2 b0 = g_sim.get(in)->pos; g_sim.step(); g_sim.events.clear();
+    CHECK3(dist(g_sim.get(in)->pos, b0) / SIM_DT > UNITS[U_C_INF1].speed * 0.9f, "infantry are slowed by the vehicle dynamics");
+    printf("movetest: ok (a tank is at %.0f%% speed after a tick, %.0f%% after a second, eases in to %.0f%% over the last tile and arrives in %.1f s)\n", 100 * speeds[1] / vmax, 100 * speeds[12] / vmax, 100 * lastV / vmax, arrivedAt);
     return g_ok3;
 }
 

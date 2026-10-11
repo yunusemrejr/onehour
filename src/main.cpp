@@ -84,7 +84,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             alive++;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "NaN position at tick %d\n", t); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "entity out of world at tick %d\n", t); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "hp above max at tick %d\n", t); return false; }
             // a fixed-wing aircraft away from its airfield never flies slower than its stall speed (it circles instead of hovering)
             size_t ix = (size_t)(&e - &g_sim.ents[0]);
@@ -125,6 +125,8 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             int sp = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, sd = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, sn = pl.faction == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
             int caps = pl.structuresKilled;   // (captures count as structures taken)
             printf("      special forces bought: spies %d, spy drones %d, snipers %d (structures taken or destroyed %d)\n", (int)(pl.spentOn[sp] / UNITS[sp].cost), (int)(pl.spentOn[sd] / UNITS[sd].cost), (int)(pl.spentOn[sn] / UNITS[sn].cost), caps);
+            int jp = pl.faction == F_CYBER ? U_C_JEEP : U_K_JEEP, ds = pl.faction == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cr = pl.faction == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
+            printf("      navy and jeeps: destroyers %d, cruisers %d (yards %d), jeeps %d, anti-nuke defences %d, guard drones %d\n", (int)(pl.spentOn[ds] / UNITS[ds].cost), (int)(pl.spentOn[cr] / UNITS[cr].cost), g_sim.countRole(p, BR_NAVAL, false), (int)(pl.spentOn[jp] / UNITS[jp].cost), g_sim.countRole(p, BR_ANTINUKE, false), (int)pl.upg[UPG_DRONES]);
         }
         if (getenv("ONEHOUR_DEBUG")) {
             printf("      value dealt per credit:");
@@ -582,6 +584,7 @@ bool jeepTest(u64 seed);
 bool droneTest(u64 seed);
 bool strikeJetTest(u64 seed);
 bool antiNukeTest(u64 seed);
+bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 static bool rulesTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "rulestest: %s\n", m); return false; };
@@ -2443,7 +2446,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 26);
+            int c = rng.range(0, 29);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2471,8 +2474,11 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 21: { Ref c2 = anyEnt(rng.range(-2, 3), 3); g_sim.cmdEnter(sel(), c2); break; }                                  // board a lifter / bunker (anybody's, or nothing)
             case 22: { Ref c2 = anyEnt(0, 3); g_sim.cmdUnload(c2, rng.range(0, 1) == 0, where()); break; }
             case 23: { Ref b2 = anyEnt(rng.range(-2, 3), 2); g_sim.cmdCapture(sel(), b2); break; }
-            case 24: { int ty = U_C_SPY + rng.range(0, 5); g_sim.spawnUnit(ty, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, g_sim.players[0].basePos + Vec2(rng.f(-200, 200), rng.f(-200, 200))); break; }   // the new kinds, for whoever
-            case 25: { int bt = B_C_BUNKER + rng.range(0, 1); int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, tx, ty, rng.range(0, 1) == 0); break; }
+            case 27: g_sim.cmdPhoneStrike(rng.range(-1, 4), where()); break;                                                       // the swarm and the two special fighters (any player id)
+            case 28: { Ref c3 = anyEnt(rng.range(-2, 3), 3); std::vector<Ref> s2 = sel(); g_sim.cmdEnter(s2, c3); if (rng.range(0, 3) == 0) g_sim.cmdUnload(c3, false, Vec2()); break; }   // board / unload jeeps too
+            case 29: { Vec2 w2 = where(); g_sim.nukes.push_back({g_sim.players[rng.range(0, 3)].basePos, w2, rng.range(0, 3), Sim::NUKE_FLIGHT - rng.f(0.0f, 5.0f), rng.range(0, 1) == 0, rng.range(0, 1) ? 1.0f : MINI_NUKE_SCALE}); break; }   // a warhead in flight: the anti-nuke defences meet it
+            case 24: { int ty = U_C_SPY + rng.range(0, 13); g_sim.spawnUnit(ty, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, g_sim.players[0].basePos + Vec2(rng.f(-200, 200), rng.f(-200, 200))); break; }   // the new kinds, for whoever
+            case 25: { int bt = B_C_BUNKER + rng.range(0, 5); int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, tx, ty, rng.range(0, 1) == 0); break; }
             }
         }
         g_sim.step(); g_ai.update(); g_sim.events.clear();
@@ -2481,7 +2487,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             if (!e.alive) continue;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "fuzz: NaN position at tick %d (%s)\n", t, e.isUnit() ? e.ut().name : "?"); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "fuzz: entity out of world at tick %d (%s %.0f,%.0f)\n", t, e.isUnit() ? e.ut().name : "building", e.pos.x, e.pos.y); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "fuzz: hp above max at tick %d\n", t); return false; }
             if (e.isUnit() && e.ammo < 0) { fprintf(stderr, "fuzz: negative ammo\n"); return false; }
             if (e.kind != EK_RESOURCE && g_sim.players[e.owner >= 0 ? e.owner : 0].money < -1) { fprintf(stderr, "fuzz: negative money at tick %d\n", t); return false; }
@@ -2542,6 +2548,7 @@ int main(int argc, char** argv) {
         else if (a == "--dronetest") return droneTest(seed) ? 0 : 1;
         else if (a == "--strikejettest") return strikeJetTest(seed) ? 0 : 1;
         else if (a == "--antinuketest") return antiNukeTest(seed) ? 0 : 1;
+        else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
         else if (a == "--autotest") { g_map.generate(); return autoTest(seed) ? 0 : 1; }
@@ -2774,6 +2781,14 @@ int main(int argc, char** argv) {
             if (getenv("ONEHOUR_NAVY")) {   // ONEHOUR_NAVY=ticks: the lake with yards, fleets under drone screens, jeeps with crews and anti-nuke defences; that many ticks of fighting first
                 navyShowcase(std::min(viewPlayer, g_sim.numPlayers - 1), stealthCam); haveStealthCam = true;
                 for (int t = 0; t < atoi(getenv("ONEHOUR_NAVY")); t++) { g_sim.step(); g_sim.events.clear(); }
+                if (const char* ns = getenv("ONEHOUR_NAVYSEL")) {   // ship | yard | jeep | an | dozer: what is selected (the HUD shows its panel and buttons)
+                    int vp2 = std::min(viewPlayer, g_sim.numPlayers - 1); std::string w = ns; g_game.selection.clear();
+                    for (auto& e : g_sim.ents) {
+                        if (!e.alive || e.owner != vp2) continue;
+                        bool hit = (w == "ship" && e.isUnit() && e.ut().naval) || (w == "jeep" && e.isUnit() && e.ut().kind == UK_VEH && e.ut().cargoCap > 0) || (w == "yard" && e.isBuilding() && e.bt().role == BR_NAVAL) || (w == "an" && e.isBuilding() && e.bt().role == BR_ANTINUKE) || (w == "dozer" && e.isUnit() && e.ut().role == UR_DOZER);
+                        if (hit) { g_game.selection.push_back(g_sim.refOf(e)); if (w != "ship" || g_game.selection.size() >= 3) break; }
+                    }
+                }
             }
             if (haveStealthCam) g_game.cam = stealthCam;
             g_game.renderAlpha = 1;

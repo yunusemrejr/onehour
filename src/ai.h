@@ -5,8 +5,11 @@
 
 // Features of the pro commander, each switchable on its own so --evalai can measure what a single one is worth (ONEHOUR_BASEMASK)
 // (the estimate-based retreat was tried and measured no better than the cost-based one)
-enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALLY = 16, FEAT_SPECIAL = 32, FEAT_ALL = 0xFFFF,   // FEAT_SPECIAL: spy drones with the army, spies that capture structures
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL };   // what ships
+enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALLY = 16, FEAT_SPECIAL = 32,   // FEAT_SPECIAL: spy drones with the army, spies that capture structures
+              FEAT_NAVY = 64,    // a Naval Yard on the lake, a fleet of its own, the Guard Drones upgrade, jeeps loaded with infantry
+              FEAT_AEGIS = 128,  // anti-nuke defences round the base and nuke targeting that reckons with the enemy's (and fires a salvo at a covered target)
+              FEAT_ALL = 0xFFFF,
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS };   // what ships
 
 struct AiPlayer {
     int player = -1;
@@ -38,6 +41,10 @@ struct AiPlayer {
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastSpyOrder = -100;     // when the spies were last sent after a structure
+    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
+    float nukeHoldSince = -1;   // a covered nuke target is waited out for the second ramp since this time
+    int nukesSeen = 0;             // enemy warheads launched so far (a commander that has been nuked builds anti-nuke defences)
+    int seenNukeIds = 0;
     float lastBombRun = -100, lastAllyHelp = -100, lastNukeDodge = -100, retreatVotes = 0;
     int dodges = 0, medicsBuilt = 0;   // statistics for the self-play reports
     float waveX[WAVE_F] = {};   // features at launch, for learning from the outcome

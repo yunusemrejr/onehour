@@ -13,8 +13,9 @@ under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of
 
 ## The map
 
-One 80x80 map: a central lake ringed by road, four base quadrants split by rock ridges with a choke gap each, and a river leaving the lake into every quadrant (mirrored, so no side is favoured).
-Roads cross the rivers on timber bridges and each river also has a sandy ford, so crossings are chokepoints but nothing is walled off. The ground is dotted with fallen logs and stumps, lily pads on the
+One 80x80 map: a **big central lake** (432 water tiles, about 31 by 19, with bays toward the four corners, a sandy beach and two rocky islets) ringed by a road 17 tiles out, four base quadrants split by rock ridges with a choke gap each, and a river leaving the lake into every quadrant (mirrored, so no side is favoured).
+The lake is the arena of the warships (see **The lake and the navy** below); the four central supply piles sit between the beach and the ring road, within reach of the ships' guns.
+Roads cross the rivers on timber bridges and each river also has a sandy ford, so crossings are chokepoints but nothing is walled off. A bridge closes a river to ships (it is road, not water), so only the lake itself is open sea. The ground is dotted with fallen logs and stumps, lily pads on the
 river shallows, ruined courtyards, stone circles and burnt-out vehicle hulks (decoration only, units drive over them). `--mapdump` prints the tile map; `ONEHOUR_WORLDBMP=file.bmp` dumps the baked ground.
 
 ## Skirmish setup
@@ -37,6 +38,10 @@ Overclock Program → Ion Lancer and Aegis Titan super-heavy walker; structure u
 Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries. Stealth and special forces: the Sniper, Spy, Recon Drone (stealth spy drone), Mammoth Lifter (cargo helicopter) and the Underground Bunker.
 Tech structure: Arms Lab (Shell Storm, Recon Flight, Paradrop, Hotline Strike, Aid Drop, Heavy Ordnance → Grenadier and Behemoth; structure upgrades Rugged Bulwark, Bunker Guns, Repair Crews).
 
+**New in the lake pass.** Both armies also have: the **Naval Yard** (Cyber *Nano Drydock*, Clanker *Shipyard*) on the lake shore, which builds warships (**Pulse Destroyer** / **Iron Destroyer**, and with the tech structure the **Lancer Cruiser** / **Rocket Cruiser**
+missile ships); the **Jeep** (built at the Assembly Plant / War Factory, the same vehicle in both armies, seven seats); the **Anti-Nuke Laser** (Cyber) and **Anti-Nuke Missiles** (Clanker) defences, small structures that shoot incoming warheads down;
+the **Guard Drones** structure upgrade (protector drones for every ship and a second one for every jeep); and two special **strike fighters** (Valkyrie / Warhawk) that every Hotline Strike brings. Each has its own section below.
+
 **Base defenses** (Laser Turret, Patriot Battery, Gun Nest, Rocket Battery) are fortified: 5200 to 6800 hp each (more than a Command Core) and
 brutal weapons: the Laser Turret burns 310 per shot, the Patriot Battery fires pairs of 240-damage missiles out to 10.5 tiles (more than double
 against aircraft), the Gun Nest hammers out 42-damage rounds seven times a second and the Rocket Battery fires salvos of three, so a few of them hold
@@ -52,6 +57,7 @@ a choke point against a large force. Artillery and long-range rails can still ou
 | **Hotline Strike** (both armies) | I | call in a **swarm** of helicopters, jets and drones on a spot of your choice: they cross the map, attack what stands there and then go home (180 s cooldown per tech structure, see below) |
 | Aid Drop (human players only) | D | a white relief plane drops $20000 and a Dozer in crates to the army nearest the spot you click, ally or enemy, never you (1 min cooldown per tech structure, see below) |
 | Advanced Program | R | $2500, 45 s (half speed on low power): unlocks the army's two elite units for good |
+| Guard Drones (Aegis / Flak) | N | $2500, 40 s: every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it, and every jeep gets a second drone (see **Protector drones**) |
 | Rugged (Nanoshell / Bulwark) | U | $3000, 40 s: every structure gets 50% more health and takes half damage. One nuke no longer flattens anything (a warhead takes at most 55% at ground zero, so it takes two); the plating only gives way when a massive assault lands a big share of a structure's health within a couple of seconds |
 | Defense Guns (Defense Lasers / Bunker Guns) | G | $3500, 45 s: every structure gets a roof gun (Cyber laser, Clanker machine gun, 7.5 tiles) that shoots aircraft, vehicles and infantry; half rate on low power |
 | Self-Repair (Nanite Repair / Repair Crews) | E | $2000, 30 s: every structure mends itself, 1.2% of its health a second once it has been out of fire for 3 s and a quarter of that under fire (never inside fallout). Units are not repaired: that is still the medics' job |
@@ -71,9 +77,13 @@ structure upgrade then deepen and enlarge the load:
 
 | Tier | When | Soldiers | Vehicles | Aircraft | Rides along |
 | --- | --- | --- | --- | --- | --- |
-| **Reinforced** | a fresh Data Center / Arms Lab | 15 | 7 | 4 | a medic and a sniper |
-| **Battle Group** | the Advanced Program is in, or one structure upgrade finished | 18 | 9 | 5 | a medic, two snipers, a scout drone |
-| **Spearhead** | the Advanced Program plus two upgrades (or all three) | 22 | 11 | 6 | two medics, two snipers, a spy, a scout drone |
+| **Reinforced** | a fresh Data Center / Arms Lab | 15 | 7 + 3 jeeps | 4 | a medic and a sniper |
+| **Battle Group** | the Advanced Program is in, or one structure upgrade finished | 18 | 9 + 4 to 6 jeeps | 5 | a medic, two snipers, a scout drone |
+| **Spearhead** | the Advanced Program plus two upgrades (or all three) | 22 | 11 + 8 to 10 jeeps | 6 | two medics, two snipers, a spy, a scout drone |
+
+**Jeeps in the drop**: on top of the vehicle slots every drop carries **three to ten Jeeps, each already holding its seven soldiers**: three from a fresh tech structure, plus one for the Advanced Program and two for each finished structure upgrade
+(Rugged, Guns, Repair), which tops out at ten. The crew of a dropped jeep is one rifleman, one sniper, one thrower (Shock Trooper's arc caster / Grenadier's grenade launcher; the Gunner until the Advanced Program is in) and **rocket troopers in the other four seats**
+(Laser Troopers for Cyber, RPG Troopers for Clanker); whatever the army cannot field yet is replaced by a rocket trooper. The soldiers ride down under the jeep's canopy and shoot from its seats the moment it lands, so a full Spearhead drop puts ten jeeps and seventy soldiers on the ground at once.
 
 **The fighting slots never carry support**: a medic and a spy do no damage at all and a sniper and a scout drone none against a structure, so they ride along *on top* of the
 soldier slots (the last column) instead of taking one — otherwise every unlock would quietly make a drop weaker at fighting than the one before it. Anything the army cannot
@@ -92,7 +102,10 @@ descent and the shoot-down.
 (or click **Hotline Strike**) and click the map or minimap over whatever you want flattened: an enemy line, a base, a choke point. A **swarm** of real aircraft crosses the map
 from beyond the edge along the line from your base and works the spot you picked for about a minute before breaking off home: Cyber answers with Hornet Gunships, Wraith
 Drones, Specter Jets and a Ghost Drone; Clanker with Vulture Gunships, Talon Jets and a Recon Drone (half of a full package is helicopters, plus jets and a drone).
-They are ordinary aircraft once they are over the spot — they attack whatever stands there, take return fire, and anti-air on the way in can shoot the package down, so a
+**Two special fighters join every call** (Cyber **Valkyrie**, Clanker **Warhawk**): they are lent to the army for one run and cannot be built, selected or commanded. They cross the map at about 900 px/s (nearly twice a Specter Jet), line up on the spot and let a salvo of
+twelve unguided rockets go on each of **three passes** (130 damage, 1.5 tile blast each, most of them aimed at what actually stands in the circle), come round and do it again, then leave over the nearest edge. They have 4200 hp and **about 60% of the hits on them miss**, so a couple of anti-air batteries cannot bring them down: they are
+meant to be survived, not shot out of the sky. A call also drops a red smoke flare and a pulsing reticle on the spot for 45 s ("AIR STRIKE"), visible to your team and to anybody who has explored the ground; while you aim, the cursor shows the called circle, the rocket scatter circle and the lane the two fighters and the swarm come in along.
+The swarm itself, the gunships, bombers and jets, are ordinary aircraft once they are over the spot — they attack whatever stands there, take return fire, and anti-air on the way in can shoot the package down, so a
 strike into a wall of Patriot Batteries costs you the swarm. The stealth drone in the package is there to **find what is hiding** (snipers and underground bunkers) so the
 rest can hit it. Free of charge, once per **180 seconds per tech structure** (three Data Centers take three calls back to back and the button shows `READY x3`), first
 available when the support powers open up at 2:30. **The swarm grows with the army, on the same ladder as the airdrop**: 9 aircraft at Reinforced, 12 at Battle
@@ -238,6 +251,38 @@ Both sides: Command Core/Post trains dozers, power plants provide 10 power, Supp
 haulers that carry $300 per trip from supply piles. Running out of power halves production and
 switches powered defenses off, exactly the pressure Zero Hour puts on you.
 
+**The lake and the navy** — the **Naval Yard** (Cyber **Nano Drydock**, Clanker **Shipyard**, key `Y`): $2200, 28 s, 3x3 tiles, needs the Assembly Plant / War Factory, at most three per army. It must **touch the open lake** (a body of at least 60 water tiles with room to sail out into:
+ponds and rivers cut off by a bridge do not count; the build ghost outlines the open water it touches and says so when it does not) and it grows a pier into the water on the side that faces it. Ships leave the yard into the lake; the rally point of a yard is a place on the water.
+Every dozer can reach the shore, but the ground there has to be explored first (scout it, or send the dozer).
+
+| Ship | Cost / time | Needs | Health, speed | Weapon |
+| --- | --- | --- | --- | --- |
+| **Pulse Destroyer** (Cyber) | $1800, 18 s | Naval Yard | 1500 hp, 72 px/s | twin Pulse Cannons: lasers, 78 damage a barrel, 8.5 tiles, ground and air |
+| **Iron Destroyer** (Clanker) | $1800, 18 s | Naval Yard | 1600 hp, 68 px/s | twin Naval Guns: 92 damage shells with a 0.7 tile blast, 9 tiles, ground and air (little against air) |
+| **Lancer Cruiser** (Cyber) | $2400, 24 s | Naval Yard + Data Center | 1200 hp, 56 px/s | Cruise Missiles: salvos of three guided rockets, 125 damage, 1.25 tile blast, **14 tiles** (nothing closer than 3), ground only |
+| **Rocket Cruiser** (Clanker) | $2400, 24 s | Naval Yard + Arms Lab | 1300 hp, 54 px/s | Rocket Barrage: six rockets, 96 damage each, 1 tile blast, **13.5 tiles** (nothing closer than 3), ground only |
+
+Ships are heavy-armoured vehicles that live on water only. A ship has weight: it turns at a limited rate (about 60 degrees a second), builds up speed along its heading and eases off before a stop, leaves a bow wave, two foam lines and a churned wake, and sails over open water the whole way
+(an A* over open water that keeps off the shore; a ship sent to a land spot sails to the nearest open water, and one sent to shell a target goes as close as it can get). Destroyers fight ships and anything on the beach; cruisers shell the shore, the ring road and the central supply piles from the middle of the lake and are poor close in.
+Rifles are weak against a hull; tank guns, rockets, aircraft and artillery are the answer, and every ground weapon that reaches a ship from the shore can hit it. **A nuke sinks every ship inside its circle**, whatever its health, and so does a bunker's mini nuke. A ship that goes down breaks up in a string of blasts and sinks into an oil slick.
+`--navytest` covers the lake, the yard (placement rules, production, exit into the lake), sailing, ship-versus-ship and ship-versus-shore fights, and nukes sinking ships.
+
+**Jeeps** — the **Jeep** (the same vehicle in both armies, only the look differs: Cyber graphite and cobalt with cyan emitters, Clanker olive drab with rust and hazard paint): $650, 9 s, Assembly Plant / War Factory, 420 hp, the fastest ground vehicle (126 px/s), light armour and a pintle gun
+(12 damage, 5.5 tiles, ground and a little air). **Seven seats for infantry only**: right-click a jeep with soldiers selected and they run to it and climb in while it stands still (`U` unloads them; non-infantry cannot board, and a loaded jeep cannot be lifted by a cargo chopper).
+**The soldiers shoot from their seats with their own weapons**, moving or not, at the best target each can hit from where the jeep is: rifle bullets, rocket troopers' rockets on tanks and aircraft, grenadiers' grenades, arc casters, a sniper's long shot (11.5 tiles, infantry only) and so on; they can be hit only through the jeep.
+A jeep that blows up kills about a third of its crew and the rest climb out hurt; one caught in a nuke takes the whole crew with it. A jeep flies with one **mini guard drone** (two once the Guard Drones upgrade is in). Veterancy works from inside the seats. The helmets on the seats and the muzzle flashes are drawn live. Dropped jeeps come loaded: see the airdrop above. `--jeeptest` covers boarding, the capacity, firing from inside (including the sniper and moving), unloading, casualties, and the drones.
+
+**Protector drones** — the **Guard Drones** upgrade ($2500, 40 s at the tech structure, key `N`; *Aegis* for Cyber, *Flak* for Clanker) gives **every ship three protector drones** and every jeep a second one (a jeep has one from the start). They circle their host and **shoot down rockets and shells homing in on it**: a drone has two interceptors a quarter of a second apart (85% to hit), then reloads for 2.4 s;
+lasers, bullets, bombs and blasts are too quick or too wide for them. Three drones stop all six rockets of a lone Rocket Cruiser's barrage; a whole fleet's salvos saturate the screen, and a pulse that switches the host off switches its drones off too. The selection panel shows how many are ready. `--dronetest` measures it: the same cruiser against the same destroyer does 1181 damage bare and none with the screen,
+a shell-firing destroyer 1352 against 386, and lasers 5242 against 5242.
+
+**Anti-nuke defences** — the **Anti-Nuke Laser** (Cyber, $1900, 20 s, 2x2, 1900 hp, power -5, a tall pylon with a focusing lens) and the **Anti-Nuke Missiles** silo (Clanker, $1800, 20 s, 2x2, 2100 hp, power -2, four interceptors in an open hatch), key `Q`, need the tech structure; at most eight per army. A defence watches the sky: a warhead heading for a spot
+**inside its cover** (17 tiles for the laser, 19 for the missiles; the circle shows when it is selected, hovered or placed) is detected when it is 4.6 s from impact and engaged (the laser fires up to three beams 0.8 s apart, the silo launches two interceptors 1.5 s apart that take a second to arrive). **Every defence has its own 30% chance at each warhead, so the more of them cover a spot the likelier it is stopped:
+1 stops 30%, 2 stop 51%, 3 stop 66%, 4 stop 76%, 6 stop 88%, 8 stop 94%.** A defence reloads for 12 s after engaging (so a second warhead right behind the first meets defences that are still reloading), needs power (an unpowered or EMP-ed defence is blind), and covers mini nukes from bunkers exactly as it covers a Nuke Ramp's warhead.
+A warhead that is hit blows up in an airburst high above the ground, and **only its pieces fall on the target: 30% of the damage it would have done** (30% of what each unit, structure and aircraft in the circle would have lost, never more than it had left) and a radiation zone at 30% strength, with scattered blasts instead of a fireball and a mushroom; the message says "Warhead shot down: its pieces and radiation will still fall".
+While you aim a nuke the cursor tells you the cover the enemy has there (only the defences you have seen) and the chance it is shot down. `--antinuketest` fires a few hundred warheads at a ring of defences and checks the rates (one, three and six defences stop 29%, 64% and 88% against 30%, 66% and 88% expected), mini nukes, the cover circle, power and EMP, the reload,
+and that the pieces really do 30% of a barracks and of a tank at ground zero where a whole warhead does 100%.
+
 ## Controls
 
 | Input | Action |
@@ -250,12 +295,14 @@ switches powered defenses off, exactly the pressure Zero Hour puts on you.
 | Select a turret / battery, or hover any defense | shows the area it covers (ground, air, or both; grey when unpowered; enemy defenses in red). The range also follows the cursor while you place a defense |
 | Ctrl+0–9 / 0–9 | assign / recall control group (Alt+#: jump to it) |
 | Arrows, screen edge, middle drag, wheel | scroll, Home: your base |
-| Dozer selected | build menu with hotkeys (including `C`: a new Command Core / Post, `U`: Underground Bunker); click the ground to place, Shift to place several |
+| Dozer selected | build menu with hotkeys (including `C`: a new Command Core / Post, `U`: Underground Bunker, `Y`: Naval Yard on the lake shore, `Q`: anti-nuke defence); click the ground to place, Shift to place several. With more than twelve buttons the grid shrinks to five compact rows |
 | Bunker selected, `K` then click | launch the bunker's mini nuke (a fifth of a full warhead's area; 90 s per bunker) |
 | Spy selected, right-click an enemy structure | capture it |
-| Soldiers / dozer selected, right-click your bunker or cargo lifter | climb aboard; with the bunker or lifter selected `U` unloads, lifter `D` then click: fly there and drop everybody off |
+| Soldiers / dozer selected, right-click your bunker, cargo lifter or **jeep** | climb aboard (a jeep takes seven soldiers, and only while it stands still); with the bunker, lifter or jeep selected `U` unloads, lifter `D` then click: fly there and drop everybody off |
+| Ships selected | right-click the lake to sail (a land spot sends them to the nearest open water), attack-move, guard area and force fire work as for tanks; ships pick by their whole hull |
+| Naval Yard selected | train ships, right-click the lake to set where new ships sail to |
 | Structure selected | train units (hotkeys shown), Del sells |
-| X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program, P paradrop, D aid drop, U / G / E structure upgrades with a tech structure selected |
+| X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program, P paradrop, I hotline strike, D aid drop, U / G / E / N structure upgrades (N: Guard Drones) with a tech structure selected |
 | Space | pause, + / - game speed (x0.5 to x4), F1 help, F2 mute, F11 fullscreen, F12 screenshot |
 | Esc | cancels a pending order, otherwise opens the pause menu: resume, game speed slider, sound, help, restart, surrender, quit to menu / desktop |
 | K | with a Nuke Ramp selected: pick a target for a tactical nuke |
@@ -330,6 +377,13 @@ reacts to the muster point), judging a running wave by the estimate instead of b
 - The window is resizable (F11 fullscreen); the UI scale adapts and the HUD re-anchors. The whole terrain is
   baked once into a single texture with domain-warped, noise-blended transitions; fog of war is a bilinear mask.
 - Fixed 20 Hz simulation with interpolated 60 fps rendering.
+- **The lake pass** is spread over a few files so each stays readable: `src/sim2.cpp` (jeep crews, protector drones, ships' drive, anti-nuke engagement, the Hotline Strike fighters, shore sites), `src/ui2.cpp` (wakes, ship mounts, jeep seats, drones, docks, anti-nuke shots, the strike marker),
+  `src/art2.h` with `art_jeep.cpp`, `art_ship.cpp` and `art_jet.cpp` (the new unit sprites: a jeep with seven seats at fixed seat positions the renderer puts helmets on, ship hulls with separate rotating mounts, the strike fighters), `src/artb_naval.cpp` (Naval Yards and anti-nuke structures) on the structure painter that moved to `src/bld.h`,
+  and `src/tests3.cpp` / `src/testutil.h` (the tests below). Ships plan with `Map::findNavalPath` (an A* over *open* water: a tile and its four neighbours are water, shore tiles cost more, the goal moves to the nearest open water), and `Map::bigWater` (water bodies are labelled at map generation; the lake is the only one big enough to sail or to build a yard on).
+  The anti-nuke engagement is rolled when a warhead enters a defence's window and then played out in time (`Sim::interceptors`), so the shots on screen are exactly what decides the outcome and a test can count outcomes over hundreds of warheads. The AI brain file is v11 (v10 files with 35 unit rows still load).
+- `--navytest`, `--jeeptest`, `--dronetest`, `--strikejettest` and `--antinuketest` (all in `src/tests3.cpp`) cover the lake pass: the map's land connectivity, the yard's placement rules and production, sailing and ship fights, nukes sinking ships; jeep seats, firing from inside, unloading and casualties; the drone screens against rockets, shells and lasers; the strike fighters (two a call, not buildable, not commandable, big damage, hard to shoot down, gone afterwards);
+  and the anti-nuke rates and the 30% rule. `--fuzztest` throws the new commands at the simulation too. Screenshot helpers: `ONEHOUR_NEWUNITS=1 --sheet out.bmp` (jeeps, ships, strike fighters and drones at 4x with seat and mount markers), `ONEHOUR_BLD=0|1` now also shows the Naval Yard and the anti-nuke defence (slots 12 and 13),
+  `ONEHOUR_NAVY=ticks --shot out.bmp --ticks 10 --view 0` (the lake with both yards, fleets under their drone screens, jeeps with crews and an anti-nuke defence; `ONEHOUR_NAVYSEL=ship|yard|jeep|an|dozer` picks what is selected).
 - `./build/onehour --selftest 900` runs an AI-only game headless and checks invariants;
   `--scenario` drives every structure/unit/order for both factions; `--uitest` feeds synthetic
   mouse and keyboard events through the real input code; `--shot out.bmp --ticks N` renders a frame
