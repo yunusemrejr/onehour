@@ -45,6 +45,7 @@ struct Game {
     bool nukeMini = false;          // ... for a bunker's small missile
     bool launchNuke(Vec2 at);       // fires the missile (a selected ready bunker's, else any ready one); false if none could go
     bool dropMode = false;          // picking a paradrop zone
+    bool strikeMode = false;        // picking the spot a Phone Strike package is called in on
     bool aidMode = false;           // picking the spot for an Aid Drop
     bool rallyMode = false;
     bool dropoffMode = false;       // picking the spot where a cargo chopper sets down and unloads

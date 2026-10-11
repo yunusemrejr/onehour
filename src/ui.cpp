@@ -3,7 +3,7 @@
 
 Game g_game;
 
-enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF, BK_MININUKE };
+enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF, BK_MININUKE, BK_AIRSTRIKE };
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -15,6 +15,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_NUKE: return "K";
     case BK_MININUKE: return "K";
     case BK_DROP: return "P";
+    case BK_AIRSTRIKE: return "I";
     case BK_AID: return "D";
     case BK_UNLOAD: return "U";
     case BK_DROPOFF: return "D";
@@ -326,6 +327,40 @@ void Game::issueAttackMove(Vec2 w) {
     g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
 }
 
+// A short "what the next drop carries" line for the tooltip, straight from the same manifest the plane itself loads: so the panel always
+// shows the army's real, current roster instead of a fixed blurb that goes stale the moment an upgrade finishes.
+static std::string rosterText(const std::vector<int>& load, size_t maxChars) {
+    std::vector<int> kinds; int cnt[U_COUNT] = {};
+    for (int t : load) { if (!cnt[t]++) kinds.push_back(t); }
+    std::string s;
+    for (size_t i = 0; i < kinds.size(); i++) {
+        std::string part = std::to_string(cnt[kinds[i]]) + "x " + UNITS[kinds[i]].name;
+        if (!s.empty()) { if (s.size() + part.size() + 2 > maxChars) { s += ", ..."; break; } s += ", "; }
+        s += part;
+    }
+    return s.empty() ? std::string("nothing yet") : s;
+}
+
+// Long tooltips wrap onto a few lines instead of running off the screen: the drop roster can list a dozen unit kinds, and the panel is a
+// single unwrapped line otherwise.
+static std::vector<std::string> wrapTip(Gfx& g, const std::string& s, int maxW) {
+    std::vector<std::string> lines;
+    std::string cur;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && s[i] == ' ') i++;
+        size_t j = i; while (j < s.size() && s[j] != ' ') j++;
+        if (j <= i) break;
+        std::string word = s.substr(i, j - i);
+        i = j;
+        std::string cand = cur.empty() ? word : cur + " " + word;
+        if (!cur.empty() && g.textW(cand.c_str()) > maxW) { lines.push_back(cur); cur = word; }
+        else cur = cand;
+    }
+    if (!cur.empty()) lines.push_back(cur);
+    return lines;
+}
+
 // ------------------------------------------------------------ command buttons
 void Game::buildButtons() {
     buttons.clear();
@@ -340,7 +375,7 @@ void Game::buildButtons() {
     if (placingType >= 0) { add(BK_CANCEL, 0, true, "Cancel", "Cancel placement (Esc)"); return; }
     if (selection.empty()) return;
     Entity* b = selectedBuilding();
-    char tip[256];
+    char tip[640];
     if (b) {
         if (!b->constructed) { add(BK_SELL, 0, true, "Sell", "Sell this structure for a partial refund"); return; }
         BuildRole role = b->bt().role;
@@ -368,8 +403,13 @@ void Game::buildButtons() {
             else snprintf(tip, sizeof tip, "%s  $%d  [R]  %s", pg.name, pg.cost, pg.desc);
             add(BK_RESEARCH, 0, g_sim.programAvailable(g_sim.humanPlayer) && g_sim.canAfford(g_sim.humanPlayer, pg.cost), pg.name, tip);
             const DropType& dr = DROPS[pl.faction];
-            snprintf(tip, sizeof tip, "%s  [P]  %s", dr.name, dr.desc);
+            int dtier = g_sim.dropTier(g_sim.humanPlayer);
+            snprintf(tip, sizeof tip, "%s  [P]  %s  Now loading (%s, tier %d of %d): %s", dr.name, dr.desc, DROP_TIERS[dtier].name, dtier + 1, DTI_COUNT, rosterText(g_sim.dropManifest(g_sim.humanPlayer), 150).c_str());
             add(BK_DROP, 0, g_sim.dropsReady(g_sim.humanPlayer) > 0, dr.name, tip);
+            const StrikeType& st = STRIKES[pl.faction];
+            std::vector<int> answer = g_sim.strikeManifest(g_sim.humanPlayer);
+            snprintf(tip, sizeof tip, "%s  [I]  %s  (%s)", st.name, st.desc, rosterText(answer, 120).c_str());
+            add(BK_AIRSTRIKE, 0, g_sim.strikesReady(g_sim.humanPlayer) > 0, st.name, tip);
             snprintf(tip, sizeof tip, "Aid Drop  [D]  A white relief plane nobody shoots at drops $%d and a Dozer in crates: the army nearest the spot gets them, ally or enemy, never you (%d s cooldown per tech structure)", AID_MONEY, (int)AID_COOLDOWN);
             add(BK_AID, 0, g_sim.aidsReady(g_sim.humanPlayer) > 0, "Aid Drop", tip);
             for (int u = 0; u < UPG_COUNT; u++) {
@@ -440,7 +480,7 @@ bool Game::launchNuke(Vec2 at) {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; dropMode = false; strikeMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
 }
 
 void Game::clickButton(const Button& b) {
@@ -466,6 +506,7 @@ void Game::cmdSelection(int kind, int id) {
     case BK_NUKE: if (g_sim.nukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_MININUKE: if (g_sim.miniNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeMini = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_AIRSTRIKE: if (g_sim.strikesReady(g_sim.humanPlayer) > 0) { cancelModes(); strikeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_AID: if (g_sim.aidsReady(g_sim.humanPlayer) > 0) { cancelModes(); aidMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
@@ -669,6 +710,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 else if (nukeMode) { if (launchNuke(wp)) { nukeMode = false; nukeMini = false; forceLatch = false; } }
                 else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
                 else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
+                else if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, wp)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, wp)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else cam = Vec2(clampf(wp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(wp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 return;
@@ -698,6 +740,7 @@ void Game::gameEvent(const SDL_Event& e) {
             if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) { powerMode = false; forceLatch = false; } else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; forceLatch = false; return; }
             if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, w)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, w)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, w); } dropoffMode = false; g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
             if (attackMoveMode) { issueAttackMove(w); attackMoveMode = false; return; }
@@ -1386,6 +1429,18 @@ void Game::renderWorld() {
         Vec2 m = Vec2(mouseX, mouseY);
         g.circle(m.x, m.y, POWERS[g_sim.players[g_sim.humanPlayer].faction].radius * TILE, hudAccent(g_sim.players[g_sim.humanPlayer].faction), 40);
     }
+    if (strikeMode) {   // the called spot, and the line the package comes in along (the same track a cargo plane would fly)
+        Vec2 m = Vec2(mouseX, mouseY), wp = screenToWorld(mouseX, mouseY);
+        Color ac = hudAccent(g_sim.players[g_sim.humanPlayer].faction);
+        float R = 4.0f * TILE;
+        g.circle(m.x, m.y, R, ac, 40);
+        Vec2 base = g_sim.players[g_sim.humanPlayer].basePos;
+        Vec2 dir = (wp - base).len() > 6.0f * TILE ? (wp - base).norm() : (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - wp).norm();
+        Vec2 sp = worldToScreen(wp - dir * (R + 120.0f));
+        g.line(m.x, m.y, sp.x, sp.y, rgb(ac.r, ac.g, ac.b, 150));
+        Vec2 perp(-dir.y, dir.x); Vec2 a = worldToScreen(wp - dir * (R + 120.0f) - perp * STRIKE_X * TILE), b = worldToScreen(wp - dir * (R + 120.0f) + perp * STRIKE_X * TILE);
+        g.line(a.x, a.y, b.x, b.y, rgb(ac.r, ac.g, ac.b, 120));
+    }
     drawZones();
     drawRangeRings();
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
@@ -1480,6 +1535,7 @@ void Game::renderWorld() {
         g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 120, 90));
     }
     else if (nukeMode) g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)", rgb(255, 100, 70));
+    else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d aircraft to the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size()); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (aidMode) {
         int who[MAX_PLAYERS]; int n = g_sim.aidCandidates(g_sim.humanPlayer, screenToWorld(mouseX, mouseY), who);
@@ -1735,10 +1791,13 @@ void Game::renderHud() {
         g.text(b.x + 5, b.y + 4, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
         if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(b.x + 5, b.y + 15, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
-        if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID) {
-            float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
+        if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE) {
+            float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidWait(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikeWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
             if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(b.x + 5, b.y + 15, buf, hudDim()); }
-            else if (b.enabled) { int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidsReady(g_sim.humanPlayer) : 1; if (dn > 1) { snprintf(buf, sizeof buf, "READY x%d", dn); g.text(b.x + 5, b.y + 15, buf, accent); } else g.text(b.x + 5, b.y + 15, "READY", accent); }
+            else if (b.enabled) {
+                int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidsReady(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikesReady(g_sim.humanPlayer) : 1;
+                if (dn > 1) { snprintf(buf, sizeof buf, "READY x%d", dn); g.text(b.x + 5, b.y + 15, buf, accent); } else g.text(b.x + 5, b.y + 15, "READY", accent);
+            }
         }
         if (b.kind == BK_RESEARCH) {
             const ProgramType& pg = PROGRAMS[pl.faction];
@@ -1758,11 +1817,14 @@ void Game::renderHud() {
         if (b.kind == BK_BUILD && placingType == b.id) g.box(b.x, b.y, b.w, b.h, accent);
     }
     if (hoverButton >= 0) {
-        const std::string& tip = buttons[hoverButton].tip;
-        int tw = g.textW(tip.c_str()) + 12;
-        int tx = std::min(SCREEN_W - tw - 4, std::max(4, mouseX - tw / 2));
-        g.fill(tx, VIEW_H - 22, tw, 16, rgb(8, 10, 14, 230));
-        g.text(tx + 6, VIEW_H - 18, tip.c_str(), rgb(255, 255, 255));
+        std::vector<std::string> tl = wrapTip(g, buttons[hoverButton].tip, SCREEN_W - 24);
+        if (tl.size() > 3) { tl.resize(3); tl[2] += " ..."; }
+        int tw = 0; for (auto& l : tl) tw = std::max(tw, g.textW(l.c_str()));
+        int th = (int)tl.size() * 16;
+        int tx = std::min(SCREEN_W - tw - 12, std::max(4, mouseX - (tw + 12) / 2));
+        int ty = VIEW_H - 6 - th;
+        g.fill(tx, ty, tw + 12, th, rgb(8, 10, 14, 230));
+        for (size_t i = 0; i < tl.size(); i++) g.text(tx + 6, ty + 4 + (int)i * 16, tl[i].c_str(), rgb(255, 255, 255));
     }
     if (showHelp) {
         int hx = SCREEN_W / 2 - 312, hy0 = std::max(30, VIEW_H / 2 - 170);
@@ -1781,7 +1843,7 @@ void Game::renderHud() {
             "Structure selected         train units; right-click ground for rally; Del sells",
             "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
-            "Tech structure            X strike, V map scan (30s), R Advanced Program, P paradrop, D aid drop",
+            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop",
             "Spy selected              right-click an enemy structure to capture it (the spy survives)",
             "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",
             "Bunker / lifter selected  U unloads; D (lifter) flies to a spot you click and drops everybody off",

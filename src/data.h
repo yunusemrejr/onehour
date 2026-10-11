@@ -139,13 +139,42 @@ static const float SELF_REPAIR_HOT = 0.25f;   // ... and the share of that rate 
 static const float SELF_REPAIR_DELAY = 3.0f;  // seconds after the last hit before full-rate repair resumes
 static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns of the Defense Guns upgrade (Cyber laser, Clanker machine gun)
 
-// Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes
+// Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes.
+// What the plane carries is never a fixed list: it is composed from what the army can actually field right now (Sim::dropManifest).
 static const int DROP_INF = 15, DROP_VEH = 7, DROP_AIR = 4;
 struct DropType { const char* name; const char* desc; float cooldown; float radius; };   // radius: tiles around the target the troops land in
 extern const DropType DROPS[F_COUNT];
-extern const int DROP_INF_TYPES[F_COUNT][DROP_INF];
-extern const int DROP_VEH_TYPES[F_COUNT][DROP_VEH];
-extern const int DROP_AIR_TYPES[F_COUNT][DROP_AIR];
+// The armies' order of battle in the three drop slots, the cheapest first, combat troops only. Sim::dropManifest walks these until the army's
+// drop tier rings the bell for that slot, so a drop is exactly the best the army can field at that moment. Support (medics, snipers, spies, a
+// scout drone) does NOT sit in these slots: it rides along on top (DROP_SUPPORT), so a load never trades its fighting strength for it.
+// Every id in the cheap part is fieldable with nothing but the producing structure; the ones behind the Advanced Program sit at the deep end.
+extern const int DROP_INF_POOL[F_COUNT][DROP_INF];
+extern const int DROP_VEH_POOL[F_COUNT][DROP_VEH];
+extern const int DROP_AIR_POOL[F_COUNT][DROP_AIR];
+// Drop tiers: how far the single supply plane's manifest reaches into those pools, and how big the load is. The first tier is what the game
+// has always sent (15 soldiers, 7 vehicles, 4 aircraft) so a fresh tech structure is no weaker than before - but the composition is now the
+// army's own roster, and the tiers above it are bigger and better, so the same Data Center / Arms Lab sends a heavier force as the match goes
+// on, for a human and for a computer army alike.
+struct DropTierType { const char* name; const char* note; float infBudget, vehBudget, airBudget; float cooldown; };
+enum DropTierId { DTI_1 = 0, DTI_2, DTI_3, DTI_COUNT };
+extern const DropTierType DROP_TIERS[DTI_COUNT];
+// The support the army brings besides its troops, per tier: medics, snipers, spies and scout drones. None of them is line fighting (a medic and a
+// spy do no damage at all, a sniper and a scout drone none against a structure), so they ride on top of the combat slots rather than taking one -
+// and each still appears only if the army can field it, which is what puts the snipers in the drop the moment the tech structure unlocks them.
+static const int DROP_SUPPORT[DTI_COUNT][4] = { { 1, 1, 0, 0 }, { 1, 2, 0, 1 }, { 2, 2, 1, 1 } };
+
+// Phone Strike ("hotline"): the tech structure's other support power. One call, and a strike package of helicopters, jets and drones
+// crosses the map to a spot of your choice and tears up whatever stands there, then it goes home. Free of charge, once per cooldown per
+// tech structure (more Data Centers / Arms Labs: more calls), and what answers the phone grows with the army the same way a drop does.
+static const float STRIKE_COOLDOWN = 180.0f;    // seconds, per tech structure
+static const float STRIKE_X = 3.5f;             // tiles: how far to either side of the target the package is spread when it comes in
+static const int   STRIKE_MAX = 16;             // hard cap on aircraft in one package
+struct StrikeType { const char* name; const char* desc; };
+extern const StrikeType STRIKES[F_COUNT];
+// How many aircraft answer a call at each drop tier: gunships, bombers, jets, scout drones. The swarm is a support power like the airdrop,
+// so it grows with the same ladder - a fresh tech structure sends a swarm, a finished arms race sends a bigger one. Every tier brings all
+// three kinds the power promises (helicopters, jets and a drone), so a strike called early is a real swarm too.
+static const int STRIKE_LOAD[DTI_COUNT][4] = { { 4, 2, 2, 1 }, { 5, 3, 3, 1 }, { 6, 4, 4, 2 } };
 
 // Aid Drop: the human player's own power at the tech structure (Data Center / Arms Lab), never a computer army's. A white relief plane
 // nobody shoots at drops crates on parachutes; the army nearest to the spot, other than the sender, receives the money and a dozer.

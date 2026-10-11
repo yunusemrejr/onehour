@@ -573,6 +573,70 @@ float Sim::dropWait(int player) const {
     }
     return best;
 }
+
+// ------------------------------------------------------------ what a drop carries
+// The single supply plane a tech structure can send never carries a fixed list. It carries what the army can field at the moment it is
+// called in: DROP_*_POOL is that army's order of battle in the three slots, cheapest first, and how far the load reaches into those pools
+// is the army's drop tier. A drop is therefore a picture of the army's progress rather than a constant - call the same Data Center ten
+// minutes later, after the Advanced Program and a couple of structure upgrades, and a heavier and better force lands.
+int Sim::dropTier(int player) const {
+    if (player < 0 || player >= numPlayers) return 0;
+    const Player& pl = players[player];
+    int lvl = pl.advTech ? 1 : 0;                  // the Advanced Program is the first thing that deepens a drop
+    for (int u = 0; u < UPG_COUNT; u++) if (pl.upg[u]) lvl++;   // and every finished structure upgrade deepens it further
+    if (lvl >= 3) return 2;                         // Spearhead: the arms race is finished
+    if (lvl >= 1) return 1;                         // Battle Group: something beyond the tech structure has opened up
+    return 0;                                       // Reinforced: what a fresh tech structure can already send
+}
+
+std::vector<int> Sim::dropManifest(int player) const {
+    std::vector<int> load;
+    if (player < 0 || player >= numPlayers) return load;
+    Faction f = players[player].faction;
+    int tier = dropTier(player);
+    const DropTierType& dt = DROP_TIERS[tier];
+    // How far into a pool this tier reaches. A fresh tech structure already reaches its own unlocks (snipers, a medic, the rail tank,
+    // a gunship), which is what "drop what you have unlocked" means at the first tier; the Advanced Program and the structure upgrades
+    // then push the reach further, and the budgets above grow with it.
+    auto depthOf = [&](int poolSize) { return std::min(poolSize, 10 + 3 * tier); };
+    // The best thing this army could put in a slot: walk down from the tier's reach to the cheapest it can field, so an army that has not
+    // learned a step simply fields the previous one. Only if the whole cheap end is unavailable (a structure it needed was bombed away)
+    // does it reach back up, and only if that is empty too does it give up the slot: a standing tech structure always lands somebody.
+    auto pick = [&](const int* pool, int poolSize, int want) -> int {
+        int dep = depthOf(poolSize);
+        for (int i = std::min(want, dep - 1); i >= 0; i--) if (i < poolSize && unitAvailable(player, pool[i])) return pool[i];
+        for (int i = 0; i < poolSize; i++) if (unitAvailable(player, pool[i])) return pool[i];
+        return -1;
+    };
+    int ic = (int)dt.infBudget, vc = (int)dt.vehBudget, ac = (int)dt.airBudget;
+    std::vector<int> inf, veh, air;
+    for (int k = 0; k < ic; k++) { int t = pick(DROP_INF_POOL[f], DROP_INF, (k * depthOf(DROP_INF)) / std::max(1, ic)); if (t >= 0) inf.push_back(t); }
+    for (int k = 0; k < vc; k++) { int t = pick(DROP_VEH_POOL[f], DROP_VEH, (k * depthOf(DROP_VEH)) / std::max(1, vc)); if (t >= 0) veh.push_back(t); }
+    for (int k = 0; k < ac; k++) { int t = pick(DROP_AIR_POOL[f], DROP_AIR, (k * depthOf(DROP_AIR)) / std::max(1, ac)); if (t >= 0) air.push_back(t); }
+    // Support rides on top of the slots instead of eating one: it is what the army has learned to bring besides its troops. A medic and a spy
+    // do no damage at all and a sniper and a scout drone none against a structure, so letting them take a fighting slot would quietly make every
+    // drop weaker than the one before. Each one still appears only if the army can field it - and the sniper's own tech structure is the very one
+    // that calls the drop, which is what puts snipers in the load the moment they are unlocked.
+    {
+        const int* sup = DROP_SUPPORT[tier];
+        int medic = f == F_CYBER ? U_C_MEDIC : U_K_MEDIC;
+        int sniper = f == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+        int spy = f == F_CYBER ? U_C_SPY : U_K_SPY;
+        int scout = f == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+        for (int k = 0; k < sup[0]; k++) if (unitAvailable(player, medic)) inf.push_back(medic);
+        for (int k = 0; k < sup[1]; k++) if (unitAvailable(player, sniper)) inf.push_back(sniper);
+        for (int k = 0; k < sup[2]; k++) if (unitAvailable(player, spy)) inf.push_back(spy);
+        for (int k = 0; k < sup[3]; k++) if (unitAvailable(player, scout)) air.push_back(scout);
+    }
+    // release order: vehicles spread through the infantry, the aircraft leave last (they simply fly off toward the zone)
+    size_t vi = 0, ii = 0;
+    while (vi < veh.size() || ii < inf.size()) {
+        if ((load.size() % 3 == 0 && vi < veh.size()) || ii >= inf.size()) load.push_back(veh[vi++]);
+        else load.push_back(inf[ii++]);
+    }
+    for (int a : air) load.push_back(a);
+    return load;
+}
 int Sim::nukesReady(int player) const {
     if (players[player].lowPower()) return 0;
     int n = 0;
@@ -662,20 +726,16 @@ bool Sim::cmdParadrop(int player, Vec2 pos, bool attackOn) {
     for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.dropTimer) { tech = &e; break; }
     if (!tech) return false;
     const DropType& dt = DROPS[pl.faction];
+    std::vector<int> manifest = dropManifest(player);   // what this army can field right now, not a fixed list
+    if (manifest.empty()) return false;
     pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
-    tech->dropTimer = time + dt.cooldown;
+    tech->dropTimer = time + DROP_TIERS[dropTier(player)].cooldown;   // a deeper drop takes a little longer to assemble
     Airlift a;
     a.owner = player; a.target = pos; a.attackOn = attackOn;
     a.hp = a.maxHp = AIRLIFT_HP;
     a.dir = flightTrack(pl.basePos, pos, a.pos);   // the plane comes in from beyond the map edge, at least a few hundred pixels before the target
     a.prevPos = a.pos;
-    // release order: vehicles spread through the infantry, the aircraft leave last
-    int vi = 0, ii = 0;
-    for (int k = 0; k < DROP_INF + DROP_VEH; k++) {
-        if ((k % 3 == 0 && vi < DROP_VEH) || ii >= DROP_INF) a.load.push_back(DROP_VEH_TYPES[pl.faction][vi++]);
-        else a.load.push_back(DROP_INF_TYPES[pl.faction][ii++]);
-    }
-    for (int k = 0; k < DROP_AIR; k++) a.load.push_back(DROP_AIR_TYPES[pl.faction][k]);
+    a.load = std::move(manifest);
     float span = 0;
     for (int t : a.load) span += (UNITS[t].kind == UK_AIR ? 0.12f : (UNITS[t].kind == UK_VEH ? 0.09f : 0.045f)) * AIRLIFT_SPEED;
     a.releaseAt = -span * 0.5f;   // the stick is centred on the target
@@ -772,6 +832,96 @@ void Sim::updateAirlifts() {
         if ((gone && a.t > 3.0f) || a.t > 60.0f) { airlifts.erase(airlifts.begin() + i); continue; }
         i++;
     }
+}
+
+// ------------------------------------------------------------ phone strike
+// The tech structure's other support power: one call and a strike package crosses the map to a spot of your choice. Unlike the powers that
+// resolve on the spot (an EMP burst, a shell storm), this puts real aircraft in the air over the target for a while: the swarm flies in
+// from beyond the map edge the way a cargo plane would, rakes whatever stands at the called spot, and then breaks off and goes home the
+// way any aircraft sent somewhere does. Losing a structure the package needs simply means fewer kinds answer the phone (see strikeManifest).
+int Sim::strikesReady(int player) const {
+    if (player < 0 || player >= numPlayers || time < players[player].dropReady) return 0;
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.strikeTimer) n++;
+    return n;
+}
+float Sim::strikeWait(int player) const {
+    if (player < 0 || player >= numPlayers) return -1;
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH) {
+        float w = std::max(0.0f, std::max(e.strikeTimer, players[player].dropReady) - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+// The package the army can put over a target right now: gunships first (they hover and stay on the spot), then the bombers and jets, then a
+// scout drone to find what is hiding there. The size follows the army's drop tier, so the same Data Center / Arms Lab that sends a small
+// package when it opens sends a swarm once the Advanced Program and the structure upgrades are in. Anything the army has not unlocked falls
+// back to the best armed aircraft it has, so a strike called early is still a strike - just a smaller, plainer one.
+std::vector<int> Sim::strikeManifest(int player) const {
+    std::vector<int> out;
+    if (player < 0 || player >= numPlayers) return out;
+    Faction f = players[player].faction;
+    int tier = dropTier(player);
+    int heli = f == F_CYBER ? U_C_HELI : U_K_AIR;      // the hovers-and-stays gunship
+    int bomb = f == F_CYBER ? U_C_AIR : U_K_AIR;       // the cheap bomber (the Clanker cheap aircraft is itself a gunship)
+    int jet = f == F_CYBER ? U_C_JET : U_K_JET;
+    int scout = f == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+    int fallback = -1;
+    for (int t = 0; t < U_COUNT; t++)   // (unit ids are not contiguous per faction: medics, snipers and drones sit after both blocks)
+        if (UNITS[t].faction == f && UNITS[t].kind == UK_AIR && UNITS[t].weapon >= 0 && unitAvailable(player, t)) { fallback = t; break; }
+    if (fallback < 0) return out;
+    auto add = [&](int t, int n) {
+        int u = unitAvailable(player, t) ? t : fallback;
+        for (int k = 0; k < n && (int)out.size() < STRIKE_MAX; k++) out.push_back(u);
+    };
+    add(heli, STRIKE_LOAD[tier][0]); add(bomb, STRIKE_LOAD[tier][1]); add(jet, STRIKE_LOAD[tier][2]); add(scout, STRIKE_LOAD[tier][3]);
+    return out;
+}
+
+bool Sim::cmdPhoneStrike(int player, Vec2 pos) {
+    if (player < 0 || player >= numPlayers) return false;
+    Player& pl = players[player];
+    if (!pl.alive || time < pl.dropReady) return false;
+    Entity* tech = nullptr;   // like the drops and the nuke ramps: each Data Center / Arms Lab takes a call on its own cooldown
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.strikeTimer) { tech = &e; break; }
+    if (!tech) return false;
+    std::vector<int> load = strikeManifest(player);
+    if (load.empty()) return false;
+    pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
+    tech->strikeTimer = time + STRIKE_COOLDOWN;
+    // the package flies the same track a cargo plane would, but it is made of real aircraft: they come in as units and can be fought off
+    Vec2 start; Vec2 dir = flightTrack(pl.basePos, pos, start);
+    Vec2 perp(-dir.y, dir.x);
+    const float m = 3.0f * TILE;
+    Vec2 entry = start;
+    for (int s = 0; s < 80; s++) {   // walk the track in from beyond the edge to the first point inside the map
+        Vec2 p = start + dir * (60.0f * s);
+        entry = p;
+        if (p.x >= m && p.y >= m && p.x <= WORLD_W - m && p.y <= WORLD_H - m) break;
+    }
+    int n = (int)load.size();
+    for (int k = 0; k < n; k++) {
+        int type = load[k];
+        const UnitType& ut = UNITS[type];
+        Vec2 from = entry + perp * (((k % 5) - 2) * (STRIKE_X * TILE))   // line abreast across the approach
+                         - dir * ((float)(k / 5) * 46.0f);              // and echeloned back in ranks so they come in as a swarm, not a stack
+        from.x = clampf(from.x, m, WORLD_W - m); from.y = clampf(from.y, m, WORLD_H - m);
+        Ref r = spawnUnit(type, player, from);
+        Entity& e = ents[r.idx];
+        e.pos = e.prevPos = e.lastPos = from;
+        e.alt = 1; e.airspeed = ut.speed * 0.6f;
+        Vec2 d = pos - from;
+        e.angle = e.turret = d.len() > 1.0f ? std::atan2(d.y, d.x) : 0.0f;
+        Entity* h = findAirfield(e);
+        if (h) e.home = refOf(*h);
+        cmdMove({r}, pos, true);   // attack-move: they engage what they pass and then work the called spot before heading home
+    }
+    emit(EV_SOUND, player, SND_AIR, entry);
+    emit(EV_MSG, player, SND_NONE, pos, (std::string(STRIKES[pl.faction].name) + " inbound").c_str());
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY AIR STRIKE INBOUND");
+    return true;
 }
 
 // ------------------------------------------------------------ aid drop

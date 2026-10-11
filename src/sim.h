@@ -61,6 +61,7 @@ struct Entity {
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
+    float strikeTimer = 0;  // tech structure: sim time it can take another Phone Strike call
     float aidTimer = 0;     // tech structure: sim time its next Aid Drop flight is ready (human players only)
     float cooldown2 = 0;    // structure: the roof gun of the Defense Guns upgrade (its own target, cooldown and facing)
     Ref engaged2;
@@ -296,9 +297,19 @@ struct Sim {
     void cmdSetRally(Ref building, Vec2 p);
     void cmdSell(Ref building);
     bool cmdPower(int player, Vec2 pos, bool force = false);
+
+    // ---- the drop manifest: what a tech structure sends sits in Data.h's DROP_*_POOL, and how far into them a drop reaches is the
+    // army's drop tier, which climbs with the Advanced Program and with each finished structure upgrade. A drop is therefore never the
+    // same force twice: it is composed from what the army can field at the moment the plane is called in.
+    int dropTier(int player) const;                     // 0-based into DROP_TIERS / DTI_COUNT entries
+    std::vector<int> dropManifest(int player) const;    // the load a cargo plane would carry for this army right now (air last)
     bool cmdNuke(int player, Vec2 pos, bool force = false);       // fires one ready Nuke Ramp at pos
     bool cmdMiniNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready bunker's small missile at pos (from that bunker if it is ready)
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
+    bool cmdPhoneStrike(int player, Vec2 pos);   // tech structure: call in a strike package on a spot of your choice (see PhoneStrike)
+    int strikesReady(int player) const;          // tech structures that can take a call right now
+    float strikeWait(int player) const;          // seconds until the soonest one is ready (0 = ready, -1 = no tech structure)
+    std::vector<int> strikeManifest(int player) const;   // the aircraft that would answer the phone now
     int dropsReady(int player) const;         // tech structures that can send a paradrop right now (after the opening delay)
     float dropWait(int player) const;         // seconds until the soonest paradrop is ready (0 = ready, -1 = no tech structure)
     bool cmdAidDrop(int player, Vec2 pos);    // tech structure, human players only: a relief flight drops $20000 and a dozer to the army nearest pos

@@ -30,12 +30,12 @@ column, Enter starts.
 
 **Cyber Army** — electric and optical. Pulse rifles, laser troopers, shock troopers, Photon Tanks,
 Volt Walkers (arc lightning, anti-infantry/anti-air), Railgun Tanks (long range, pierces a line),
-Wraith Drones, Hornet Gunships (attack helicopter), Laser Turrets and Patriot Batteries. Stealth and special forces: the Ghost Sniper, Infiltrator (spy), Ghost Drone (stealth spy drone), Atlas Lifter (cargo helicopter) and the Deep Bunker. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop, Aid Drop,
+Wraith Drones, Hornet Gunships (attack helicopter), Laser Turrets and Patriot Batteries. Stealth and special forces: the Ghost Sniper, Infiltrator (spy), Ghost Drone (stealth spy drone), Atlas Lifter (cargo helicopter) and the Deep Bunker. Tech structure: Data Center (EMP Strike, Orbital Scan, Airlift Drop, Hotline Strike, Aid Drop,
 Overclock Program → Ion Lancer and Aegis Titan super-heavy walker; structure upgrades Rugged Nanoshell, Defense Lasers, Nanite Repair).
 
 **Clanker Army** — diesel and gunpowder. Riflemen, RPG troopers, heavy gunners, Brute Tanks,
 Gatling Tanks, Rocket Launchers (artillery), Vulture Gunships, Gun Nests and Rocket Batteries. Stealth and special forces: the Sniper, Spy, Recon Drone (stealth spy drone), Mammoth Lifter (cargo helicopter) and the Underground Bunker.
-Tech structure: Arms Lab (Shell Storm, Recon Flight, Paradrop, Aid Drop, Heavy Ordnance → Grenadier and Behemoth; structure upgrades Rugged Bulwark, Bunker Guns, Repair Crews).
+Tech structure: Arms Lab (Shell Storm, Recon Flight, Paradrop, Hotline Strike, Aid Drop, Heavy Ordnance → Grenadier and Behemoth; structure upgrades Rugged Bulwark, Bunker Guns, Repair Crews).
 
 **Base defenses** (Laser Turret, Patriot Battery, Gun Nest, Rocket Battery) are fortified: 5200 to 6800 hp each (more than a Command Core) and
 brutal weapons: the Laser Turret burns 310 per shot, the Patriot Battery fires pairs of 240-damage missiles out to 10.5 tiles (more than double
@@ -48,7 +48,8 @@ a choke point against a large force. Artillery and long-range rails can still ou
 | --- | --- | --- |
 | Strike (EMP Strike / Shell Storm) | X | call a strike on a circle of your choice (3 min cooldown); also on the Command Core/Post |
 | Scan (Orbital Scan / Recon Flight) | V | the whole map and every enemy on it is visible for 30 s (3.5 min cooldown) |
-| Paradrop (Airlift Drop / Paradrop) | P | a cargo plane drops a free force on parachutes wherever you click (2 min cooldown per tech structure, see below) |
+| Paradrop (Airlift Drop / Paradrop) | P | a cargo plane drops **what your army can field at that moment** on parachutes wherever you click (tiered: fresh tech structure → Advanced Program → upgrades; 120/110/95 s per tech structure, see below) |
+| **Hotline Strike** (both armies) | I | call in a **swarm** of helicopters, jets and drones on a spot of your choice: they cross the map, attack what stands there and then go home (180 s cooldown per tech structure, see below) |
 | Aid Drop (human players only) | D | a white relief plane drops $20000 and a Dozer in crates to the army nearest the spot you click, ally or enemy, never you (1 min cooldown per tech structure, see below) |
 | Advanced Program | R | $2500, 45 s (half speed on low power): unlocks the army's two elite units for good |
 | Rugged (Nanoshell / Bulwark) | U | $3000, 40 s: every structure gets 50% more health and takes half damage. One nuke no longer flattens anything (a warhead takes at most 55% at ground zero, so it takes two); the plating only gives way when a massive assault lands a big share of a structure's health within a couple of seconds |
@@ -62,21 +63,50 @@ Team colours: every unit type has its own tone (graphite, cobalt, ceramic and te
 Clanker), a small jewel-like dot in the owner's colour marks each unit, and every finished structure flies its owner's own flag
 (rectangle+chevron, swallowtail+roundel, pennant, burgee+cross) from a mast on the roof.
 
-**Paradrop** — select the Data Center / Arms Lab and press `P` (or click the button), then click the map or minimap. A cargo plane flies in from the map
-edge along the line from your base through the drop zone and, as it crosses the circle, releases **15 infantry, 7 vehicles and 4 aircraft** (Cyber: 7 Troopers,
-5 Laser Troopers, 3 Shock Troopers, 3 Photon Tanks, 2 Volt Walkers, a Railgun Tank, a Medic Rig, 2 Wraith Drones and 2 Specter Jets; Clanker: the matching
-Riflemen, RPG Troopers, Gunners, Brute Tanks, Gatling Tanks, Rocket Launcher, Field Medic, Vulture Gunships and Talon Jets). The soldiers and vehicles hang
+**Airdrop (Airlift Drop / Paradrop)** — select the Data Center / Arms Lab and press `P` (or click the button), then click the map or minimap. A cargo plane flies in from the map
+edge along the line from your base through the drop zone and, as it crosses the circle, releases **the force your army can field at that moment**. The load is never a fixed list:
+each slot (soldiers, vehicles, aircraft) is filled from that army's own order of battle, cheapest first, as far up as its **drop tier** reaches. A fresh Data Center / Arms Lab
+already lands its snipers, a medic, its rail tank / rocket artillery and a gunship — the units the tech structure itself unlocks — and the Advanced Program and every finished
+structure upgrade then deepen and enlarge the load:
+
+| Tier | When | Soldiers | Vehicles | Aircraft | Rides along |
+| --- | --- | --- | --- | --- | --- |
+| **Reinforced** | a fresh Data Center / Arms Lab | 15 | 7 | 4 | a medic and a sniper |
+| **Battle Group** | the Advanced Program is in, or one structure upgrade finished | 18 | 9 | 5 | a medic, two snipers, a scout drone |
+| **Spearhead** | the Advanced Program plus two upgrades (or all three) | 22 | 11 | 6 | two medics, two snipers, a spy, a scout drone |
+
+**The fighting slots never carry support**: a medic and a spy do no damage at all and a sniper and a scout drone none against a structure, so they ride along *on top* of the
+soldier slots (the last column) instead of taking one — otherwise every unlock would quietly make a drop weaker at fighting than the one before it. Anything the army cannot
+field right now (a structure it needs was bombed away, the program is not researched) is skipped for the best thing it *can* field, so a drop never carries a unit you could not
+build; a computer army's drops grow exactly the way yours do as its own program and upgrades land, and the button's tooltip lists the exact load the next drop will carry and
+the tier it is at. The soldiers and vehicles hang
 under parachutes for a few seconds (they cannot be hit or act until they land) and the aircraft take up guard over the zone. The load is free, the power
-recharges for **2 minutes per tech structure** (first available at 2:30): like nuke ramps, every Data Center / Arms Lab you own has its own cooldown, so three of them can send three airlifts back to back and the button shows `READY x3`. The plane is not invulnerable: every anti-air gun that
+recharges **per tech structure** (120 s at Reinforced, 110 s at Battle Group, 100 s at Spearhead; first available at 2:30): like nuke ramps, every Data Center / Arms Lab you own has its own cooldown, so three of them can send three airlifts back to back and the button shows `READY x3`. The plane is not invulnerable: every anti-air gun that
 reaches it on its way in shoots at it (1100 hp, a few Patriot Batteries bring it down) and a plane lost before the drop takes its whole load with it.
 The enemy is told when an airlift is on its way, and the drop circle is public. The computer commander uses it to reinforce a base under attack
-and to land on the objective of a wave, avoiding targets with a lot of anti-air. `--droptest` covers the call, the load, the parachute descent and the shoot-down.
+and to land on the objective of a wave, avoiding targets with a lot of anti-air. `--droptest` covers the call, the tiered load (nothing the army has not unlocked
+can appear, and the same structure sends a bigger and better force once the program and the upgrades land — for a human and for a computer army), the parachute
+descent and the shoot-down.
+
+**Hotline Strike (Phone Strike)** — the tech structure's other support power, and the loudest thing in either army's book. Select the Data Center / Arms Lab, press `I`
+(or click **Hotline Strike**) and click the map or minimap over whatever you want flattened: an enemy line, a base, a choke point. A **swarm** of real aircraft crosses the map
+from beyond the edge along the line from your base and works the spot you picked for about a minute before breaking off home: Cyber answers with Hornet Gunships, Wraith
+Drones, Specter Jets and a Ghost Drone; Clanker with Vulture Gunships, Talon Jets and a Recon Drone (half of a full package is helicopters, plus jets and a drone).
+They are ordinary aircraft once they are over the spot — they attack whatever stands there, take return fire, and anti-air on the way in can shoot the package down, so a
+strike into a wall of Patriot Batteries costs you the swarm. The stealth drone in the package is there to **find what is hiding** (snipers and underground bunkers) so the
+rest can hit it. Free of charge, once per **180 seconds per tech structure** (three Data Centers take three calls back to back and the button shows `READY x3`), first
+available when the support powers open up at 2:30. **The swarm grows with the army, on the same ladder as the airdrop**: 9 aircraft at Reinforced, 12 at Battle
+Group (the Advanced Program or an upgrade) and 16 at Spearhead, and **every call brings all three kinds** — gunships, jets and a drone — so even the first strike a
+fresh Data Center can call is a swarm; a computer commander's strikes grow the same way. The enemy is warned when a package is inbound. Computer commanders call strikes of their own at the
+juiciest enemy cluster they can see, and never on top of their own troops. `--striketest` covers the refusal without a tech structure, the per-structure cooldown, the
+makeup of the swarm, its growth with the tiers, the flight in, the attack on an enemy line and the calls coming back.
 
 **Aid Drop (yours alone)** — a power only a human player has; the computer armies, your ally's included, never get it. With a Data Center / Arms Lab selected,
 press `D` (or click **Aid Drop**), then click the map or minimap. A big white relief plane with sky-blue aid roundels flies in along the same kind of track as a paradrop
 and drops **five wooden crates on parachutes** over the spot. Nobody shoots at it, enemies included, since it brings them help: no gun, no anti-air and no computer army's
 nuke ever harms it. Only your own nuke can bring it down, like every aircraft in your blast: crates still aboard are lost, crates already falling still land.
 When the last crate is down, the **army nearest to the spot gets $20000 and a Dozer** (the Dozer rolls out beside the opened crates):
+
 - nearest means the shortest distance from the spot to any of that army's units or structures, measured to a structure's edge (0 when the spot is on it), so the army you drop on gets it, and where two bases are intertwined the structure nearest the spot decides;
 - **you never get it**: drop it on your own base and it still goes to the nearest other army, however far away that one is;
 - ally or enemy alike; on an exact tie between armies, one of them is drawn at random (still never you).
@@ -146,6 +176,7 @@ everybody out, or **D** (Drop Off) and click a spot: it flies there, sets down a
 **Underground bunkers** — the **Deep Bunker** (Cyber) and the **Underground Bunker** (Clanker): $2500, built by a dozer, needs a Barracks. Only a small steel hatch (2x2 tiles) shows on the surface, and not even that to the enemy: a finished bunker is **stealth**, found
 only by an enemy spy drone. It holds **50 infantry and one dozer** (right-click the bunker with soldiers or a dozer selected; U unloads, the rally point is where they walk to). Everybody inside is untouchable. In a fight the whole garrison **fires from the hatch**, each soldier with its own weapon (rocket troopers
 hit tanks and aircraft, snipers pick off infantry), and heals slowly. The rest of the rules:
+
 - the **hatch** (2800 hp) takes the damage first; once it is blown off the garrison cannot shoot, though it stays safe. A **nuke wrecks the hatch and hurts the bunker, but can never destroy it**, however many land (buried deep): the same goes for aircraft, bombs, turrets, shells and fallout, none of which takes it below 10% of its health;
 - only **infantry and vehicles can destroy a bunker**, and it is very hard: 30000 hp and plating that stops 78% of what gets past the hatch (a column of fifteen tanks needs several minutes; they only see it while a spy drone is nearby);
 - a **dozer inside** patches the hatch (6% a second) and the bunker once out of fire for three seconds; any dozer next to it mends it too;
@@ -305,7 +336,7 @@ reacts to the muster point), judging a running wave by the estimate instead of b
   headless; `--train N` self-plays N games to train the AI brain, `--eval N` pits the learned AI against the plain heuristic AI;
   `--soundcheck` prints statistics for the synthesized sounds; `--hqtest` rebuilds a lost Command Core (human dozer and AI), `--jettest` flies
   the jets (speed, banking, strafing, rearming), `--econtest` and `--areatest` cover income structures, nukes and area orders, and `--bench [N]`
-  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--helitest` builds 18 helicopters from one airfield (and checks they park on helipads with a gap between them, stop side by side on a group move, hover still on posts of their own when guarding a small circle, and that planes still wait for a pad), `--aidtest` covers the Aid Drop, `--stealthtest` covers stealth snipers and spy drones, spy captures, cargo lifters, underground bunkers (garrison, hatch, nukes, destruction; and a lone bunker's income, self-repair, miniguns and mini nuke) and promotions, `--allytest` covers a computer ally moving up to the front where your army fights, `--haultest` covers haulers escaping a raider and returning to work, `--upgradetest` covers the structure upgrades (research rules, Rugged under one and two nukes and under a massive assault, roof guns against aircraft, vehicles and infantry, self-repair on structures but never units, upgrades lasting after the tech structure falls) and dozers sharing out repairs, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_AID=N` (an aid drop near the enemy base; + `ONEHOUR_CAMBACK=px`, `ONEHOUR_CAMPLANE=1`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, `ONEHOUR_HELI=N` (N helicopters of the viewed army over its base; `ONEHOUR_HELIGUARD=1` has them guard a small circle there), `ONEHOUR_UPG=1|raid` (every army starts with all structure upgrades; `raid` then sends aircraft and tanks into the viewed base), and `--sheet FILE`
+  times N rendered frames. `--airmatrix` and `--groundmatrix` send every aircraft and every ground combat unit (idle, attack-move, guard area, attack order; moving targets; flights of four) against every kind of target and require damage within a time limit, `--turrettest` does the same for turrets and anti-air batteries, `--helitest` builds 18 helicopters from one airfield (and checks they park on helipads with a gap between them, stop side by side on a group move, hover still on posts of their own when guarding a small circle, and that planes still wait for a pad), `--aidtest` covers the Aid Drop, `--droptest` and `--striketest` cover the unlock-driven airdrop tiers and the phone strike swarm, `--stealthtest` covers stealth snipers and spy drones, spy captures, cargo lifters, underground bunkers (garrison, hatch, nukes, destruction; and a lone bunker's income, self-repair, miniguns and mini nuke) and promotions, `--allytest` covers a computer ally moving up to the front where your army fights, `--haultest` covers haulers escaping a raider and returning to work, `--upgradetest` covers the structure upgrades (research rules, Rugged under one and two nukes and under a massive assault, roof guns against aircraft, vehicles and infantry, self-repair on structures but never units, upgrades lasting after the tech structure falls) and dozers sharing out repairs, `--fuzztest [secs]` throws random commands at the simulation (run it under `-fsanitize=address,undefined`), and `ONEHOUR_STUCK=1 --selftest` reports units that hold a movement order without moving. `--autotest` covers units left on their own (answering fire from beyond their reach, backing away from aircraft they cannot hit, helping an ally, a small guard zone, nuke dodging), force fire through the Force Fire button with no ally or own unit shooting back, jets shooting down bombers and fighting each other, and no fixed-wing aircraft hanging still; every `--selftest` also fails if a fixed-wing aircraft away from its airfield ever flies slower than its stall speed. Screenshot helpers: `ONEHOUR_CAM=tx,ty`, `ONEHOUR_REVEAL=1`, `ONEHOUR_JETS=1`, `ONEHOUR_BOMBS=N`, `ONEHOUR_DROP=N` (+ `ONEHOUR_CAMBACK=px`), `ONEHOUR_AID=N` (an aid drop near the enemy base; + `ONEHOUR_CAMBACK=px`, `ONEHOUR_CAMPLANE=1`), `ONEHOUR_NUKEDMG=N`, `ONEHOUR_MENUDEMO=row`, `ONEHOUR_NEWB=1|boom`, `ONEHOUR_HELI=N` (N helicopters of the viewed army over its base; `ONEHOUR_HELIGUARD=1` has them guard a small circle there), `ONEHOUR_UPG=1|raid` (every army starts with all structure upgrades; `raid` then sends aircraft and tanks into the viewed base), and `--sheet FILE`
   with `ONEHOUR_BLD=0|1` (every structure of an army) or `ONEHOUR_BIG=0|1` (every unit, enlarged).
 
 **Medics and mending** — each army's factory builds a healing vehicle (Cyber **Medic Rig**, Clanker **Field Medic**, key `Y`, $900). Its aura

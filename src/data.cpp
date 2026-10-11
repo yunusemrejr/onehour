@@ -133,20 +133,33 @@ const UpgradeType UPGRADES[F_COUNT][UPG_COUNT] = {
 };
 
 const DropType DROPS[F_COUNT] = {
-    { "Airlift Drop", "A stealth cargo plane drops 15 troopers, 7 vehicles and 4 aircraft on parachutes anywhere you choose (2 min cooldown per Data Center)", 120.0f, 4.5f },
-    { "Paradrop",     "A cargo plane drops 15 infantry, 7 vehicles and 4 aircraft on parachutes anywhere you choose (2 min cooldown per Arms Lab)",          120.0f, 4.5f },
+    { "Airlift Drop", "A stealth cargo plane drops the force your Data Center can field right now on parachutes, anywhere you choose: soldiers and vehicles on the silk, aircraft take up guard over the zone. The load grows as you learn (2 min cooldown per Data Center)", 120.0f, 4.5f },
+    { "Paradrop",     "A cargo plane drops the force your Arms Lab can field right now on parachutes, anywhere you choose: soldiers and vehicles on the silk, aircraft take up guard over the zone. The load grows as you learn (2 min cooldown per Arms Lab)",          120.0f, 4.5f },
 };
-const int DROP_INF_TYPES[F_COUNT][DROP_INF] = {
-    { U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF3, U_C_INF3, U_C_INF3 },
-    { U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF3, U_K_INF3, U_K_INF3 },
+// Slots: entry 0 is the cheapest thing the army can put in that slot, the next entry the next step up, and so on. An army that has not
+// learned a step yet simply stops before it (Sim::dropManifest), so the pool may hold units it cannot field today.
+const int DROP_INF_POOL[F_COUNT][DROP_INF] = {
+    { U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF1, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF2, U_C_INF3, U_C_INF3, U_C_ELITE, U_C_ELITE, U_C_ELITE, U_C_INF3, U_C_INF3 },
+    { U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF1, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF2, U_K_INF3, U_K_INF3, U_K_ELITE, U_K_ELITE, U_K_ELITE, U_K_INF3, U_K_INF3 },
 };
-const int DROP_VEH_TYPES[F_COUNT][DROP_VEH] = {
-    { U_C_TANK, U_C_TANK, U_C_TANK, U_C_VOLT, U_C_VOLT, U_C_RAIL, U_C_MEDIC },
-    { U_K_TANK, U_K_TANK, U_K_TANK, U_K_GATLING, U_K_GATLING, U_K_MLRS, U_K_MEDIC },
+const int DROP_VEH_POOL[F_COUNT][DROP_VEH] = {
+    { U_C_TANK, U_C_TANK, U_C_TANK, U_C_VOLT, U_C_VOLT, U_C_RAIL, U_C_TITAN },
+    { U_K_TANK, U_K_TANK, U_K_TANK, U_K_GATLING, U_K_GATLING, U_K_MLRS, U_K_TITAN },
 };
-const int DROP_AIR_TYPES[F_COUNT][DROP_AIR] = {
-    { U_C_AIR, U_C_AIR, U_C_JET, U_C_JET },
-    { U_K_AIR, U_K_AIR, U_K_JET, U_K_JET },
+const int DROP_AIR_POOL[F_COUNT][DROP_AIR] = {
+    { U_C_AIR, U_C_AIR, U_C_HELI, U_C_JET },
+    { U_K_AIR, U_K_AIR, U_K_AIR, U_K_JET },
+};
+
+const DropTierType DROP_TIERS[DTI_COUNT] = {
+    { "Reinforced",   "what a fresh tech structure sends: the army's own roster, the tech-gated snipers included",                        15.0f, 7.0f, 4.0f, 120.0f },
+    { "Battle Group", "something has opened up (the Advanced Program or an upgrade finishes): a medic joins and the armour gets heavier", 18.0f, 9.0f, 5.0f, 110.0f },
+    { "Spearhead",    "the arms race is done: elite infantry, the best armour, gunships and jets, and the most of them",                  22.0f, 11.0f, 6.0f, 100.0f },
+};
+
+const StrikeType STRIKES[F_COUNT] = {
+    { "Hotline Strike", "One call to Cyber Command and every Hornet gunship, Wraith drone and Specter jet that can fly crosses the map to rake the spot you pick, then breaks off home. Needs a Data Center; one call per cooldown per Data Center" },
+    { "Hotline Strike", "One call to the battery and every Vulture gunship, Talon jet and recon drone that can fly crosses the map to rake the spot you pick, then breaks off home. Needs an Arms Lab; one call per cooldown per Arms Lab" },
 };
 
 int firstUnitOf(Faction f) { return f == F_CYBER ? U_C_DOZER : U_K_DOZER; }

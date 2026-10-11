@@ -795,6 +795,28 @@ void AiPlayer::think() {
         if (go && S.cmdParadrop(player, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] PARADROP at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
     }
 
+    // ---------- phone strike: the strike power's louder cousin - instead of resolving on the spot it puts a swarm of aircraft over it
+    if (techs > 0 && pl.difficulty >= 1 && S.time > 150.0f && S.strikesReady(player) > 0 && !enemyUnits.empty()) {
+        const float R = 6.0f * TILE;   // the package works a spot about this wide
+        Vec2 at; float best = 0;
+        for (auto* e : enemyUnits) {
+            if (!S.visibleTo(*e, player)) continue;
+            float score = 0;
+            for (auto& o : S.ents) {
+                if (!o.alive || o.kind == EK_RESOURCE || !S.enemies(player, o.owner) || o.isAir()) continue;
+                if (o.isBuilding() && BUILDS[o.type].role == BR_BUNKER) continue;   // aircraft can never take a bunker below its floor: not a strike target
+                if (dist(e->pos, o.pos) > R) continue;
+                float v = o.isUnit() ? (float)UNITS[o.type].cost : (float)BUILDS[o.type].cost * 0.6f;
+                if (!o.isUnit() && BUILDS[o.type].w * BUILDS[o.type].h > 6) v *= 0.5f;   // a big structure shrugs a strike off
+                score += v;
+            }
+            if (score > best) { best = score; at = e->pos; }
+        }
+        // never right on top of our own people: the package shoots whatever it finds over the spot
+        for (auto& o : S.ents) if (o.alive && o.kind != EK_RESOURCE && o.owner == player && dist(at, o.pos) < R * 0.75f) best = 0;
+        if (best >= (pl.faction == F_CYBER ? 1800.0f : 1500.0f) && S.cmdPhoneStrike(player, at) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] PHONE STRIKE at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
+    }
+
     // ---------- army
     float waveThreshold = 3200.0f + minutes * 320.0f;
     if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.6f;

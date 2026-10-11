@@ -20,7 +20,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --autotest, --bombtest, --supporttest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -1238,6 +1238,14 @@ static bool dropTest(u64 seed) {
         if (g_sim.cmdParadrop(0, target)) return fail("paradrop worked before its initial delay");
         pl.dropReady = 0;
         int before = g_sim.countUnits(0), beforeAir = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) beforeAir++;
+        // What this fresh tech structure should send, straight from the simulator's own manifest: the load is not a fixed list any more.
+        std::vector<int> want = g_sim.dropManifest(0);
+        if (want.empty()) return fail("a standing tech structure would send nothing");
+        if (g_sim.dropTier(0) != 0) return fail("a fresh tech structure is not at the first drop tier");
+        for (int t : want) if (UNITS[t].program) return fail("a drop carried a unit the Advanced Program has not unlocked yet");
+        int wantInf = 0, wantVeh = 0, wantAir = 0;
+        for (int t : want) { if (UNITS[t].kind == UK_INF) wantInf++; else if (UNITS[t].kind == UK_VEH) wantVeh++; else wantAir++; }
+        if (std::count(want.begin(), want.end(), fac[0] == F_CYBER ? U_C_SNIPER : U_K_SNIPER) < 1) { fprintf(stderr, "droptest: a fresh tech structure sent %d snipers (snipers are available to it)\n", (int)std::count(want.begin(), want.end(), fac[0] == F_CYBER ? U_C_SNIPER : U_K_SNIPER)); return false; }
         if (!g_sim.cmdParadrop(0, target)) return fail("paradrop refused");
         if (g_sim.cmdParadrop(0, target)) return fail("paradrop ignored its cooldown");
         if (std::abs(g_sim.dropWait(0) - 120.0f) > 0.5f) return fail("cooldown is not two minutes");
@@ -1260,9 +1268,63 @@ static bool dropTest(u64 seed) {
             if (!g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y))) return fail("a paratrooper landed on blocked ground");
             if (dist(e.pos, target) > (DROPS[fac[0]].radius + 6.0f) * TILE && dist(e.pos, g_sim.players[0].basePos) > 10 * TILE) return fail("a paratrooper landed far from the drop zone");
         }
-        if (inf != DROP_INF || veh != DROP_VEH + 1 /* the starting dozer */ || air - beforeAir != DROP_AIR) { fprintf(stderr, "droptest: landed %d infantry %d vehicles %d aircraft\n", inf, veh, air - beforeAir); return fail("wrong load"); }
-        if (g_sim.countUnits(0) - before != DROP_INF + DROP_VEH + DROP_AIR) return fail("wrong unit count");
-        printf("droptest drop %s: ok (%d infantry, %d vehicles, %d aircraft, up to %d on the silk at once)\n", FACTION_NAME[fac[0]], inf, veh - 1, air - beforeAir, maxFalling);
+        if (inf != wantInf || veh != wantVeh + 1 /* the starting dozer */ || air - beforeAir != wantAir) { fprintf(stderr, "droptest: landed %d infantry %d vehicles %d aircraft (manifest said %d/%d/%d)\n", inf, veh, air - beforeAir, wantInf, wantVeh, wantAir); return fail("the load that landed is not the manifest the plane loaded"); }
+        if (g_sim.countUnits(0) - before != (int)want.size()) return fail("wrong unit count");
+        printf("droptest drop %s: ok (tier 1 '%s': %d infantry, %d vehicles, %d aircraft, up to %d on the silk at once)\n", FACTION_NAME[fac[0]], DROP_TIERS[0].name, inf, veh - 1, air - beforeAir, maxFalling);
+
+        // ---- it is upgradable: the same Data Center / Arms Lab sends more once the army learns things (R3/R4/R5). Snipers are
+        // unlocked by the tech structure itself, so they must already be in the first load (R2); the Advanced Program's own units
+        // (Ion Lancer, Aegis Titan) and the structure upgrades must deepen it afterwards, for a human army and for a computer one.
+        {
+            int sniper = fac[0] == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+            int elite = fac[0] == F_CYBER ? U_C_ELITE : U_K_ELITE;
+            int titan = fac[0] == F_CYBER ? U_C_TITAN : U_K_TITAN;
+            auto has = [](const std::vector<int>& v, int t) { return std::find(v.begin(), v.end(), t) != v.end(); };
+            if (!has(want, sniper)) return fail("the first drop did not carry the snipers the army can field");
+            if (has(want, elite) || has(want, titan)) return fail("the first drop carried Advanced Program units");
+            if (g_sim.dropManifest(0).size() != want.size()) return fail("the manifest changed with nothing unlocked");
+            pl.advTech = true;
+            if (g_sim.dropTier(0) <= 0) return fail("the Advanced Program did not deepen the drop");
+            std::vector<int> mid = g_sim.dropManifest(0);
+            if (mid.size() <= want.size()) return fail("a deeper drop is not bigger");
+            if (!has(mid, elite)) return fail("the Advanced Program's elite infantry did not join the drop");
+            pl.upg[UPG_REPAIR] = pl.upg[UPG_GUNS] = true;
+            if (g_sim.dropTier(0) != 2) return fail("the Advanced Program plus two upgrades did not reach the top drop tier");
+            std::vector<int> top = g_sim.dropManifest(0);
+            if (top.size() <= mid.size()) return fail("the top tier is not bigger than the middle one");
+            if (!has(top, titan)) return fail("the top tier did not reach the super-heavy walker");
+            if (!has(top, fac[0] == F_CYBER ? U_C_JET : U_K_JET)) return fail("the top tier did not reach the army's jets");
+            if (DROP_TIERS[0].cooldown <= DROP_TIERS[2].cooldown) return fail("a deeper drop did not shorten its cooldown");
+            // a computer army reads the same manifest: its own unlocks deepen its drops too - and its own structures gate what may appear
+            {
+                int bbFoe = firstBuildOf(fac[1]) + BR_TECH;
+                Vec2 bp1 = g_sim.players[1].basePos;
+                for (int dy = 4; dy < 20 && !g_sim.hasBuilding(1, bbFoe); dy++) for (int dx = -14; dx < 14 && !g_sim.hasBuilding(1, bbFoe); dx++) { int tx = tileOf(bp1.x) + dx, ty = tileOf(bp1.y) + dy; if (g_sim.canPlace(1, bbFoe, tx, ty)) g_sim.placeBuilding(bbFoe, 1, tx, ty, true); }
+                if (!g_sim.hasBuilding(1, bbFoe)) return fail("could not give the computer army a tech structure");
+                std::vector<int> botEarly = g_sim.dropManifest(1);
+                if (botEarly.empty()) return fail("a computer army's standing tech structure would send nothing");
+                for (int t : botEarly) if (UNITS[t].program) return fail("a computer army's drop carried a unit its own program has not unlocked");
+                if (std::count(botEarly.begin(), botEarly.end(), fac[1] == F_CYBER ? U_C_SNIPER : U_K_SNIPER) < 1) return fail("a computer army's drop carried no sniper though its own tech structure unlocks them");
+                g_sim.players[1].advTech = true; g_sim.players[1].upg[UPG_REPAIR] = g_sim.players[1].upg[UPG_GUNS] = true;
+                std::vector<int> botLate = g_sim.dropManifest(1);
+                if (botLate.size() <= botEarly.size()) { fprintf(stderr, "droptest: a computer army's drop went %d -> %d with its own unlocks\n", (int)botEarly.size(), (int)botLate.size()); return false; }
+                if (std::find(botLate.begin(), botLate.end(), fac[1] == F_CYBER ? U_C_ELITE : U_K_ELITE) == botLate.end()) return fail("a computer army's program units did not join its drop");
+                printf("droptest bot %s: ok (its own tech structure sends %d units with the snipers in them; its own program and upgrades grow that to %d)\n", FACTION_NAME[fac[1]], (int)botEarly.size(), (int)botLate.size());
+            }
+            if (g_sim.dropTier(1) != 2) return fail("a computer army's unlocks did not deepen its drop");
+            // and the same structure really does send that heavier force now: call it again and count what lands
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && e.bt().role == BR_TECH) e.dropTimer = 0;
+            int before2 = g_sim.countUnits(0);
+            if (!g_sim.cmdParadrop(0, target)) return fail("the top-tier drop was refused");
+            if (std::abs(g_sim.dropWait(0) - DROP_TIERS[2].cooldown) > 0.5f) return fail("the deeper drop did not use the shorter cooldown");
+            for (int t = 0; t < 20 * 60 && !g_sim.airlifts.empty(); t++) { g_sim.step(); g_sim.events.clear(); }
+            for (int t = 0; t < 20 * 6; t++) { g_sim.step(); g_sim.events.clear(); }
+            if (!g_sim.airlifts.empty()) return fail("the top-tier plane never left the map");
+            int got2 = g_sim.countUnits(0) - before2;
+            if (got2 != (int)top.size()) { fprintf(stderr, "droptest: the top-tier drop landed %d of %d\n", got2, (int)top.size()); return false; }
+            if (got2 <= (int)want.size()) return fail("the top-tier drop is not bigger than the first one");
+            printf("droptest upgrades %s: ok (tier 1 -> tier 3 grew the load from %d to %d units, snipers in it, cooldown %d s -> %d s)\n", FACTION_NAME[fac[0]], (int)want.size(), got2, (int)DROP_TIERS[0].cooldown, (int)DROP_TIERS[2].cooldown);
+        }
     }
     // anti-air on the approach brings the plane down with its load
     {
@@ -1293,12 +1355,105 @@ static bool dropTest(u64 seed) {
         if (placed < 6) return fail("could not set the anti-air screen up");
         if (g_sim.players[1].lowPower()) return fail("the screen has no power");
         int before = g_sim.countUnits(0);
+        std::vector<int> want = g_sim.dropManifest(0);
         if (!g_sim.cmdParadrop(0, target)) return fail("paradrop refused (flak test)");
         for (int t = 0; t < 20 * 45 && !g_sim.airlifts.empty(); t++) { g_sim.step(); g_sim.events.clear(); }
         for (int t = 0; t < 20 * 5; t++) { g_sim.step(); g_sim.events.clear(); }
         int got = g_sim.countUnits(0) - before;
-        if (got >= DROP_INF + DROP_VEH + DROP_AIR) return fail("the whole load got through a wall of flak");
-        printf("droptest flak: ok (the plane was shot down, %d of %d units got out)\n", got, DROP_INF + DROP_VEH + DROP_AIR);
+        if (got >= (int)want.size()) return fail("the whole load got through a wall of flak");
+        printf("droptest flak: ok (the plane was shot down, %d of %d units got out)\n", got, (int)want.size());
+    }
+    return true;
+}
+
+// The Phone Strike: the tech structure's other support power. One call takes a swarm of real aircraft (helicopters, bombers and jets, with
+// a scout drone) across the map to a spot you pick; they attack what stands there and then go home. Needs a tech structure, one call per
+// cooldown per structure, and the package grows with the army like a drop does.
+static bool strikeTest(u64 seed) {
+    auto fail = [](const char* m) { fprintf(stderr, "striketest: %s\n", m); return false; };
+    auto run = [](float sec) { for (int t = 0; t < (int)(20 * sec); t++) { g_sim.step(); g_sim.events.clear(); } };
+    for (int fi = 0; fi < 2; fi++) {
+        Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
+        bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+        g_sim.init(2, fac, ai, diff, team, seed + 3 * fi);
+        Player& pl = g_sim.players[0]; pl.money = 100000;
+        std::fill(pl.explored.begin(), pl.explored.end(), 1);
+        int bb = firstBuildOf(fac[0]);
+        Vec2 b0 = pl.basePos;
+        Vec2 line = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 24);
+        // nothing to call with, and nothing to call before the support powers open up
+        if (g_sim.cmdPhoneStrike(0, line) || g_sim.strikesReady(0) != 0 || g_sim.strikeWait(0) >= 0) return fail("a strike was offered without a tech structure");
+        for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (!g_sim.hasBuilding(0, bb + BR_TECH) && g_sim.canPlace(0, bb + BR_TECH, tx, ty)) g_sim.placeBuilding(bb + BR_TECH, 0, tx, ty, true); }
+        if (!g_sim.hasBuilding(0, bb + BR_TECH)) return fail("could not place the tech structure");
+        if (g_sim.cmdPhoneStrike(0, line)) return fail("a strike worked before the support powers open up");
+        pl.dropReady = 0;
+        if (g_sim.strikesReady(0) != 1) return fail("one tech structure should take one call");
+        // the first tier is already a swarm of all three kinds (R7: helicopters, jets and drones, whatever the army has learned so far)
+        if (g_sim.dropTier(0) != 0) return fail("a fresh tech structure is not at the first tier");
+        std::vector<int> weak = g_sim.strikeManifest(0);
+        int wh = 0, wj = 0, wd = 0;
+        for (int t : weak) { const UnitType& u = UNITS[t]; if (u.role == UR_SCOUT || (!u.heli && u.bomber)) wd++; else if (u.jet) wj++; else wh++; }
+        if (!wh || !wj || !wd || (int)weak.size() < 8) { fprintf(stderr, "striketest: the first-tier package is %d aircraft (%d helicopters, %d jets, %d drones)\n", (int)weak.size(), wh, wj, wd); return false; }
+        // what answers the phone: the army's own armed aircraft only, and a real mix of helicopters, jets and drones
+        pl.advTech = true;
+        std::vector<int> swarm = g_sim.strikeManifest(0);
+        if (swarm.size() <= weak.size()) { fprintf(stderr, "striketest: %d aircraft after the Advanced Program, %d before\n", (int)swarm.size(), (int)weak.size()); return false; }
+        int heli = 0, jet = 0, drone = 0, armed = 0;
+        for (int t : swarm) {
+            const UnitType& u = UNITS[t];
+            if (u.kind != UK_AIR || u.faction != fac[0] || (u.role != UR_COMBAT && u.role != UR_SCOUT)) { fprintf(stderr, "striketest: type %d '%s' (kind %d, weapon %d, faction %d, role %d) answered a %s army's call\n", t, u.name, (int)u.kind, u.weapon, (int)u.faction, (int)u.role, FACTION_NAME[fac[0]]); return false; }
+            if (u.weapon >= 0) armed++;
+            // the game's own flags: 'heli' means it hovers (the recon drone hovers too), 'jet' is the supersonic one, the rest are the cheap
+            // bomber drones - so tell a gunship from a jet from a drone the way the aircraft themselves behave
+            if (u.role == UR_SCOUT || (!u.heli && u.bomber)) drone++;
+            else if (u.jet) jet++;
+            else heli++;
+        }
+        if ((int)swarm.size() < 6) { fprintf(stderr, "striketest: %d aircraft in a strike package\n", (int)swarm.size()); return false; }
+        if (!heli || !jet || !drone) { fprintf(stderr, "striketest: %d helicopters, %d jets, %d drones\n", heli, jet, drone); return false; }
+        if (armed < 5) { fprintf(stderr, "striketest: only %d of %d aircraft in the package carry a weapon\n", armed, (int)swarm.size()); return false; }
+        // an enemy line drawn up right where the call goes
+        int foeInf = firstUnitOf(fac[1]) + 2, foeVeh = firstUnitOf(fac[1]) + 5;
+        std::vector<Ref> foes;
+        for (int k = 0; k < 6; k++) foes.push_back(g_sim.spawnUnit(k % 2 ? foeVeh : foeInf, 1, line + Vec2((k - 3) * 40.0f, (k % 3 - 1) * 30.0f)));
+        float foeHp0 = 0; for (auto r : foes) if (Entity* e = g_sim.get(r)) foeHp0 += e->hp;
+        int beforeAir = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) beforeAir++;
+        if (!g_sim.cmdPhoneStrike(0, line)) return fail("the strike was refused");
+        if (g_sim.cmdPhoneStrike(0, line)) return fail("the strike ignored its cooldown");
+        if (std::abs(g_sim.strikeWait(0) - STRIKE_COOLDOWN) > 0.5f) return fail("wrong strike cooldown");
+        // the swarm really does come in and close on the called spot
+        int spawned = 0; float closest = 1e9f; bool closed = false;
+        for (int t = 0; t < 20 * 40; t++) {
+            g_sim.step(); g_sim.events.clear();
+            spawned = 0; closest = 1e9f;
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) { spawned++; closest = std::min(closest, dist(e.pos, line)); }
+            if (spawned == beforeAir + (int)swarm.size() && closest < 12.0f * TILE) { closed = true; break; }
+        }
+        if (spawned != beforeAir + (int)swarm.size()) { fprintf(stderr, "striketest: %d aircraft answered the phone, wanted %d\n", spawned - beforeAir, (int)swarm.size()); return false; }
+        if (!closed) { fprintf(stderr, "striketest: the swarm never closed on the called spot (closest %.0f px)\n", closest); return false; }
+        // and it attacks what stands there, rather than just flying past
+        run(20);
+        float foeHp1 = 0; for (auto r : foes) if (Entity* e = g_sim.get(r)) foeHp1 += e->hp;
+        if (foeHp1 >= foeHp0 * 0.6f) { fprintf(stderr, "striketest: the enemy line took only %.0f of %.0f damage\n", foeHp0 - foeHp1, foeHp0); return false; }
+        // the top tier sends a bigger swarm still: the same tech structure grows with the army's unlocks
+        pl.upg[UPG_REPAIR] = pl.upg[UPG_GUNS] = true;
+        if (g_sim.dropTier(0) != 2) return fail("the strike tiers do not follow the drop tiers");
+        int big = (int)g_sim.strikeManifest(0).size();
+        if (big <= (int)swarm.size()) { fprintf(stderr, "striketest: %d aircraft at the top tier, %d at the middle one\n", big, (int)swarm.size()); return false; }
+        // a second tech structure that has not been called on yet can take a call while the first is still cooling down
+        for (int dy = 4; dy < 20 && g_sim.countBuildings(0, bb + BR_TECH, false) < 2; dy++)
+            for (int dx = -14; dx < 14 && g_sim.countBuildings(0, bb + BR_TECH, false) < 2; dx++) {
+                int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy;
+                if (g_sim.canPlace(0, bb + BR_TECH, tx, ty)) g_sim.placeBuilding(bb + BR_TECH, 0, tx, ty, true);
+            }
+        if (g_sim.countBuildings(0, bb + BR_TECH, false) < 2) return fail("could not place a second tech structure");
+        if (g_sim.strikesReady(0) != 1) return fail("the second tech structure did not offer a call while the first was cooling down");
+        if (!g_sim.cmdPhoneStrike(0, line)) return fail("the second tech structure refused the call");
+        if (g_sim.strikesReady(0) != 0) return fail("one call cooled down both tech structures");
+        // the cooldown does come back
+        for (int t = 0; t < (int)((STRIKE_COOLDOWN + 2.0f) * 20) && g_sim.strikesReady(0) < 2; t++) { g_sim.step(); g_sim.events.clear(); }
+        if (g_sim.strikesReady(0) != 2) return fail("the calls did not come back after the cooldown");
+        printf("striketest %s: ok (a swarm of %d aircraft grew %d -> %d -> %d with the army's unlocks: %d helicopters, %d jets, %d drones at the middle tier; the enemy line was left at %.0f%% of its health)\n", FACTION_NAME[fac[0]], (int)swarm.size(), (int)weak.size(), (int)swarm.size(), big, heli, jet, drone, 100.0f * foeHp1 / std::max(1.0f, foeHp0));
     }
     return true;
 }
@@ -2336,6 +2491,7 @@ int main(int argc, char** argv) {
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
         else if (a == "--droptest") { g_map.generate(); return dropTest(seed) ? 0 : 1; }
+        else if (a == "--striketest") { g_map.generate(); return strikeTest(seed) ? 0 : 1; }
         else if (a == "--haultest") { g_map.generate(); return haulTest(seed) ? 0 : 1; }
         else if (a == "--allytest") { g_map.generate(); return allyTest(seed) ? 0 : 1; }
         else if (a == "--aidtest") { g_map.generate(); return aidTest(seed) ? 0 : 1; }
@@ -2655,6 +2811,9 @@ int main(int argc, char** argv) {
                 Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
                 for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(bp.x) + dx, ty = tileOf(bp.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
                 g_sim.players[0].dropReady = 0;
+                if (getenv("ONEHOUR_DROPUPG")) {   // showcase the same Data Center later in the match: its program and its structure upgrades are already in
+                    g_sim.players[0].advTech = true; g_sim.players[0].upg[UPG_REPAIR] = g_sim.players[0].upg[UPG_GUNS] = true;
+                }
                 Vec2 tgt = g_map.nearestFree(bp + (ep - bp) * 0.45f, 40);
                 if (!g_sim.cmdParadrop(0, tgt)) fprintf(stderr, "drop showcase: the call was refused\n");
                 int n = atoi(getenv("ONEHOUR_DROP")); if (n < 1) n = 100;
@@ -2663,7 +2822,32 @@ int main(int argc, char** argv) {
                 Vec2 look = tgt - dir * back;
                 g_game.cam = Vec2(clampf(look.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(look.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
-                printf("drop showcase: %zu planes in the air, %d units\n", g_sim.airlifts.size(), g_sim.countUnits(0));
+                printf("drop showcase: %zu planes in the air, %d units, %zu in the manifest (tier %d of %d)\n", g_sim.airlifts.size(), g_sim.countUnits(0), g_sim.dropManifest(0).size(), g_sim.dropTier(0) + 1, DTI_COUNT);
+            }
+            if (getenv("ONEHOUR_STRIKE")) {   // showcase: the Hotline Strike swarm over an enemy line (ONEHOUR_STRIKE=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera up the approach)
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction;
+                int bb0 = firstBuildOf(f0);
+                Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
+                for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(bp.x) + dx, ty = tileOf(bp.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
+                g_sim.players[0].advTech = true;   // the showcase calls in the full package, as it looks at the top tier
+                g_sim.players[0].upg[UPG_REPAIR] = g_sim.players[0].upg[UPG_GUNS] = true;
+                g_sim.players[0].dropReady = 0;
+                Vec2 tgt = g_map.nearestFree(bp + (ep - bp) * 0.45f, 40);
+                for (int k = 0; k < 8; k++) {   // an enemy line drawn up right where the call goes
+                    int t = (k % 2) ? firstUnitOf(f1) + 5 : firstUnitOf(f1) + 2;
+                    g_sim.spawnUnit(t, 1, g_map.nearestFree(tgt + Vec2((k - 4) * 34.0f, (k % 3 - 1) * 30.0f), 12));
+                }
+                std::vector<int> pack = g_sim.strikeManifest(0);
+                if (!g_sim.cmdPhoneStrike(0, tgt)) fprintf(stderr, "strike showcase: the call was refused\n");
+                int n = atoi(getenv("ONEHOUR_STRIKE")); if (n < 1) n = 100;
+                float back = getenv("ONEHOUR_CAMBACK") ? (float)atof(getenv("ONEHOUR_CAMBACK")) : 0.0f;
+                Vec2 look = tgt - Vec2(0, back);
+                g_game.cam = Vec2(clampf(look.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(look.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                int ours = 0, oursAir = 0, foes = 0;
+                for (auto& e : g_sim.ents) if (e.alive && e.isUnit()) { if (e.owner == 0) { ours++; if (e.isAir()) oursAir++; } else if (e.owner == 1) foes++; }
+                printf("strike showcase: %d aircraft in the package (%s), %d of our aircraft in the air, enemy line left with %d units\n", (int)pack.size(), FACTION_NAME[f0], oursAir, foes);
             }
             if (getenv("ONEHOUR_AID")) {   // showcase: an Aid Drop near the enemy base (ONEHOUR_AID=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera against the heading)
                 for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);

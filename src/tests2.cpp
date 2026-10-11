@@ -426,6 +426,44 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
     run(30);
     CHECK(g_sim.get(ch)->passengers.empty(), "the lifter did not unload at the chosen spot");
     g_game.selection.clear(); g_game.cancelModes();
+    // ---- the tech structure panel: the airdrop names the load it will actually carry (with its tier) and the phone strike is there, ready
+    Ref tech = placeAt(firstBuildOf(me) + BR_TECH, 0, mid + Vec2(0, -12 * TILE));
+    CHECK(tech.valid(), "no spot for the tech structure");
+    g_sim.players[0].dropReady = 0; g_sim.updatePowerPublic();
+    g_game.selection.clear(); g_game.selection.push_back(tech); g_game.cancelModes();
+    g_game.buildButtons();
+    int sniperMe2 = me == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+    int heliT = me == F_CYBER ? U_C_HELI : U_K_AIR, jetT = me == F_CYBER ? U_C_JET : U_K_JET, droneT = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+    bool sawDrop = false, sawStrike = false;
+    for (auto& b : g_game.buttons) {
+        if (std::string(DROPS[me].name) == b.label) {
+            sawDrop = true;
+            CHECK(b.enabled, "the airdrop button is not ready at a fresh tech structure");
+            CHECK(b.tip.find("tier") != std::string::npos, "the airdrop tooltip does not name the drop tier");
+            CHECK(b.tip.find(UNITS[sniperMe2].name) != std::string::npos, "the airdrop tooltip does not list the snipers it carries");
+        }
+        if (std::string(STRIKES[me].name) == b.label) {
+            sawStrike = true;
+            CHECK(b.enabled, "the phone strike button is not ready at a fresh tech structure");
+            CHECK(b.tip.find(UNITS[heliT].name) != std::string::npos, "the strike tooltip does not name its helicopters");
+            CHECK(b.tip.find(UNITS[jetT].name) != std::string::npos, "the strike tooltip does not name its jets");
+            CHECK(b.tip.find(UNITS[droneT].name) != std::string::npos, "the strike tooltip does not name its drone");
+        }
+    }
+    CHECK(sawDrop && sawStrike, "the tech structure panel has no airdrop / phone strike button");
+    // the I hotkey picks the strike and a click on the ground really calls the swarm in
+    g_game.hotkey(SDLK_i, 0);
+    CHECK(g_game.strikeMode, "I did not start picking a spot for the phone strike");
+    int air0 = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) air0++;
+    Vec2 callAt = g_map.nearestFree(mid + Vec2(6 * TILE, 0), 20);
+    Vec2 cs = g_game.worldToScreen(callAt);
+    g_game.mouseX = (int)cs.x; g_game.mouseY = (int)cs.y;
+    SDL_Event ev2; memset(&ev2, 0, sizeof ev2); ev2.type = SDL_MOUSEBUTTONDOWN; ev2.button.button = SDL_BUTTON_LEFT;
+    g_game.gameEvent(ev2);
+    CHECK(!g_game.strikeMode, "clicking the ground did not call the phone strike in");
+    int air1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) air1++;
+    CHECK(air1 > air0, "the phone strike put no aircraft in the air");
+    g_game.selection.clear();
     printf("stealthtest %s: controls ok\n", FACTION_NAME[me]);
     return true;
 }
