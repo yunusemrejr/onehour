@@ -44,7 +44,7 @@ struct Map {
     bool navTile(int x, int y) const { return inMap(x, y) && tiles[y * MAP_W + x] == T_WATER && (blocked[y * MAP_W + x] & ~1) == 0; }
     bool navOpen(int x, int y) const { return navTile(x, y) && navTile(x + 1, y) && navTile(x - 1, y) && navTile(x, y + 1) && navTile(x, y - 1); }
     bool bigWater(int x, int y) const { return inMap(x, y) && waterComp[y * MAP_W + x] != 0 && waterSize[waterComp[y * MAP_W + x]] >= NAVAL_WATER_MIN; }
-    Vec2 nearestWater(Vec2 p, int maxR = 12) const;                              // centre of the nearest open water tile (p itself when it already is one)
+    Vec2 nearestWater(Vec2 p, int maxR = 12, bool bigOnly = false) const;       // centre of the nearest open water tile (p itself when it already is one); bigOnly: in the lake, not in a pond or a cut-off river
     bool findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 4000) const;   // like findPath for ships; the goal is moved to the nearest open water
     bool navLineClear(Vec2 a, Vec2 b) const;                                     // straight line over open water
 };

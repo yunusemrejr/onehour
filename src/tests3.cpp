@@ -1,0 +1,540 @@
+// One Hour - headless tests of the lake and its warships, jeeps with shooting crews, protector drones, the Hotline Strike fighters and the anti-nuke
+// defences (--navytest, --jeeptest, --dronetest, --strikejettest, --antinuketest)
+#include "sim.h"
+#include "map.h"
+#include "ui.h"
+#include "ai.h"
+#include "testutil.h"
+
+static bool g_ok3 = true;
+static const char* g_name3 = "test";
+static bool failMsg3(const char* m) { fprintf(stderr, "%s: %s\n", g_name3, m); g_ok3 = false; return false; }
+#define CHECK3(cond, msg) do { if (!(cond)) return failMsg3(msg); } while (0)
+
+static void run3(float sec) { int n = (int)(sec * SIM_HZ); for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); } }
+static bool alive3(Ref r) { return g_sim.get(r) != nullptr; }
+static float hp3(Ref r) { Entity* e = g_sim.get(r); return e ? e->hp : -1.0f; }
+
+// A scene with two armies (everything explored, plenty of money, enough power) and nothing but the two Command Cores and the lake in the middle.
+static void lakeScene(Faction f0, Faction f1, u64 seed) {
+    Faction fac[2] = { f0, f1 };
+    bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
+    g_sim.init(2, fac, ai, diff, team, seed);
+    for (int p = 0; p < 2; p++) {
+        g_sim.players[p].money = 400000; std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+        g_sim.players[p].dropReady = 0;
+    }
+    for (auto& e : g_sim.ents) if (e.alive && e.isUnit()) g_sim.destroy(e, false);
+}
+
+static Ref placeNear3(int type, int owner, Vec2 nearP) {
+    int cx = tileOf(nearP.x), cy = tileOf(nearP.y);
+    for (int r = 0; r < 24; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+        if (std::abs(dx) != r && std::abs(dy) != r) continue;
+        if (g_sim.canPlace(owner, type, cx + dx, cy + dy)) return g_sim.placeBuilding(type, owner, cx + dx, cy + dy, true);
+    }
+    return NOREF;
+}
+static void givePower3(int owner) {
+    int pt = firstBuildOf(g_sim.players[owner].faction) + BR_POWER;
+    Vec2 in = (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - g_sim.players[owner].basePos).norm();   // (toward the middle of the map: the bases sit in the corners)
+    for (int i = 0; i < 5; i++) placeNear3(pt, owner, g_sim.players[owner].basePos + in * ((6 + i * 2) * (float)TILE));
+    g_sim.updatePowerPublic();
+}
+static Vec2 lakePoint(float dx, float dy) { return Vec2(WORLD_W * 0.5f + dx * TILE, WORLD_H * 0.5f + dy * TILE); }
+static Ref ship3(int type, int owner, Vec2 at) { return g_sim.spawnUnit(type, owner, g_map.nearestWater(at, 12)); }
+static bool onWater(const Entity& e) { return g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)); }
+
+// ---------------------------------------------------------------------------------------------------------------- the lake and the fleet
+static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
+    lakeScene(me, foe, seed);
+    // the map: a big central lake, one body of water for the ships, still crossable on land
+    int biggest = 0; for (int s : g_map.waterSize) biggest = std::max(biggest, s);
+    CHECK3(biggest >= 350, "the central lake is not big (350 tiles or more)");
+    CHECK3(g_map.bigWater(40, 40) && g_map.navOpen(40, 40), "the middle of the map is not open lake");
+    {   // a land route between the bases that is not the lake (from beside one Command Core to beside the other)
+        std::vector<Vec2> path;
+        Vec2 s0 = g_map.nearestFree(g_sim.players[0].basePos + Vec2(0, 5 * TILE), 10), s1 = g_map.nearestFree(g_sim.players[1].basePos + Vec2(0, 5 * TILE), 10);
+        CHECK3(g_map.findPath(s0, s1, path, 20000), "no land route between the bases");
+        for (Vec2 q : path) CHECK3(g_map.passable(tileOf(q.x), tileOf(q.y)), "the land route crosses water");
+    }
+    // ships sail on open water only, along a path planned over it
+    std::vector<Vec2> np;
+    Vec2 a = g_map.nearestWater(lakePoint(-9, 0), 6), b = g_map.nearestWater(lakePoint(9, 1), 6);
+    CHECK3(g_map.findNavalPath(a, b, np), "no naval path across the lake");
+    for (Vec2 q : np) CHECK3(g_map.navTile(tileOf(q.x), tileOf(q.y)), "a naval waypoint is not water");
+    // a Naval Yard must touch the open lake
+    int yardT = me == F_CYBER ? B_C_NAVAL : B_K_NAVAL, facT = firstBuildOf(me) + BR_FACTORY, techT = firstBuildOf(me) + BR_TECH;
+    CHECK3(!g_sim.canPlace(0, yardT, 8, 8), "a Naval Yard may stand on dry land away from the lake");
+    CHECK3(!g_sim.canPlace(0, yardT, 17, 31), "a Naval Yard may stand on a bridge-cut river");
+    int tx = 0, ty = 0;
+    CHECK3(g_sim.shoreSite(0, yardT, g_sim.players[0].basePos, tx, ty), "no shore site for a Naval Yard");
+    {   // the site touches the lake along one of its edges
+        bool touch = false;
+        for (int j = ty - 1; j <= ty + 3; j++) for (int i = tx - 1; i <= tx + 3; i++) { bool inside = i >= tx && i < tx + 3 && j >= ty && j < ty + 3, corner = (i < tx || i >= tx + 3) && (j < ty || j >= ty + 3); if (!inside && !corner && g_map.bigWater(i, j)) touch = true; }
+        CHECK3(touch, "the shore site does not touch the lake");
+    }
+    // it needs the Assembly Plant / War Factory first
+    CHECK3(!g_sim.buildAvailable(0, yardT), "a Naval Yard is buildable without a factory");
+    placeNear3(facT, 0, g_sim.players[0].basePos + Vec2(0, 6 * TILE));
+    placeNear3(techT, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));
+    givePower3(0);
+    CHECK3(g_sim.buildAvailable(0, yardT), "a Naval Yard is not buildable with a factory");
+    Ref yard = g_sim.placeBuilding(yardT, 0, tx, ty, true);
+    g_sim.updatePowerPublic();
+    int destroyer = me == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cruiser = me == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
+    CHECK3(g_sim.unitAvailable(0, destroyer) && g_sim.unitAvailable(0, cruiser), "the ships are not available at a yard with a tech structure");
+    CHECK3(g_sim.cmdTrain(yard, destroyer) && g_sim.cmdTrain(yard, cruiser), "the yard cannot train ships");
+    int before = g_sim.countUnits(0, destroyer) + g_sim.countUnits(0, cruiser);
+    run3(70);
+    CHECK3(g_sim.countUnits(0, destroyer) + g_sim.countUnits(0, cruiser) == before + 2, "the yard did not build both ships");
+    for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().naval) {
+        CHECK3(onWater(e), "a ship came out of the yard onto land");
+        if (dist(e.pos, lakePoint(0, 0)) >= 20 * TILE) fprintf(stderr, "ship %s at %.0f,%.0f tile %d,%d order %d target %.0f,%.0f path %zu/%zu airspeed %.1f\n", e.ut().name, e.pos.x, e.pos.y, tileOf(e.pos.x), tileOf(e.pos.y), (int)e.order, e.target.x, e.target.y, e.pathIdx, e.path.size(), e.airspeed);
+        CHECK3(dist(e.pos, lakePoint(0, 0)) < 20 * TILE, "a new ship did not head out into the lake");
+    }
+    // and it sails where it is sent, over water the whole way, turning like a ship
+    Ref sh = ship3(destroyer, 0, lakePoint(-8, 0));
+    Vec2 goal = g_map.nearestWater(lakePoint(9, 2), 6);
+    g_sim.cmdMove({sh}, goal, false);
+    float lastAngle = g_sim.get(sh)->angle; float maxTurn = 0; bool arrived = false;
+    for (int t = 0; t < 20 * 60 && !arrived; t++) {
+        g_sim.step(); g_sim.events.clear();
+        Entity* e = g_sim.get(sh); CHECK3(e, "the ship vanished");
+        CHECK3(onWater(*e), "the ship left the water");
+        float da = std::abs(std::atan2(std::sin(e->angle - lastAngle), std::cos(e->angle - lastAngle))); maxTurn = std::max(maxTurn, da); lastAngle = e->angle;
+        if (dist(e->pos, goal) < 40) arrived = true;
+    }
+    CHECK3(arrived, "the ship never crossed the lake");
+    CHECK3(maxTurn < 1.1f * SIM_DT + 0.001f, "the ship turned faster than its turn rate");
+    // a destination on land: it sails to the nearest open water
+    g_sim.cmdMove({sh}, g_sim.players[0].basePos, false);
+    run3(40);
+    CHECK3(g_sim.get(sh) && onWater(*g_sim.get(sh)), "a ship sent to a land target left the water");
+    printf("lake %s: ok (lake %d tiles, yard at %d,%d builds ships, a destroyer crosses the lake in a turn-limited sail)\n", FACTION_NAME[me], biggest, tx, ty);
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- ships fight
+static bool shipsFight(Faction me, Faction foe, u64 seed) {
+    lakeScene(me, foe, seed);
+    int dM = me == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, dF = foe == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER;
+    int cM = me == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
+    int tankF = firstUnitOf(foe) + 5;
+    // two destroyers per side fight it out in the middle of the lake
+    std::vector<Ref> mine, theirs;
+    for (int i = 0; i < 2; i++) { mine.push_back(ship3(dM, 0, lakePoint(-7, -2 + i * 3))); theirs.push_back(ship3(dF, 1, lakePoint(7, -2 + i * 3))); }
+    g_sim.cmdMove(mine, lakePoint(0, 0), true); g_sim.cmdMove(theirs, lakePoint(0, 0), true);
+    run3(60);
+    float hm = 0, ht = 0; int am = 0, at = 0;
+    for (Ref r : mine) if (alive3(r)) { hm += hp3(r); am++; }
+    for (Ref r : theirs) if (alive3(r)) { ht += hp3(r); at++; }
+    CHECK3(am + at < 4 || hm + ht < 4 * UNITS[dM].hp * 0.95f, "two fleets met on the lake and nothing was damaged");
+    // a ship dies as a ship: wreck, no corpse of a vehicle on land
+    for (Ref r : mine) if (Entity* e = g_sim.get(r)) CHECK3(onWater(*e), "a fighting ship is on land");
+    // cruiser rockets hit a tank on the shore, a long way off, and nothing closer than the minimum range
+    lakeScene(me, foe, seed + 1);
+    Vec2 shore = g_map.nearestFree(lakePoint(0, -15), 10);
+    Ref tank = g_sim.spawnUnit(tankF, 1, shore);
+    Entity* tk = g_sim.get(tank); tk->disabledUntil = 1e9f;   // it sits still and takes it
+    Vec2 wpos = g_map.nearestWater(Vec2(tk->pos.x, tk->pos.y + 11.0f * TILE), 12);
+    float range = dist(wpos, tk->pos) / TILE;
+    CHECK3(range < WEAPONS[UNITS[cM].weapon].range, "the test scene put the cruiser out of its own range");
+    Ref cr = ship3(cM, 0, wpos);
+    float h0 = g_sim.get(tank)->hp;
+    g_sim.cmdAttack({cr}, tank);
+    run3(40);
+    CHECK3(!alive3(tank) || hp3(tank) < h0 * 0.8f, "a cruiser did not hurt a tank on the shore");
+    // a ground tank at the shore shoots a ship that comes close
+    lakeScene(me, foe, seed + 2);
+    Vec2 sh2 = g_map.nearestFree(lakePoint(0, -13.5f), 10);
+    Ref gt = g_sim.spawnUnit(firstUnitOf(me) + 5, 0, sh2);
+    Ref enemyShip = ship3(dF, 1, Vec2(sh2.x, sh2.y + 6 * TILE));
+    float e0 = hp3(enemyShip);
+    g_sim.get(enemyShip)->order = O_IDLE;
+    g_sim.cmdAttack({gt}, enemyShip);
+    run3(30);
+    CHECK3(!alive3(enemyShip) || hp3(enemyShip) < e0, "a tank on the shore could not hurt a ship in range");
+    printf("ships fight %s vs %s: ok\n", FACTION_NAME[me], FACTION_NAME[foe]);
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- nukes sink ships
+static bool nukesSinkShips(Faction me, Faction foe, u64 seed) {
+    lakeScene(me, foe, seed);
+    int dF = foe == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cF = foe == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
+    Vec2 c = lakePoint(0, 0);
+    std::vector<Ref> fleet;
+    for (int i = 0; i < 3; i++) fleet.push_back(ship3(i % 2 ? cF : dF, 1, c + Vec2((i - 1) * 3.0f * TILE, 0)));
+    Ref faraway = ship3(dF, 1, lakePoint(9, 7));
+    Vec2 gz = g_sim.get(fleet[1])->pos;
+    // a bunker's small missile has a fifth of the blast area: every ship inside its circle goes down, whatever its health
+    Sim::Nuke mini{ g_sim.players[0].basePos, gz, 0, Sim::NUKE_FLIGHT - 0.05f, false, MINI_NUKE_SCALE };
+    float R = Sim::nukeRadius(mini);
+    int inside = 0; for (Ref r : fleet) if (dist(g_sim.get(r)->pos, gz) <= R) inside++;
+    CHECK3(inside == 3, "the test fleet is not inside the small blast");
+    CHECK3(dist(g_sim.get(faraway)->pos, gz) > R + 2 * TILE, "the far ship is inside the small blast");
+    g_sim.nukes.push_back(mini);
+    run3(0.5f);
+    int sunk = 0; for (Ref r : fleet) if (!alive3(r)) sunk++;
+    CHECK3(sunk == 3, "a small nuke did not sink every ship in its circle");
+    CHECK3(alive3(faraway), "a small nuke sank a ship far outside its circle");
+    // a full warhead sinks a ship near the rim of its circle too
+    lakeScene(me, foe, seed + 1);
+    Ref rim = ship3(dF, 1, lakePoint(-4, 0));
+    Vec2 rp = g_sim.get(rim)->pos;
+    Vec2 gz2 = g_map.nearestWater(rp + Vec2(NUKE_RADIUS * TILE * 0.85f, 0), 20);
+    CHECK3(dist(gz2, rp) < NUKE_RADIUS * TILE, "the test ship is outside the full blast");
+    g_sim.nukes.push_back({g_sim.players[0].basePos, gz2, 0, Sim::NUKE_FLIGHT - 0.05f, false});
+    run3(0.5f);
+    CHECK3(!alive3(rim), "a full warhead did not sink a ship near the rim of its circle");
+    printf("nukes sink ships %s: ok (all %d ships in a bunker missile's circle sunk, the one outside left alone)\n", FACTION_NAME[foe], sunk);
+    return true;
+}
+
+bool navyTest(u64 seed) {
+    g_name3 = "navytest"; g_ok3 = true;
+    for (int fi = 0; fi < 2; fi++) {
+        Faction me = (Faction)fi, foe = (Faction)(1 - fi);
+        if (!lakeAndShips(me, foe, seed + fi)) return false;
+        if (!shipsFight(me, foe, seed + 3 + fi)) return false;
+        if (!nukesSinkShips(me, foe, seed + 7 + fi)) return false;
+    }
+    printf("navytest: ok\n");
+    return g_ok3;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- jeeps
+static Ref jeepWithCrew(int owner, Vec2 at) {
+    Faction f = g_sim.players[owner].faction;
+    Ref jp = g_sim.spawnUnit(f == F_CYBER ? U_C_JEEP : U_K_JEEP, owner, at);
+    for (int t : g_sim.jeepCrew(owner)) { Ref c = g_sim.spawnUnit(t, owner, at); Entity* cu = g_sim.get(c); Entity* je = g_sim.get(jp); if (cu && je) g_sim.boardQuiet(*cu, *je); }
+    return jp;
+}
+
+static bool jeepScenes(Faction me, Faction foe, u64 seed) {
+    lakeScene(me, foe, seed);
+    flattenArena(lakePoint(0, 0), 24, 24);
+    Vec2 mid = lakePoint(0, 0);
+    int jeepT = me == F_CYBER ? U_C_JEEP : U_K_JEEP, rifle = firstUnitOf(me) + 2, tankF = firstUnitOf(foe) + 5, rifleF = firstUnitOf(foe) + 2;
+    // the same hull, weapon and price in both armies (only the look differs)
+    CHECK3(UNITS[U_C_JEEP].hp == UNITS[U_K_JEEP].hp && UNITS[U_C_JEEP].speed == UNITS[U_K_JEEP].speed && UNITS[U_C_JEEP].cost == UNITS[U_K_JEEP].cost && UNITS[U_C_JEEP].weapon == UNITS[U_K_JEEP].weapon && UNITS[U_C_JEEP].cargoCap == JEEP_SEATS && UNITS[U_K_JEEP].cargoCap == JEEP_SEATS, "the two armies' jeeps are not the same vehicle");
+    // seven seats, soldiers only, and only while it stands still
+    Ref jp = g_sim.spawnUnit(jeepT, 0, mid);
+    std::vector<Ref> men;
+    for (int i = 0; i < 9; i++) men.push_back(g_sim.spawnUnit(rifle, 0, mid + Vec2((i % 3 - 1) * 20.0f, 40.0f + (i / 3) * 18.0f)));
+    Ref tank = g_sim.spawnUnit(firstUnitOf(me) + 5, 0, mid + Vec2(60, 0));
+    CHECK3(!g_sim.canBoard(*g_sim.get(tank), *g_sim.get(jp)), "a tank was allowed into a jeep");
+    CHECK3(g_sim.canBoard(*g_sim.get(men[0]), *g_sim.get(jp)), "a soldier cannot board an empty jeep");
+    g_sim.cmdEnter(men, jp);
+    run3(15);
+    CHECK3((int)g_sim.get(jp)->passengers.size() == JEEP_SEATS, "a jeep did not fill its seven seats");
+    int outside = 0; for (Ref r : men) if (alive3(r) && !g_sim.get(r)->carrier.valid()) outside++;
+    CHECK3(outside == 2, "the two soldiers that did not fit are not standing outside");
+    CHECK3(!g_sim.canBoard(*g_sim.get(men[0]), *g_sim.get(jp)) || g_sim.get(men[0])->carrier.valid(), "a full jeep took an eighth soldier");
+    // the crew rides along and unloads on command
+    g_sim.cmdMove({jp}, mid + Vec2(0, -200), false);
+    run3(4);
+    for (Ref r : g_sim.get(jp)->passengers) CHECK3(g_sim.get(r) && dist(g_sim.get(r)->pos, g_sim.get(jp)->pos) < 2.0f, "a passenger is not where the jeep is");
+    g_sim.cmdUnload(jp, false, Vec2());
+    run3(3);
+    CHECK3(g_sim.get(jp)->passengers.empty(), "the crew did not climb out");
+    for (Ref r : men) if (alive3(r)) CHECK3(!g_sim.get(r)->carrier.valid() && g_map.passable(tileOf(g_sim.get(r)->pos.x), tileOf(g_sim.get(r)->pos.y)), "a soldier climbed out onto blocked ground");
+    // from inside: a rocket trooper hits a tank beyond the jeep's own gun, a sniper picks off infantry far beyond anything else aboard
+    lakeScene(me, foe, seed + 1);
+    flattenArena(lakePoint(0, 0), 24, 24);
+    mid = lakePoint(0, 0);
+    placeNear3(firstBuildOf(me) + BR_TECH, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));   // (the sniper and the thrower need the tech structure)
+    Ref j2 = jeepWithCrew(0, mid);
+    CHECK3((int)g_sim.get(j2)->passengers.size() == JEEP_SEATS, "the test crew is not seven");
+    int rocketN = 0, sniperN = 0; for (Ref r : g_sim.get(j2)->passengers) { Entity* u = g_sim.get(r); if (u->ut().sniper) sniperN++; if (u->type == (me == F_CYBER ? U_C_INF2 : U_K_INF2)) rocketN++; }   // (the anti-armour trooper: Laser Trooper / RPG Trooper)
+    Ref t2 = g_sim.spawnUnit(tankF, 1, mid + Vec2(6.35f * TILE, 0));
+    g_sim.get(t2)->disabledUntil = 1e9f;
+    {   // the tank sits beyond the jeep's own gun and inside the reach of the rocket / laser troopers aboard (ranges are measured to its edge)
+        float edge = g_sim.distToEntity(g_sim.get(j2)->pos, *g_sim.get(t2)) / TILE, rpg = WEAPONS[UNITS[me == F_CYBER ? U_C_INF2 : U_K_INF2].weapon].range;
+        CHECK3(edge > WEAPONS[W_JEEP_MG].range + 0.2f && edge < rpg, "the test geometry does not put the tank between the jeep gun's and the rocket's range");
+    }
+    g_sim.cmdStop({j2});
+    float h0 = hp3(t2);
+    run3(20);
+    CHECK3(!alive3(t2) || hp3(t2) < h0 * 0.8f, "the soldiers of a jeep did not shoot a tank from inside");
+    Ref inf2 = g_sim.spawnUnit(rifleF, 1, mid + Vec2(10.5f * TILE, 0));
+    g_sim.get(inf2)->disabledUntil = 1e9f;
+    run3(15);
+    CHECK3(!alive3(inf2), "a sniper in a jeep did not shoot infantry 10 tiles away");
+    CHECK3(rocketN >= 4 && sniperN == 1, "the dropped crew is not mostly rocket troopers with one sniper");
+    // moving, they keep firing; blown up, some of the crew die and the rest climb out hurt
+    Ref t3 = g_sim.spawnUnit(tankF, 1, mid + Vec2(30 * TILE, 0));
+    g_sim.get(t3)->disabledUntil = 1e9f;
+    g_sim.cmdMove({j2}, mid + Vec2(25 * TILE, 0), false);
+    float h3 = hp3(t3);
+    run3(14);
+    CHECK3(!alive3(t3) || hp3(t3) < h3, "a moving jeep's crew did not fire");
+    int crewBefore = (int)g_sim.get(j2)->passengers.size();
+    Entity* je = g_sim.get(j2);
+    std::vector<Ref> crew = je->passengers;
+    g_sim.applyDamagePublic(*je, 1e6f, 1, NOREF);
+    int dead = 0, hurt = 0, fine = 0;
+    for (Ref r : crew) { Entity* u = g_sim.get(r); if (!u) dead++; else if (u->hp < u->maxHp * 0.9f) hurt++; else fine++; }
+    CHECK3(crewBefore == JEEP_SEATS && dead + hurt + fine == JEEP_SEATS && hurt + fine > 0 && fine == 0, "the crew of a wrecked jeep is not thrown out hurt or killed");
+    // protector drones: one for a jeep, two with the upgrade
+    lakeScene(me, foe, seed + 2);
+    Ref j3 = g_sim.spawnUnit(jeepT, 0, lakePoint(0, -14));
+    CHECK3(g_sim.droneCount(*g_sim.get(j3)) == JEEP_DRONES, "a jeep does not fly with a mini drone");
+    g_sim.players[0].upg[UPG_DRONES] = true;
+    CHECK3(g_sim.droneCount(*g_sim.get(j3)) == JEEP_DRONES + 1, "the Guard Drones upgrade did not give the jeep a second drone");
+    printf("jeeps %s: ok (7 seats, soldiers shoot from inside incl. a sniper at 10 tiles, casualties %d dead %d hurt when it blows up)\n", FACTION_NAME[me], dead, hurt);
+    return true;
+}
+
+bool jeepTest(u64 seed) {
+    g_name3 = "jeeptest"; g_ok3 = true;
+    for (int fi = 0; fi < 2; fi++) if (!jeepScenes((Faction)fi, (Faction)(1 - fi), seed + fi)) return false;
+    printf("jeeptest: ok\n");
+    return g_ok3;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- protector drones
+// A ship is attacked by a missile cruiser, by shell-firing or by laser-firing destroyers for a while: the same scene with and without the Guard
+// Drones upgrade (lasers are too quick for the drones; rockets and shells are not)
+enum { ATK_MISSILES = 0, ATK_LASERS, ATK_SHELLS };
+static float shellingDamage(Faction foe, u64 seed, bool drones, int kind) {
+    lakeScene(F_CYBER, foe, seed);
+    g_sim.players[1].upg[UPG_DRONES] = drones;
+    int dT = foe == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER;
+    int shooterT = kind == ATK_MISSILES ? U_C_CRUISER : (kind == ATK_LASERS ? U_C_DESTROYER : U_K_DESTROYER);   // (Cyber guns are lasers, Clanker guns fire shells)
+    int shooterOwner = 0;
+    Ref tgt = ship3(dT, 1, lakePoint(6, 0));
+    g_sim.get(tgt)->maxHp = g_sim.get(tgt)->hp = 20000.0f;   // (so that the damage done adds up instead of sinking it)
+    std::vector<Ref> shooters;
+    int n = kind == ATK_LASERS ? 3 : 1;   // (one ship: a screen of three drones stops its volleys; a whole fleet's massed fire would saturate it)
+    for (int i = 0; i < n; i++) { Ref r = ship3(shooterT, shooterOwner, lakePoint(-3.0f, -3.0f + i * 3.0f)); shooters.push_back(r); }
+    g_sim.get(tgt)->order = O_IDLE;
+    g_sim.cmdAttack(shooters, tgt);
+    for (int t = 0; t < 20 * 14 && alive3(tgt); t++) {   // the target never moves or shoots back (it would just sail out of range)
+        g_sim.step(); g_sim.events.clear();
+        if (Entity* e = g_sim.get(tgt)) { e->order = O_IDLE; e->cooldown = 1e3f; }
+    }
+    Entity* e = g_sim.get(tgt);
+    return e ? 20000.0f - e->hp : 20000.0f;
+}
+
+bool droneTest(u64 seed) {
+    g_name3 = "dronetest"; g_ok3 = true;
+    for (int fi = 0; fi < 2; fi++) {
+        Faction foe = (Faction)fi;
+        float bare = shellingDamage(foe, seed + fi, false, ATK_MISSILES), screened = shellingDamage(foe, seed + fi, true, ATK_MISSILES);
+        CHECK3(bare > 800.0f, "the missile ship did not hurt a bare destroyer");
+        if (!(screened < bare * 0.5f)) { fprintf(stderr, "dronetest: rockets did %.0f without the screen and %.0f with it\n", bare, screened); return failMsg3("the drones did not blunt a rocket attack"); }
+        float sb = shellingDamage(foe, seed + 3 + fi, false, ATK_SHELLS), ss = shellingDamage(foe, seed + 3 + fi, true, ATK_SHELLS);
+        CHECK3(sb > 400.0f, "the shell-firing destroyer did not hurt a bare destroyer");
+        if (!(ss < sb * 0.6f)) { fprintf(stderr, "dronetest: shells did %.0f without the screen and %.0f with it\n", sb, ss); return failMsg3("the drones did not blunt a shell attack"); }
+        float lb = shellingDamage(foe, seed + 5 + fi, false, ATK_LASERS), ls = shellingDamage(foe, seed + 5 + fi, true, ATK_LASERS);
+        CHECK3(lb > 400.0f && std::abs(lb - ls) < lb * 0.06f, "the drones stopped lasers, which are too quick for them");
+        printf("drones on a %s destroyer: ok (rockets %.0f -> %.0f, shells %.0f -> %.0f, lasers %.0f -> %.0f)\n", FACTION_NAME[foe], bare, screened, sb, ss, lb, ls);
+    }
+    // count, EMP
+    lakeScene(F_CYBER, F_CLANKER, seed + 9);
+    Ref sh = ship3(U_C_DESTROYER, 0, lakePoint(0, 0));
+    CHECK3(g_sim.droneCount(*g_sim.get(sh)) == 0, "a ship has drones without the upgrade");
+    g_sim.players[0].upg[UPG_DRONES] = true;
+    CHECK3(g_sim.droneCount(*g_sim.get(sh)) == SHIP_DRONES, "the upgrade did not give a ship three drones");
+    g_sim.get(sh)->disabledUntil = g_sim.time + 5;
+    CHECK3(g_sim.droneCount(*g_sim.get(sh)) == 0, "a switched-off ship still has its drones");
+    printf("dronetest: ok\n");
+    return g_ok3;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- Hotline Strike fighters
+bool strikeJetTest(u64 seed) {
+    g_name3 = "strikejettest"; g_ok3 = true;
+    for (int fi = 0; fi < 2; fi++) {
+        Faction me = (Faction)fi, foe = (Faction)(1 - fi);
+        lakeScene(me, foe, seed + fi);
+        int techT = firstBuildOf(me) + BR_TECH, jetT = me == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET, airfT = firstBuildOf(me) + BR_AIRFIELD;
+        placeNear3(techT, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));
+        Ref af = placeNear3(airfT, 0, g_sim.players[0].basePos + Vec2(-8 * TILE, 10 * TILE));
+        givePower3(0);
+        CHECK3(!g_sim.cmdTrain(af, jetT), "a strike fighter could be built at an airfield");
+        CHECK3(UNITS[jetT].builtBy == BR_NONE && UNITS[jetT].temp == 1, "the strike fighter is not marked as a loan");
+        // a target worth the trip: a cluster of enemy tanks that sit still
+        Vec2 spot = g_map.nearestFree(lakePoint(0, -17), 10);
+        flattenArena(spot, 10, 10);
+        std::vector<Ref> victims;
+        for (int i = 0; i < 6; i++) { Ref r = g_sim.spawnUnit(firstUnitOf(foe) + 5, 1, spot + Vec2((i % 3 - 1) * 40.0f, (i / 3 - 0.5f) * 40.0f)); g_sim.get(r)->disabledUntil = 1e9f; victims.push_back(r); }
+        float h0 = 0; for (Ref r : victims) h0 += hp3(r);
+        CHECK3(g_sim.cmdPhoneStrike(0, spot), "the strike call was refused");
+        int jets = g_sim.countUnits(0, jetT);
+        CHECK3(jets == STRIKE_JETS, "a strike call did not bring exactly two special fighters");
+        std::vector<Ref> jetRefs;
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == jetT) { jetRefs.push_back(g_sim.refOf(e)); CHECK3(e.order == O_STRIKERUN, "a fighter is not on its strike run"); CHECK3(e.pos.x > 0 && e.pos.y > 0 && e.pos.x < WORLD_W && e.pos.y < WORLD_H, "a fighter spawned off the map"); }
+        // they take no orders and cannot be picked as a unit group
+        g_sim.cmdMove(jetRefs, g_sim.players[0].basePos, false); g_sim.cmdStop(jetRefs); g_sim.cmdAttack(jetRefs, victims[0]);
+        for (Ref r : jetRefs) CHECK3(g_sim.get(r)->order == O_STRIKERUN, "a strike fighter obeyed an order");
+        // the run: three passes of rockets over the spot, then they are gone
+        float fastest = 0; int rockets = 0;
+        for (int t = 0; t < 20 * 40; t++) {
+            g_sim.step(); g_sim.events.clear();
+            for (Ref r : jetRefs) if (Entity* e = g_sim.get(r)) fastest = std::max(fastest, e->airspeed);
+            for (auto& p : g_sim.projs) if (p.weapon == W_STRIKE_C || p.weapon == W_STRIKE_K) rockets++;
+        }
+        float h1 = 0; for (Ref r : victims) h1 += std::max(0.0f, hp3(r));
+        CHECK3(fastest > 800.0f, "the strike fighters are not very fast");
+        CHECK3(rockets > 20, "the strike fighters fired no rockets");
+        CHECK3(h1 < h0 * 0.35f, "the two fighters' rockets did not do big damage to what stood at the spot");
+        run3(30);
+        CHECK3(g_sim.countUnits(0, jetT) == 0, "the strike fighters never left");
+        CHECK3(g_sim.players[0].alive, "the army was counted out");
+        // very hard to shoot down: two Patriot / Rocket batteries and a wall of guns at the target do not bring them down
+        lakeScene(me, foe, seed + 4 + fi);
+        placeNear3(techT, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));
+        givePower3(1);
+        spot = g_map.nearestFree(lakePoint(0, -17), 10);
+        flattenArena(spot, 12, 12);
+        Ref aa1 = g_sim.placeBuilding(firstBuildOf(foe) + BR_AATURRET, 1, tileOf(spot.x) + 4, tileOf(spot.y) - 2, true);
+        Ref aa2 = g_sim.placeBuilding(firstBuildOf(foe) + BR_AATURRET, 1, tileOf(spot.x) - 5, tileOf(spot.y) + 2, true);
+        g_sim.updatePowerPublic();
+        CHECK3(g_sim.get(aa1) && g_sim.get(aa2), "no anti-air for the test");
+        CHECK3(g_sim.cmdPhoneStrike(0, spot), "the second strike call was refused");
+        float worst = 1.0f; int guns = 0;
+        for (int t = 0; t < 20 * 24; t++) {
+            g_sim.step(); g_sim.events.clear();
+            for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == jetT) worst = std::min(worst, e.hp / e.maxHp);
+        }
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_AATURRET && e.owner == 1) guns++;
+        CHECK3(worst > 0.25f, "two anti-air batteries brought a strike fighter close to falling");
+        printf("strike fighters %s: ok (two on every call, %.0f px/s, %d rockets in flight over three passes, the target cluster %.0f%% destroyed, they left; worst hit fighter at %d%% health under flak)\n", FACTION_NAME[me], fastest, rockets, 100.0f * (1.0f - h1 / h0), (int)(worst * 100));
+        (void)guns;
+    }
+    printf("strikejettest: ok\n");
+    return g_ok3;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- anti-nuke defences
+// Fires warheads at the same spot over and over (the defences reload between trials) and counts how many were shot down
+static int trialsShotDown(Vec2 gz, int trials, float scale, int* fragmentsOut) {
+    int down = 0, frag = 0;
+    for (int k = 0; k < trials; k++) {
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) e.siloTimer = 0;
+        g_sim.fallouts.clear(); g_sim.interceptors.clear();
+        Sim::Nuke n{ g_sim.players[1].basePos, gz, 1, Sim::NUKE_FLIGHT - 4.2f, false, scale };
+        g_sim.nukes.push_back(n);
+        bool broken = false;
+        for (int t = 0; t < 20 * 6 && !g_sim.nukes.empty(); t++) {
+            g_sim.step(); g_sim.events.clear();
+            if (getenv("ONEHOUR_DEBUG") && k == 0 && !g_sim.nukes.empty()) { const Sim::Nuke& q = g_sim.nukes[0]; fprintf(stderr, "t=%d nuke t=%.2f killT=%.2f engaged=%zu interceptors=%zu id=%d broken=%d power=%.2f\n", t, q.t, q.killT, q.engagedBy.size(), g_sim.interceptors.size(), q.id, (int)q.broken, q.power); }
+            if (!g_sim.nukes.empty() && g_sim.nukes[0].broken) broken = true;
+        }
+        if (broken) { down++; if (!g_sim.fallouts.empty() && g_sim.fallouts[0].power < 0.31f) frag++; }
+    }
+    if (fragmentsOut) *fragmentsOut = frag;
+    return down;
+}
+
+bool antiNukeTest(u64 seed) {
+    g_name3 = "antinuketest"; g_ok3 = true;
+    for (int fi = 0; fi < 2; fi++) {
+        Faction me = (Faction)fi, foe = (Faction)(1 - fi);
+        lakeScene(me, foe, seed + fi);
+        int techT = firstBuildOf(me) + BR_TECH, anT = me == F_CYBER ? B_C_ANTINUKE : B_K_ANTINUKE;
+        CHECK3(!g_sim.buildAvailable(0, anT), "an anti-nuke defence is buildable without a tech structure");
+        placeNear3(techT, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));
+        givePower3(0);
+        CHECK3(g_sim.buildAvailable(0, anT), "an anti-nuke defence is not buildable with a tech structure");
+        CHECK3(BUILDS[anT].w * BUILDS[anT].h <= 4, "the anti-nuke defence is not a small structure");
+        Vec2 gz = lakePoint(0, -16.5f);   // (north of the lake, far from both bases: the test's own warheads must not blow up the power plants)
+        flattenArena(gz, 20, 20);
+        std::vector<Ref> ds;
+        // none: nothing is ever shot down
+        CHECK3(trialsShotDown(gz, 20, 1.0f, nullptr) == 0, "a warhead was shot down with no defences");
+        float cover = (me == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE;
+        // one defence: about a third; three: about two thirds; six: nearly always
+        for (int n = 1; n <= 6; n++) {
+            // the defences ring the target at 13.5 tiles: inside everybody's cover and outside the blast of the test warheads
+            float ang = n * 1.0472f + 0.3f;
+            Ref d = placeNear3(anT, 0, gz + Vec2(std::cos(ang), std::sin(ang)) * (13.5f * TILE));
+            CHECK3(d.valid(), "no spot for a defence");
+            ds.push_back(d);
+            g_sim.updatePowerPublic();
+            if (n == 1 || n == 3 || n == 6) {
+                if (g_sim.antiNukeCovering(gz, 1) != n) { fprintf(stderr, "antinuketest: %d covering, expected %d (power %d/%d disabled? ", g_sim.antiNukeCovering(gz, 1), n, g_sim.players[0].powerMade, g_sim.players[0].powerUsed); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0) fprintf(stderr, "{%s p%d c%d} ", e.bt().name, e.bt().power, (int)e.constructed); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) fprintf(stderr, "[%.0f,%.0f dist %.0f cover %.0f constructed %d disabled %.1f] ", e.pos.x, e.pos.y, dist(e.pos, gz), cover, (int)e.constructed, e.disabledUntil); fprintf(stderr, ")\n"); return failMsg3("the number of defences covering the target is wrong"); }
+                float want = 1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)n);
+                CHECK3(std::abs(g_sim.antiNukeChance(gz, 1) - want) < 1e-4f, "the stated chance is not 1 - (1 - p)^n");
+                int frag = 0, trials = 240;
+                int down = trialsShotDown(gz, trials, 1.0f, &frag);
+                float rate = down / (float)trials, sigma = std::sqrt(want * (1 - want) / trials);
+                if (std::abs(rate - want) > 4.0f * sigma + 0.02f) { fprintf(stderr, "antinuketest: %d defences shot down %.0f%% of %d warheads, expected %.0f%%\n", n, rate * 100, trials, want * 100); return failMsg3("the interception rate does not follow the number of defences"); }
+                CHECK3(frag == down, "a shot-down warhead did not leave weak radiation");
+                printf("anti-nuke %s: %d defence%s stop %.0f%% of warheads (expected %.0f%%)\n", FACTION_NAME[me], n, n == 1 ? "" : "s", rate * 100, want * 100);
+            }
+        }
+        // mini nukes are covered the same way
+        { int d1 = trialsShotDown(gz, 120, MINI_NUKE_SCALE, nullptr); CHECK3(d1 > 120 * 0.78f, "six defences let too many bunker missiles through"); }
+        // out of cover: untouched
+        Vec2 far = gz + Vec2(0, cover * 2.2f);   // (further from every defence than its cover reaches: they ring the target at 13.5 tiles)
+        CHECK3(g_sim.antiNukeCovering(far, 1) == 0, "a spot beyond the cover counts as covered");
+        // no power, or switched off: blind
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) e.disabledUntil = g_sim.time + 1000;
+        CHECK3(trialsShotDown(gz, 30, 1.0f, nullptr) == 0, "a switched-off defence shot a warhead down");
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) e.disabledUntil = -1;
+        // the pieces do 30% of the damage: a barracks and a tank at ground zero of a shot-down warhead vs a whole one
+        lakeScene(me, foe, seed + 7 + fi);
+        flattenArena(gz, 10, 10);
+        auto damageAt = [&](float power, bool broken) {
+            Ref b = g_sim.placeBuilding(firstBuildOf(foe) + BR_BARRACKS, 1, tileOf(gz.x) - 1, tileOf(gz.y) - 1, true);
+            Ref u = g_sim.spawnUnit(firstUnitOf(foe) + 5, 1, gz + Vec2(0, 3 * TILE));
+            float bh = hp3(b), uh = hp3(u);
+            Sim::Nuke n{ g_sim.players[0].basePos, g_sim.get(b)->pos, 0, Sim::NUKE_FLIGHT - 0.05f, false, 1.0f, power };
+            n.broken = broken; n.killT = broken ? 1.0f : -1.0f;
+            g_sim.nukes.push_back(n);
+            run3(0.4f);
+            float lostB = alive3(b) ? bh - hp3(b) : bh, lostU = alive3(u) ? uh - hp3(u) : uh;
+            g_sim.fallouts.clear();
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.kind != EK_RESOURCE && !(e.isBuilding() && e.bt().role == BR_HQ)) g_sim.destroy(e, false);
+            return Vec2(lostB / bh, lostU / uh);
+        };
+        Vec2 whole = damageAt(1.0f, false), pieces = damageAt(ANTINUKE_FALLOFF, true);
+        CHECK3(whole.x > 0.95f && whole.y > 0.95f, "a whole warhead did not destroy a barracks and a tank at ground zero");
+        CHECK3(std::abs(pieces.x - ANTINUKE_FALLOFF) < 0.06f && std::abs(pieces.y - ANTINUKE_FALLOFF) < 0.06f, "the pieces of a shot-down warhead do not do 30% of the damage");
+        printf("anti-nuke %s: ok (pieces take %.0f%% of a barracks and %.0f%% of a tank at ground zero where a whole warhead takes %.0f%%/%.0f%%)\n", FACTION_NAME[me], pieces.x * 100, pieces.y * 100, whole.x * 100, whole.y * 100);
+    }
+    printf("antinuketest: ok\n");
+    return g_ok3;
+}
+
+// ---------------------------------------------------------------------------------------------------------------- screenshot scene
+// ONEHOUR_NAVY=1 --shot: the lake with both armies' yards, destroyers and cruisers under their drone screens trading fire, jeeps with crews on the shore,
+// two anti-nuke defences and a strike marker (setup only: the caller then simulates a few ticks and renders)
+void navyShowcase(int vp, Vec2& camOut) {
+    int foe = vp == 0 ? 1 : 0;
+    Faction f = g_sim.players[vp].faction, ff = g_sim.players[foe].faction;
+    for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+    for (int p : { vp, foe }) { g_sim.players[p].money = 400000; g_sim.players[p].upg[UPG_DRONES] = true; }
+    auto yardNear = [&](int owner, Faction fac, Vec2 near) {
+        int tx, ty;
+        placeNear3(firstBuildOf(fac) + BR_POWER, owner, g_sim.players[owner].basePos + Vec2(0, 6 * TILE));
+        placeNear3(firstBuildOf(fac) + BR_FACTORY, owner, g_sim.players[owner].basePos + Vec2(0, 9 * TILE));
+        placeNear3(firstBuildOf(fac) + BR_TECH, owner, g_sim.players[owner].basePos + Vec2(8 * TILE, 8 * TILE));
+        if (g_sim.shoreSite(owner, fac == F_CYBER ? B_C_NAVAL : B_K_NAVAL, near, tx, ty)) return g_sim.placeBuilding(fac == F_CYBER ? B_C_NAVAL : B_K_NAVAL, owner, tx, ty, true);
+        return NOREF;
+    };
+    Vec2 lake = lakePoint(0, 0);
+    Ref y0 = yardNear(vp, f, lake + (g_sim.players[vp].basePos - lake) * 0.5f);
+    Ref y1 = yardNear(foe, ff, lake + (g_sim.players[foe].basePos - lake) * 0.5f);
+    g_sim.updatePowerPublic();
+    int dM = f == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cM = f == F_CYBER ? U_C_CRUISER : U_K_CRUISER, dF = ff == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cF = ff == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
+    Vec2 mc = g_sim.get(y0) ? g_sim.get(y0)->pos : lake, fc = g_sim.get(y1) ? g_sim.get(y1)->pos : lake;
+    Vec2 toF = (fc - mc).norm(), side(-toF.y, toF.x), mid = (mc + fc) * 0.5f;
+    std::vector<Ref> mine, theirs;
+    for (int i = 0; i < 3; i++) { mine.push_back(ship3(i == 1 ? cM : dM, vp, mid - toF * (4.0f * TILE) + side * ((i - 1) * 3.2f * TILE))); theirs.push_back(ship3(i == 1 ? cF : dF, foe, mid + toF * (4.0f * TILE) + side * ((i - 1) * 3.2f * TILE))); }
+    g_sim.cmdMove(mine, mid + toF * 2.0f * TILE, true); g_sim.cmdMove(theirs, mid - toF * 2.0f * TILE, true);
+    // jeeps with their crews on the shore, and two anti-nuke defences
+    Vec2 shoreSpot = g_map.nearestFree(mc + (lake - mc).norm() * (3.0f * TILE) + side * (5.0f * TILE), 10);
+    for (int j = 0; j < 2; j++) {
+        Ref jp = g_sim.spawnUnit(f == F_CYBER ? U_C_JEEP : U_K_JEEP, vp, shoreSpot + Vec2(j * 46.0f, 30.0f));
+        for (int t : g_sim.jeepCrew(vp)) { Ref c = g_sim.spawnUnit(t, vp, shoreSpot); if (Entity* cu = g_sim.get(c)) if (Entity* je = g_sim.get(jp)) g_sim.boardQuiet(*cu, *je); }
+    }
+    placeNear3(firstBuildOf(f) + BR_TECH, vp, shoreSpot + Vec2(0, 5 * TILE));
+    placeNear3(f == F_CYBER ? B_C_ANTINUKE : B_K_ANTINUKE, vp, shoreSpot + Vec2(4 * TILE, 3 * TILE));
+    camOut = Vec2(clampf(mid.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
+}

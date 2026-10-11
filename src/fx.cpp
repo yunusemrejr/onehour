@@ -1,5 +1,6 @@
 // One Hour - visual effects: baked effect sprites, the cosmetic particle system and the drawing of simulation effects.
 #include "ui.h"
+#include "art.h"
 #include "paint.h"
 #include "artb.h"
 
@@ -240,7 +241,7 @@ void Game::spawnFromFx() {
             if (s >= 15 && decals.size() < 56) decals.push_back(Decal{ f.a.x, f.a.y, s * r.f(1.0f, 1.25f), r.f(0, 6.28f), 0, r.f(32, 46), (u8)r.range(0, 2) });
             break;
         }
-        case FX_WRECK: if (f.vel.y > 0.5f) for (int i = 0; i < 2; i++) emitP(f.a.x + r.f(-3, 3), f.a.y + r.f(-3, 3), r.f(-10, 10), r.f(-12, 4), r.f(0.5f, 0.8f), 3, 9, rgb(150, 126, 100, 150), PK_DUST, (u8)r.range(0, 2), 0, 1.6f); break;
+        case FX_WRECK: if (f.vel.y > 0.5f && f.vel.y < 1.5f) for (int i = 0; i < 2; i++) emitP(f.a.x + r.f(-3, 3), f.a.y + r.f(-3, 3), r.f(-10, 10), r.f(-12, 4), r.f(0.5f, 0.8f), 3, 9, rgb(150, 126, 100, 150), PK_DUST, (u8)r.range(0, 2), 0, 1.6f); break;
         case FX_BEAM: case FX_RAIL: {
             int n = f.type == FX_RAIL ? 5 : 2;
             for (int i = 0; i < n; i++) { float an = r.f(0, 6.283f), sp = r.f(40, 130); emitP(f.b.x, f.b.y, std::cos(an) * sp, std::sin(an) * sp, r.f(0.15f, 0.35f), r.f(0.9f, 1.4f), 0.3f, f.color, PK_SPARK, 0, 60, 4.0f); }
@@ -284,6 +285,23 @@ void Game::drawGroundFx() {
                     g.glowAdd(x, y, 8 + 3 * fl, Color{255, 110, 40, (u8)(110 * fl * fade)});
                 }
                 if (frameDt > 0 && fxRng.f() < 1.4f * frameDt && f.t < 14.0f) emitP(f.a.x + fxRng.f(-0.35f, 0.35f) * w * TILE, f.a.y + fxRng.f(-0.35f, 0.35f) * h * TILE, fxRng.f(-4, 4), fxRng.f(-22, -12), fxRng.f(1.8f, 3.0f), 6, 16, rgb(70, 66, 62), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.2f);
+            }
+        } else if (f.type == FX_WRECK && f.vel.y > 1.5f) {   // a ship going down: the hull settles, tilts and fades into a spreading oil slick and foam
+            if (!onScreen(f.a.x, f.a.y, 90)) continue;
+            Vec2 a = worldToScreen(f.a);
+            int ut = (int)f.b.x, ow = slotOf((int)f.b.y);
+            float sink = clampf(k * 2.2f, 0, 1), al = clampf((1 - k) * 1.8f, 0, 1);
+            float L = 38.0f * UNIT_SCALE * artScale(ut);
+            g.drawSized(g.shadowLarge, a.x + 3, a.y + 4, L * (1.6f + 1.4f * k), L * (0.9f + 0.9f * k), f.vel.x, rgb(10, 10, 12), (u8)(110 * al));   // the oil
+            g.drawSized(g.fxs.ring, a.x, a.y, L * (1.6f + 2.2f * k), L * (0.8f + 1.1f * k), f.vel.x, rgb(236, 246, 252), (u8)(120 * al * (1 - sink * 0.5f)));
+            Color hull = shade(rgb(80, 74, 70), 1.0f - 0.45f * sink);
+            g.draw(g.unitBody[ut][ow], a.x, a.y + 3 * sink, f.vel.x + 0.12f * sink, 1.0f - 0.07f * sink, hull, (u8)(255 * al));
+            if (f.t < 5.0f) {
+                float fade = 1 - f.t / 5.0f; int fr = ((int)(wallTime * 12) + (int)f.a.x) % 6;
+                g.draw(g.fxs.flame[fr], a.x - 6, a.y, 0, 0.6f, rgb(255, 255, 255), (u8)(200 * fade));
+                g.draw(g.fxs.flame[(fr + 2) % 6], a.x + 8, a.y + 3, 0, 0.5f, rgb(255, 255, 255), (u8)(180 * fade));
+                g.glowAdd(a.x, a.y, 24 + 6 * std::sin(wallTime * 9 + f.a.x), Color{255, 130, 50, (u8)(90 * fade)});
+                if (frameDt > 0 && fxRng.f() < 6.0f * frameDt) emitP(f.a.x + fxRng.f(-14, 14), f.a.y + fxRng.f(-8, 8), fxRng.f(-6, 6), fxRng.f(-26, -12), fxRng.f(1.4f, 2.6f), 6, 18, rgb(52, 50, 48, 210), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.6f, fxRng.f(0, 6), 0.2f);
             }
         } else if (f.type == FX_WRECK && f.vel.y > 0.5f) {   // fallen soldier: dark and flat, fading out
             if (!onScreen(f.a.x, f.a.y, 24)) continue;

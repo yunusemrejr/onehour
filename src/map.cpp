@@ -341,9 +341,9 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) con
 }
 
 // ---- the lake
-Vec2 Map::nearestWater(Vec2 p, int maxR) const {
+Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly) const {
     int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
-    if (navOpen(tx, ty)) return p;
+    if (navOpen(tx, ty) && (!bigOnly || bigWater(tx, ty))) return p;
     for (int pass = 0; pass < 2; pass++)   // open water first; a tile with only a narrow channel is the fallback
         for (int r = 1; r <= maxR; r++) {
             float best = 1e18f; int bx = -1, by = -1;
@@ -351,6 +351,7 @@ Vec2 Map::nearestWater(Vec2 p, int maxR) const {
                 if (std::abs(dx) != r && std::abs(dy) != r) continue;
                 int x = tx + dx, y = ty + dy;
                 if (pass == 0 ? !navOpen(x, y) : !navTile(x, y)) continue;
+                if (bigOnly && !bigWater(x, y)) continue;
                 float d = dist2(tileCenter(x, y), p);
                 if (d < best) { best = d; bx = x; by = y; }
             }

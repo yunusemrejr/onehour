@@ -108,6 +108,14 @@ private:
     void pauseMenuActivate(int row);
     void cancelModes();
     void drawNukes();
+    void drawShipWake(const Entity& e, Vec2 p);                    // ui2.cpp: the newer features' rendering
+    void drawShipMounts(const Entity& e, Vec2 p, Color mod);
+    void drawJeepCrew(const Entity& e, Vec2 p);
+    void drawEscorts(const Entity& e, Vec2 p);
+    void drawStrikeMarks();
+    void drawCoverRing(Vec2 sp, float radiusPx, Color col, bool powered, const char* label);
+    void drawInterceptors();
+    void drawDock(const Entity& e, Vec2 p);                       // a Naval Yard's pier into the lake
     void drawAirlifts();
     void drawAidDrops();
     void scroll(float dt);

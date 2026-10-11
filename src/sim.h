@@ -112,7 +112,8 @@ struct Entity {
     float detUntil[MAX_PLAYERS] = {}; // stealthy entity: sim time until which each player can see it (a detector close by keeps it up to date)
     u8 rank = 0;                      // infantry veterancy: 0 recruit, 1 veteran, 2 elite
     u16 kills = 0;
-    float droneAt[3] = {0, 0, 0};     // protector drones (jeeps, ships): sim time each one has reloaded (see Sim::droneCount)
+    float droneAt[3] = {0, 0, 0};     // protector drones (jeeps, ships): sim time each one can fire again (see Sim::droneCount) ...
+    u8 droneLoad[3] = {0, 0, 0};      // ... and the interceptors it has left (0 once the reload has run out means a full magazine)
     u8 strikePass = 0;                // Hotline Strike fighter: passes made over the target so far
     u8 salvoLeft = 0;                 // ... rockets still to fire from the salvo of the pass in progress
     float lifeUntil = -1;             // a loan (UnitType.temp): sim time at which it is withdrawn whatever it is doing (-1 = never)
@@ -340,9 +341,12 @@ struct Sim {
     int dropJeeps(int player) const;                         // loaded jeeps an airdrop carries: DROP_JEEPS_MIN .. DROP_JEEPS_MAX by what the army has unlocked
     std::vector<int> jeepCrew(int player) const;             // the seven infantry types a jeep of this army is dropped with (one of each useful kind, the rest rocket troopers)
     int droneCount(const Entity& e) const;                   // protector drones it flies with right now (0 while disabled or under a parachute)
-    Vec2 dronePos(const Entity& e, int i) const;             // where its i-th drone is (they circle their host)
+    Vec2 dronePos(const Entity& e, int i) const { return dronePosAt(e, i, time); }   // where its i-th drone is (they circle their host)
+    Vec2 dronePosAt(const Entity& e, int i, float t) const;
     float antiNukeChance(Vec2 at, int victim, bool knownOnly = false) const;   // chance the defences covering 'at' stop a warhead (of anybody who would hurt 'victim'): 1 - prod(1 - ANTINUKE_CHANCE)
     int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false) const;   // how many working defences cover 'at'
+    void applyDamagePublic(Entity& tgt, float dmg, int attackerOwner, Ref attacker) { applyDamage(tgt, dmg, attackerOwner, attacker, nullptr); }   // (test scenes)
+    void boardQuiet(Entity& u, Entity& c) { board(u, c, true); }   // put a soldier aboard a carrier at once (test scenes; the game walks them in with cmdEnter)
     Vec2 navalExit(const Entity& yard) const;                // where a ship leaves the yard into the water
     bool shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const;   // a legal spot for a structure that must touch the lake, nearest to 'near' (false: none known)
     int nukesReady(int player) const;         // ramps that can launch right now

@@ -577,6 +577,12 @@ static bool hqTest(u64 seed) {
 // Rules added in the friendly-fire / sniper / air-power pass: forced fire on friends (humans only), snipers and who can spot them,
 // both aircraft kinds fighting aircraft, and the per-structure paradrop cooldown.
 bool stealthTest(u64 seed);   // tests2.cpp: stealth, spies, cargo lifters, underground bunkers, rocket infantry
+bool navyTest(u64 seed);      // tests3.cpp: the lake, warships, nukes sinking ships
+bool jeepTest(u64 seed);
+bool droneTest(u64 seed);
+bool strikeJetTest(u64 seed);
+bool antiNukeTest(u64 seed);
+void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 static bool rulesTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "rulestest: %s\n", m); return false; };
     auto run = [](int sec) { for (int t = 0; t < 20 * sec; t++) { g_sim.step(); g_sim.events.clear(); } };
@@ -2531,6 +2537,11 @@ int main(int argc, char** argv) {
         }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
         else if (a == "--stealthtest") return stealthTest(seed) ? 0 : 1;
+        else if (a == "--navytest") return navyTest(seed) ? 0 : 1;
+        else if (a == "--jeeptest") return jeepTest(seed) ? 0 : 1;
+        else if (a == "--dronetest") return droneTest(seed) ? 0 : 1;
+        else if (a == "--strikejettest") return strikeJetTest(seed) ? 0 : 1;
+        else if (a == "--antinuketest") return antiNukeTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
         else if (a == "--autotest") { g_map.generate(); return autoTest(seed) ? 0 : 1; }
@@ -2605,7 +2616,7 @@ int main(int argc, char** argv) {
                 }
                 if (t == U_C_JEEP || t == U_K_JEEP) {
                     for (int i = 0; i < 7; i++) g.fillCircle(x + (JEEP_SEAT_X[i] - 32) * UNIT_SCALE * sc, y + (JEEP_SEAT_Y[i] - 32) * UNIT_SCALE * sc, 2.6f * UNIT_SCALE * sc, i < 2 ? rgb(255, 200, 80) : rgb(255, 255, 255, 150));
-                    g.draw(g.unitAnim[t][row][0], x + 110, y, 0, sc); g.draw(g.unitAnim[t][row][1], x + 110, y + 75, 0, sc);
+                    g.draw(g.unitAnim[t][row][0], x - 60, y + 78, 0, 2.0f); g.draw(g.unitAnim[t][row][1], x + 40, y + 78, 0, 2.0f);   // the two wheel-cycle frames, small, below
                 }
             }
             for (int row = 0; row < 2; row++) for (int p = 0; p < 4; p++) g.draw(g.guardDrone[row][p], 40 + (row * 4 + p) * 40, 560, 0, 3.0f);
@@ -2760,6 +2771,10 @@ int main(int argc, char** argv) {
                 printf("action at tile %d,%d (projectiles %zu, fx %zu, lastDamaged %.1f at t=%.1f)\n", tileOf(b.x), tileOf(b.y), g_sim.projs.size(), g_sim.fx.size(), best, g_sim.time);
             }
             g_game.cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+            if (getenv("ONEHOUR_NAVY")) {   // ONEHOUR_NAVY=ticks: the lake with yards, fleets under drone screens, jeeps with crews and anti-nuke defences; that many ticks of fighting first
+                navyShowcase(std::min(viewPlayer, g_sim.numPlayers - 1), stealthCam); haveStealthCam = true;
+                for (int t = 0; t < atoi(getenv("ONEHOUR_NAVY")); t++) { g_sim.step(); g_sim.events.clear(); }
+            }
             if (haveStealthCam) g_game.cam = stealthCam;
             g_game.renderAlpha = 1;
             if (viewPlayer != 0 || getenv("ONEHOUR_REVEAL")) { std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1); }

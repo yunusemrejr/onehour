@@ -90,10 +90,10 @@ int Sim::droneCount(const Entity& e) const {
     return std::min(n, 3);
 }
 
-Vec2 Sim::dronePos(const Entity& e, int i) const {
+Vec2 Sim::dronePosAt(const Entity& e, int i, float t) const {
     int n = std::max(1, droneCount(e));
     float R = e.radius() + 15.0f;
-    float a = time * 1.7f + 6.2831853f * (float)i / (float)n + (float)(e.gen % 7) * 0.9f;
+    float a = t * 1.7f + 6.2831853f * (float)i / (float)n + (float)(e.gen % 7) * 0.9f;
     return e.pos + Vec2(std::cos(a), std::sin(a)) * R;
 }
 
@@ -108,7 +108,9 @@ bool Sim::interceptProjectile(Projectile& p) {
     if (n <= 0 || dist(p.pos, h->pos) > DRONE_RANGE + h->radius()) return false;
     for (int i = 0; i < n; i++) {
         if (h->droneAt[i] > time) continue;
-        h->droneAt[i] = time + DRONE_RELOAD;
+        if (h->droneLoad[i] == 0) h->droneLoad[i] = (u8)DRONE_SHOTS;   // a drone whose reload has run out has a full magazine again
+        h->droneLoad[i]--;
+        h->droneAt[i] = time + (h->droneLoad[i] > 0 ? DRONE_GAP : DRONE_RELOAD);
         Vec2 d = dronePos(*h, i);
         Color col = players[h->owner].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120);
         fx.push_back({FX_BEAM, d, p.pos, 0, 0.16f, col, 2});
@@ -154,7 +156,7 @@ void Sim::moveShip(Entity& e, float speed) {
     }
 }
 
-Vec2 Sim::navalExit(const Entity& yard) const { return g_map.nearestWater(yard.pos, 10); }
+Vec2 Sim::navalExit(const Entity& yard) const { return g_map.nearestWater(yard.pos, 10, true); }   // (always the lake: a ship put into a cut-off river could never get out)
 
 // The legal spot nearest to 'near' for a structure that must touch the lake (a Naval Yard): scans the whole shore the player has explored.
 bool Sim::shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const {
@@ -162,6 +164,9 @@ bool Sim::shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) cons
     float best = 1e18f; bool found = false;
     for (int y = 1; y < MAP_H - b.h; y++) for (int x = 1; x < MAP_W - b.w; x++) {
         if (!canPlace(player, buildType, x, y)) continue;
+        bool roadFree = true;   // never plug a road (the ring road runs right along the beach)
+        for (int j = y - 1; j <= y + b.h && roadFree; j++) for (int i = x - 1; i <= x + b.w; i++) if (inMap(i, j) && (g_map.tile(i, j) == T_ROAD || g_map.bridge[j * MAP_W + i])) { roadFree = false; break; }
+        if (!roadFree) continue;
         bool gapOk = true;   // keep the one-tile lane around the structure open, as the computer commander does for everything it builds
         for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++) if (inMap(i, j) && (g_map.blocked[j * MAP_W + i] & 2)) { gapOk = false; break; }
         if (!gapOk) continue;

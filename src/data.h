@@ -210,11 +210,14 @@ static const int   DROP_JEEPS_MIN = 3, DROP_JEEPS_MAX = 10;   // an airdrop brin
 static const float JEEP_CASUALTIES = 0.35f;    // share of the crew killed when the jeep blows up (the rest climbs out hurt)
 
 // Protector drones: a screen of small drones that shoots down rockets and shells aimed at their host (ships, jeeps). Lasers and bullets are too
-// quick for them. Each drone fires once, then needs DRONE_RELOAD seconds; a salvo bigger than the screen gets through.
+// quick for them. Each drone carries DRONE_SHOTS interceptors, a quarter-second apart, then needs DRONE_RELOAD seconds; a salvo bigger than the
+// screen gets through (three drones stop a lone ship's volley of six rockets; a fleet's massed fire saturates them).
 static const int   SHIP_DRONES = 3;            // with the Guard Drones upgrade
 static const int   JEEP_DRONES = 1;            // a jeep flies with one; the Guard Drones upgrade adds a second (and gives every ship SHIP_DRONES)
 static const float DRONE_RANGE = 3.2f * TILE;  // px: how close to the host a projectile must come to be engaged
-static const float DRONE_RELOAD = 2.6f;
+static const float DRONE_RELOAD = 2.4f;
+static const int   DRONE_SHOTS = 2;
+static const float DRONE_GAP = 0.25f;
 static const float DRONE_CHANCE = 0.85f;
 
 // The lake: ships live on it and a Naval Yard must touch it (a body of at least NAVAL_WATER_MIN connected water tiles).

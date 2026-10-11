@@ -56,7 +56,7 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e = Entity();
     e.gen = gen; e.alive = true; e.kind = EK_UNIT; e.type = type; e.owner = owner;
     const UnitType& t = UNITS[type];
-    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos) : g_map.nearestFree(pos));
+    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 12, true) : g_map.nearestFree(pos));
     e.lastPos = e.pos; e.prevPos = e.pos;
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
@@ -126,7 +126,16 @@ void Sim::deathFx(Entity& e) {
         fx.push_back({FX_SPARK, e.pos, e.pos, 0, 0.3f, rgb(255, 200, 120), 4});
         emit(EV_SOUND, -1, SND_HIT, e.pos);
     } else if (e.isUnit()) {
-        if (e.ut().kind == UK_VEH) fx.push_back({FX_WRECK, e.pos, Vec2((float)e.type, (float)std::max(0, e.owner)), 0, 16.0f, rgb(255, 255, 255), e.turret, Vec2(e.angle, 0)});
+        if (e.ut().naval) {   // a ship breaks up in a string of blasts along its length and sinks
+            Vec2 fw(std::cos(e.angle), std::sin(e.angle));
+            for (int k = -2; k <= 2; k++) {
+                Vec2 q = e.pos + fw * (k * r * 0.7f);
+                fx.push_back({FX_EXPLODE, q, q, -0.12f * (k + 2), 0.9f, rgb(255, 176, 76), r * 1.5f});
+                fx.push_back({FX_SMOKE, q, q, -0.12f * (k + 2), 3.4f, rgb(46, 44, 42), r * 1.1f, Vec2(rng.f(-8, 8), -rng.f(18, 34))});
+            }
+            fx.push_back({FX_RING, e.pos, e.pos, 0, 0.9f, rgb(235, 245, 255), r * 3.2f});
+            fx.push_back({FX_WRECK, e.pos, Vec2((float)e.type, (float)std::max(0, e.owner)), 0, 12.0f, rgb(255, 255, 255), e.turret, Vec2(e.angle, 2.0f)});
+        } else if (e.ut().kind == UK_VEH) fx.push_back({FX_WRECK, e.pos, Vec2((float)e.type, (float)std::max(0, e.owner)), 0, 16.0f, rgb(255, 255, 255), e.turret, Vec2(e.angle, 0)});
         if (e.isAir()) {   // a downed aircraft hits the ground a moment later, short of where it was shot
             Vec2 g = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 26.0f + Vec2(0, 20);
             fx.push_back({FX_EXPLODE, g, g, -0.3f, 0.8f, rgb(255, 170, 70), r * 2.6f});
@@ -285,9 +294,11 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
             bool inside = i >= tx && i < tx + b.w && j >= ty && j < ty + b.h;
             bool corner = (i < tx || i >= tx + b.w) && (j < ty || j >= ty + b.h);
             if (inside || corner) continue;
-            if (g_map.bigWater(i, j) && g_map.navOpen(i, j)) { touch = true; break; }
+            if (g_map.bigWater(i, j) && g_map.navTile(i, j)) { touch = true; break; }
         }
         if (!touch) return false;
+        Vec2 out = g_map.nearestWater(buildingCenter(buildType, tx, ty), 7, true);   // and ships must have open lake to sail out into
+        if (!g_map.navOpen(tileOf(out.x), tileOf(out.y))) return false;
     }
     // units standing on the footprint are pushed off when placed; no check needed
     return true;
@@ -1103,13 +1114,15 @@ void Sim::nukeBlast(const Nuke& n) {
         Entity* e = get(r); if (!e) continue;
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (d > R) continue;
-        float f = (d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f))) * P;   // flat lethal core, then a falloff to a quarter at the rim (all of it scaled by what is left of the warhead)
+        float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
+        // the pieces of a warhead that was shot down do P of what it would have done to the target, and never more than the target had left to lose
+        auto lessen = [&](float dmg, const Entity& t) { return P < 1.0f ? P * std::min(dmg, t.hp) : dmg; };
         bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies and the human's own army as well
         if (e->isAir()) {   // nothing flying survives the fireball and the shock front, whoever owns it: torn apart, it falls out of the sky
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
             fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
             for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
-            applyDamage(*e, e->maxHp * 2.0f * P, n.owner, NOREF, nullptr);
+            applyDamage(*e, lessen(e->maxHp * 2.0f, *e), n.owner, NOREF, nullptr);
             continue;
         }
         Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
@@ -1126,9 +1139,9 @@ void Sim::nukeBlast(const Nuke& n) {
                     dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f);                          // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
                     dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));           // never lethal
                 }
-                if (dmg > 0) applyDamage(*e, dmg, n.owner, NOREF, nullptr);
+                if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr);
                 e = get(r); if (!e) continue;
-                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * (rugged ? 0.5f : 1.0f));   // the pulse knocks survivors offline for a while
+                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
                     for (int k = 0; k < 4; k++) {
                         Vec2 p = e->pos + Vec2(rng.f(-e->radius() * 0.7f, e->radius() * 0.7f), rng.f(-e->radius() * 0.5f, e->radius() * 0.5f));
@@ -1138,14 +1151,14 @@ void Sim::nukeBlast(const Nuke& n) {
                 }
             } else {
                 float dmg = 6000.0f * f;
-                if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f * P);   // a warship is no match for a warhead anywhere in the blast: it goes down
-                applyDamage(*e, dmg, n.owner, NOREF, nullptr);
+                if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f);   // a warship is no match for a warhead anywhere in the blast: it goes down
+                applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr);
                 e = get(r); if (!e) continue;
-                e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f);           // survivors are stunned by the pulse
+                e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f * P);       // survivors are stunned by the pulse
             }
         }
         if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
-            Vec2 np = e->pos + away * (90.0f * f);
+            Vec2 np = e->pos + away * (90.0f * f * P);
             if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
         }

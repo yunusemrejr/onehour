@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "art.h"
+#include "art2.h"
 
 Game g_game;
 
@@ -188,6 +189,7 @@ static float roofLift(const BuildType& b) {
     switch (b.role) {
     case BR_HQ: return 22; case BR_POWER: return 14; case BR_SUPPLY: return 16; case BR_BARRACKS: return 12; case BR_FACTORY: return 20;
     case BR_AIRFIELD: return 14; case BR_TECH: return 16; case BR_AATURRET: return 6; case BR_INCOME: return b.faction == F_CYBER ? 10 : 8; case BR_NUKE: return 16;
+    case BR_NAVAL: return 18; case BR_ANTINUKE: return b.faction == F_CYBER ? 22 : 10;
     default: return 0;
     }
 }
@@ -212,6 +214,11 @@ Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
             Vec2 drawn(e.pos.x, e.pos.y - 14.0f * e.alt);
             d = dist(w, drawn) <= e.radius() + 12 ? dist(w, drawn) * 0.5f : 1e9f;
         }
+        else if (e.ut().naval) {   // a ship is picked anywhere along its hull
+            Vec2 f(std::cos(e.angle), std::sin(e.angle)), r = w - e.pos;
+            float along = r.x * f.x + r.y * f.y, across = -r.x * f.y + r.y * f.x;
+            d = std::abs(along) <= e.radius() * 1.55f && std::abs(across) <= e.radius() * 0.6f + 6 ? dist(w, e.pos) * 0.7f : 1e9f;
+        }
         else d = dist(w, e.pos) <= e.radius() + 6 ? dist(w, e.pos) : 1e9f;
         if (d < bd) { bd = d; best = &e; }
     }
@@ -220,7 +227,7 @@ Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
 
 void Game::selectSingle(Entity* e, bool add) {
     if (!add) selection.clear();
-    if (!e || e->owner != g_sim.humanPlayer) return;
+    if (!e || e->owner != g_sim.humanPlayer || (e->isUnit() && e->ut().temp)) return;   // (a Hotline Strike fighter on loan takes no orders)
     Ref r = g_sim.refOf(*e);
     auto it = std::find(selection.begin(), selection.end(), r);
     if (it != selection.end()) { if (add) selection.erase(it); return; }
@@ -237,7 +244,7 @@ void Game::selectBox(Vec2 a, Vec2 b, bool add) {
     float x0 = std::min(a.x, b.x), x1 = std::max(a.x, b.x), y0 = std::min(a.y, b.y), y1 = std::max(a.y, b.y);
     bool any = false;
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isUnit() || e.owner != g_sim.humanPlayer || e.carrier.valid()) continue;
+        if (!e.alive || !e.isUnit() || e.owner != g_sim.humanPlayer || e.carrier.valid() || e.ut().temp) continue;
         if (e.pos.x < x0 || e.pos.x > x1 || e.pos.y < y0 || e.pos.y > y1) continue;
         Ref r = g_sim.refOf(e);
         if (std::find(selection.begin(), selection.end(), r) == selection.end()) { selection.push_back(r); any = true; }
@@ -253,7 +260,7 @@ void Game::selectSameType(Entity* e) {
     if (!e || !e->isUnit() || e->owner != g_sim.humanPlayer) return;
     selection.clear();
     for (auto& o : g_sim.ents) {
-        if (!o.alive || !o.isUnit() || o.owner != e->owner || o.type != e->type || o.carrier.valid()) continue;
+        if (!o.alive || !o.isUnit() || o.owner != e->owner || o.type != e->type || o.carrier.valid() || o.ut().temp) continue;
         Vec2 s = worldToScreen(o.pos);
         if (s.x < -20 || s.y < -20 || s.x > SCREEN_W + 20 || s.y > VIEW_H + 20) continue;
         selection.push_back(g_sim.refOf(o));
@@ -441,7 +448,7 @@ void Game::buildButtonsRaw() {
             add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
             return;
         }
-        if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY) add(BK_RALLY, 0, true, "Rally", "Set rally point (right-click ground while selected)");
+        if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY || role == BR_NAVAL) add(BK_RALLY, 0, true, "Rally", role == BR_NAVAL ? "Set the point ships sail to (right-click the lake while the yard is selected)" : "Set rally point (right-click ground while selected)");
         add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
         return;
     }
@@ -989,6 +996,10 @@ void Game::drawRangeRings() {
             const BuildType& bt = e->bt();
             bool powered = !(pl.lowPower() && bt.power < 0) && e->disabledUntil <= g_sim.time;
             rangeRing(sp, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, powered, false, false);
+        } else if (e->isBuilding() && e->constructed && e->bt().role == BR_ANTINUKE) {
+            const BuildType& bt = e->bt();
+            bool powered = !(pl.lowPower() && bt.power < 0) && e->disabledUntil <= g_sim.time;
+            drawCoverRing(sp, (bt.faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE, hudAccent(bt.faction), powered, powered ? "Anti-nuke cover" : "Anti-nuke cover: NO POWER");
         } else if (e->isBuilding() && e->constructed && e->bt().role == BR_BUNKER) {
             const BuildType& bt = e->bt();
             rangeRing(sp, WEAPONS[W_BUNKER_MINIGUN].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, W_BUNKER_MINIGUN, "Miniguns", e->hatch > 0 && e->disabledUntil <= g_sim.time, false, false);
@@ -1002,6 +1013,10 @@ void Game::drawRangeRings() {
     // a defense under the cursor: show what it covers (enemy ones in red)
     if (placingType < 0 && !areaMode && mouseY < VIEW_H) {
         Entity* h = pickEntity(screenToWorld(mouseX, mouseY), false);
+        if (h && h->isBuilding() && h->constructed && h->bt().role == BR_ANTINUKE && std::find(selection.begin(), selection.end(), g_sim.refOf(*h)) == selection.end()) {
+            bool mine = !g_sim.enemies(g_sim.humanPlayer, h->owner);
+            drawCoverRing(worldToScreen(h->pos), (h->bt().faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE, mine ? hudAccent(h->bt().faction) : rgb(255, 90, 80), true, mine ? "Anti-nuke cover" : "Enemy anti-nuke cover");
+        }
         if (h && h->isBuilding() && h->constructed && h->bt().weapon >= 0 && std::find(selection.begin(), selection.end(), g_sim.refOf(*h)) == selection.end()) {
             bool mine = !g_sim.enemies(g_sim.humanPlayer, h->owner);   // yours or an ally's: green; an enemy's: red
             const BuildType& bt = h->bt();
@@ -1050,6 +1065,23 @@ void Game::drawBuildingAnim(const Entity& e, Vec2 p, bool disabled) {
         if (cy) { Color rc = Color{255, 80, 70, (u8)((std::sin(t * 5.0f) > 0 && powered) ? 190 : 40)}; g.glowAdd(p.x - 37, p.y - 51, 9, rc); g.glowAdd(p.x + 37, p.y - 51, 9, rc); }
         else g.glowAdd(p.x - 24, p.y + 26, 18, Color{255, 120, 50, (u8)(30 + 50 * (0.5f + 0.5f * std::sin(t * 7.0f)))});
         break;
+    case BR_ANTINUKE: {
+        bool firing = e.cooldown2 > 0 && powered && !disabled, armed = powered && !disabled && g_sim.time >= e.siloTimer;
+        if (cy) {   // the lens on the pylon: dim without power, a slow breath when armed, a blinding focus while a beam is on its way
+            float al = firing ? 255.0f : (armed ? 60.0f + 70.0f * pulse : 18.0f);
+            g.glowAdd(p.x + 1, p.y - 42, firing ? 34.0f : 22.0f, Color{110, 232, 255, (u8)al});
+            if (firing) { g.glowAdd(p.x + 1, p.y - 42, 12.0f, Color{255, 255, 255, 230}); g.fill((int)p.x - 1, (int)p.y - 42, 3, 3, rgb(255, 255, 255)); }
+        } else {    // the silo: the hatch glows when it is armed and belches fire and smoke when interceptors leave it
+            Vec2 hc(p.x + 2, p.y - 12);
+            if (armed) g.glowAdd(hc.x, hc.y, 16.0f, Color{255, 190, 90, (u8)(30 + 40 * pulse)});
+            if (firing) {
+                g.glowAdd(hc.x, hc.y - 6, 30.0f, Color{255, 170, 80, 190});
+                int fr = ((int)(wallTime * 24) + (int)e.gen) % 6;
+                g.draw(g.fxs.flame[fr], hc.x, hc.y + 2, 0, 0.9f, rgb(255, 230, 190), 220);
+                if (frameDt > 0 && fxRng.f() < 40.0f * frameDt) emitP(hc.x + cam.x + fxRng.f(-8, 8), hc.y + cam.y - 6, fxRng.f(-14, 14), fxRng.f(-46, -18), fxRng.f(0.9f, 1.8f), 6, 20, rgb(222, 220, 214, 200), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.2f);
+            }
+        }
+        break; }
     default: break;
     }
 }
@@ -1107,6 +1139,7 @@ void Game::drawEntity(Entity& e) {
         float fw = (float)bt.w * TILE, fh = (float)bt.h * TILE;           // footprint
         float fx = p.x - fw * 0.5f, fy = p.y - fh * 0.5f;
         Color tint = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
+        if (bt.role == BR_NAVAL) drawDock(e, p);   // the pier reaches into the lake under the structure
         if (!e.constructed) {
             g.draw(g.site[e.type], p.x, p.y);
             // the finished structure rises out of the site from the ground up as construction progresses, with a work light along the cut
@@ -1208,8 +1241,13 @@ void Game::drawEntity(Entity& e) {
         g.draw(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, 1, rgb(0, 0, 0), (u8)(70 + 40 * (1 - alt)));
         p.y -= 14 * alt;   // altitude
     } else {
-        g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
-        if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
+        if (ut.naval) {   // a hull on the water: the wake round it and a soft dark patch under it
+            drawShipWake(e, p);
+            g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), 64);
+        } else {
+            g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
+            if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
+        }
         p.y -= lift;
     }
     if (Sim::stealthOf(e) && e.owner >= 0 && g_sim.players[e.owner].team != g_sim.players[g_sim.humanPlayer].team) {   // a stealthy enemy one of your detectors has found: marked while it is spotted
@@ -1235,7 +1273,7 @@ void Game::drawEntity(Entity& e) {
         bs = &g.unitAnim[e.type][slotOf(owner)][((int)std::floor(travelled)) & 1];
     }
     // vehicles kick up dust: a puff behind the tracks now and then, grey on asphalt and tan on bare ground
-    if (!air && ut.kind == UK_VEH && moving && frameDt > 0 && fxRng.f() < 11.0f * frameDt) {
+    if (!air && ut.kind == UK_VEH && !ut.naval && moving && frameDt > 0 && fxRng.f() < 11.0f * frameDt) {
         Vec2 back = Vec2(std::cos(e.angle), std::sin(e.angle)) * -(e.radius() * 0.85f);
         bool road = g_map.tile(clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) == T_ROAD;
         float sz = e.radius() * 0.42f;
@@ -1243,7 +1281,7 @@ void Game::drawEntity(Entity& e) {
               road ? rgb(150, 150, 152, 150) : rgb(178, 150, 108, 170), PK_DUST, (u8)fxRng.range(0, 2), 0, 1.4f, fxRng.f(0, 6), fxRng.f(-0.6f, 0.6f));
     }
     // tracks press into soft ground: a pair of short dark dashes behind a moving vehicle (none on asphalt), fading over a quarter of a minute
-    if (!air && ut.kind == UK_VEH && moving && frameDt > 0 && fxRng.f() < 9.0f * frameDt) {
+    if (!air && ut.kind == UK_VEH && !ut.naval && moving && frameDt > 0 && fxRng.f() < 9.0f * frameDt) {
         int tl = g_map.tile(clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1));
         if (tl == T_DIRT || tl == T_SAND || tl == T_GRASS || tl == T_GRASS2) {
             Vec2 fw(std::cos(e.angle), std::sin(e.angle)), side(-fw.y, fw.x);
@@ -1258,7 +1296,8 @@ void Game::drawEntity(Entity& e) {
     // jets: afterburner flame, glow and a vapour trail while they are moving fast
     if (air && ut.jet && spd > 120 && !disabled) {
         float burn = clampf((spd - 120) / 360.0f, 0, 1), th = e.angle;
-        Vec2 tail = Vec2(p.x - std::cos(th) * 25.0f * 0.62f * 1.28f, p.y - std::sin(th) * 25.0f * 0.62f * 1.28f);
+        const float jsc = artScale(e.type);
+        Vec2 tail = Vec2(p.x - std::cos(th) * 25.0f * 0.62f * jsc, p.y - std::sin(th) * 25.0f * 0.62f * jsc);
         int fr = ((int)(wallTime * 24) + (int)e.gen) % 6;
         bool cyj = ut.faction == F_CYBER;
         Color fc = cyj ? rgb(140, 230, 255) : rgb(255, 190, 110);
@@ -1270,8 +1309,10 @@ void Game::drawEntity(Entity& e) {
         }
     }
     g.draw(*bs, p.x, p.y, e.angle, 1, mod, ghost);
+    if (ut.naval) drawShipMounts(e, p, mod);
+    if (ut.kind == UK_VEH && ut.cargoCap > 0) drawJeepCrew(e, p);
     const Sprite& tur = g.unitTurret[e.type][slotOf(owner)];
-    if (tur.tex) {
+    if (tur.tex && !ut.naval) {
         // the barrel kicks back for a moment after every shot
         float rec = 0;
         if (ut.weapon >= 0 && !paused) { const Weapon& w = WEAPONS[ut.weapon]; float since = w.cooldown - e.cooldown; if (w.cooldown > 0.6f && since >= 0 && since < 0.15f) rec = 1.0f - since / 0.15f; }
@@ -1317,7 +1358,8 @@ void Game::drawEntity(Entity& e) {
         }
     }
     if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
-    if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10, p.y - e.radius() - 7, 20 + (ut.cargoCap > 0 ? 24.0f : 0.0f), e.hp / e.maxHp);
+    drawEscorts(e, p);
+    if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10 - (ut.naval ? 8.0f : 0.0f), p.y - e.radius() - 7, 20 + (ut.naval ? 16.0f : 0.0f) + (ut.cargoCap > 0 && ut.kind == UK_AIR ? 24.0f : 0.0f), e.hp / e.maxHp);
     if (e.rank > 0) {   // veteran / elite chevrons beside the health bar
         Color cc = e.rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255);
         for (int k = 0; k < e.rank; k++) { float cx = p.x + 12 + k * 4, cy = p.y - e.radius() - 5; g.line(cx - 2, cy - 1, cx, cy + 1, cc); g.line(cx, cy + 1, cx + 2, cy - 1, cc); }
@@ -1326,7 +1368,10 @@ void Game::drawEntity(Entity& e) {
         const Entity* tb = g_sim.get(e.targetEnt);
         if (tb) hpBar(g, p.x - 14, p.y - e.radius() - 12, 28, e.actionTimer / g_sim.captureTime(*tb));
     }
-    if (ut.cargoCap > 0 && (selected || !e.passengers.empty())) {   // how full a lifter is: one pip per five places
+    if (ut.cargoCap > 0 && ut.kind == UK_VEH && e.owner == g_sim.humanPlayer && (selected || !e.passengers.empty())) {   // a jeep: one pip per seat
+        for (int k = 0; k < JEEP_SEATS; k++) g.fill((int)p.x - JEEP_SEATS * 2 + k * 4, (int)(p.y - e.radius() - 12), 3, 3, k < (int)e.passengers.size() ? rgb(240, 205, 90) : rgb(70, 74, 80));
+    }
+    if (ut.cargoCap > 0 && ut.kind == UK_AIR && (selected || !e.passengers.empty())) {   // how full a lifter is: one pip per five places
         int used = g_sim.cargoUsed(e), pips = ut.cargoCap / 5;
         for (int k = 0; k < pips; k++) g.fill((int)p.x - pips * 2 + k * 4, (int)(p.y - e.radius() - 12), 3, 3, k * 5 < used ? rgb(240, 205, 90) : rgb(70, 74, 80));
     }
@@ -1381,6 +1426,15 @@ void Game::renderWorld() {
         bool ok = g_sim.canPlace(g_sim.humanPlayer, placingType, tx, ty);
         Vec2 c = worldToScreen(g_sim.buildingCenter(placingType, tx, ty));
         if (bt.weapon >= 0) rangeRing(c, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, true, false, false);
+        if (bt.role == BR_ANTINUKE) drawCoverRing(c, (bt.faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE, hudAccent(bt.faction), true, "Anti-nuke cover");
+        if (bt.role == BR_NAVAL) {   // a Naval Yard must touch the lake: the open water around the footprint is outlined, and a hint says what is wrong
+            for (int j = ty - 1; j <= ty + bt.h; j++) for (int i = tx - 1; i <= tx + bt.w; i++) {
+                bool inside = i >= tx && i < tx + bt.w && j >= ty && j < ty + bt.h, corner = (i < tx || i >= tx + bt.w) && (j < ty || j >= ty + bt.h);
+                if (inside || corner || !g_map.bigWater(i, j) || !g_map.navTile(i, j)) continue;
+                g.fill((int)(i * TILE - cam.x), (int)(j * TILE - cam.y), TILE, TILE, rgb(90, 200, 255, 70));
+            }
+            if (!ok) g.text((int)c.x - 90, (int)c.y - bt.h * TILE / 2 - 16, "Naval Yard: must touch the open lake", rgb(255, 170, 130));
+        }
         { Color gt = ok ? rgb(160, 255, 160) : rgb(255, 120, 120); g.draw(g.building[placingType], c.x, c.y, 0, 1, gt, 150); if (g.buildingTeam[placingType].tex) g.draw(g.buildingTeam[placingType], c.x, c.y, 0, 1, gt, 150); }
         for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
             bool t = g_map.buildable(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
@@ -1435,20 +1489,28 @@ void Game::renderWorld() {
         Vec2 m = Vec2(mouseX, mouseY);
         g.circle(m.x, m.y, POWERS[g_sim.players[g_sim.humanPlayer].faction].radius * TILE, hudAccent(g_sim.players[g_sim.humanPlayer].faction), 40);
     }
-    if (strikeMode) {   // the called spot, and the line the package comes in along (the same track a cargo plane would fly)
+    if (strikeMode) {   // the called spot, the circle the fighters' rockets are scattered over, and the lane the package comes in along (the track a cargo plane would fly)
         Vec2 m = Vec2(mouseX, mouseY), wp = screenToWorld(mouseX, mouseY);
-        Color ac = hudAccent(g_sim.players[g_sim.humanPlayer].faction);
-        float R = 4.0f * TILE;
-        g.circle(m.x, m.y, R, ac, 40);
+        Faction sf = g_sim.players[g_sim.humanPlayer].faction;
+        Color ac = hudAccent(sf);
+        float R = 6.0f * TILE, Rr = STRIKE_SPREAD * TILE, pulse = 0.5f + 0.5f * std::sin(wallTime * 7.0f);
+        g.discFill(m.x, m.y, Rr, Color{255, 90, 70, (u8)(26 + 22 * pulse)});
+        g.circle(m.x, m.y, Rr, rgb(255, 110, 90), 32);
+        g.dashedCircle(m.x, m.y, R, ac, wallTime * 24.0f);
+        for (int k = 0; k < 4; k++) { float a = k * 1.5708f + 0.7854f; g.line(m.x + std::cos(a) * (Rr * 0.4f), m.y + std::sin(a) * (Rr * 0.4f), m.x + std::cos(a) * (Rr + 8), m.y + std::sin(a) * (Rr + 8), rgb(255, 130, 100)); }
         Vec2 base = g_sim.players[g_sim.humanPlayer].basePos;
         Vec2 dir = (wp - base).len() > 6.0f * TILE ? (wp - base).norm() : (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - wp).norm();
-        Vec2 sp = worldToScreen(wp - dir * (R + 120.0f));
-        g.line(m.x, m.y, sp.x, sp.y, rgb(ac.r, ac.g, ac.b, 150));
-        Vec2 perp(-dir.y, dir.x); Vec2 a = worldToScreen(wp - dir * (R + 120.0f) - perp * STRIKE_X * TILE), b = worldToScreen(wp - dir * (R + 120.0f) + perp * STRIKE_X * TILE);
-        g.line(a.x, a.y, b.x, b.y, rgb(ac.r, ac.g, ac.b, 120));
+        Vec2 perp(-dir.y, dir.x);
+        Vec2 sp = worldToScreen(wp - dir * (R + 260.0f));
+        g.line(m.x, m.y, sp.x, sp.y, Color{ac.r, ac.g, ac.b, 150});
+        for (int side = -1; side <= 1; side += 2) { Vec2 a = worldToScreen(wp - dir * (R + 260.0f) + perp * (side * STRIKE_X * TILE)); g.line(m.x + perp.x * side * STRIKE_X * TILE * 0.5f, m.y + perp.y * side * STRIKE_X * TILE * 0.5f, a.x, a.y, Color{ac.r, ac.g, ac.b, 70}); }
+        // the two strike fighters on their lane, ahead of the swarm
+        int jt = sf == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
+        for (int k = 0; k < STRIKE_JETS; k++) { Vec2 q = worldToScreen(wp - dir * (R + 200.0f) + perp * ((k * 2 - 1) * 2.4f * TILE)); g.draw(g.unitBody[jt][slotOf(g_sim.humanPlayer)], q.x, q.y, std::atan2(dir.y, dir.x), 0.9f, rgb(255, 255, 255), 170); }
     }
     drawZones();
     drawRangeRings();
+    drawStrikeMarks();
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
@@ -1540,8 +1602,13 @@ void Game::renderWorld() {
         else snprintf(buf, sizeof buf, "FORCE FIRE: pick a unit or structure");
         g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 120, 90));
     }
-    else if (nukeMode) g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)", rgb(255, 100, 70));
-    else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d aircraft to the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size()); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
+    else if (nukeMode) {
+        g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)", rgb(255, 100, 70));
+        Vec2 wp = screenToWorld(mouseX, mouseY);
+        int nd = g_sim.antiNukeCovering(wp, g_sim.humanPlayer, true);   // (only defences you have seen)
+        if (nd > 0) { char ab[96]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the warhead is shot down (30%% of the damage still falls)", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
+    }
+    else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d aircraft and %d strike fighters to the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size(), STRIKE_JETS); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (aidMode) {
         int who[MAX_PLAYERS]; int n = g_sim.aidCandidates(g_sim.humanPlayer, screenToWorld(mouseX, mouseY), who);
@@ -1696,6 +1763,10 @@ void Game::renderHud() {
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);
+                if (int dn = g_sim.droneCount(*e)) {   // protector drones: how many are ready to fire
+                    int rdy = 0; for (int i = 0; i < dn; i++) if (e->droneAt[i] <= g_sim.time) rdy++;
+                    snprintf(buf, sizeof buf, "Guard drones %d / %d ready: they shoot down rockets and shells aimed at it", rdy, dn); g.text(INFO_X + 86, hy + 110, buf, rgb(150, 220, 255));
+                } else if ((ut.naval || ut.cargoCap > 0) && ut.kind == UK_VEH && e->owner == g_sim.humanPlayer && !g_sim.hasUpgrade(g_sim.humanPlayer, UPG_DRONES) && ut.naval) g.text(INFO_X + 86, hy + 110, "No drones yet: the Guard Drones upgrade at the tech structure gives every ship a screen", hudDim());
             } else {
                 const BuildType& bt = e->bt();
                 if (bt.power != 0) { snprintf(buf, sizeof buf, "Power %+d", bt.power); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
@@ -1716,7 +1787,23 @@ void Game::renderHud() {
                     for (int u = 0; u < UPG_COUNT; u++) if (op.upg[u]) { if (!ups.empty()) ups += "  "; ups += UPGRADES[op.faction][u].name; }
                     if (!ups.empty()) g.text(INFO_X + 86 + (bt.power != 0 ? 70 : 0), hy + 58, ups.c_str(), accent);
                 }
-                if (bt.role != BR_BUNKER) { char d[96]; snprintf(d, sizeof d, "%.*s", e->queue.empty() ? 76 : 38, bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
+                if (bt.role == BR_ANTINUKE && e->constructed) {
+                    bool powered = !(pl.lowPower() && bt.power < 0) && e->disabledUntil <= g_sim.time;
+                    float rw = std::max(0.0f, e->siloTimer - g_sim.time);
+                    if (!powered) snprintf(buf, sizeof buf, "OFFLINE: %s", e->disabledUntil > g_sim.time ? "switched off by a pulse" : "no power");
+                    else if (rw > 0) snprintf(buf, sizeof buf, "Reloading %ds", (int)std::ceil(rw));
+                    else snprintf(buf, sizeof buf, "ARMED: covers %d tiles around it", (int)(bt.faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K));
+                    g.text(INFO_X + 86, hy + 58 + (bt.power != 0 ? 0 : 0), buf, powered && rw <= 0 ? accent : rgb(255, 200, 120));
+                    int foe = -1; for (int q = 0; q < g_sim.numPlayers; q++) if (g_sim.enemies(g_sim.humanPlayer, q)) { foe = q; break; }
+                    int nd = foe >= 0 ? g_sim.antiNukeCovering(e->pos, foe) : 1;
+                    snprintf(buf, sizeof buf, "%d defence%s cover this spot: a warhead aimed here is shot down %d%% of the time (30%% of its damage still falls)", nd, nd == 1 ? "" : "s", (int)(100.0f * (1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)nd)) + 0.5f));
+                    g.text(INFO_X + 86, hy + 84, buf, hudDim());
+                    snprintf(buf, sizeof buf, "%d of %d anti-nuke defences built", g_sim.countRole(g_sim.humanPlayer, BR_ANTINUKE, false), ANTINUKE_MAX); g.text(INFO_X + 86, hy + 96, buf, hudDim());
+                } else if (bt.role == BR_NAVAL && e->constructed) {
+                    int ships = 0; for (auto& u : g_sim.ents) if (u.alive && u.isUnit() && u.owner == g_sim.humanPlayer && u.ut().naval) ships++;
+                    snprintf(buf, sizeof buf, "%d ship%s afloat   (right-click the lake to set where new ships sail)", ships, ships == 1 ? "" : "s"); g.text(INFO_X + 86, hy + 84, buf, hudDim());
+                }
+                if (bt.role != BR_BUNKER && bt.role != BR_ANTINUKE) { char d[96]; snprintf(d, sizeof d, "%.*s", e->queue.empty() ? 76 : 38, bt.desc); g.text(INFO_X + 86, hy + 70, d, hudDim()); }
                 if (bt.role == BR_TECH && e->constructed) {
                     const ProgramType& pg = PROGRAMS[pl.faction];
                     if (pl.advTech) snprintf(buf, sizeof buf, "%s: researched, special units unlocked", pg.name);
@@ -1739,7 +1826,7 @@ void Game::renderHud() {
                         if (i == 0) hpBar(g, qx, qy + 30, 28, e->queueProgress);
                     }
                     snprintf(buf, sizeof buf, "%s %d%%", UNITS[e->queue[0]].name, (int)(e->queueProgress * 100)); g.text(INFO_X + 330, hy + 104, buf, hudText());
-                } else if (e->constructed && (bt.role == BR_BARRACKS || bt.role == BR_FACTORY || bt.role == BR_AIRFIELD || bt.role == BR_HQ || bt.role == BR_SUPPLY)) g.text(INFO_X + 330, hy + 58, "Production idle", hudDim());
+                } else if (e->constructed && (bt.role == BR_BARRACKS || bt.role == BR_FACTORY || bt.role == BR_AIRFIELD || bt.role == BR_HQ || bt.role == BR_SUPPLY || bt.role == BR_NAVAL)) g.text(INFO_X + 330, hy + 58, "Production idle", hudDim());
                 if (pl.lowPower() && bt.power < 0) g.text(INFO_X + 86, hy + (bt.role == BR_TECH || bt.role == BR_NUKE || bt.role == BR_INCOME ? 110 : 98), "LOW POWER: reduced output", rgb(255, 140, 120));
                 if (bt.role == BR_INCOME && e->constructed) {
                     bool half = pl.lowPower() && bt.power < 0;
@@ -1991,8 +2078,9 @@ void Game::drawNukes() {
         float nr = Sim::nukeRadius(n);
         g.discFill(tgt.x, tgt.y, nr, rgb(255, 60, 40, (int)(20 + 26 * pulse)));
         g.dashedCircle(tgt.x, tgt.y, nr, rgb(255, 90, 60), wallTime * 30.0f);
-        char buf[32]; snprintf(buf, sizeof buf, "%s %ds", n.scale < 1.0f ? "MINI NUKE" : "NUKE", (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
-        g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, rgb(255, 230, 200));
+        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE"), (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
+        g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, n.broken ? rgb(255, 214, 140) : rgb(255, 230, 200));
+        if (n.broken) continue;   // (the missile is gone: its pieces are drawn with the anti-nuke shots)
         // the missile: rises from the ramp on a long arc and falls on the target
         auto world = [&](float u) { Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; };
         auto ground = [&](float u) { return n.from + (n.pos - n.from) * u; };
@@ -2040,6 +2128,7 @@ void Game::drawNukes() {
             g.glowAdd(fs.x, fs.y, 64 * inten, Color{255, 170, 80, (u8)(150 * inten)});
         }
     }
+    drawInterceptors();
     if (nukeFlash > 0) {
         g.fill(0, 0, SCREEN_W, VIEW_H, rgb(255, 246, 228, (int)(215 * clampf(nukeFlash / 0.55f, 0, 1))));
     }
