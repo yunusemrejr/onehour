@@ -4,6 +4,7 @@
 #include "artb.h"
 #include "art.h"
 #include "art2.h"
+#include "testutil.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <thread>
@@ -587,7 +588,7 @@ static bool rulesTest(u64 seed) {
         Faction me = fac[0], foe = fac[2];
         int tankMe = me == F_CYBER ? U_C_TANK : U_K_TANK, tankFoe = foe == F_CYBER ? U_C_TANK : U_K_TANK;
         int inf1Foe = firstUnitOf(foe) + 2, sniperMe = me == F_CYBER ? U_C_SNIPER : U_K_SNIPER, sniperFoe = foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
-        Vec2 mid = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 30);
+        Vec2 mid = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f));
         auto hpOf = [](Ref r) { Entity* e = g_sim.get(r); return e ? e->hp : 0.0f; };
         // ---- force fire on friends: humans only
         Ref a = g_sim.spawnUnit(tankMe, 0, mid), own = g_sim.spawnUnit(tankMe, 0, mid + Vec2(90, 0)), ally = g_sim.spawnUnit(tankMe, 1, mid + Vec2(0, 90));
@@ -695,7 +696,7 @@ static bool autoTest(u64 seed) {
         Faction me = fac[0], foe = fac[2];
         int ub = firstUnitOf(me), fb = firstUnitOf(foe), ab = firstUnitOf(fac[1]);
         int tankMe = ub + 5, infFoe = fb + 2, artFoe = foe == F_CYBER ? U_C_RAIL : U_K_MLRS, bomberFoe = fb + 8, jetMe = ub + 11, jetFoe = fb + 11;
-        Vec2 mid = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 30);
+        Vec2 mid = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f));
         auto freeAt = [](Vec2 p) { return g_map.nearestFree(p, 30); };
         clearAll();
         // ---- answering fire from beyond reach: the enemy's artillery out-ranges the tanks; they go and get it, then walk back
@@ -1246,7 +1247,10 @@ static bool dropTest(u64 seed) {
         if (g_sim.dropTier(0) != 0) return fail("a fresh tech structure is not at the first drop tier");
         for (int t : want) if (UNITS[t].program) return fail("a drop carried a unit the Advanced Program has not unlocked yet");
         int wantInf = 0, wantVeh = 0, wantAir = 0;
-        for (int t : want) { if (UNITS[t].kind == UK_INF) wantInf++; else if (UNITS[t].kind == UK_VEH) wantVeh++; else wantAir++; }
+        int jeepsIn = 0;
+        for (int t : want) { if (UNITS[t].kind == UK_INF) wantInf++; else if (UNITS[t].kind == UK_VEH) { wantVeh++; if (UNITS[t].cargoCap > 0) jeepsIn++; } else wantAir++; }
+        if (jeepsIn != g_sim.dropJeeps(0) || jeepsIn < DROP_JEEPS_MIN || jeepsIn > DROP_JEEPS_MAX) return fail("a drop does not carry its jeeps (3 to 10, by what the army has unlocked)");
+        wantInf += jeepsIn * JEEP_SEATS;   // every jeep comes down with its seven soldiers aboard
         if (std::count(want.begin(), want.end(), fac[0] == F_CYBER ? U_C_SNIPER : U_K_SNIPER) < 1) { fprintf(stderr, "droptest: a fresh tech structure sent %d snipers (snipers are available to it)\n", (int)std::count(want.begin(), want.end(), fac[0] == F_CYBER ? U_C_SNIPER : U_K_SNIPER)); return false; }
         if (!g_sim.cmdParadrop(0, target)) return fail("paradrop refused");
         if (g_sim.cmdParadrop(0, target)) return fail("paradrop ignored its cooldown");
@@ -1271,7 +1275,18 @@ static bool dropTest(u64 seed) {
             if (dist(e.pos, target) > (DROPS[fac[0]].radius + 6.0f) * TILE && dist(e.pos, g_sim.players[0].basePos) > 10 * TILE) return fail("a paratrooper landed far from the drop zone");
         }
         if (inf != wantInf || veh != wantVeh + 1 /* the starting dozer */ || air - beforeAir != wantAir) { fprintf(stderr, "droptest: landed %d infantry %d vehicles %d aircraft (manifest said %d/%d/%d)\n", inf, veh, air - beforeAir, wantInf, wantVeh, wantAir); return fail("the load that landed is not the manifest the plane loaded"); }
-        if (g_sim.countUnits(0) - before != (int)want.size()) return fail("wrong unit count");
+        if (g_sim.countUnits(0) - before != (int)want.size() + jeepsIn * JEEP_SEATS) return fail("wrong unit count");
+        {   // the jeeps carry one rifleman, one sniper, one thrower and rocket troopers in the rest; they shoot from inside
+            int jeeps = 0, aboard = 0;
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().kind == UK_VEH && e.ut().cargoCap > 0) {
+                jeeps++; aboard += (int)e.passengers.size();
+                if ((int)e.passengers.size() != JEEP_SEATS) return fail("a dropped jeep landed with an empty seat");
+                int snipers = 0, rockets = 0;
+                for (Ref r : e.passengers) { const Entity* u = g_sim.get(r); if (!u || u->carrier != g_sim.refOf(e)) return fail("a crew member does not know its jeep"); if (u->ut().sniper) snipers++; if (u->type == (fac[0] == F_CYBER ? U_C_INF2 : U_K_INF2)) rockets++; }
+                if (snipers != 1 || rockets < 4) return fail("a dropped jeep's crew is not one sniper and the rest mostly rocket troopers");
+            }
+            if (jeeps != jeepsIn || aboard != jeepsIn * JEEP_SEATS) return fail("the jeeps that landed are not the jeeps the plane carried");
+        }
         printf("droptest drop %s: ok (tier 1 '%s': %d infantry, %d vehicles, %d aircraft, up to %d on the silk at once)\n", FACTION_NAME[fac[0]], DROP_TIERS[0].name, inf, veh - 1, air - beforeAir, maxFalling);
 
         // ---- it is upgradable: the same Data Center / Arms Lab sends more once the army learns things (R3/R4/R5). Snipers are
@@ -1322,9 +1337,11 @@ static bool dropTest(u64 seed) {
             for (int t = 0; t < 20 * 60 && !g_sim.airlifts.empty(); t++) { g_sim.step(); g_sim.events.clear(); }
             for (int t = 0; t < 20 * 6; t++) { g_sim.step(); g_sim.events.clear(); }
             if (!g_sim.airlifts.empty()) return fail("the top-tier plane never left the map");
-            int got2 = g_sim.countUnits(0) - before2;
-            if (got2 != (int)top.size()) { fprintf(stderr, "droptest: the top-tier drop landed %d of %d\n", got2, (int)top.size()); return false; }
-            if (got2 <= (int)want.size()) return fail("the top-tier drop is not bigger than the first one");
+            int got2 = g_sim.countUnits(0) - before2, topJeeps = (int)std::count(top.begin(), top.end(), fac[0] == F_CYBER ? U_C_JEEP : U_K_JEEP);
+            if (topJeeps != g_sim.dropJeeps(0) || topJeeps <= jeepsIn) { fprintf(stderr, "droptest: the top tier carried %d jeeps (a fresh drop has %d, the manifest says %d)\n", topJeeps, jeepsIn, g_sim.dropJeeps(0)); return false; }
+            { bool keep = pl.upg[UPG_RUGGED]; pl.upg[UPG_RUGGED] = true; int allJeeps = g_sim.dropJeeps(0); pl.upg[UPG_RUGGED] = keep; if (allJeeps != DROP_JEEPS_MAX) return fail("an army with everything unlocked does not drop the most jeeps"); }
+            if (got2 != (int)top.size() + topJeeps * JEEP_SEATS) { fprintf(stderr, "droptest: the top-tier drop landed %d of %d\n", got2, (int)top.size() + topJeeps * JEEP_SEATS); return false; }
+            if (got2 <= (int)want.size() + jeepsIn * JEEP_SEATS) return fail("the top-tier drop is not bigger than the first one");
             printf("droptest upgrades %s: ok (tier 1 -> tier 3 grew the load from %d to %d units, snipers in it, cooldown %d s -> %d s)\n", FACTION_NAME[fac[0]], (int)want.size(), got2, (int)DROP_TIERS[0].cooldown, (int)DROP_TIERS[2].cooldown);
         }
     }
@@ -1497,6 +1514,7 @@ static bool supportTest(u64 seed) {
         if (!fb || fb->hp < fb->maxHp * 0.9f) { fprintf(stderr, "factory hp %.0f / %.0f\n", fb ? fb->hp : 0, fb ? fb->maxHp : 0); return fail("the idle dozer did not repair the damaged structure"); }
         // nuke: lots of enemy units and a structure, 9 tiles from ground zero
         Vec2 gz = g_map.nearestFree(b0 + Vec2(0, 30 * TILE), 60);
+        flattenArena(gz, 14, 14);
         Ref e1 = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, gz), e2 = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, g_map.nearestFree(gz + Vec2(9 * TILE, 0), 20));
         Vec2 gzE = g_sim.get(e1)->pos;
         g_sim.nukes.push_back({b0, gzE, 0, Sim::NUKE_FLIGHT - 0.05f});
@@ -1576,7 +1594,7 @@ static bool bombTest(u64 seed) {
         g_sim.init(2, fac, ai, diff, team, seed + 10 + fi);
         for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
         int b0 = firstBuildOf(fac[0]), b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]);
-        Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        Vec2 mid = openGroundNear(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f);
         Ref af, target;
         for (int dy = -8; dy < 8 && !af.valid(); dy++) for (int dx = -8; dx < 8 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, b0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(b0 + BR_AIRFIELD, 0, tx, ty, true); }
         for (int dy = 12; dy < 24 && !target.valid(); dy++) for (int dx = -10; dx < 10 && !target.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(1, b1 + BR_FACTORY, tx, ty)) target = g_sim.placeBuilding(b1 + BR_FACTORY, 1, tx, ty, true); }
@@ -1981,6 +1999,7 @@ static bool airMatrixTest(u64 seed) {
         for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
         int b0 = firstBuildOf(fac[0]), b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]), u1 = firstUnitOf(fac[1]);
         Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        flattenArena(mid, 16, 26);   // (the middle of the map is a lake: the aircraft get an open field)
         Ref af;
         for (int dy = -8; dy < 8 && !af.valid(); dy++) for (int dx = -8; dx < 8 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, b0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(b0 + BR_AIRFIELD, 0, tx, ty, true); }
         if (!af.valid()) { fprintf(stderr, "airmatrix: no airfield spot\n"); return false; }
@@ -2044,7 +2063,7 @@ static bool groundMatrixTest(u64 seed) {
         g_sim.init(2, fac, ai, diff, team, seed + fi);
         for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
         int b1 = firstBuildOf(fac[1]), u1 = firstUnitOf(fac[1]);
-        Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        Vec2 mid = openGroundNear(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f);
         Vec2 me = g_map.nearestFree(mid, 20);
         Ref unit = g_sim.spawnUnit(u0 + ut, 0, me);
         Vec2 where = g_map.nearestFree(me + Vec2(mode == 0 ? 5.0f * TILE : 13.0f * TILE, 0), 30);
@@ -2094,6 +2113,7 @@ static bool turretTest(u64 seed) {
         if (air && !W.air) continue;
         if (!air && !W.ground) continue;
         Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
+        flattenArena(mid, 22, 22);   // (the middle of the map is a lake)
         Ref tur;
         for (int dy = -8; dy < 8 && !tur.valid(); dy++) for (int dx = -8; dx < 8 && !tur.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) tur = g_sim.placeBuilding(type, 0, tx, ty, !fresh); }
         // power plant so the turret is powered
@@ -2816,7 +2836,7 @@ int main(int argc, char** argv) {
                 Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction; int bb0 = firstBuildOf(f0), bb1 = firstBuildOf(f1);
                 Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
                 std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1); std::fill(g_sim.players[1].explored.begin(), g_sim.players[1].explored.end(), 1);
-                Vec2 mid = g_map.nearestFree(bp + (ep - bp) * 0.5f, 40);
+                Vec2 mid = openGroundNear(bp + (ep - bp) * 0.5f);
                 Ref af;
                 for (int dy = -8; dy < 8 && !af.valid(); dy++) for (int dx = -8; dx < 8 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, bb0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(bb0 + BR_AIRFIELD, 0, tx, ty, true); }
                 Vec2 pad = g_sim.get(af)->pos; Vec2 tgc = pad + Vec2(10 * TILE, 4 * TILE); Ref first;

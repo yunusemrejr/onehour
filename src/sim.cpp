@@ -9,7 +9,7 @@ static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
-    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fallouts.clear();
+    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); nukeSeq = 0;
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -56,7 +56,7 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e = Entity();
     e.gen = gen; e.alive = true; e.kind = EK_UNIT; e.type = type; e.owner = owner;
     const UnitType& t = UNITS[type];
-    e.pos = t.kind == UK_AIR ? pos : g_map.nearestFree(pos);
+    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos) : g_map.nearestFree(pos));
     e.lastPos = e.pos; e.prevPos = e.pos;
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
@@ -247,7 +247,10 @@ bool Sim::atIncomeLimit(int player, int buildType) const {
 // a dozer may found or rebuild a Command Core / Post any time it can pay for one; up to HQ_MAX stand (or rise) at once
 bool Sim::atBuildLimit(int player, int buildType) const {
     if (atIncomeLimit(player, buildType)) return true;
-    return BUILDS[buildType].role == BR_HQ && countRole(player, BR_HQ, false) >= HQ_MAX;
+    BuildRole r = BUILDS[buildType].role;
+    if (r == BR_NAVAL) return countRole(player, BR_NAVAL, false) >= 3;
+    if (r == BR_ANTINUKE) return countRole(player, BR_ANTINUKE, false) >= ANTINUKE_MAX;
+    return r == BR_HQ && countRole(player, BR_HQ, false) >= HQ_MAX;
 }
 int Sim::countUnits(int player, int type) const {
     int n = 0;
@@ -275,6 +278,16 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
     for (int j = ty - 1; j <= ty + b.h; j++) for (int i = tx - 1; i <= tx + b.w; i++) {
         if (!inMap(i, j)) continue;
         if (g_map.blocked[j * MAP_W + i] & 4) return false;
+    }
+    if (b.role == BR_NAVAL) {   // a Naval Yard stands on the shore: its edge must touch the open lake (not a pond or a river cut off by a bridge)
+        bool touch = false;
+        for (int j = ty - 1; j <= ty + b.h && !touch; j++) for (int i = tx - 1; i <= tx + b.w; i++) {
+            bool inside = i >= tx && i < tx + b.w && j >= ty && j < ty + b.h;
+            bool corner = (i < tx || i >= tx + b.w) && (j < ty || j >= ty + b.h);
+            if (inside || corner) continue;
+            if (g_map.bigWater(i, j) && g_map.navOpen(i, j)) { touch = true; break; }
+        }
+        if (!touch) return false;
     }
     // units standing on the footprint are pushed off when placed; no check needed
     return true;
@@ -320,13 +333,14 @@ static void formationOffsets(const std::vector<Entity*>& units, Vec2 dest, std::
 
 void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     std::vector<Entity*> ground, air;
-    for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && !e->carrier.valid()) (e->isAir() ? air : ground).push_back(e); }
+    for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && !e->carrier.valid() && !e->ut().temp) (e->isAir() ? air : ground).push_back(e); }   // (a Hotline Strike fighter takes no orders)
     std::vector<Vec2> offs;
     formationOffsets(ground, dest, offs);
     for (size_t i = 0; i < ground.size(); i++) {
         Entity& e = *ground[i];
         e.zoneR = 0; e.leashed = false; takeOrder(e); e.forceTarget = NOREF;
-        Vec2 d = g_map.nearestFree(Vec2(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE)), 6);
+        Vec2 dd(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE));
+        Vec2 d = e.ut().naval ? g_map.nearestWater(dd, 14) : g_map.nearestFree(dd, 6);   // ships sail to the nearest open water
         e.order = attackMove && e.weapon() >= 0 ? O_ATTACKMOVE : O_MOVE;
         e.postOrder = O_IDLE;
         e.target = d; e.targetEnt = NOREF; e.engaged = NOREF; e.actionTimer = 0;
@@ -347,7 +361,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
     if (!t) return;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || e == t || e->carrier.valid()) continue;
+        if (!e || e == t || e->carrier.valid() || (e->isUnit() && e->ut().temp)) continue;
         if (e->isUnit() && e->ut().role == UR_SPY) {   // a spy takes an enemy structure; against anything else it just walks over
             if (t->isBuilding() && t->constructed && enemies(e->owner, t->owner)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
@@ -381,7 +395,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
 void Sim::cmdStop(const std::vector<Ref>& sel) {
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || !e->isUnit() || e->carrier.valid()) continue;
+        if (!e || !e->isUnit() || e->carrier.valid() || e->ut().temp) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF; e->loiterUntil = -1;
         if (e->isAir() && e->ammo <= 0 && e->ut().ammo > 0) { e->order = O_REARM; e->targetEnt = NOREF; continue; }
         e->order = O_IDLE; e->postOrder = O_IDLE; e->targetEnt = NOREF; e->engaged = NOREF; e->path.clear(); e->guardPos = e->pos;
@@ -407,7 +421,7 @@ void Sim::cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
     radius = clampf(radius, 2.0f * TILE, 14.0f * TILE);
     center = Vec2(clampf(center.x, TILE, WORLD_W - TILE), clampf(center.y, TILE, WORLD_H - TILE));
     std::vector<Entity*> us;
-    for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && !e->carrier.valid() && e->ut().role == UR_COMBAT && e->weapon() >= 0) us.push_back(e); }
+    for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && !e->carrier.valid() && !e->ut().temp && e->ut().role == UR_COMBAT && e->weapon() >= 0) us.push_back(e); }
     int n = (int)us.size();
     for (int k = 0; k < n; k++) {
         Entity& e = *us[k];
@@ -610,9 +624,13 @@ std::vector<int> Sim::dropManifest(int player) const {
     };
     int ic = (int)dt.infBudget, vc = (int)dt.vehBudget, ac = (int)dt.airBudget;
     std::vector<int> inf, veh, air;
+    int jeepType = f == F_CYBER ? U_C_JEEP : U_K_JEEP;
     for (int k = 0; k < ic; k++) { int t = pick(DROP_INF_POOL[f], DROP_INF, (k * depthOf(DROP_INF)) / std::max(1, ic)); if (t >= 0) inf.push_back(t); }
     for (int k = 0; k < vc; k++) { int t = pick(DROP_VEH_POOL[f], DROP_VEH, (k * depthOf(DROP_VEH)) / std::max(1, vc)); if (t >= 0) veh.push_back(t); }
     for (int k = 0; k < ac; k++) { int t = pick(DROP_AIR_POOL[f], DROP_AIR, (k * depthOf(DROP_AIR)) / std::max(1, ac)); if (t >= 0) air.push_back(t); }
+    // jeeps come on top of the fighting slots, each with its seven soldiers already aboard (they are put in when the jeep leaves the plane, see releaseUnit):
+    // DROP_JEEPS_MIN of them from the start and more as the army unlocks things (dropJeeps)
+    if (unitAvailable(player, jeepType)) for (int k = 0, nj = dropJeeps(player); k < nj; k++) veh.push_back(jeepType);
     // Support rides on top of the slots instead of eating one: it is what the army has learned to bring besides its troops. A medic and a spy
     // do no damage at all and a sniper and a scout drone none against a structure, so letting them take a fighting slot would quietly make every
     // drop weaker than the one before. Each one still appears only if the army can field it - and the sniper's own tech structure is the very one
@@ -771,6 +789,13 @@ void Sim::releaseUnit(Airlift& a) {
     Vec2 dir = a.dir; int owner = a.owner; Vec2 target = a.target; bool attackOn = a.attackOn;
     Vec2 to = ut.kind == UK_AIR ? target : landingSpot(a, ut.kind == UK_VEH ? 34.0f : 20.0f);
     Ref r = spawnUnit(type, owner, from);
+    if (ut.kind == UK_VEH && ut.cargoCap > 0) {   // a jeep leaves the plane with its crew already aboard (they ride down under the same canopy)
+        for (int ct : jeepCrew(owner)) {
+            Ref cr = spawnUnit(ct, owner, from);   // (may grow the entity array: fetch both again)
+            Entity* c = get(cr); Entity* jp = get(r);
+            if (c && jp) board(*c, *jp, true);
+        }
+    }
     Entity& e = ents[r.idx];
     e.pos = e.prevPos = e.lastPos = from;
     float face = std::atan2(dir.y, dir.x);
@@ -918,8 +943,22 @@ bool Sim::cmdPhoneStrike(int player, Vec2 pos) {
         if (h) e.home = refOf(*h);
         cmdMove({r}, pos, true);   // attack-move: they engage what they pass and then work the called spot before heading home
     }
+    // ... and the two special fighters: far faster than the swarm, they arrive first and work the spot over three rocket passes
+    int jetType = pl.faction == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
+    for (int k = 0; k < STRIKE_JETS; k++) {
+        Vec2 from = entry + perp * ((k * 2 - 1) * 2.4f * TILE);
+        from.x = clampf(from.x, m, WORLD_W - m); from.y = clampf(from.y, m, WORLD_H - m);
+        Ref r = spawnUnit(jetType, player, from);
+        Entity& e = ents[r.idx];
+        e.pos = e.prevPos = e.lastPos = from;
+        e.alt = 1; e.airspeed = UNITS[jetType].speed * 0.9f;
+        Vec2 d = pos - from;
+        e.angle = e.turret = d.len() > 1.0f ? std::atan2(d.y, d.x) : 0.0f;
+        e.order = O_STRIKERUN; e.target = pos; e.ammo = UNITS[jetType].ammo; e.lifeUntil = time + STRIKE_LIFE; e.strikePass = 0; e.salvoLeft = 0; e.jetBreak = 0;
+    }
+    strikeMarks.push_back({pos, player, time});
     emit(EV_SOUND, player, SND_AIR, entry);
-    emit(EV_MSG, player, SND_NONE, pos, (std::string(STRIKES[pl.faction].name) + " inbound").c_str());
+    emit(EV_MSG, player, SND_NONE, pos, (std::string(STRIKES[pl.faction].name) + " inbound: the swarm and two " + UNITS[jetType].name + " strike fighters").c_str());
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY AIR STRIKE INBOUND");
     return true;
 }
@@ -1043,7 +1082,10 @@ void Sim::updateAidDrops() {
 static const int NUKE_SMALL_AREA = 6;
 
 void Sim::updateNukes() {
-    for (auto& n : nukes) n.t += SIM_DT;
+    for (auto& n : nukes) { n.t += SIM_DT; if (n.id == 0) n.id = ++nukeSeq; }
+    // anti-nuke defences open fire on the warheads closing in on them (their shots are laid out in time: a warhead is shot down when the winning one arrives)
+    for (auto& b : ents) if (b.alive && b.isBuilding() && b.constructed && b.bt().role == BR_ANTINUKE) updateAntiNuke(b);
+    for (auto& n : nukes) if (!n.broken && n.killT >= 0 && n.t >= n.killT) breakNuke(n);
     for (size_t i = 0; i < nukes.size();) {
         if (nukes[i].t < NUKE_FLIGHT) { i++; continue; }
         Nuke n = nukes[i];
@@ -1054,19 +1096,20 @@ void Sim::updateNukes() {
 
 void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
+    const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
         Entity* e = get(r); if (!e) continue;
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (d > R) continue;
-        float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
+        float f = (d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f))) * P;   // flat lethal core, then a falloff to a quarter at the rim (all of it scaled by what is left of the warhead)
         bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies and the human's own army as well
         if (e->isAir()) {   // nothing flying survives the fireball and the shock front, whoever owns it: torn apart, it falls out of the sky
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
             fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
             for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
-            applyDamage(*e, e->maxHp * 2.0f, n.owner, NOREF, nullptr);
+            applyDamage(*e, e->maxHp * 2.0f * P, n.owner, NOREF, nullptr);
             continue;
         }
         Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
@@ -1094,14 +1137,16 @@ void Sim::nukeBlast(const Nuke& n) {
                     }
                 }
             } else {
-                applyDamage(*e, 6000.0f * f, n.owner, NOREF, nullptr);
+                float dmg = 6000.0f * f;
+                if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f * P);   // a warship is no match for a warhead anywhere in the blast: it goes down
+                applyDamage(*e, dmg, n.owner, NOREF, nullptr);
                 e = get(r); if (!e) continue;
                 e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f);           // survivors are stunned by the pulse
             }
         }
         if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
             Vec2 np = e->pos + away * (90.0f * f);
-            if (g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
+            if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
         }
     }
@@ -1114,6 +1159,21 @@ void Sim::nukeBlast(const Nuke& n) {
         fx.push_back({FX_SMOKE, a.pos, a.pos, 0, 4.0f, rgb(44, 42, 40), 40.0f, Vec2(rng.f(-10, 10), -20)});
         for (int k = 0; k < 14; k++) fx.push_back({FX_DEBRIS, a.pos, a.pos, 0, rng.f(0.7f, 1.6f), rgb(220, 222, 226), rng.f(2, 5), Vec2(rng.f(-200, 200), rng.f(-220, -30))});
         emit(EV_MSG, a.owner, SND_NONE, a.pos, a.crates.empty() ? "Your nuke brought down the aid plane: the aid is lost" : "Your nuke brought down the aid plane: only the crates already out will land");
+    }
+    if (n.broken) {   // a warhead that was shot down: its pieces come down in a rain of scattered blasts and burning wreckage, with no fireball or mushroom
+        fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 1.0f, rgb(255, 236, 190), R * 0.55f});
+        fx.push_back({FX_RING, n.pos, n.pos, 0, 1.2f, rgb(255, 200, 130), R * 0.8f});
+        for (int k = 0; k < 26; k++) {
+            float a = rng.f(0, 6.283f), r = R * std::sqrt(rng.f(0.0f, 1.0f)) * 0.95f; Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
+            fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 1.6f), rng.f(0.5f, 0.9f), rgb(255, 160, 60), rng.f(14, 34)});
+            fx.push_back({FX_SMOKE, p, p, -rng.f(0, 1.8f), 4.0f, rgb(60, 54, 50), rng.f(16, 34), Vec2(rng.f(-10, 10), rng.f(-34, -14))});
+        }
+        for (int k = 0; k < 24; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.8f), rng.f(0.7f, 1.6f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-300, 300), rng.f(-380, -90))});
+        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, rgb(120, 255, 90), R * 0.95f});
+        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, P});
+        emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+        emit(EV_SOUND, -1, SND_EXPLODE_S, n.pos);
+        return;
     }
     // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
     fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, rgb(255, 240, 200), R * 1.3f});
@@ -1148,7 +1208,7 @@ void Sim::updateFallout() {
         }
         if (f.tick >= 0.5f) {
             f.tick -= 0.5f;
-            float strength = f.t < FALLOUT_LIFE - 15.0f ? 1.0f : (FALLOUT_LIFE - f.t) / 15.0f;   // dies down at the end
+            float strength = (f.t < FALLOUT_LIFE - 15.0f ? 1.0f : (FALLOUT_LIFE - f.t) / 15.0f) * f.power;   // dies down at the end (and is weaker for the pieces of a warhead that was shot down)
             std::vector<Ref> in;
             forEachNear(f.pos, f.r, [&](Entity& e) { if (e.kind != EK_RESOURCE && !e.isAir() && dist(e.pos, f.pos) <= f.r) in.push_back(refOf(e)); });
             for (auto r : in) {
@@ -1247,12 +1307,18 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
     e.repathTimer = PATH_INTERVAL;
     e.stuckTimer = 0; e.lastPos = e.pos;
     if (e.isAir()) { e.path.push_back(dest); return true; }
+    if (e.ut().naval) {   // ships plan over open water only
+        bool ok = g_map.findNavalPath(e.pos, dest, e.path);
+        if (e.path.empty()) e.path.push_back(g_map.nearestWater(dest, 6));
+        return ok;
+    }
     bool ok = g_map.findPath(e.pos, dest, e.path);
     if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4));   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
     return ok;
 }
 
 void Sim::moveAlong(Entity& e, float speed) {
+    if (!e.isAir() && e.ut().naval) { moveShip(e, speed); return; }
     if (e.pathIdx >= e.path.size()) return;
     Vec2 wp = e.path[e.pathIdx];
     Vec2 d = wp - e.pos;
@@ -1451,6 +1517,10 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle
 
 void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
+    if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
+        if (tick % 3 == 0) { fx.push_back({FX_SPARK, tgt.pos, tgt.pos, 0, 0.3f, rgb(255, 236, 190), 5}); fx.push_back({FX_RING, tgt.pos, tgt.pos, 0, 0.25f, rgb(255, 255, 255), 16.0f}); }
+        return;
+    }
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
@@ -1538,6 +1608,7 @@ void Sim::updateProjectiles() {
         if (!p.alive) continue;
         const Weapon& w = WEAPONS[p.weapon];
         p.life -= SIM_DT;
+        if (interceptProjectile(p)) { p.alive = false; continue; }   // a protector drone got it
         if (w.proj == PJ_SHELL || w.proj == PJ_BOMB) {
             p.arcT += SIM_DT / p.arcLen;
             Vec2 start = p.vel;
@@ -1999,7 +2070,7 @@ void Sim::autoEngage(Entity& e, Entity& t) {
 
 void Sim::moveAside(Entity& e, Vec2 dest, float holdFor) {
     dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
-    if (!e.isAir()) dest = g_map.nearestFree(dest, 6);
+    if (!e.isAir()) dest = e.ut().naval ? g_map.nearestWater(dest, 10) : g_map.nearestFree(dest, 6);
     e.order = O_MOVE; e.target = dest; e.engaged = NOREF; e.autoTask = true; e.leashed = false; e.postOrder = O_IDLE; e.actionTimer = 0;
     e.evadeUntil = time + holdFor;
     if (!e.isAir()) requestPath(e, dest);
@@ -2187,8 +2258,10 @@ void Sim::updateUnit(Entity& e) {
         return;
     }
     if (e.cooldown > 0) e.cooldown -= SIM_DT;
+    if (ut.temp && e.lifeUntil >= 0 && time >= e.lifeUntil) { destroy(e, false); return; }   // a loan whose time is up is withdrawn wherever it is
     if (e.disabledUntil > time) return;
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
+    if (ut.cargoCap > 0 && ut.kind == UK_VEH) updateJeep(e);   // the crew of a jeep mends, climbs out and fires from the seats
 
     // medics: a healing field around them (units at the full rate, structures slowly), pulsed four times a second
     if (ut.role == UR_HEALER && (tick + e.gen) % 5 == 0) {
@@ -2233,11 +2306,11 @@ void Sim::updateUnit(Entity& e) {
     }
 
     // Aircraft: out of ammo -> go rearm (remember the target)
-    if (e.isAir() && ut.ammo > 0 && e.ammo <= 0 && e.order != O_REARM) { e.order = O_REARM; }
+    if (e.isAir() && ut.ammo > 0 && e.ammo <= 0 && e.order != O_REARM && !ut.temp) { e.order = O_REARM; }
 
     // Ground units standing on a blocked tile (new structure) get nudged off
-    if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && !g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y)))
-        e.pos = g_map.nearestFree(e.pos, 14);
+    if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && (ut.naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y))))
+        e.pos = ut.naval ? g_map.nearestWater(e.pos, 14) : g_map.nearestFree(e.pos, 14);
 
     // jammed: it has somewhere to go but hardly moved in the last second (two units head-on in a one-tile lane between structures,
     // a soldier standing in a gap): for a couple of seconds it slips past other units instead of shoving against them
@@ -2260,6 +2333,8 @@ void Sim::updateUnit(Entity& e) {
     // a fixed-wing aircraft whose order changed this tick (a target lost, a spot reached, a new order) still flies on: it never hangs in the air
     if (e.isAir() && fixedWing(ut) && e.alive && e.pos.x == before.x && e.pos.y == before.y && e.airspeed > 0 && e.disabledUntil <= time)
         airSteer(e, e.angle, std::max(e.airspeed, ut.speed * AIR_STALL));
+    // a ship that has no order to steer by still has its way on: it glides to a halt
+    if (ut.naval && e.alive && e.airspeed > 0.5f && e.pos.x == before.x && e.pos.y == before.y) moveShip(e, ut.speed);
 }
 
 // ------------------------------------------------------------ repairs
@@ -2644,7 +2719,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         Entity* c = get(e.targetEnt);
         if (!c || !canBoard(e, *c)) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); break; }
         float reach = c->isBuilding() ? 40.0f : c->radius() + 44.0f;   // (a crowd cannot all stand at the door: whoever is close enough climbs in)
-        bool open = c->isBuilding() ? (c->constructed && !c->unloading) : (c->order == O_IDLE && !c->unloading && c->disabledUntil <= time);   // a lifter takes people while it hovers in place
+        bool open = c->isBuilding() ? (c->constructed && !c->unloading) : ((c->ut().kind == UK_VEH ? dist(c->pos, c->prevPos) < 1.2f : c->order == O_IDLE) && !c->unloading && c->disabledUntil <= time);   // a lifter takes people while it hovers in place, a jeep while it is stopped
         if (distToEntity(e.pos, *c) <= reach && open) { board(e, *c); break; }
         Vec2 toMe = (e.pos - c->pos).norm();   // each soldier heads for the side of the door it is on, so a crowd spreads around the bunker instead of jamming on one face
         Vec2 goal = c->isBuilding() ? g_map.nearestFree(c->pos + toMe * (std::max(c->bt().w, c->bt().h) * TILE * 0.5f + 22.0f), 6) : g_map.nearestFree(c->pos + toMe * (c->radius() * 0.5f), 6);
@@ -2690,6 +2765,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         else { e.unloading = true; e.unloadTimer = 0.4f; e.order = O_IDLE; }
         break;
     }
+    case O_STRIKERUN: strikeJetRun(e); break;
     case O_REARM: {
         Entity* h = get(e.home);
         if (!h) { h = findAirfield(e); if (h) e.home = refOf(*h); }
@@ -2738,7 +2814,7 @@ void Sim::spawnFromQueue(Entity& b) {
     b.queue.erase(b.queue.begin());
     b.queueProgress = 0;
     const UnitType& ut = UNITS[type];
-    Vec2 at = ut.kind == UK_AIR ? b.pos : unitExit(b);
+    Vec2 at = ut.kind == UK_AIR ? b.pos : (ut.naval ? navalExit(b) : unitExit(b));
     Ref bref = refOf(b);
     Vec2 rally = b.rally; bool hasRally = b.hasRally; int owner = b.owner;
     Ref r = spawnUnit(type, owner, at);          // may reallocate ents: b must not be touched afterwards
@@ -2748,6 +2824,7 @@ void Sim::spawnFromQueue(Entity& b) {
         Entity* p = findPile(u, 60 * TILE);
         if (p) cmdHarvest({r}, refOf(*p));
     } else if (hasRally) cmdMove({r}, rally, false);
+    else if (ut.naval) { Vec2 lake(WORLD_W * 0.5f, WORLD_H * 0.5f), out = (u.pos - lake).norm(); cmdMove({r}, lake + out * (5.5f * TILE) + Vec2(rng.f(-30, 30), rng.f(-30, 30)), false); }   // out into the lake
     else cmdMove({r}, rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
     emit(EV_UNIT_READY, owner, SND_UNIT_READY, u.pos, ut.name);
 }
@@ -2866,7 +2943,9 @@ bool Sim::canBoard(const Entity& u, const Entity& c) const {
         if (u.ut().role == UR_DOZER) return garrisonDozers(c) < BUNKER_DOZER_CAP;
         return false;
     }
-    if (!c.isUnit() || c.ut().cargoCap <= 0) return false;
+    if (!c.isUnit() || c.ut().cargoCap <= 0 || u.ut().temp) return false;
+    if (c.ut().kind == UK_VEH && u.ut().kind != UK_INF) return false;   // a jeep seats soldiers, nothing else
+    if (!u.passengers.empty()) return false;                            // a loaded jeep is not itself lifted (no loads inside loads)
     int sz = cargoSize(u.ut());
     return sz > 0 && cargoUsed(c) + sz <= c.ut().cargoCap;
 }
@@ -2882,14 +2961,14 @@ void Sim::cmdEnter(const std::vector<Ref>& sel, Ref carrier) {
     }
 }
 
-void Sim::board(Entity& u, Entity& c) {
+void Sim::board(Entity& u, Entity& c, bool quiet) {
     Ref uref = refOf(u);
     u.carrier = refOf(c);
     c.passengers.push_back(uref);
     u.order = O_IDLE; u.postOrder = O_IDLE; u.targetEnt = NOREF; u.engaged = NOREF; u.path.clear(); u.pathIdx = 0; u.actionTimer = 0; u.cooldown = 0;
     u.pos = c.pos; u.prevPos = u.pos;
     if (c.isBuilding()) fx.push_back({FX_SMOKE, c.pos, c.pos, 0, 0.8f, rgb(120, 110, 96), 7, Vec2(0, -8)});
-    if (c.owner >= 0) emit(EV_SOUND, c.owner, SND_CLICK, c.pos);
+    if (c.owner >= 0 && !quiet) emit(EV_SOUND, c.owner, SND_CLICK, c.pos);
 }
 
 // Where soldier number 'slot' stands when it climbs out: a ring around the carrier, on free ground
@@ -2912,7 +2991,9 @@ void Sim::ejectAll(Entity& c, bool lost) {
         Entity* u = get(r);
         if (!u || u->carrier != refOf(c)) continue;
         if (crash) { u->pos = c.pos; u->carrier = NOREF; destroy(*u, true); continue; }
+        if (lost && c.isUnit() && !c.isAir() && rng.f() < JEEP_CASUALTIES) { u->pos = c.pos; u->carrier = NOREF; destroy(*u, true); continue; }   // killed in the wreck of their jeep
         ejectOne(c, *u, slot++);
+        if (lost && c.isUnit() && !c.isAir()) u->hp = std::max(1.0f, u->hp * 0.65f);   // the others climb out hurt
     }
 }
 
@@ -2921,6 +3002,11 @@ void Sim::cmdUnload(Ref carrier, bool atSpot, Vec2 spot) {
     if (!c || c->passengers.empty()) return;
     if (c->isBuilding()) { if (c->bt().role == BR_BUNKER && c->constructed) { c->unloading = true; c->unloadTimer = 0; } return; }
     if (!c->isUnit() || c->ut().cargoCap <= 0) return;
+    if (c->ut().kind == UK_VEH) {   // a jeep stops and the crew climbs out onto the ground around it
+        c->unloading = true; c->unloadTimer = 0.1f;
+        c->order = O_IDLE; c->postOrder = O_IDLE; c->path.clear(); c->pathIdx = 0; c->targetEnt = NOREF;
+        return;
+    }
     if (atSpot) {
         c->unloading = false;
         c->order = O_UNLOAD; c->target = Vec2(clampf(spot.x, TILE, WORLD_W - TILE), clampf(spot.y, TILE, WORLD_H - TILE)); c->targetEnt = NOREF; c->loiterUntil = -1; c->zoneR = 0; c->engaged = NOREF;
@@ -3189,6 +3275,7 @@ void Sim::separateUnits() {
                 if (j == i) continue;
                 Entity& b = ents[j];
                 if (!b.alive || !b.isUnit() || b.isAir() != air || b.fall > 0) continue;
+                if (!air && b.ut().naval != a.ut().naval) continue;   // a ship and a land unit never share ground (a shore unit is not pushed by a hull)
                 if (!air && (a.squeezeUntil > time || b.squeezeUntil > time)) continue;   // a jammed unit slips past
                 float rr = ra + b.radius();
                 if (air && a.ut().heli && b.ut().heli) rr = HELI_SPACE;   // helicopters keep a small gap between their hulls
@@ -3207,7 +3294,7 @@ void Sim::separateUnits() {
         }
         if (push.len2() > 0.01f) {
             Vec2 np = a.pos + push * SIM_DT * 14.0f;
-            if (air || g_map.passable(tileOf(np.x), tileOf(np.y))) a.pos = np;
+            if (air || (a.ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y)))) a.pos = np;
         }
         a.pos.x = clampf(a.pos.x, 8, WORLD_W - 8); a.pos.y = clampf(a.pos.y, 8, WORLD_H - 8);
     }
@@ -3221,7 +3308,7 @@ void Sim::checkVictory() {
         // an army is out only when nothing of its own still stands: a hidden sniper, spy drone or bunker counts (the enemy has to find it),
         // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too
         bool any = false;
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE) { any = true; break; }
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && e.ut().temp)) { any = true; break; }   // (a Hotline Strike fighter on loan is no army)
         if (!any) { pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]); }
     }
     if (!anyDied) return;
@@ -3263,6 +3350,8 @@ void Sim::step() {
     updateStorms();
     updateNukes();
     updateAirlifts();
+    updateStrikeMarks();
+    updateInterceptors();
     updateAidDrops();
     updateFallout();
     separateUnits();

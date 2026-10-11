@@ -9,7 +9,8 @@ enum EntKind : u8 { EK_UNIT = 0, EK_BUILDING, EK_RESOURCE };
 enum Order : u8 { O_IDLE = 0, O_MOVE, O_ATTACKMOVE, O_ATTACK, O_HARVEST, O_RETURN, O_BUILD, O_REARM, O_GUARDPOS, O_GUARDAREA,
                   O_ENTER,      // walk to a transport / bunker (targetEnt) and climb aboard
                   O_CAPTURE,    // spy: take the enemy structure targetEnt
-                  O_UNLOAD };   // transport: fly to 'target' and let the passengers out there
+                  O_UNLOAD,     // transport: fly to 'target' and let the passengers out there
+                  O_STRIKERUN };// Hotline Strike fighter: rocket passes over 'target', then it leaves the map (see Sim::strikeJetRun)
 
 struct Ref {
     i32 idx = -1; u32 gen = 0;
@@ -111,6 +112,10 @@ struct Entity {
     float detUntil[MAX_PLAYERS] = {}; // stealthy entity: sim time until which each player can see it (a detector close by keeps it up to date)
     u8 rank = 0;                      // infantry veterancy: 0 recruit, 1 veteran, 2 elite
     u16 kills = 0;
+    float droneAt[3] = {0, 0, 0};     // protector drones (jeeps, ships): sim time each one has reloaded (see Sim::droneCount)
+    u8 strikePass = 0;                // Hotline Strike fighter: passes made over the target so far
+    u8 salvoLeft = 0;                 // ... rockets still to fire from the salvo of the pass in progress
+    float lifeUntil = -1;             // a loan (UnitType.temp): sim time at which it is withdrawn whatever it is doing (-1 = never)
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -203,10 +208,18 @@ struct Sim {
     struct Storm { Vec2 pos; float radius; int owner; float t; int shellsLeft; float nextShell; bool force = false; };
     std::vector<Storm> storms;
     // tactical nukes in flight: launched from a Nuke Ramp, they detonate at 'pos' after NUKE_FLIGHT seconds
-    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE)
+    // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
+    // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
+    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE)
     static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
+    int nukeSeq = 0;
+    // The air position of a warhead t seconds into its flight: a long arc over the ground line from the ramp to the target (the renderer draws the missile here too).
+    static Vec2 nukeAirPos(const Nuke& n, float t) { float u = clampf(t / NUKE_FLIGHT, 0.0f, 1.0f); Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; }
+    // A shot of an anti-nuke defence in the air: a laser beam or an interceptor rocket on its way to meet the warhead at 'aim' (hit: it will get it).
+    struct Interceptor { Vec2 from, aim; int owner = -1; int nukeId = 0; float launchT = 0, dur = 0.5f; bool laser = true, hit = false, done = false; };
+    std::vector<Interceptor> interceptors;
     // paradrop: a cargo plane crosses the map over the target and releases its load on parachutes (it can be shot down by anti-air)
     struct Airlift {
         Vec2 pos, prevPos, dir, target;
@@ -241,9 +254,14 @@ struct Sim {
         float deliveredAt = -1;
     };
     std::vector<AidDrop> aidDrops;
+    // Where a Hotline Strike was called in: the spot stays marked for a while (smoke and a reticle) so the swarm and the two fighters have something to
+    // work on and everybody can see it coming
+    struct StrikeMark { Vec2 pos; int owner = -1; float t0 = 0; };
+    std::vector<StrikeMark> strikeMarks;
+    static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
-    struct Fallout { Vec2 pos; float r; float t; float tick; };
+    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; };
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid
@@ -318,6 +336,15 @@ struct Sim {
     // the armies an aid drop at 'at' would go to: every army but the sender at the smallest distance to its nearest unit or structure
     // (edge distance, 0 when the spot is on it); more than one only on an exact tie, which is drawn at random. Returns the count.
     int aidCandidates(int sender, Vec2 at, int* out) const;
+    // ---- jeeps, protector drones, anti-nuke defences, ships
+    int dropJeeps(int player) const;                         // loaded jeeps an airdrop carries: DROP_JEEPS_MIN .. DROP_JEEPS_MAX by what the army has unlocked
+    std::vector<int> jeepCrew(int player) const;             // the seven infantry types a jeep of this army is dropped with (one of each useful kind, the rest rocket troopers)
+    int droneCount(const Entity& e) const;                   // protector drones it flies with right now (0 while disabled or under a parachute)
+    Vec2 dronePos(const Entity& e, int i) const;             // where its i-th drone is (they circle their host)
+    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false) const;   // chance the defences covering 'at' stop a warhead (of anybody who would hurt 'victim'): 1 - prod(1 - ANTINUKE_CHANCE)
+    int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false) const;   // how many working defences cover 'at'
+    Vec2 navalExit(const Entity& yard) const;                // where a ship leaves the yard into the water
+    bool shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const;   // a legal spot for a structure that must touch the lake, nearest to 'near' (false: none known)
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
     int miniNukesReady(int player) const;     // bunkers whose missile is ready
@@ -376,7 +403,17 @@ private:
     void updateStorms();
     void updateNukes();
     void updateAirlifts();
+    void updateStrikeMarks();
     void updateAidDrops();
+    void updateAntiNuke(Entity& b);                      // a defence watching the sky over its area: engages a warhead closing in on it
+    void breakNuke(Nuke& n);                             // a warhead shot down: the airburst, and only its pieces fall on the target now
+    void updateInterceptors();
+    bool interceptProjectile(Projectile& p);             // a protector drone shoots a rocket or shell aimed at its host down (true: it did)
+    void updateJeep(Entity& jeep);                       // the crew mends, climbs out when told to, and fires from the seats
+    bool passengersFire(Entity& host, float reachTiles); // every passenger shoots its own weapon at the best target it can hit from the host; true if anybody fired
+    void moveShip(Entity& e, float speed);              // a ship's drive: it turns at a limited rate and builds up speed (the lake has no corners to slip round)
+    void strikeJetRun(Entity& e);                        // Hotline Strike fighter: line up, salvo of rockets on the called spot, break away, come round again, then leave
+    void fireStrikeRocket(Entity& e);
     void deliverAid(AidDrop& a);
     void releaseUnit(Airlift& a);
     Vec2 landingSpot(Airlift& a, float spacing);
@@ -388,7 +425,7 @@ private:
     void updateBunkerSelf(Entity& b);                    // the bunker's own business: income, mending, miniguns
     void updateBunker(Entity& b);                        // garrison: heals, repairs the hatch, fires from the hatch, lets soldiers out
     void updateCarrierUnload(Entity& c);                 // one passenger out every few ticks while 'unloading'
-    void board(Entity& u, Entity& c);
+    void board(Entity& u, Entity& c, bool quiet = false);   // quiet: no click sound (a dropped jeep's crew is put aboard in bulk)
     void ejectAll(Entity& c, bool lost);                 // everybody out onto the ground (lost: aboard a downed aircraft they die instead)
     void ejectOne(Entity& c, Entity& u, int slot);
     void captureBuilding(Entity& b, Entity& spy);
