@@ -78,13 +78,15 @@ inline float samp(const std::vector<float>& m, int w, int h, float fx, float fy)
 }
 
 // ---------------------------------------------------------------- ground colours
-const F3 GRASS_A = f3(76, 110, 50), GRASS_B = f3(98, 130, 60), GRASS2_A = f3(62, 96, 46), GRASS2_B = f3(84, 114, 54), DRY = f3(132, 134, 70);
-const F3 DIRT_A = f3(132, 106, 72), DIRT_B = f3(110, 88, 60), DIRT_DARK = f3(88, 68, 46);
-const F3 SAND_A = f3(204, 188, 142), SAND_B = f3(184, 166, 120), SAND_WET = f3(150, 134, 100);
-const F3 ASPHALT = f3(72, 72, 74), GRAVEL = f3(132, 124, 108);
-const F3 FOREST_A = f3(52, 78, 40), FOREST_B = f3(80, 66, 42);
-const F3 ROCK_A = f3(118, 110, 98), ROCK_B = f3(92, 86, 78), MOSS = f3(78, 98, 54);
-const F3 WATER_SHALLOW = f3(78, 158, 168), WATER_DEEP = f3(18, 58, 104);
+// Warm, sunlit grading: deeper greens against warm earth, pale sand, teal shallows over a navy lake bed. A split-tone
+// grade at the end of the ground pass warms the highlights and cools the shadows, so the whole map reads as one light.
+const F3 GRASS_A = f3(68, 108, 44), GRASS_B = f3(96, 134, 56), GRASS2_A = f3(54, 92, 40), GRASS2_B = f3(80, 114, 50), DRY = f3(148, 142, 72);
+const F3 DIRT_A = f3(140, 110, 72), DIRT_B = f3(112, 86, 56), DIRT_DARK = f3(86, 64, 42);
+const F3 SAND_A = f3(216, 198, 146), SAND_B = f3(192, 172, 122), SAND_WET = f3(150, 134, 100);
+const F3 ASPHALT = f3(66, 67, 72), GRAVEL = f3(138, 130, 112);
+const F3 FOREST_A = f3(46, 74, 36), FOREST_B = f3(80, 66, 42);
+const F3 ROCK_A = f3(124, 116, 102), ROCK_B = f3(90, 84, 76), MOSS = f3(78, 102, 52), SCREE = f3(158, 148, 128);
+const F3 WATER_SHALLOW = f3(56, 160, 170), WATER_MID = f3(27, 102, 150), WATER_DEEP = f3(13, 52, 102), WEED = f3(40, 104, 80);
 
 F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float depth) {
     float n1 = nz.v(x * 0.045f, y * 0.045f), n2 = nz.v(x * 0.17f + 5, y * 0.17f + 9), n3 = nz.v(x * 0.9f + y * 0.3f, y * 1.3f);
@@ -93,6 +95,10 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
     case K_GRASS: case K_GRASS2: {
         bool two = c == K_GRASS2;
         F3 col = lerp3(two ? GRASS2_A : GRASS_A, two ? GRASS2_B : GRASS_B, n1);
+        // broad meadow drifts: sun-bleached sweeps and lush darker hollows at map scale, so grass reads in weather systems, not speckle
+        float drift = nz.v(x * 0.004f + 21, y * 0.004f + 6);
+        col = lerp3(col, DRY, sstep(0.58f, 0.86f, drift) * 0.34f);
+        col = mul3(col, 0.92f + 0.16f * sstep(0.35f, 0.05f, drift));
         col = mul3(col, 0.90f + 0.20f * n2);
         col = mul3(col, 0.94f + 0.12f * n3);
         float dry = sstep(0.60f, 0.85f, macro);
@@ -147,14 +153,23 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
         return col;
     }
     case K_WATER: {
-        float d = depth;
-        F3 col = lerp3(WATER_SHALLOW, WATER_DEEP, d);
+        float d = clampf(depth + (nz.v(x * 0.045f + 17, y * 0.045f + 28) - 0.5f) * 0.14f + (nz.v(x * 0.35f, y * 0.35f) - 0.5f) * 0.03f, 0, 1);   // dithered depth: no contour rings on a big lake bed
+        // three-stop depth ramp: pale teal over the sand, a clear mid blue, then a deep navy bed (the old two-stop ramp banded)
+        F3 col = d < 0.45f ? lerp3(WATER_SHALLOW, WATER_MID, d / 0.45f) : lerp3(WATER_MID, WATER_DEEP, (d - 0.45f) / 0.55f);
+        // sand bars and weed beds show through the shallows
+        float bar = sstep(0.62f, 0.8f, nz.v(x * 0.016f + 44, y * 0.016f + 2));
+        col = lerp3(col, lerp3(SAND_B, WATER_SHALLOW, 0.45f), bar * (1.0f - d) * 0.5f);
+        float weed = sstep(0.6f, 0.82f, nz.v(x * 0.03f + 8, y * 0.03f + 51));
+        col = lerp3(col, WEED, weed * clampf(1.0f - d * 1.6f, 0, 1) * 0.45f);
         float wave = std::sin((x * 0.09f + 5.0f * nz.fbm(x * 0.01f, y * 0.01f)) + y * 0.05f);
         col = mul3(col, 0.95f + 0.06f * wave + 0.06f * (n2 - 0.5f));
-        float c1 = 1.0f - std::abs(2.0f * nz.v(x * 0.07f + 3, y * 0.07f + 11) - 1.0f), c2 = 1.0f - std::abs(2.0f * nz.v(x * 0.05f + 40 + y * 0.02f, y * 0.05f + 7) - 1.0f);
-        float caus = std::pow(c1 * c2, 5.0f);                                        // caustic-like light networks in the shallows
-        col = add3(col, mul3(f3(70, 96, 84), (1.0f - d * 0.8f) * clampf(caus * 2.2f, 0, 1)));
-        if (nz.v(x * 0.9f + 13, y * 0.9f + 7) > 0.975f) col = add3(col, f3(40, 48, 44));   // sparkle
+        float c1 = 1.0f - std::abs(2.0f * nz.v(x * 0.09f + 3, y * 0.09f + 11) - 1.0f), c2 = 1.0f - std::abs(2.0f * nz.v(x * 0.065f + 40 + y * 0.02f, y * 0.065f + 7) - 1.0f);
+        float caus = std::pow(c1 * c2, 6.0f);                                        // finer caustic light networks in the shallows
+        col = add3(col, mul3(f3(56, 84, 76), (1.0f - d * 0.8f) * clampf(caus * 2.0f, 0, 1)));
+        // sun glitter: a broken diagonal path of sparkles running away from the north-west light, denser in open water
+        float glit = clampf(1.0f - std::abs((x - y) * 0.7071f - 140.0f * std::sin(x * 0.0009f)) / 1000.0f, 0, 1);
+        float th = 0.986f - 0.02f * glit;
+        if (nz.v(x * 1.3f + 13, y * 1.3f + 7) > th) col = add3(col, mul3(f3(90, 110, 104), 0.35f + 0.65f * glit));
         return col;
     }
     }
@@ -418,7 +433,7 @@ void terrainBake(Canvas& world) {
                 t.x = tx * TILE + r.f(5, TILE - 5); t.y = ty * TILE + r.f(5, TILE - 5);
                 float zone = nz.fbm(tx * 0.09f + 3, ty * 0.09f + 8);
                 float u = r.f();
-                t.kind = zone > 0.55f ? (u < 0.8f ? T_CONIFER : T_BROAD) : (u < 0.06f ? T_AUTUMN : T_BROAD);
+                t.kind = zone > 0.55f ? (u < 0.8f ? T_CONIFER : T_BROAD) : (u < 0.11f ? T_AUTUMN : T_BROAD);
                 t.r = (t.kind == T_CONIFER ? r.f(13, 17) : r.f(14, 19));
                 t.seed = r.next();
                 trees.push_back(t);
@@ -508,7 +523,9 @@ void terrainBake(Canvas& world) {
             F3 col{0, 0, 0};
             float inv = 1.0f / sum;
             for (int c = 0; c < K_N; c++) if (w[c] > 0.003f) col = add3(col, mul3(groundColor(c, (float)x, (float)y, nz, macro, depth), w[c] * inv));
-            float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wSand = w[K_SAND] * inv;
+            float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wSand = w[K_SAND] * inv, wRock = w[K_ROCK] * inv;
+            // scree aprons: pale rubble shed at the foot of every cliff, strongest where rock coverage is just giving out
+            if (wRock > 0.03f && wRock < 0.5f && wWater < 0.05f) col = lerp3(col, SCREE, (0.5f - wRock) * 0.6f * (0.65f + 0.35f * nz.v(x * 0.4f + 3, y * 0.4f + 8)));
             // shorelines: foam on the water side, wet dark sand on the land side
             if (wWater > 0.02f && wWater < 0.98f) {
                 float edge = 1.0f - std::abs(wWater - 0.5f) * 2.0f;
@@ -547,6 +564,16 @@ void terrainBake(Canvas& world) {
                 // moss in the cracks at the foot of cliffs, a pale dry rim on the crests
                 if (w[K_ROCK] > 0.4f * sum) { col = lerp3(col, MOSS, (1.0f - rockish) * 0.3f); col = add3(col, mul3(f3(30, 28, 24), clampf((h0 - 28.0f) / 14.0f, 0, 1))); }
             }
+            // split-tone grade: a whisper of S-curve, a touch more saturation, warm highlights and cool shadows (one sunlight for the whole map)
+            {
+                float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
+                auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
+                vr = curve(vr); vg = curve(vg); vb = curve(vb);
+                float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+                vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
+                float warm = (lum - 0.5f) * 0.045f;
+                col = f3((int)clampf((vr + warm) * 255.0f, 0, 255), (int)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (int)clampf((vb - warm) * 255.0f, 0, 255));
+            }
             Color o{ (u8)clampf(col.r, 0, 255), (u8)clampf(col.g, 0, 255), (u8)clampf(col.b, 0, 255), 255 };
             world.px[(size_t)y * W + x] = Canvas::pack(o);
         }
@@ -557,7 +584,7 @@ void terrainBake(Canvas& world) {
     auto tileAt = [&](float x, float y) { return g_map.tile(clampi(tileOf(x), 0, MAP_W - 1), clampi(tileOf(y), 0, MAP_H - 1)); };
     auto openGround = [&](float x, float y) { int t = tileAt(x, y); return t == T_GRASS || t == T_GRASS2 || t == T_DIRT || t == T_SAND; };
     // grass tufts
-    for (int i = 0; i < 26000; i++) {
+    for (int i = 0; i < 44000; i++) {   // (decor counts scale with the map's area so density matches the old 80x80)
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_GRASS && t != T_GRASS2) continue;
@@ -572,7 +599,7 @@ void terrainBake(Canvas& world) {
         }
     }
     // wildflowers in drifts
-    for (int i = 0; i < 9000; i++) {
+    for (int i = 0; i < 15000; i++) {
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_GRASS && t != T_GRASS2) continue;
@@ -583,7 +610,7 @@ void terrainBake(Canvas& world) {
         for (int k = 0; k < 3; k++) { float fx = x + r.f(-5, 5), fy = y + r.f(-5, 5); world.set((int)fx, (int)fy, c); world.set((int)fx + 1, (int)fy, shade(c, 0.85f)); world.set((int)fx, (int)fy + 1, rgb(60, 90, 40, 140)); }
     }
     // pebbles on dirt and sand, shells on the shore
-    for (int i = 0; i < 6000; i++) {
+    for (int i = 0; i < 10000; i++) {
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_DIRT && t != T_SAND) continue;
@@ -616,11 +643,80 @@ void terrainBake(Canvas& world) {
             }
         }
     }
-    // supply piles stand on churned earth with a ring of tyre tracks
+    // road edge lines: a pale worn line just inside each shoulder (skipped where repair patches and dirt have eaten it)
+    for (const auto& rs : g_map.roads) {
+        float x0 = rs.x0 * TILE, y0 = rs.y0 * TILE, x1 = rs.x1 * TILE, y1 = rs.y1 * TILE;
+        float len = hyp(x1 - x0, y1 - y0); if (len < 1) continue;
+        float dx = (x1 - x0) / len, dy = (y1 - y0) / len, off = rs.halfW * TILE * 0.62f;   // inside the asphalt core: coverage-blended tile borders already read as dirt
+        for (float s = 6; s < len - 6; s += 1.4f) {
+            if (nz.v(s * 0.05f + x0 * 0.01f, y0 * 0.01f) < 0.18f) continue;   // worn away in stretches
+            for (int sd = -1; sd <= 1; sd += 2) {
+                float px = x0 + dx * s - dy * off * sd, py = y0 + dy * s + dx * off * sd;
+                if (tileAt(px, py) != T_ROAD || g_map.bridge[clampi(tileOf(py), 0, MAP_H - 1) * MAP_W + clampi(tileOf(px), 0, MAP_W - 1)]) continue;
+                world.set((int)px, (int)py, rgb(206, 204, 192, 110));
+            }
+        }
+    }
+    // supply piles stand on a gravel depot pad with churned earth and a ring of tyre tracks
     for (const auto& sp : g_map.supplies) {
         float cx = sp.tx * TILE + TILE * 0.5f, cy = sp.ty * TILE + TILE * 0.5f;
+        for (int y = (int)(cy - 26); y < (int)(cy + 26); y++) for (int x = (int)(cx - 26); x < (int)(cx + 26); x++) {
+            if (!inMapPx(x, y)) continue;
+            float e = std::max(std::abs(x - cx), std::abs(y - cy)) / 26.0f;
+            float k = clampf((1.0f - e) * 3.0f, 0, 1) * 0.5f;
+            if (k <= 0) continue;
+            Color o = Canvas::unpack(world.px[(size_t)y * W + x]);
+            Color pad = shade(rgb(150, 142, 124), 0.92f + 0.16f * nz.v(x * 0.5f, y * 0.5f));
+            bool seam = ((x - (int)cx) % 13 == 0) || ((y - (int)cy) % 13 == 0);
+            if (seam) pad = shade(pad, 0.82f);
+            world.px[(size_t)y * W + x] = Canvas::pack(Color{(u8)(o.r + (pad.r - o.r) * k), (u8)(o.g + (pad.g - o.g) * k), (u8)(o.b + (pad.b - o.b) * k), 255});
+        }
         for (int i = 0; i < 40; i++) { float an = r.f(0, 6.28f), d = r.f(10, 44); world.fillCircle(cx + std::cos(an) * d, cy + std::sin(an) * d * 0.8f, r.f(1.5f, 4), rgb(70, 54, 36, 80)); }
         for (int k = 0; k < 2; k++) for (float a = 0; a < 6.2f; a += 0.05f) { float rr = 34 + k * 5; world.set((int)(cx + std::cos(a) * rr), (int)(cy + std::sin(a) * rr * 0.8f), rgb(60, 46, 32, 70)); }
+    }
+    // each base sits on prepared ground: a faint gravel apron under the start position, so a headquarters reads as founded, not parked
+    for (const auto& st : g_map.starts) {
+        float cx = st.tx * TILE + TILE * 0.5f, cy = st.ty * TILE + TILE * 0.5f;
+        const float R = 5.2f * TILE;
+        for (int y = (int)(cy - R); y < (int)(cy + R); y++) for (int x = (int)(cx - R); x < (int)(cx + R); x++) {
+            if (!inMapPx(x, y)) continue;
+            float d = hyp(x - cx, (y - cy) * 1.15f) / R;
+            if (d >= 1) continue;
+            float k = (1 - d) * (1 - d) * 0.30f;
+            Color o = Canvas::unpack(world.px[(size_t)y * W + x]);
+            Color pad = shade(rgb(144, 138, 122), 0.94f + 0.12f * nz.v(x * 0.35f + 4, y * 0.35f));
+            world.px[(size_t)y * W + x] = Canvas::pack(Color{(u8)(o.r + (pad.r - o.r) * k), (u8)(o.g + (pad.g - o.g) * k), (u8)(o.b + (pad.b - o.b) * k), 255});
+        }
+    }
+    // craters from some older war: dark scorched bowls with a pale thrown-up rim, clustered along the old front lines
+    {
+        Rng cr(5150);
+        int placedC = 0;
+        for (int i = 0; i < 2600 && placedC < 30; i++) {
+            float x = cr.f(60, W - 60.0f), y = cr.f(60, H - 60.0f);
+            if (!openGround(x, y)) continue;
+            float dc = hyp(x - W * 0.5f, y - H * 0.5f) / TILE;
+            if (dc < 26 || dc > 46) continue;   // the band armies cross to reach the lake
+            bool near = false;
+            for (auto& s : g_map.starts) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < 10 * TILE) near = true;
+            for (auto& s : g_map.supplies) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < 90) near = true;
+            if (near) continue;
+            float R = cr.f(13, 30);
+            for (int yy = (int)(y - R - 4); yy < (int)(y + R + 4); yy++) for (int xx = (int)(x - R - 4); xx < (int)(x + R + 4); xx++) {
+                if (!inMapPx(xx, yy)) continue;
+                float d = hyp(xx - x, (yy - y) * 1.2f) / R;
+                if (d > 1.25f) continue;
+                Color o = Canvas::unpack(world.px[(size_t)yy * W + xx]);
+                float nse = 0.85f + 0.3f * nz.v(xx * 0.3f + 9, yy * 0.3f);
+                Color c = o;
+                if (d < 0.72f) { float k = (0.72f - d) * 1.1f; c = shade(mix(o, rgb(38, 30, 24), clampf(k, 0, 0.8f)), nse); }        // scorched bowl
+                else if (d < 1.0f) { float k = (d - 0.72f) * 2.2f; c = shade(mix(o, rgb(168, 148, 118), clampf(k, 0, 0.55f)), nse); } // thrown-up rim
+                else { float k = (1.25f - d) * 0.9f; c = mix(o, rgb(120, 102, 80), clampf(k, 0, 0.3f)); }                              // dust apron
+                if (xx - x + (yy - y) > R * 0.55f && d >= 0.72f && d < 1.0f) c = shade(c, 0.82f);                                        // rim shadow to the south-east
+                world.px[(size_t)yy * W + xx] = Canvas::pack(Color{c.r, c.g, c.b, 255});
+            }
+            placedC++;
+        }
     }
 
 
@@ -628,10 +724,13 @@ void terrainBake(Canvas& world) {
     for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
         if (!g_map.bridge[ty * MAP_W + tx]) continue;
         int x0 = tx * TILE, y0 = ty * TILE;
+        bool runsEW = g_map.bridge[ty * MAP_W + tx - 1] || g_map.bridge[ty * MAP_W + tx + 1];   // deck direction, for the wheel-worn runner strips
         for (int y = 0; y < TILE; y++) for (int x = 0; x < TILE; x++) {   // planks
             float pl = nz.v((x0 + x) * 0.9f, (y0 + y) * 0.1f), g = 0.86f + 0.22f * pl;
             bool seamH = (y % 8) == 0, seamV = ((x0 + x + (((y0 + y) / 8) & 1) * 12) % 24) == 0;
-            Color c = shade(rgb(142, 108, 74), g * (seamH || seamV ? 0.6f : 1.0f));
+            int lane = runsEW ? y : x;
+            bool runner = (lane >= 7 && lane <= 10) || (lane >= 21 && lane <= 24);   // twin dark tracks where wheels and treads polish the timber
+            Color c = shade(rgb(142, 108, 74), g * (seamH || seamV ? 0.6f : 1.0f) * (runner ? 0.78f : 1.0f));
             world.set(x0 + x, y0 + y, c);
         }
     }
@@ -682,17 +781,17 @@ void terrainBake(Canvas& world) {
         };
         Rng pr(9137);
         // lily pads on the river shallows (not the deep lake)
-        for (int i = 0; i < 2600; i++) {
+        for (int i = 0; i < 4200; i++) {
             float x = pr.f(8, W - 8.0f), y = pr.f(8, H - 8.0f);
             if (tileAt(x, y) != T_WATER || tileAt(x + 12, y) != T_WATER || tileAt(x - 12, y) != T_WATER || tileAt(x, y + 12) != T_WATER || tileAt(x, y - 12) != T_WATER) continue;
-            if (hyp(x - 40.0f * TILE, y - 40.0f * TILE) < 9.0f * TILE) continue;
+            if (hyp(x - WORLD_W * 0.5f, y - WORLD_H * 0.5f) < 13.0f * TILE) continue;   // not in the deep middle of the lake (its shallows and bays are fine)
             if (nz.v(x * 0.012f + 31, y * 0.012f + 5) < 0.45f) continue;
             if (g_map.bridge[clampi(tileOf(y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(x), 0, MAP_W - 1)]) continue;
             put(pads[pr.range(0, 5)], x, y);
         }
         // fallen logs and stumps near the trees, logs on river banks
         int placed = 0;
-        for (int i = 0; i < 4000 && placed < 90; i++) {
+        for (int i = 0; i < 6500 && placed < 140; i++) {
             float x = pr.f(40, W - 40.0f), y = pr.f(40, H - 40.0f);
             if (!flat(x, y) || !clearOf(x, y, 9, 90)) continue;
             bool nearTree = false;
@@ -709,7 +808,8 @@ void terrainBake(Canvas& world) {
             {24, 17, 0}, {30, 8.5f, 1}, {8, 22, 2}, {25, 31, 2}, {19, 47, 0}, {6.5f, 54, 1}
         };
         for (int q = 0; q < 4; q++) for (const Site& st : SITES) {
-            float tx = (q & 1) ? 79 - st.tx : st.tx, ty = (q & 2) ? 79 - st.ty : st.ty, cx = tx * TILE, cy = ty * TILE;
+            float sx = st.tx * (MAP_W / 80.0f), sy = st.ty * (MAP_H / 80.0f);   // sites were placed for the old 80x80 map
+            float tx = (q & 1) ? (MAP_W - 1) - sx : sx, ty = (q & 2) ? (MAP_H - 1) - sy : sy, cx = tx * TILE, cy = ty * TILE;
             if (!clearOf(cx, cy, 8, 80)) continue;
             Rng sr((u64)(q * 977 + st.tx * 31 + st.ty * 7));
             if (st.what == 0) {   // a ruined courtyard: wall runs round a square with pillar stumps at the corners
@@ -729,7 +829,7 @@ void terrainBake(Canvas& world) {
     {
         std::vector<Canvas> boulder; float br[6];
         for (int i = 0; i < 6; i++) { br[i] = 5.0f + i * 1.6f; boulder.push_back(makeBoulder(br[i], 900u + i)); }
-        for (int i = 0; i < 700; i++) {
+        for (int i = 0; i < 1150; i++) {
             float x = r.f(8, W - 8.0f), y = r.f(8, H - 8.0f);
             if (!openGround(x, y)) continue;
             bool nearRock = false;
@@ -762,11 +862,15 @@ void terrainBake(Canvas& world) {
 }
 
 void terrainOverview(const Canvas& world, Canvas& out) {
-    int n = out.w, f = world.w / n;
+    // 3x3 samples inside each output pixel's exact footprint (the old integer factor cropped the east and south edges
+    // once the world stopped being a multiple of the overview size)
     for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) {
         float r = 0, g = 0, b = 0;
-        for (int j = 0; j < f; j += 2) for (int i = 0; i < f; i += 2) { Color c = Canvas::unpack(world.px[(size_t)(y * f + j) * world.w + x * f + i]); r += c.r; g += c.g; b += c.b; }
-        float k = 1.0f / (float)(((f + 1) / 2) * ((f + 1) / 2));   // (the loops above take (f + 1) / 2 samples a side)
-        out.px[y * out.w + x] = Canvas::pack(Color{(u8)clampf(r * k, 0, 255), (u8)clampf(g * k, 0, 255), (u8)clampf(b * k, 0, 255), 255});
+        for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
+            int sx = std::min(world.w - 1, (int)((x + (i + 0.5f) / 3.0f) * world.w / out.w));
+            int sy = std::min(world.h - 1, (int)((y + (j + 0.5f) / 3.0f) * world.h / out.h));
+            Color c = Canvas::unpack(world.px[(size_t)sy * world.w + sx]); r += c.r; g += c.g; b += c.b;
+        }
+        out.px[y * out.w + x] = Canvas::pack(Color{(u8)clampf(r / 9.0f, 0, 255), (u8)clampf(g / 9.0f, 0, 255), (u8)clampf(b / 9.0f, 0, 255), 255});
     }
 }

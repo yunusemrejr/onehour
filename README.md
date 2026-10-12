@@ -13,10 +13,10 @@ under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of
 
 ## The map
 
-One 80x80 map: a **big central lake** (432 water tiles, about 31 by 19, with bays toward the four corners, a sandy beach and two rocky islets) ringed by a road 17 tiles out, four base quadrants split by rock ridges with a choke gap each, and a river leaving the lake into every quadrant (mirrored, so no side is favoured).
-The lake is the arena of the warships (see **The lake and the navy** below); the four central supply piles sit between the beach and the ring road, within reach of the ships' guns.
+One 104x104 map (30% wider than the original 80x80, 69% more ground): a **big central lake** (about 1020 water tiles, some 38 across, with bays toward the four corners, a sandy beach, two rocky islets and a **buildable island in the middle** — a dozer has to be airlifted in, so whoever holds the water and the sky can fortify the centre) ringed by a road 26.5 tiles out, with a pool inside each corner of the ring, four base quadrants split by rock ridges with a choke gap each, forest belts between the bases and the ring, and a wider river leaving the lake into every quadrant (mirrored or rotated, so no side is favoured), each spreading into a marshy pool on its way to the map edge.
+The lake is the arena of the warships (see **The lake and the navy** below); the four central supply piles sit between the beach and the ring road, within reach of the ships' guns, and four more piles hide in the quadrant woods for whoever contests them (20 piles in all).
 Roads cross the rivers on timber bridges and each river also has a sandy ford, so crossings are chokepoints but nothing is walled off. A bridge closes a river to ships (it is road, not water), so only the lake itself is open sea. The ground is dotted with fallen logs and stumps, lily pads on the
-river shallows, ruined courtyards, stone circles and burnt-out vehicle hulks (decoration only, units drive over them). `--mapdump` prints the tile map; `ONEHOUR_WORLDBMP=file.bmp` dumps the baked ground.
+river shallows and in the lake's bays, ruined courtyards, stone circles, burnt-out vehicle hulks and the craters of some older war along the approaches to the lake (decoration only, units drive over them). Every supply pile stands on a gravel depot pad and every start on a prepared apron. `--mapdump` prints the tile map; `ONEHOUR_WORLDBMP=file.bmp` dumps the baked ground.
 
 ## Skirmish setup
 
@@ -376,15 +376,24 @@ reacts to the muster point), judging a running wave by the estimate instead of b
   supersampled canvases. Units (`src/art.cpp`) have walk / track frames, turrets, spinning rotors and burning wrecks; structures
   (`src/artb.cpp`) are raised 3/4-view blocks with south walls, roof props, windows, soft cast shadows, a construction-site sprite and a ruin
   sprite, painted once per type and shared by every owner (the owner's colour comes from a white team mask tinted at draw time, plus the flag).
-- **Terrain** (`src/terrain.cpp`): the whole 80x80 map is baked once into one 2560x2560 texture on worker threads: smoothed class coverage with
-  noise-displaced borders, procedural grass / dirt / sand / asphalt / rock / water shading, a height field that lights cliffs and lake banks and
-  casts soft shadows from rocks and tree canopies, foam and wet sand on the shore, painted road markings, individually drawn trees, boulders,
-  flowers, pebbles and reeds. The minimap is a downsample of the same texture.
+- **Terrain** (`src/terrain.cpp`): the whole 104x104 map is baked once into one 3328x3328 texture on worker threads: smoothed class coverage with
+  noise-displaced borders, procedural grass / dirt / sand / asphalt / rock / water shading (meadow-scale sun-bleached and lush drifts, a three-stop
+  lake-depth ramp with sand bars, weed beds and a sun-glitter path, scree aprons at cliff feet), a height field that lights cliffs and lake banks and
+  casts soft shadows from rocks and tree canopies, foam and wet sand on the shore, painted road markings with worn edge lines, depot pads under the
+  supply piles, old craters, individually drawn trees, boulders, flowers, pebbles and reeds, finished with a split-tone grade (warm highlights, cool
+  shadows) so the whole map sits in one sunlight. The minimap is a downsample of the same texture. On a GPU the texture is stored as dithered
+  RGB565 (22 MB instead of 44 MB at 32-bit — less than the old 80x80 map's 26 MB); under the software renderer, which has no fast 565 blit, it stays
+  32-bit. Unit and structure sprites are cropped to their painted area for the same reason. Water caustics draw from map-generated lists of aligned
+  4x4 interior-water blocks plus leftover shore tiles, so a screen full of lake costs dozens of draws instead of hundreds; the shroud's mottling
+  noise is baked into lookup tables once. Vehicles bob on their suspension, ships roll and heave slowly, helicopters sway in the hover, infantry
+  stride with the ground they cover, beams flicker, and electric arcs throw side forks — all by nudging existing draws, no new ones.
 - **Effects** (`src/fx.cpp`): fireball frames, flame tongues, smoke and dust puffs, muzzle stars, beams, shock rings and scorch decals are baked
   sprites; a capped (900) render-side particle system adds debris, sparks, smoke columns, vehicle dust, vapour trails and nuke mushroom clouds,
   spawned the first frame a simulation effect appears. It never touches the simulation and freezes with the game.
 - The simulation is untouched by any of it; the whole game still uses a few percent of one core: `./build/onehour --bench` renders 300 frames of
-  an eight-minute four-army battle with the CPU-only software renderer (about 5 ms a frame, 65 MB resident; startup under a second).
+  an eight-minute four-army battle with the CPU-only software renderer (about 11 ms a frame against 13 ms for the old 80x80 build measured
+  interleaved on the same machine, simulation at parity in `--selftest`; about 78 MB resident under the software renderer — the 32-bit world
+  texture — and less on a GPU, where the world is the 22 MB RGB565 version; startup, which includes baking a 69%-larger world, is two to three seconds).
 - The window is resizable (F11 fullscreen); the UI scale adapts and the HUD re-anchors. The whole terrain is
   baked once into a single texture with domain-warped, noise-blended transitions; fog of war is a bilinear mask.
 - Fixed 20 Hz simulation with interpolated 60 fps rendering.

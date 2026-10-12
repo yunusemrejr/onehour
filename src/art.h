@@ -3,7 +3,7 @@
 #include "gfx.h"
 
 static const int ART_SIZE = 64;   // unit canvases are 64x64 and face +x, centre (32,32)
-static const float UNIT_SCALE = 0.62f;   // on-screen size: a little over half the texture, so the extra detail shows
+static const float UNIT_SCALE = 0.65f;   // on-screen size: a little over half the texture, so the extra detail shows
 
 // Body sprite. frame: 0 = standing, 1/2 = the two phases of the walk / track cycle.
 void artUnitBody(Canvas& c, int type, Color team, int frame);

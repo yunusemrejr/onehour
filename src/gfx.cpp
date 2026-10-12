@@ -90,6 +90,31 @@ Sprite Gfx::fromCanvas(Canvas& c, float ox, float oy) {
     return s;
 }
 
+// The baked world as RGB565: half the texture memory and half the blit bandwidth of the 32-bit original, which is what
+// pays for a map with 69% more ground. A 4x4 Bayer dither spreads the quantization error into the terrain's own grain.
+Sprite Gfx::fromCanvas565(Canvas& c, float ox, float oy) {
+    Sprite s;
+    s.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STATIC, c.w, c.h);
+    if (!s.tex) return fromCanvas(c, ox, oy);
+    static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+    std::vector<u16> row((size_t)c.w);   // converted and uploaded a row at a time: no second full-size buffer at startup
+    for (int y = 0; y < c.h; y++) {
+        for (int x = 0; x < c.w; x++) {
+            Color col = Canvas::unpack(c.px[(size_t)y * c.w + x]);
+            int dth = BAYER[(y & 3) * 4 + (x & 3)] - 8;   // -8..+7 in 1/32 steps of each channel's quantum
+            int r = clampi((int)col.r + dth / 4, 0, 255) >> 3;          // 5-bit channels: quantum 8, dither +-2
+            int g = clampi((int)col.g + dth / 8, 0, 255) >> 2;          // 6-bit green: quantum 4, dither +-1
+            int b = clampi((int)col.b + dth / 4, 0, 255) >> 3;
+            row[x] = (u16)((r << 11) | (g << 5) | b);
+        }
+        SDL_Rect rect = { 0, y, c.w, 1 };
+        SDL_UpdateTexture(s.tex, &rect, row.data(), c.w * 2);
+    }
+    SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_BLEND);
+    s.w = c.w; s.h = c.h; s.ox = ox; s.oy = oy;
+    return s;
+}
+
 Sprite Gfx::fromCanvasAdd(Canvas& c, float ox, float oy) {
     Sprite s = fromCanvasSmooth(c, ox, oy);
     SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_ADD);
@@ -229,7 +254,9 @@ void Gfx::buildFont() {
 void Gfx::bakeTerrain() {
     Canvas c(WORLD_W, WORLD_H);
     terrainBake(c);
-    worldTerrain = fromCanvas(c, 0, 0);
+    // On a GPU the world is RGB565 (half the memory and sampling bandwidth, dithered so nothing bands). The software
+    // renderer has no fast 565-to-display blit (measured +11 ms a frame), so there it stays 32-bit and memcpy-fast.
+    worldTerrain = softwareRenderer ? fromCanvas(c, 0, 0) : fromCanvas565(c, 0, 0);
     if (const char* wp = getenv("ONEHOUR_WORLDBMP")) {   // debugging: dump the baked ground (ONEHOUR_WORLDBMP=file.bmp)
         if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(c.px.data(), c.w, c.h, 32, c.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, wp); SDL_FreeSurface(sf); }
     }
@@ -249,27 +276,37 @@ void Gfx::updateShroud(const std::vector<u8>& ex) {
     // the boundary of what you have seen is a ragged, cloudy fringe instead of a staircase of tiles; the unseen area carries faint mottling.
     const int SS = SHROUD_SS, W2 = MAP_W * SS, H2 = MAP_H * SS;
     static std::vector<u32> buf; static std::vector<float> noise;
+    static std::vector<u8> mottle; static std::vector<float> edgeN;   // the mottling and the fringe displacement are fixed per pixel: baked once, looked up per refresh
     if (noise.empty()) { Rng r(99); noise.resize(64 * 64); for (auto& v : noise) v = r.f(); }
     auto vn = [&](float x, float y) {
         int ix = (int)std::floor(x), iy = (int)std::floor(y); float fx = x - ix, fy = y - iy; fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
         auto at = [&](int a, int b) { return noise[(b & 63) * 64 + (a & 63)]; };
         return lerpf(lerpf(at(ix, iy), at(ix + 1, iy), fx), lerpf(at(ix, iy + 1), at(ix + 1, iy + 1), fx), fy);
     };
+    if ((int)mottle.size() != W2 * H2) {
+        mottle.assign((size_t)W2 * H2, 0); edgeN.assign((size_t)W2 * H2, 0);
+        for (int y = 0; y < H2; y++) for (int x = 0; x < W2; x++) {
+            mottle[(size_t)y * W2 + x] = (u8)(238 + (int)(vn(x * 0.35f, y * 0.35f) * 14));
+            edgeN[(size_t)y * W2 + x] = vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f;
+        }
+    }
     buf.assign((size_t)W2 * H2, 0);
     for (int y = 0; y < H2; y++) for (int x = 0; x < W2; x++) {
         float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
         int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx = fx - x0, ty = fy - y0;
         auto E = [&](int a, int b) { return ex[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)] ? 1.0f : 0.0f; };
         float v = lerpf(lerpf(E(x0, y0), E(x0 + 1, y0), tx), lerpf(E(x0, y0 + 1), E(x0 + 1, y0 + 1), tx), ty);
-        if (v <= 0.0f) { buf[(size_t)y * W2 + x] = (u32)(238 + (int)(vn(x * 0.35f, y * 0.35f) * 14)) << 24 | 12u << 16 | 8u << 8 | 5u; continue; }   // unseen: mottled dark
+        if (v <= 0.0f) { buf[(size_t)y * W2 + x] = (u32)mottle[(size_t)y * W2 + x] << 24 | 12u << 16 | 8u << 8 | 5u; continue; }   // unseen: mottled dark
         if (v >= 1.0f) continue;                                                                                                                   // seen: clear
-        float n = vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f;
+        float n = edgeN[(size_t)y * W2 + x];
         float s = clampf((v - 0.5f) * 1.6f + (n - 0.5f) * 0.9f + 0.5f, 0, 1);
         s = s * s * (3 - 2 * s);
         buf[(size_t)y * W2 + x] = (u32)((1.0f - s) * 242) << 24 | 12u << 16 | 8u << 8 | 5u;
     }
     SDL_UpdateTexture(shroudTex, nullptr, buf.data(), W2 * 4);
 }
+
+static Sprite cropToSprite(Gfx& g, Canvas& c, float cx, float cy, float dscale);   // defined with the buildings below; unit sprites are cropped to their painted area too
 
 // ------------------------------------------------------------ units
 // Unit art lives in art.cpp: 2x supersampled sprites (drawn at 0.5 scale, bilinear filtered), with two extra
@@ -283,26 +320,25 @@ void Gfx::buildUnits() {
                 if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
                 Canvas c(ART_SIZE, ART_SIZE);
                 artUnitBody(c, t, team, f);
-                Sprite s = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2);
-                s.dscale = UNIT_SCALE * artScale(t);
+                Sprite s = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t));
                 if (f == 0) unitBody[t][p] = s; else unitAnim[t][p][f - 1] = s;
             }
             if (u.kind == UK_AIR) { unitAnim[t][p][0] = unitBody[t][p]; unitAnim[t][p][1] = unitBody[t][p]; }
             Canvas tc(ART_SIZE, ART_SIZE);
-            if (artUnitTurret(tc, t, team)) { unitTurret[t][p] = fromCanvasSmooth(tc, ART_SIZE / 2, ART_SIZE / 2); unitTurret[t][p].dscale = UNIT_SCALE * artScale(t); }
+            if (artUnitTurret(tc, t, team)) unitTurret[t][p] = cropToSprite(*this, tc, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t));
         }
     }
     for (int p = 0; p < MAX_PLAYERS; p++) {
-        for (int f = 0; f < F_COUNT; f++) { Canvas c(ART_SIZE, ART_SIZE); artCargoPlane(c, PLAYER_COLOR[p], f == F_CYBER); cargoPlane[p][f] = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); cargoPlane[p][f].dscale = UNIT_SCALE; }
-        Canvas c(ART_SIZE, ART_SIZE); artChute(c, PLAYER_COLOR[p]); chute[p] = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); chute[p].dscale = UNIT_SCALE;
+        for (int f = 0; f < F_COUNT; f++) { Canvas c(ART_SIZE, ART_SIZE); artCargoPlane(c, PLAYER_COLOR[p], f == F_CYBER); cargoPlane[p][f] = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE); }
+        Canvas c(ART_SIZE, ART_SIZE); artChute(c, PLAYER_COLOR[p]); chute[p] = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE);
     }
-    { Canvas c(ART_SIZE, ART_SIZE); artAidPlane(c); aidPlane = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); aidPlane.dscale = UNIT_SCALE; }
-    { Canvas c(ART_SIZE, ART_SIZE); artChute(c, rgb(110, 180, 240)); aidChute = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); aidChute.dscale = UNIT_SCALE; }
-    { Canvas c(ART_SIZE, ART_SIZE); artCrate(c, false); crate = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); crate.dscale = UNIT_SCALE; }
-    { Canvas c(ART_SIZE, ART_SIZE); artCrate(c, true); crateOpen = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); crateOpen.dscale = UNIT_SCALE; }
+    { Canvas c(ART_SIZE, ART_SIZE); artAidPlane(c); aidPlane = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE); }
+    { Canvas c(ART_SIZE, ART_SIZE); artChute(c, rgb(110, 180, 240)); aidChute = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE); }
+    { Canvas c(ART_SIZE, ART_SIZE); artCrate(c, false); crate = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE); }
+    { Canvas c(ART_SIZE, ART_SIZE); artCrate(c, true); crateOpen = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE); }
     for (int f = 0; f < F_COUNT; f++) for (int p = 0; p < MAX_PLAYERS; p++) {
         Canvas c(ART_SIZE, ART_SIZE); artGuardDrone(c, PLAYER_COLOR[p], f == F_CYBER);
-        guardDrone[f][p] = fromCanvasSmooth(c, ART_SIZE / 2, ART_SIZE / 2); guardDrone[f][p].dscale = UNIT_SCALE;
+        guardDrone[f][p] = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE);
     }
     { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, false); rotorDisc = fromCanvasSmooth(c, 32, 32); rotorDisc.dscale = UNIT_SCALE; }
     { Canvas c(ART_SIZE, ART_SIZE); artRotor(c, true); rotorBlades = fromCanvasSmooth(c, 32, 32); rotorBlades.dscale = UNIT_SCALE; }
@@ -310,7 +346,7 @@ void Gfx::buildUnits() {
 
 // ------------------------------------------------------------ buildings
 // Structure art lives in artb.cpp. Each type is painted once (no owner baked in); the owner's colour comes from a white team mask
-// tinted at draw time, and the owner's flag on the roof. The mask is cropped to its used area to keep texture memory small.
+// tinted at draw time, and the owner's flag on the roof. Sprites are cropped to their used area to keep texture memory small.
 static Sprite cropToSprite(Gfx& g, Canvas& c, float cx, float cy, float dscale) {
     int x0 = c.w, y0 = c.h, x1 = -1, y1 = -1;
     for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) if (Canvas::unpack(c.px[y * c.w + x]).a > 0) { x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y); }
@@ -327,12 +363,14 @@ void Gfx::buildBuildings() {
         BArtSize sz = artBuildingSize(t);
         Canvas c(sz.w, sz.h), m(sz.w, sz.h);
         artBuilding(c, m, t);
-        building[t] = fromCanvasSmooth(c, sz.cx, sz.cy); building[t].dscale = 1.0f / BART_K;
+        // cropped to the painted area like the team masks: the padding round a footprint is mostly empty sky, and the
+        // saved texture memory (a third or more of every structure sprite) pays for the bigger world texture
+        building[t] = cropToSprite(*this, c, sz.cx, sz.cy, 1.0f / BART_K);
         buildingTeam[t] = cropToSprite(*this, m, sz.cx, sz.cy, 1.0f / BART_K);
         Canvas s(sz.w, sz.h);
         artSite(s, t);
-        site[t] = fromCanvasSmooth(s, sz.cx, sz.cy); site[t].dscale = 1.0f / BART_K;
-        if (BUILDS[t].role == BR_NUKE) { Canvas a(sz.w, sz.h); artArmed(a, t); armed[t] = fromCanvasSmooth(a, sz.cx, sz.cy); armed[t].dscale = 1.0f / BART_K; }
+        site[t] = cropToSprite(*this, s, sz.cx, sz.cy, 1.0f / BART_K);
+        if (BUILDS[t].role == BR_NUKE) { Canvas a(sz.w, sz.h); artArmed(a, t); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
     }
     static const int RW[7] = { 1, 2, 3, 3, 4, 4, 5 }, RH[7] = { 1, 2, 2, 3, 3, 4, 3 };
     for (int i = 0; i < 7; i++) {
@@ -426,6 +464,7 @@ void Gfx::buildMisc() {
         pile[v] = fromCanvas(c, 20, 20);
     }
     { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float d = std::sqrt((x + 0.5f - 128) * (x + 0.5f - 128) + (y + 0.5f - 128) * (y + 0.5f - 128)); float a = clampf(128 - d, 0, 1); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{255, 255, 255, (u8)(a * 255)}); } disc = fromCanvasSmooth(c, 128, 128); }
+    { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float dx = (x + 0.5f - 128) / 128.0f, dy = (y + 0.5f - 128) / 128.0f; float d = std::sqrt(dx * dx + dy * dy); float a = clampf((d - 0.62f) / 0.75f, 0, 1); a = a * a * (3 - 2 * a); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{4, 6, 10, (u8)(a * 105)}); } vignette = fromCanvasSmooth(c, 0, 0); }
     { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blob = fromCanvas(c, 16, 16); }
     { Canvas c(24, 16); for (int y = 0; y < 16; y++) for (int x = 0; x < 24; x++) { float dx = (x - 12) / 12.0f, dy = (y - 8) / 8.0f; float d = dx * dx + dy * dy; if (d < 1) c.set(x, y, rgb(0, 0, 0, (u8)(110 * (1 - d)))); } shadowSmall = fromCanvas(c, 12, 8); }
     { Canvas c(40, 26); for (int y = 0; y < 26; y++) for (int x = 0; x < 40; x++) { float dx = (x - 20) / 20.0f, dy = (y - 13) / 13.0f; float d = dx * dx + dy * dy; if (d < 1) c.set(x, y, rgb(0, 0, 0, (u8)(120 * (1 - d)))); } shadowLarge = fromCanvas(c, 20, 13); }

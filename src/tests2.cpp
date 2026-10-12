@@ -534,11 +534,13 @@ static bool bunkerFloorTest(Faction me, Faction foe, u64 seed) {
     // ---- the hatch is gone: the gunship gives up instead of hovering over the bunker
     B = g_sim.get(bk); B->hatch = 0; B->lastDamaged = g_sim.time; B->hp = B->maxHp * BUNKER_FLOOR;
     run(4);
-    CHECK(alive(heli) && g_sim.get(heli)->order != O_ATTACK, "a gunship kept attacking a bunker it can no longer hurt");
+    // (the contract is that the bunker stops being its target; with the field this close to a corner base the gunship may
+    // legitimately pick a fight with the enemy HQ in its sight instead — that is not it hovering over the bunker)
+    CHECK(alive(heli) && g_sim.get(heli)->targetEnt != bk, "a gunship kept attacking a bunker it can no longer hurt");
     float floorHp = g_sim.get(bk)->hp;
     g_sim.cmdAttack({heli}, bk);
     run(2);
-    CHECK(g_sim.get(heli)->order != O_ATTACK, "a gunship was ordered onto a bunker it cannot hurt and stayed on it");
+    CHECK(g_sim.get(heli)->targetEnt != bk, "a gunship was ordered onto a bunker it cannot hurt and stayed on it");
     CHECK(g_sim.get(bk)->hp == floorHp, "a gunship damaged a bunker below its floor");
     // ---- a tank on the ground still grinds the bunker below the floor
     Ref tank = spawnAt(tankMe, 0, bp + Vec2(3 * TILE, 0));

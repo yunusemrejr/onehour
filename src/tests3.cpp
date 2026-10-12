@@ -48,10 +48,18 @@ static bool onWater(const Entity& e) { return g_map.navTile(tileOf(e.pos.x), til
 // ---------------------------------------------------------------------------------------------------------------- the lake and the fleet
 static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
     lakeScene(me, foe, seed);
-    // the map: a big central lake, one body of water for the ships, still crossable on land
+    // the map: 104x104 tiles (30% wider than the old 80x80), a big central lake with a buildable island in the middle of it,
+    // one body of water for the ships, still crossable on land
+    CHECK3(MAP_W >= 104 && MAP_H >= 104, "the map is not the enlarged 104x104 one");
     int biggest = 0; for (int s : g_map.waterSize) biggest = std::max(biggest, s);
-    CHECK3(biggest >= 350, "the central lake is not big (350 tiles or more)");
-    CHECK3(g_map.bigWater(40, 40) && g_map.navOpen(40, 40), "the middle of the map is not open lake");
+    CHECK3(biggest >= 850, "the central lake is not big (850 tiles or more)");
+    CHECK3(g_map.bigWater(MAP_W / 2 + 10, MAP_H / 2) && g_map.navOpen(MAP_W / 2 + 10, MAP_H / 2), "the water east of the island is not open lake");
+    CHECK3(g_map.buildable(MAP_W / 2, MAP_H / 2), "the middle of the lake is not a buildable island");
+    {   // ships can sail all the way round the island
+        std::vector<Vec2> ring;
+        Vec2 w = g_map.nearestWater(lakePoint(-10, 0), 6), e = g_map.nearestWater(lakePoint(10, 0), 6);
+        CHECK3(g_map.findNavalPath(w, e, ring), "no naval path round the island");
+    }
     {   // a land route between the bases that is not the lake (from beside one Command Core to beside the other)
         std::vector<Vec2> path;
         Vec2 s0 = g_map.nearestFree(g_sim.players[0].basePos + Vec2(0, 5 * TILE), 10), s1 = g_map.nearestFree(g_sim.players[1].basePos + Vec2(0, 5 * TILE), 10);
@@ -66,7 +74,24 @@ static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
     // a Naval Yard must touch the open lake
     int yardT = me == F_CYBER ? B_C_NAVAL : B_K_NAVAL, facT = firstBuildOf(me) + BR_FACTORY, techT = firstBuildOf(me) + BR_TECH;
     CHECK3(!g_sim.canPlace(0, yardT, 8, 8), "a Naval Yard may stand on dry land away from the lake");
-    CHECK3(!g_sim.canPlace(0, yardT, 17, 31), "a Naval Yard may stand on a bridge-cut river");
+    {   // a buildable footprint whose edge touches river water but not the lake: still refused (found by scanning, so this
+        // holds wherever the rivers run)
+        bool found = false, refused = false;
+        for (int ty = 1; ty < MAP_H - 4 && !found; ty++) for (int tx = 1; tx < MAP_W - 4 && !found; tx++) {
+            bool foot = true;
+            for (int j = 0; j < 3 && foot; j++) for (int i = 0; i < 3; i++) if (!g_map.buildable(tx + i, ty + j)) foot = false;
+            if (!foot) continue;
+            bool river = false, lake = false;
+            for (int j = ty - 1; j <= ty + 3; j++) for (int i = tx - 1; i <= tx + 3; i++) {
+                bool inside = i >= tx && i < tx + 3 && j >= ty && j < ty + 3, corner = (i < tx || i >= tx + 3) && (j < ty || j >= ty + 3);
+                if (inside || corner || !inMap(i, j) || g_map.tile(i, j) != T_WATER) continue;
+                if (g_map.bigWater(i, j)) lake = true; else river = true;
+            }
+            if (river && !lake) { found = true; refused = !g_sim.canPlace(0, yardT, tx, ty); }
+        }
+        CHECK3(found, "no buildable riverbank footprint found to test the Naval Yard rule on");
+        CHECK3(refused, "a Naval Yard may stand on a bridge-cut river");
+    }
     int tx = 0, ty = 0;
     CHECK3(g_sim.shoreSite(0, yardT, g_sim.players[0].basePos, tx, ty), "no shore site for a Naval Yard");
     {   // the site touches the lake along one of its edges
@@ -163,7 +188,7 @@ static bool shipsFight(Faction me, Faction foe, u64 seed) {
 static bool nukesSinkShips(Faction me, Faction foe, u64 seed) {
     lakeScene(me, foe, seed);
     int dF = foe == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cF = foe == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
-    Vec2 c = lakePoint(0, 0);
+    Vec2 c = lakePoint(-11, -4);   // open water well clear of the island and the rocky islets
     std::vector<Ref> fleet;
     for (int i = 0; i < 3; i++) fleet.push_back(ship3(i % 2 ? cF : dF, 1, c + Vec2((i - 1) * 3.0f * TILE, 0)));
     Ref faraway = ship3(dF, 1, lakePoint(9, 7));
@@ -181,7 +206,7 @@ static bool nukesSinkShips(Faction me, Faction foe, u64 seed) {
     CHECK3(alive3(faraway), "a small nuke sank a ship far outside its circle");
     // a full warhead sinks a ship near the rim of its circle too
     lakeScene(me, foe, seed + 1);
-    Ref rim = ship3(dF, 1, lakePoint(-4, 0));
+    Ref rim = ship3(dF, 1, lakePoint(-10, -6));
     Vec2 rp = g_sim.get(rim)->pos;
     Vec2 gz2 = g_map.nearestWater(rp + Vec2(NUKE_RADIUS * TILE * 0.85f, 0), 20);
     CHECK3(dist(gz2, rp) < NUKE_RADIUS * TILE, "the test ship is outside the full blast");
@@ -210,8 +235,10 @@ static bool mapConnectivity() {
     int main = 1; for (int i = 1; i <= ncomp; i++) if (size[i] > size[main]) main = i;
     for (auto& st : g_map.starts) CHECK3(comp[st.ty * MAP_W + st.tx] == main, "a base start is cut off from the rest of the land");
     for (auto& sp : g_map.supplies) CHECK3(comp[sp.ty * MAP_W + sp.tx] == main, "a supply pile is cut off from the rest of the land");
-    int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main) stray += size[i];
-    if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "map: main land %d tiles, %d tiles in %d small pockets\n", size[main], stray, ncomp - 1);
+    int island = comp[(MAP_H / 2) * MAP_W + MAP_W / 2];   // the lake's island is cut off by design (reached by airlift, not by road)
+    CHECK3(island != 0 && island != main, "the island in the middle of the lake is not an island");
+    int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main && i != island) stray += size[i];
+    if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "map: main land %d tiles, island %d, %d tiles in small pockets\n", size[main], size[island], stray);
     CHECK3(stray <= 40, "the lake and rivers cut off pockets of land");
     return true;
 }

@@ -2022,7 +2022,8 @@ static bool airMatrixTest(u64 seed) {
         if (var == 2) for (int i = 1; i < 4; i++) { Ref r = g_sim.spawnUnit(type, 0, pad + Vec2((i - 1.5f) * 30, 0)); g_sim.get(r)->home = af; flight.push_back(r); }
         Vec2 where = pad + Vec2(0, (mode == 0 ? 7 : 16) * TILE);
         std::vector<Ref> tg;
-        auto putB = [&](int btype) { for (int dy = 0; dy < 10; dy++) for (int dx = -6; dx < 6; dx++) { int tx = tileOf(where.x) + dx, ty = tileOf(where.y) + dy; if (g_sim.canPlace(1, btype, tx, ty)) return g_sim.placeBuilding(btype, 1, tx, ty, true); } return NOREF; };
+        // nearest spot to 'where' first (a corner-first search could park the target against the map border, where a jet's turning circle does not fit)
+        auto putB = [&](int btype) { for (int r2 = 0; r2 <= 130; r2++) for (int dy = 0; dy < 10; dy++) for (int dx = -6; dx < 6; dx++) { if (dx * dx + dy * dy != r2) continue; int tx = tileOf(where.x) + dx, ty = tileOf(where.y) + dy; if (g_sim.canPlace(1, btype, tx, ty)) return g_sim.placeBuilding(btype, 1, tx, ty, true); } return NOREF; };
         if (kind == 0) for (int i = 0; i < 3; i++) tg.push_back(g_sim.spawnUnit(u1 + 2, 1, g_map.nearestFree(where + Vec2(i * 18, 0), 20)));
         if (kind == 1) for (int i = 0; i < 3; i++) tg.push_back(g_sim.spawnUnit(u1 + 5, 1, g_map.nearestFree(where + Vec2(i * 24, 0), 20)));
         if (kind == 2) tg.push_back(putB(b1 + BR_POWER));

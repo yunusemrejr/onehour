@@ -55,6 +55,13 @@ static bool isGrass(u8 t) { return t == T_GRASS || t == T_GRASS2; }
 
 void Map::generate() {
     const u32 SEED = 1979;
+    // The layout is the classic 80x80 arena scaled by S (104x104 tiles today), with the lake grown well beyond the plain
+    // scaling: its radius went from 11 tiles to about 17.6, so it holds roughly 900 tiles of water (the old one held 432)
+    // with a buildable island in the middle. Everything below is written in old-map coordinates and multiplied by S, except
+    // the lake, the ring road and the lake supply piles, which were re-placed for the bigger water.
+    const float S = MAP_W / 80.0f;
+    const float C = MAP_W * 0.5f;   // map centre, tile units
+    auto sc = [&](int v) { return (int)std::lround(v * S); };
     roads.clear();
     // Base terrain from noise: grass with dirt patches, sand near center
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
@@ -68,18 +75,23 @@ void Map::generate() {
         bridge[y * MAP_W + x] = 0;
     }
     // The central lake: a big organic body of water, the arena of the warships. Its shore bulges into bays toward the four corners and pulls back
-    // toward the supply piles on the axes; a sandy beach rings it, two rocky islets break the open water, and the four rivers leave it
-    // (they are cut off by the bridges of the ring road, so only the lake itself is a sea for ships).
+    // toward the supply piles on the axes; a sandy beach rings it, two rocky islets and one buildable island break the open water, and the four
+    // rivers leave it (they are cut off by the bridges of the ring road, so only the lake itself is a sea for ships).
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
-        float dx = x + 0.5f - 40.0f, dy = y + 0.5f - 40.0f, d = std::sqrt(dx * dx + dy * dy), th = std::atan2(dy, dx);
-        float R = 11.0f + 1.15f * std::cos(4.0f * th + 3.14159f) + 0.45f * std::sin(3.0f * th + 1.1f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 1.5f;
-        if (d <= R + 1.7f) tiles[y * MAP_W + x] = T_SAND;
+        float dx = x + 0.5f - C, dy = y + 0.5f - C, d = std::sqrt(dx * dx + dy * dy), th = std::atan2(dy, dx);
+        float R = 17.6f + 1.5f * std::cos(4.0f * th + 3.14159f) + 0.6f * std::sin(3.0f * th + 1.1f) + 0.5f * std::sin(8.0f * th + 0.7f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 2.0f;
+        if (d <= R + 2.2f) tiles[y * MAP_W + x] = T_SAND;
         if (d <= R) tiles[y * MAP_W + x] = T_WATER;
     }
-    paintDisc(*this, 36.6f, 43.4f, 1.25f, T_ROCK); paintDisc(*this, 44.2f, 36.8f, 1.5f, T_ROCK);   // islets (rock: nothing can be built on them)
-    // Small ponds near the lateral gaps (decor + partial cover)
-    paintDisc(*this, 40, 21, 2.2f, T_SAND); paintDisc(*this, 40, 21, 1.3f, T_WATER);
-    paintDisc(*this, 40, 59, 2.2f, T_SAND); paintDisc(*this, 40, 59, 1.3f, T_WATER);
+    // The island in the middle of the lake: a sandy shore round a grassy top big enough for a small structure or two. Nothing
+    // drives to it — a dozer has to be airlifted in — so it is a prize for whoever holds the water and the sky.
+    paintDisc(*this, C, C, 3.3f, T_SAND); paintDisc(*this, C, C, 2.5f, T_GRASS);
+    paintDisc(*this, C - 7.5f, C + 5.5f, 1.9f, T_ROCK); paintDisc(*this, C + 7.5f, C - 5.5f, 1.9f, T_ROCK);   // rocky islets (nothing can be built on them)
+    // Pools inside the ring road's corners, on the diagonals between the lake and the road (decor + partial cover)
+    for (int q = 0; q < 4; q++) {
+        float px = C + ((q & 1) ? 18.0f : -18.0f), py = C + ((q & 2) ? 18.0f : -18.0f);
+        paintDisc(*this, px, py, 3.0f, T_SAND); paintDisc(*this, px, py, 1.9f, T_WATER);
+    }
 
     // Rock ridges dividing quadrants, each with a gap (chokepoint)
     auto ridge = [&](int x0, int x1, int y0, int y1, bool vertical, int gapA, int gapB) {
@@ -93,43 +105,53 @@ void Map::generate() {
             tiles[y * MAP_W + x] = T_ROCK;
         }
     };
-    ridge(38, 41, 1, 24, true, 10, 14);
-    ridge(38, 41, 55, 78, true, 65, 69);
-    ridge(1, 24, 38, 41, false, 10, 14);
-    ridge(55, 78, 38, 41, false, 65, 69);
+    const int tip = (int)(C - 26);   // ridge ends stop under the ring road (its discs paint over the last tiles), leaving a shore corridor inside the ring with the supply piles in it
+    ridge(sc(38), sc(41), 1, tip, true, sc(10), sc(14));
+    ridge(sc(38), sc(41), MAP_H - 1 - tip, sc(78), true, sc(65), sc(69));
+    ridge(1, tip, sc(38), sc(41), false, sc(10), sc(14));
+    ridge(MAP_W - 1 - tip, sc(78), sc(38), sc(41), false, sc(65), sc(69));
     // Rock outcrops guarding the diagonal approaches to the center
-    paintDisc(*this, 27, 33, 2.4f, T_ROCK); paintDisc(*this, 53, 33, 2.4f, T_ROCK);
-    paintDisc(*this, 27, 47, 2.4f, T_ROCK); paintDisc(*this, 53, 47, 2.4f, T_ROCK);
+    paintDisc(*this, 27 * S, 33 * S, 2.4f * S, T_ROCK); paintDisc(*this, 53 * S, 33 * S, 2.4f * S, T_ROCK);
+    paintDisc(*this, 27 * S, 47 * S, 2.4f * S, T_ROCK); paintDisc(*this, 53 * S, 47 * S, 2.4f * S, T_ROCK);
     // Map border rocks
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++)
         if (x == 0 || y == 0 || x == MAP_W - 1 || y == MAP_H - 1) tiles[y * MAP_W + x] = T_ROCK;
 
     // Roads: diagonals from bases to the ring road around the lake, plus the ring
-    starts = { {11, 11}, {68, 11}, {11, 68}, {68, 68} };
-    const float ring = 17.0f;   // the lake is big: the ring road runs around its beach and the supply piles
-    float rx0 = 40 - ring, rx1 = 40 + ring;
-    paintRoad(*this, rx0, rx0, rx1, rx0, 1.1f);
-    paintRoad(*this, rx1, rx0, rx1, rx1, 1.1f);
-    paintRoad(*this, rx1, rx1, rx0, rx1, 1.1f);
-    paintRoad(*this, rx0, rx1, rx0, rx0, 1.1f);
-    paintRoad(*this, 13, 13, rx0, rx0, 1.2f);
-    paintRoad(*this, 67, 13, rx1, rx0, 1.2f);
-    paintRoad(*this, 13, 67, rx0, rx1, 1.2f);
-    paintRoad(*this, 67, 67, rx1, rx1, 1.2f);
-    // Lateral roads through the chokepoint gaps
-    paintRoad(*this, 13, 12, 67, 12, 1.0f);
-    paintRoad(*this, 13, 67, 67, 67, 1.0f);
-    paintRoad(*this, 12, 13, 12, 67, 1.0f);
-    paintRoad(*this, 67, 13, 67, 67, 1.0f);
+    {
+        int st = sc(11), sf = MAP_W - 1 - st;
+        starts = { {st, st}, {sf, st}, {st, sf}, {sf, sf} };
+    }
+    const float ring = 26.5f;   // the ring road runs around the lake's beach and the supply piles on its shore
+    float rx0 = C - ring, rx1 = C + ring;
+    paintRoad(*this, rx0, rx0, rx1, rx0, 1.4f);
+    paintRoad(*this, rx1, rx0, rx1, rx1, 1.4f);
+    paintRoad(*this, rx1, rx1, rx0, rx1, 1.4f);
+    paintRoad(*this, rx0, rx1, rx0, rx0, 1.4f);
+    {
+        float dn = sc(13), df = (MAP_W - 1) - dn;   // just outside each Command Core
+        paintRoad(*this, dn, dn, rx0, rx0, 1.5f);
+        paintRoad(*this, df, dn, rx1, rx0, 1.5f);
+        paintRoad(*this, dn, df, rx0, rx1, 1.5f);
+        paintRoad(*this, df, df, rx1, rx1, 1.5f);
+        // Lateral roads through the chokepoint gaps
+        float ln = sc(12), lf = (MAP_W - 1) - sc(12) - 1;
+        paintRoad(*this, dn, ln, df, ln, 1.3f);
+        paintRoad(*this, dn, lf + 1, df, lf + 1, 1.3f);
+        paintRoad(*this, ln, dn, ln, df, 1.3f);
+        paintRoad(*this, lf + 1, dn, lf + 1, df, 1.3f);
+    }
 
     // Rivers: four meandering streams leave the lake towards the map edge (one per quadrant, mirrored). Roads that cross them become bridges and
     // every river has a sandy ford besides, so nothing is cut off, but armies funnel through the crossings.
     {
         struct Pt { float x, y; };
-        static const Pt NW[] = { {32.5f, 35.3f}, {26.5f, 36.2f}, {22, 36.8f}, {18.5f, 34.5f}, {16, 31.5f}, {12.5f, 29.6f}, {8, 30.4f}, {4.5f, 32.4f}, {1, 31.5f} };
-        const int N = (int)(sizeof(NW) / sizeof(NW[0]));
+        static const Pt NW0[] = { {32.5f, 35.3f}, {26.5f, 36.2f}, {22, 36.8f}, {18.5f, 34.5f}, {16, 31.5f}, {12.5f, 29.6f}, {8, 30.4f}, {4.5f, 32.4f}, {1, 31.5f} };
+        const int N = (int)(sizeof(NW0) / sizeof(NW0[0]));
+        Pt NW[16];
+        for (int i = 0; i < N; i++) NW[i] = Pt{ NW0[i].x * S, NW0[i].y * S };
         for (int q = 0; q < 4; q++) {
-            auto tf = [&](Pt p) { return Pt{ (q & 1) ? 79 - p.x : p.x, (q & 2) ? 79 - p.y : p.y }; };
+            auto tf = [&](Pt p) { return Pt{ (q & 1) ? (MAP_W - 1) - p.x : p.x, (q & 2) ? (MAP_H - 1) - p.y : p.y }; };
             std::vector<Pt> pts;   // Catmull-Rom through the control points
             for (int i = 0; i < N - 1; i++) {
                 Pt a = NW[std::max(0, i - 1)], b = NW[i], c = NW[i + 1], d = NW[std::min(N - 1, i + 2)];
@@ -141,17 +163,22 @@ void Map::generate() {
             }
             pts.push_back(tf(NW[N - 1]));
             for (size_t i = 0; i < pts.size(); i++) {   // banks first (grass and dirt only), then the water on top
-                float w = 1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q);
-                paintDisc(*this, pts[i].x, pts[i].y, w + 0.9f, T_SAND, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT; });
+                float w = (1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q)) * S;
+                paintDisc(*this, pts[i].x, pts[i].y, w + 0.9f * S, T_SAND, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT; });
             }
             for (size_t i = 0; i < pts.size(); i++) {
-                float w = 1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q);
+                float w = (1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q)) * S;
                 paintDisc(*this, pts[i].x, pts[i].y, w, T_WATER, [](u8 t) { return t != T_ROCK; });
+            }
+            {   // a wider, marshy pool part-way down each river, where the stream slows and spreads
+                Pt mp = pts[pts.size() * 13 / 20];
+                paintDisc(*this, mp.x, mp.y, 3.4f * S, T_SAND, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT; });
+                paintDisc(*this, mp.x, mp.y, 2.7f * S, T_WATER, [](u8 t) { return t != T_ROCK; });
             }
             size_t fi = pts.size() * 9 / 20;   // the ford: a narrow sandy shallows strip laid across the stream
             Pt f = pts[fi], d{ pts[fi + 2].x - pts[fi - 2].x, pts[fi + 2].y - pts[fi - 2].y };
             float dl = std::sqrt(d.x * d.x + d.y * d.y); d.x /= dl; d.y /= dl;
-            for (float t = -3.2f; t <= 3.2f; t += 0.25f) for (float u = -0.9f; u <= 0.9f; u += 0.3f) {
+            for (float t = -3.2f * S - 0.8f; t <= 3.2f * S + 0.8f; t += 0.25f) for (float u = -0.9f * S; u <= 0.9f * S; u += 0.3f) {
                 int fx = (int)(f.x - d.y * t + d.x * u), fy = (int)(f.y + d.x * t + d.y * u);
                 if (inMap(fx, fy) && tiles[fy * MAP_W + fx] == T_WATER) tiles[fy * MAP_W + fx] = T_SAND;
             }
@@ -176,29 +203,52 @@ void Map::generate() {
         if (!isGrass(t)) continue;
         float n = fbm(x * 0.13f + 40, y * 0.13f + 40, SEED + 31);
         bool nearBase = false;
-        for (auto& s : starts) if (std::abs(x - s.tx) < 11 && std::abs(y - s.ty) < 11) nearBase = true;
-        float dc = std::sqrt((x - 40.0f) * (x - 40.0f) + (y - 40.0f) * (y - 40.0f));
-        if (nearBase || dc < 19) continue;
+        for (auto& s : starts) if (std::abs(x - s.tx) < 15 && std::abs(y - s.ty) < 15) nearBase = true;
+        float dc = std::sqrt((x - C) * (x - C) + (y - C) * (y - C));
+        if (nearBase || dc < 24) continue;
         // keep roads' neighbors clear
         bool nearRoad = false;
         for (int dy = -1; dy <= 1 && !nearRoad; dy++) for (int dx = -1; dx <= 1; dx++)
             if (tiles[(y + dy) * MAP_W + x + dx] == T_ROAD) { nearRoad = true; break; }
         if (nearRoad) continue;
-        if (n > 0.66f) t = T_TREE;
+        if (n > 0.63f) t = T_TREE;
     }
-    // Scenic forest belts in the corners between bases (partial cover, never sealed)
-    // Supply piles: two per base, four around the lake, four in the lateral gaps
+    // Forest belts: two dense stands in each quadrant between the base and the ring road (cover for infantry, never sealed:
+    // the noise gate leaves gaps a column can thread). Placed by rotation so every quadrant gets the same woods.
+    {
+        static const float BELT[2][2] = { {18, 30}, {36, 22} };   // NW quadrant, tile units
+        for (int q = 0; q < 4; q++) for (auto& b : BELT) {
+            float bx = b[0], by = b[1];
+            for (int k = 0; k < q; k++) { float t = bx; bx = (MAP_W - 1) - by; by = t; }   // rotate 90 degrees q times
+            const float BR = 5.5f;
+            int x0 = clampi((int)(bx - BR - 1), 1, MAP_W - 2), x1 = clampi((int)(bx + BR + 1), 1, MAP_W - 2);
+            int y0 = clampi((int)(by - BR - 1), 1, MAP_H - 2), y1 = clampi((int)(by + BR + 1), 1, MAP_H - 2);
+            for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
+                float dx = x + 0.5f - bx, dy = y + 0.5f - by, d = std::sqrt(dx * dx + dy * dy) / BR;
+                if (d > 1.0f) continue;
+                u8& t = tiles[y * MAP_W + x];
+                if (!isGrass(t)) continue;
+                bool near = false;
+                for (auto& s : starts) if (std::abs(x - s.tx) < 14 && std::abs(y - s.ty) < 14) near = true;
+                for (int j = -1; j <= 1 && !near; j++) for (int i = -1; i <= 1; i++) if (tiles[(y + j) * MAP_W + x + i] == T_ROAD) near = true;
+                if (near) continue;
+                if (fbm(x * 0.35f + 9, y * 0.35f + 4, SEED + 47) > 0.38f + 0.25f * d) t = T_TREE;
+            }
+        }
+    }
+    // Supply piles: two per base, four on the lake shore, four in the lateral gaps, four contested ones in the quadrant woods
     supplies = {
-        {6, 16, 36000}, {16, 6, 36000},
-        {73, 16, 36000}, {63, 6, 36000},
-        {6, 63, 36000}, {16, 73, 36000},
-        {73, 63, 36000}, {63, 73, 36000},
-        {40, 26, 50000}, {54, 40, 50000}, {40, 54, 50000}, {26, 40, 50000},
-        {35, 6, 36000}, {6, 45, 36000}, {45, 73, 36000}, {73, 35, 36000},
+        {8, 21, 36000}, {21, 8, 36000},
+        {95, 21, 36000}, {82, 8, 36000},
+        {8, 82, 36000}, {21, 95, 36000},
+        {95, 82, 36000}, {82, 95, 36000},
+        {52, 31, 50000}, {73, 52, 50000}, {52, 73, 50000}, {31, 52, 50000},
+        {46, 8, 36000}, {8, 57, 36000}, {57, 95, 36000}, {95, 46, 36000},
+        {18, 33, 30000}, {70, 18, 30000}, {85, 70, 30000}, {33, 85, 30000},
     };
     // Clear the ground around supply piles and bases so nothing important is walled in
-    for (auto& s : supplies) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 2.6f, T_DIRT, [](u8 t) { return t == T_TREE || t == T_ROCK || t == T_WATER; });
-    for (auto& s : starts) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 9.0f, T_GRASS, [](u8 t) { return t == T_TREE || t == T_ROCK; });
+    for (auto& s : supplies) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 3.4f, T_DIRT, [](u8 t) { return t == T_TREE || t == T_ROCK || t == T_WATER; });
+    for (auto& s : starts) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 11.5f, T_GRASS, [](u8 t) { return t == T_TREE || t == T_ROCK; });
 
     // Blocked flags
     for (int i = 0; i < MAP_W * MAP_H; i++) {
@@ -224,6 +274,27 @@ void Map::generate() {
                 waterComp[ny * MAP_W + nx] = (u16)id; stack.push_back(ny * MAP_W + nx);
             }
         }
+    }
+    lakeComp = 0;
+    for (int i = 1; i < (int)waterSize.size(); i++) if (waterSize[i] > waterSize[lakeComp]) lakeComp = i;
+    // Interior water grouped for the caustics pass (see map.h): aligned 4x4 blocks first, then whatever interior tiles remain.
+    waterBlocks.clear(); waterTiles.clear();
+    {
+        auto interior = [&](int x, int y) {
+            return tiles[y * MAP_W + x] == T_WATER && tiles[y * MAP_W + x - 1] == T_WATER && tiles[y * MAP_W + x + 1] == T_WATER
+                && tiles[(y - 1) * MAP_W + x] == T_WATER && tiles[(y + 1) * MAP_W + x] == T_WATER;
+        };
+        static u8 covered[MAP_W * MAP_H];
+        memset(covered, 0, sizeof(covered));
+        for (int by = 4; by + 3 < MAP_H - 1; by += 4) for (int bx = 4; bx + 3 < MAP_W - 1; bx += 4) {
+            bool full = true;
+            for (int j = 0; j < 4 && full; j++) for (int i = 0; i < 4; i++) if (!interior(bx + i, by + j)) { full = false; break; }
+            if (!full) continue;
+            waterBlocks.push_back(by * MAP_W + bx);
+            for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) covered[(by + j) * MAP_W + bx + i] = 1;
+        }
+        for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++)
+            if (!covered[y * MAP_W + x] && interior(x, y)) waterTiles.push_back(y * MAP_W + x);
     }
 }
 

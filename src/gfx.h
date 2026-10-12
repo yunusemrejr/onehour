@@ -103,7 +103,7 @@ struct Gfx {
     Sprite rubble[7];               // scorched ruins by footprint class
     Sprite prop[4];                 // live-rotated structure props: cyber dish, clanker radar, pump jack beam, fan
     Sprite pile[3];
-    Sprite shadowSmall, shadowLarge, blob, disc;
+    Sprite shadowSmall, shadowLarge, blob, disc, vignette;   // vignette: soft dark frame corners (GPU only, like the cloud shadows)
     Sprite blobAdd;                 // additive radial glow (muzzle light, fire glow, beacons)
     // baked effect sprites: smoke and dust puffs, fireball frames, flame tongues, muzzle stars, sparks, shock rings, beams, debris, scorch decals
     struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], tread[2], missile, missileK, cloud[3], billow[4]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead
@@ -137,6 +137,7 @@ struct Gfx {
     void dashedCircle(float cx, float cy, float r, Color c, float phase, float dash = 9, float gap = 6);
     Sprite fromCanvasSmooth(Canvas& c, float ox, float oy);   // bilinear-filtered texture (supersampled sprites)
     Sprite fromCanvasAdd(Canvas& c, float ox, float oy);      // bilinear + additive blending
+    Sprite fromCanvas565(Canvas& c, float ox, float oy);      // opaque RGB565 texture with ordered dithering (half the memory and blit bandwidth; the baked world)
     void bevelPanel(int x, int y, int w, int h, Color base, bool raised = true);
     void drawFlag(float poleX, float poleY, int player, float scale, float phase);   // mast standing at (poleX, poleY), flag waving
     void present();

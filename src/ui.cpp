@@ -1059,6 +1059,17 @@ void Game::drawBuildingAnim(const Entity& e, Vec2 p, bool disabled) {
     case BR_SUPPLY:
         if (cy) g.glowAdd(p.x - 24, p.y + 36, 14, Color{110, 232, 255, (u8)(40 + 90 * pulse)});
         break;
+    case BR_AIRFIELD: {   // runway edge lights chase down the strip when powered (two dotted rows, alternating blink)
+        if (disabled || !powered) break;
+        float fw2 = bt.w * TILE * 0.5f - 8, fh2 = bt.h * TILE * 0.5f - 8;
+        Color lc = cy ? Color{110, 232, 255, 200} : Color{255, 190, 90, 200};
+        int phase = ((int)(t * 2.2f)) & 1;
+        for (int i = 0; i < 4; i++) {
+            if (((i + phase) & 1) == 0) continue;
+            float lx = p.x - fw2 + (2 * fw2) * (i / 3.0f);
+            g.glowAdd(lx, p.y - fh2, 5.5f, lc); g.glowAdd(lx, p.y + fh2, 5.5f, lc);
+        }
+        break; }
     case BR_INCOME:
         if (cy) g.glowAdd(p.x, p.y - 22, 26, Color{255, 214, 96, (u8)(40 + 90 * pulse)});
         else g.draw(g.prop[2], p.x, p.y + 6, powered ? std::sin(t * 2.4f) * 0.26f : 0, 1.15f);
@@ -1272,8 +1283,22 @@ void Game::drawEntity(Entity& e) {
     const Sprite* bs = &body;
     bool moving = (e.pos - e.prevPos).len2() > 0.01f && fallK <= 0;
     if (!air && !paused && !disabled && moving) {
-        float travelled = ut.kind == UK_INF ? wallTime * 9.0f + e.gen * 0.7f : (e.pos.x + e.pos.y) / 3.0f;
+        float travelled = (e.pos.x + e.pos.y) / (ut.kind == UK_INF ? 2.4f : 3.0f) + e.gen * 0.37f;   // feet and tracks turn with the ground they cover, not the clock
         bs = &g.unitAnim[e.type][slotOf(owner)][((int)std::floor(travelled)) & 1];
+    }
+    // body language (same draw calls, just a nudge): suspension bob on the move, a soldier's step bounce, a hull's slow
+    // roll and heave, a helicopter's hover sway. Everything settles still when the unit does.
+    float drawAng = e.angle;
+    if (!paused) {
+        if (ut.naval) {
+            drawAng += std::sin(wallTime * 0.85f + (float)e.gen * 1.7f) * 0.018f;
+            p.y += std::sin(wallTime * 0.65f + (float)e.gen * 2.3f) * 0.8f;
+        } else if (air) {
+            p.y += std::sin(wallTime * (ut.heli ? 2.1f : 3.0f) + (float)e.gen * 2.9f) * (ut.heli ? 1.1f : 0.5f) * (0.25f + 0.75f * alt);
+        } else if (moving && !disabled) {
+            if (ut.kind == UK_VEH) p.y += std::sin((e.pos.x + e.pos.y) * 0.115f + (float)e.gen) * 0.75f;
+            else if (ut.kind == UK_INF) p.y -= std::fabs(std::sin((e.pos.x + e.pos.y) * 0.21f + (float)e.gen)) * 1.1f;
+        }
     }
     // vehicles kick up dust: a puff behind the tracks now and then, grey on asphalt and tan on bare ground
     if (!air && ut.kind == UK_VEH && !ut.naval && moving && frameDt > 0 && fxRng.f() < 11.0f * frameDt) {
@@ -1342,7 +1367,7 @@ void Game::drawEntity(Entity& e) {
             }
         }
     }
-    g.draw(*bs, p.x, p.y, e.angle, 1, mod, ghost);
+    g.draw(*bs, p.x, p.y, drawAng, 1, mod, ghost);
     if (ut.naval) drawShipMounts(e, p, mod);
     if (ut.kind == UK_VEH && ut.cargoCap > 0) drawJeepCrew(e, p);
     const Sprite& tur = g.unitTurret[e.type][slotOf(owner)];
@@ -1437,15 +1462,24 @@ void Game::renderWorld() {
         SDL_SetTextureColorMod(g.worldTerrain.tex, 255, 255, 255); SDL_SetTextureAlphaMod(g.worldTerrain.tex, 255);
         SDL_RenderCopy(g.ren, g.worldTerrain.tex, &src, &dst);
     }
-    // water: seamless animated caustics over open water (one small draw per visible interior tile)
+    // water: seamless animated caustics over open water. Interior water is pre-grouped by the map into aligned 4x4 blocks
+    // (one 128 px draw each) plus the leftover shore-side tiles, so a lake filling the screen costs dozens of draws, not hundreds.
     {
         int fr = ((int)(wallTime * 3.0f)) & 3;
         const Sprite& w = g.waterFx[fr];
-        SDL_SetTextureColorMod(w.tex, 255, 255, 255); SDL_SetTextureAlphaMod(w.tex, 255);
-        for (int ty = ty0; ty <= ty1; ty++) for (int tx = tx0; tx <= tx1; tx++) {
-            if (g_map.tile(tx, ty) != T_WATER || !(rev || ex[ty * MAP_W + tx])) continue;
-            if (tx < 1 || ty < 1 || tx > MAP_W - 2 || ty > MAP_H - 2) continue;
-            if (g_map.tile(tx - 1, ty) != T_WATER || g_map.tile(tx + 1, ty) != T_WATER || g_map.tile(tx, ty - 1) != T_WATER || g_map.tile(tx, ty + 1) != T_WATER) continue;
+        SDL_SetTextureColorMod(w.tex, 255, 255, 255);
+        SDL_SetTextureAlphaMod(w.tex, (u8)(238 + 17 * std::sin(wallTime * 0.6f)));   // the light on the water breathes a little
+        for (int idx : g_map.waterBlocks) {
+            int tx = idx % MAP_W, ty = idx / MAP_W;
+            if (tx + 3 < tx0 || tx > tx1 || ty + 3 < ty0 || ty > ty1) continue;
+            if (!rev && !ex[(ty + 1) * MAP_W + tx + 1] && !ex[(ty + 2) * MAP_W + tx + 2]) continue;
+            SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), 4 * TILE, 4 * TILE };
+            SDL_RenderCopy(g.ren, w.tex, nullptr, &dst);
+        }
+        for (int idx : g_map.waterTiles) {
+            int tx = idx % MAP_W, ty = idx / MAP_W;
+            if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) continue;
+            if (!rev && !ex[idx]) continue;
             SDL_Rect src = { (tx & 3) * TILE, (ty & 3) * TILE, TILE, TILE };
             SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE };
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
@@ -1622,6 +1656,7 @@ void Game::renderWorld() {
     drawAirlifts();
     drawShroud();
     drawAidDrops();
+    if (!g.softwareRenderer && g.vignette.tex) g.drawRect(g.vignette, 0, 0, SCREEN_W, VIEW_H);   // soft dark corners frame the battlefield (one draw, GPU only)
     // drag box
     if (dragging) {
         Vec2 a = worldToScreen(dragStart), b = worldToScreen(dragNow);

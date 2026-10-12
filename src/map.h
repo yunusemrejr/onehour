@@ -16,9 +16,14 @@ struct Map {
     u8 bridge[MAP_W * MAP_H];       // road laid over a river (drawn as a timber deck)
     u16 waterComp[MAP_W * MAP_H];   // connected body of water a water tile belongs to (0 = not water), see waterSize
     std::vector<int> waterSize;     // tiles of each body of water, indexed by waterComp (the central lake is by far the biggest)
+    int lakeComp = 0;               // waterComp id of the central lake (the largest body of water)
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
     std::vector<SupplySpot> supplies;
     std::vector<RoadSeg> roads;
+    // Interior water (water with water on all four sides), pre-grouped for the animated-caustics pass: origins of aligned 4x4
+    // all-interior blocks (one 128 px draw each) and every interior tile no block covers. Filled by generate().
+    std::vector<int> waterBlocks;
+    std::vector<int> waterTiles;
 
     void generate();
     u8 tile(int x, int y) const { return tiles[y * MAP_W + x]; }
@@ -46,7 +51,7 @@ struct Map {
     // river to ships); a tile is "open" if it and its four neighbours are sailable, which leaves room for a hull between the shores.
     bool navTile(int x, int y) const { return inMap(x, y) && tiles[y * MAP_W + x] == T_WATER && (blocked[y * MAP_W + x] & ~1) == 0; }
     bool navOpen(int x, int y) const { return navTile(x, y) && navTile(x + 1, y) && navTile(x - 1, y) && navTile(x, y + 1) && navTile(x, y - 1); }
-    bool bigWater(int x, int y) const { return inMap(x, y) && waterComp[y * MAP_W + x] != 0 && waterSize[waterComp[y * MAP_W + x]] >= NAVAL_WATER_MIN; }
+    bool bigWater(int x, int y) const { return inMap(x, y) && waterComp[y * MAP_W + x] == lakeComp && lakeComp != 0 && waterSize[lakeComp] >= NAVAL_WATER_MIN; }   // the lake itself, not a wide stretch of river cut off by a bridge
     Vec2 nearestWater(Vec2 p, int maxR = 12, bool bigOnly = false) const;       // centre of the nearest open water tile (p itself when it already is one); bigOnly: in the lake, not in a pond or a cut-off river
     bool findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 4000) const;   // like findPath for ships; the goal is moved to the nearest open water
     bool navLineClear(Vec2 a, Vec2 b) const;                                     // straight line over open water

@@ -64,11 +64,11 @@ void setTone(int type) {
     if (local < 0 || local > 11) return;
     if (UNITS[type].faction == F_CYBER) {
         const CyTone& t = CY_TONES[local];
-        CYH = t.h; CYP = t.p; CYM = t.m; CYD = t.d; CYG = t.g;
+        CYH = shade(t.h, 1.03f); CYP = shade(t.p, 1.08f); CYM = t.m; CYD = shade(t.d, 0.92f); CYG = t.g;   // plates catch more light, recesses sit deeper
         CYW = mix(t.g, rgb(255, 255, 255), 0.72f);
     } else {
         const CkTone& t = CK_TONES[local];
-        CKH = t.h; CKP = t.p; CKD = t.d; CKR = t.r; CKY = t.y; CKS = t.s; CKT = t.t;
+        CKH = shade(t.h, 1.03f); CKP = shade(t.p, 1.08f); CKD = shade(t.d, 0.92f); CKR = t.r; CKY = t.y; CKS = t.s; CKT = t.t;
     }
 }
 

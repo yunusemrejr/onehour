@@ -174,16 +174,19 @@ void Gfx::buildEffects() {
         c.outline(rgb(8, 10, 14, 170));
         (cy ? fxs.missile : fxs.missileK) = fromCanvasSmooth(c, 62, 22); (cy ? fxs.missile : fxs.missileK).dscale = 0.5f;
     }
-    // water caustics: sums of integer-frequency waves so every frame tiles seamlessly, four frames that loop
+    // water caustics: sums of integer-frequency waves so every frame tiles seamlessly, four frames that loop. Two wave
+    // sets (broad swell + fine chop) multiplied together give thin bright filaments instead of blobby squiggles.
     for (int f = 0; f < 4; f++) {
         Canvas c(128, 128);
         static const int A[5] = { 1, 3, 2, 4, 5 }, B[5] = { 2, 1, -3, 3, -2 }, M[5] = { 1, -1, 1, -1, 1 };
+        static const int A2[4] = { 7, -5, 9, 4 }, B2[4] = { -4, 8, 3, -9 }, M2[4] = { -1, 1, -1, 1 };
         for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) {
-            float w = 0;
+            float w = 0, w2 = 0;
             for (int k = 0; k < 5; k++) w += std::sin(6.2831853f * (A[k] * x + B[k] * y) / 128.0f + 1.3f * k + f * 1.5707963f * M[k]);
-            float r = clampf(1.0f - std::abs(w) * 0.5f, 0, 1);
-            float a = std::pow(r, 7.0f);
-            c.px[y * 128 + x] = Canvas::pack(Color{190, 232, 250, (u8)(clampf(a, 0, 1) * 110)});
+            for (int k = 0; k < 4; k++) w2 += std::sin(6.2831853f * (A2[k] * x + B2[k] * y) / 128.0f + 0.7f * k + f * 1.5707963f * M2[k]);
+            float r = clampf(1.0f - std::abs(w) * 0.5f, 0, 1), r2 = clampf(1.0f - std::abs(w2) * 0.62f, 0, 1);
+            float a = std::pow(r, 7.0f) * 0.75f + std::pow(r * r2, 4.0f) * 0.85f;
+            c.px[y * 128 + x] = Canvas::pack(Color{196, 238, 250, (u8)(clampf(a, 0, 1) * 96)});
         }
         waterFx[f] = fromCanvasAdd(c, 0, 0);
     }
@@ -336,7 +339,7 @@ void Game::drawFx() {
         switch (f.type) {
         case FX_BEAM: {   // textured bolt: wide soft glow, bright core, hot white filament
             float len = hyp(b.x - a.x, b.y - a.y); if (len < 1) break;
-            float ang = std::atan2(b.y - a.y, b.x - a.x), al = 1 - k;
+            float ang = std::atan2(b.y - a.y, b.x - a.x), al = (1 - k) * (0.86f + 0.14f * std::sin(wallTime * 90.0f + f.a.x * 0.7f));   // mains flicker
             Vec2 mid = (a + b) * 0.5f;
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 12, ang, f.color, (u8)(150 * al));
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 5, ang, f.color, (u8)(255 * al));
@@ -368,6 +371,21 @@ void Game::drawFx() {
                     g.drawSized(g.fxs.beam, mid.x, mid.y, len + 3, 9, ang, c, (u8)(120 * al));
                     g.drawSized(g.fxs.beam, mid.x, mid.y, len + 1, 3, ang, rgb(255, 255, 255), (u8)(255 * al)); }
                 prev = q;
+            }
+            for (int fork = 0; fork < 2; fork++) {   // side forks snapping off the main bolt
+                float t0 = 0.3f + 0.25f * fork + r.f(-0.06f, 0.06f);
+                Vec2 base = a + (b - a) * t0 + Vec2(r.f(-6, 6), r.f(-6, 6));
+                Vec2 dv = b - a; float dl = hyp(dv.x, dv.y); if (dl < 1) break; dv = dv * (1.0f / dl);
+                Vec2 side(-dv.y, dv.x); if (r.f() < 0.5f) side = side * -1.0f;
+                Vec2 mid = base + side * r.f(6, 13) + dv * r.f(2, 9), tip = mid + side * r.f(4, 10) + dv * r.f(-2, 7);
+                Vec2 pts[3] = { base, mid, tip };
+                for (int sgm = 0; sgm < 2; sgm++) {
+                    Vec2 d2 = pts[sgm + 1] - pts[sgm]; float l2 = hyp(d2.x, d2.y); if (l2 < 0.5f) continue;
+                    Vec2 mm = (pts[sgm] + pts[sgm + 1]) * 0.5f; float a2 = std::atan2(d2.y, d2.x);
+                    g.drawSized(g.fxs.beam, mm.x, mm.y, l2 + 2, 5.5f, a2, c, (u8)(85 * al));
+                    g.drawSized(g.fxs.beam, mm.x, mm.y, l2 + 1, 1.8f, a2, rgb(255, 255, 255), (u8)(190 * al));
+                }
+                g.glowAdd(tip.x, tip.y, 5.5f, Color{c.r, c.g, c.b, (u8)(110 * al)});
             }
             g.glowAdd(b.x, b.y, 12, Color{c.r, c.g, c.b, (u8)(150 * al)});
             break;
@@ -559,12 +577,12 @@ void Game::drawClouds() {
     Gfx& g = g_gfx;
     if (g.softwareRenderer) return;   // big alpha blends are the one thing a CPU-only renderer pays dearly for
     const float span = WORLD_W + 1800.0f;
-    for (int i = 0; i < 9; i++) {
-        float bx = 311.0f * (i * 7 % 9) + 190.0f * i, by = 270.0f * (i * 5 % 9) + 130.0f * (i % 3);
+    for (int i = 0; i < 11; i++) {
+        float bx = 311.0f * (i * 7 % 11) + 190.0f * i, by = 270.0f * (i * 5 % 11) + 130.0f * (i % 3) + (WORLD_H - 2560.0f) * (i % 4) * 0.22f;
         float x = std::fmod(bx + wallTime * (7.0f + (i % 3) * 2.0f), span) - 900.0f, y = by + std::sin(wallTime * 0.04f + i * 1.7f) * 90.0f;
         float w = 760.0f + 160.0f * (i % 4), h = w * (0.62f + 0.06f * (i % 3));
         Vec2 s = worldToScreen(Vec2(x, y));
         if (s.x + w * 0.5f < 0 || s.x - w * 0.5f > SCREEN_W || s.y + h * 0.5f < 0 || s.y - h * 0.5f > VIEW_H) continue;
-        g.drawSized(g.fxs.cloud[i % 3], s.x, s.y, w, h, 0, rgb(0, 6, 12), 40);
+        g.drawSized(g.fxs.cloud[i % 3], s.x, s.y, w, h, 0, rgb(0, 6, 12), 50);
     }
 }
