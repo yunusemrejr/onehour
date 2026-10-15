@@ -350,6 +350,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     formationOffsets(ground, dest, offs);
     for (size_t i = 0; i < ground.size(); i++) {
         Entity& e = *ground[i];
+        if (e.ut().role == UR_DOZER) { keepSite(e); e.autoHoldUntil = time + DOZER_MANUAL_HOLD; }   // (it goes back to an unfinished site once there; no mending rounds for a while)
         e.zoneR = 0; e.leashed = false; takeOrder(e); e.forceTarget = NOREF;
         Vec2 dd(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE));
         Vec2 d = e.ut().naval ? g_map.nearestWater(dd, 14) : g_map.nearestFree(dd, 6);   // ships sail to the nearest open water
@@ -409,6 +410,7 @@ void Sim::cmdStop(const std::vector<Ref>& sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->carrier.valid() || e->ut().temp) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF; e->loiterUntil = -1;
+        if (e->ut().role == UR_DOZER) { e->siteQueue.clear(); e->autoHoldUntil = time + DOZER_MANUAL_HOLD; }   // stop means stop: the kept sites are dropped too
         if (e->isAir() && e->ammo <= 0 && e->ut().ammo > 0) { e->order = O_REARM; e->targetEnt = NOREF; continue; }
         e->order = O_IDLE; e->postOrder = O_IDLE; e->targetEnt = NOREF; e->engaged = NOREF; e->path.clear(); e->guardPos = e->pos;
     }
@@ -475,7 +477,7 @@ void Sim::cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
 
 bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     Entity* d = get(dozer);
-    if (!d || !d->isUnit() || d->ut().role != UR_DOZER) return false;
+    if (!d || !d->isUnit() || d->ut().role != UR_DOZER || d->carrier.valid()) return false;   // (a dozer aboard a bunker cannot drive to a site)
     int p = d->owner;
     if (!buildAvailable(p, buildType) || !canPlace(p, buildType, tx, ty)) return false;
     const BuildType& b = BUILDS[buildType];
@@ -484,6 +486,7 @@ bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     Ref site = placeBuilding(buildType, p, tx, ty, false);
     d = get(dozer);   // (placing may grow the entity array)
     if (!d) return true;
+    keepSite(*d);   // (a site it leaves unfinished for this one is resumed afterwards)
     takeOrder(*d);
     d->order = O_BUILD; d->targetEnt = site; d->engaged = NOREF; d->repathTimer = 0; d->actionTimer = 0;
     emit(EV_SOUND, p, SND_PLACE, d->pos);
@@ -498,12 +501,14 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
     std::vector<Entity*> dz;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (e && e->isUnit() && e->ut().role == UR_DOZER && e->owner == b->owner) dz.push_back(e);
+        if (e && e->isUnit() && e->ut().role == UR_DOZER && e->owner == b->owner && !e->carrier.valid()) dz.push_back(e);
     }
     Vec2 at = b->pos;
     std::stable_sort(dz.begin(), dz.end(), [&](const Entity* x, const Entity* y) { return dist2(x->pos, at) < dist2(y->pos, at); });
     int room = std::max(2, repairCrewCap(*b));
     for (auto* e : dz) {
+        if (e->targetEnt != building) keepSite(*e);
+        if (!players[e->owner].isAI) e->autoHoldUntil = time + DOZER_MANUAL_HOLD;   // the player picked its job: no wandering off on its own right after
         takeOrder(*e);
         Ref job = building;
         if (b->constructed && e->targetEnt != building && repairCrew(*b) >= room) {
@@ -514,6 +519,7 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
             if (other) job = refOf(*other);
         }
         e->order = O_BUILD; e->targetEnt = job; e->repathTimer = 0; e->actionTimer = 0; e->path.clear();
+        e->siteQueue.erase(std::remove(e->siteQueue.begin(), e->siteQueue.end(), job), e->siteQueue.end());
     }
 }
 
@@ -722,6 +728,8 @@ bool Sim::cmdMiniNuke(int player, Vec2 pos, bool force, Ref from) {
     if (!silo) return false;
     silo->siloTimer = time + MINI_NUKE_COOLDOWN;
     nukes.push_back({silo->pos, pos, player, 0, force, MINI_NUKE_SCALE});
+    silo->nukeSalvo = (u8)(MINI_NUKE_SALVO - 1); silo->nukeSalvoAt = time + MINI_NUKE_SALVO_GAP;   // the rest of the salvo follows (see updateBunkerSelf)
+    silo->nukeSalvoPos = pos; silo->nukeSalvoForce = force;
     emit(EV_SOUND, -1, SND_ROCKET, silo->pos);
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) {
         silo->detUntil[p] = std::max(silo->detUntil[p], time + MINI_NUKE_REVEAL);   // the missile climbs out of the hatch: whoever sees the launch knows where it is
@@ -2107,6 +2115,7 @@ void Sim::autoEngage(Entity& e, Entity& t) {
 }
 
 void Sim::moveAside(Entity& e, Vec2 dest, float holdFor) {
+    keepSite(e);   // (a dozer that ducks out of danger goes back to its site afterwards)
     dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
     if (!e.isAir()) dest = e.ut().naval ? g_map.nearestWater(dest, 10) : g_map.nearestFree(dest, 6);
     e.order = O_MOVE; e.target = dest; e.engaged = NOREF; e.autoTask = true; e.leashed = false; e.postOrder = O_IDLE; e.actionTimer = 0;
@@ -2411,6 +2420,56 @@ Entity* Sim::repairJob(Entity& dz, float maxDist) {
     return best;
 }
 
+// An unfinished site an idle dozer should help with. Construction always comes before mending: the dozer takes the nearest site of its army that
+// is not under fire and has fewer than DOZER_SITE_CREW builders (one nobody is working on counts as much nearer), so a crew of idle dozers fans out over
+// the open sites instead of all piling onto one.
+Entity* Sim::siteJob(Entity& dz, float maxDist) {
+    Entity* best = nullptr; float bs = 1e18f;
+    for (auto& b : ents) {
+        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || b.constructed || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
+        float d = dist(b.pos, dz.pos);
+        if (d > maxDist) continue;
+        int crew = repairCrew(b, &dz);
+        if (crew >= DOZER_SITE_CREW) continue;
+        float score = d / TILE + crew * 12.0f - b.progress * 6.0f;   // (a nearly finished one is worth a short detour)
+        if (score < bs) { bs = score; best = &b; }
+    }
+    return best;
+}
+
+bool Sim::siteOpen(const Entity& dz, Ref site) const {
+    const Entity* b = get(site);
+    return b && b->isBuilding() && b->owner == dz.owner && !b->constructed;
+}
+
+void Sim::keepSite(Entity& dz) {
+    if (!dz.isUnit() || dz.ut().role != UR_DOZER || dz.order != O_BUILD || !siteOpen(dz, dz.targetEnt)) return;
+    auto& q = dz.siteQueue;
+    if (std::find(q.begin(), q.end(), dz.targetEnt) != q.end()) return;
+    q.insert(q.begin(), dz.targetEnt);   // the site it was just on is the first one it goes back to
+    if ((int)q.size() > DOZER_SITE_QUEUE) q.pop_back();
+}
+
+// What an idle dozer does next: first the sites it was pulled away from (its own build orders, kept however it was moved), then on its own any open
+// site of its army, then repairs; the last two wait while a manual order's hold lasts.
+bool Sim::dozerFindWork(Entity& e) {
+    auto& q = e.siteQueue;
+    for (size_t i = 0; i < q.size();) {
+        if (!siteOpen(e, q[i])) { q.erase(q.begin() + i); continue; }
+        const Entity* b = get(q[i]);
+        if (time - b->lastDamaged < 4.0f || inFallout(b->pos)) { i++; continue; }   // under fire: wait and keep it
+        Ref site = q[i]; q.erase(q.begin() + i);
+        e.order = O_BUILD; e.targetEnt = site; e.autoTask = false; e.repathTimer = 0; e.actionTimer = 0; e.path.clear();
+        return true;
+    }
+    if (time < e.autoHoldUntil) return false;
+    Entity* best = siteJob(e);
+    if (!best) best = repairJob(e);
+    if (!best) return false;
+    e.order = O_BUILD; e.targetEnt = refOf(*best); e.autoTask = true; e.repathTimer = 0; e.actionTimer = 0; e.path.clear();
+    return true;
+}
+
 void Sim::runOrder(Entity& e, const UnitType& ut) {
     switch (e.order) {
     case O_IDLE: {
@@ -2425,11 +2484,8 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             }
             break;
         }
-        if (ut.role == UR_DOZER) {    // bulldozers mend damaged structures on their own when they have nothing to do, each taking its own job
-            if ((tick + e.gen) % 20 == 0) {
-                Entity* best = repairJob(e);
-                if (best) { e.order = O_BUILD; e.targetEnt = refOf(*best); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); }
-            }
+        if (ut.role == UR_DOZER) {    // bulldozers go back to their sites, then help build and mend on their own when they have nothing to do
+            if ((tick + e.gen) % 20 == 0) dozerFindWork(e);
             break;
         }
         if (ut.weapon < 0) break;
@@ -2542,6 +2598,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         break;
     }
     case O_MOVE: case O_ATTACKMOVE: {
+        if (ut.role == UR_DOZER && !e.autoTask) e.autoHoldUntil = std::max(e.autoHoldUntil, time + DOZER_MANUAL_HOLD);   // the hold runs from its arrival
         if (e.isAir()) {
             // a fixed-wing craft has arrived once it passes within its own turn circle of the spot; it then waits there (circling)
             bool fw = fixedWing(ut);
@@ -2717,15 +2774,25 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         break;
     }
     case O_BUILD: {
-        if (time - e.lastDamaged < 1.0f && e.lastDamaged > 0 && e.hp < e.maxHp * 0.5f) { e.order = O_MOVE; e.target = g_map.nearestFree(players[e.owner].basePos + Vec2(0, 60), 6); e.targetEnt = NOREF; requestPath(e, e.target); break; }
+        if (time - e.lastDamaged < 1.0f && e.lastDamaged > 0 && e.hp < e.maxHp * 0.5f) {   // badly hurt: back to base (an unfinished site is kept for later)
+            keepSite(e);
+            e.order = O_MOVE; e.target = g_map.nearestFree(players[e.owner].basePos + Vec2(0, 60), 6); e.targetEnt = NOREF; e.autoTask = true; requestPath(e, e.target); break;
+        }
         Entity* b = get(e.targetEnt);
         if (!b || !b->isBuilding() || b->owner != e.owner || (b->constructed && b->hp >= b->maxHp && b->hatch >= b->hatchMax)) {
-            e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos;
-            if (b && b->constructed && b->owner == e.owner) {   // a repair is done: move straight on to the next job close by
-                Entity* next = repairJob(e, 18.0f * TILE);
-                if (next) { e.order = O_BUILD; e.targetEnt = refOf(*next); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); }
+            e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.autoTask = false;
+            if (b && b->constructed && b->owner == e.owner) {   // a repair is done: move straight on to the next job (a site first, then mending close by)
+                if (!e.siteQueue.empty() || time < e.autoHoldUntil) { dozerFindWork(e); break; }
+                Entity* next = siteJob(e);
+                if (!next) next = repairJob(e, 18.0f * TILE);
+                if (next) { e.order = O_BUILD; e.targetEnt = refOf(*next); e.autoTask = true; e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); }
             }
             break;
+        }
+        // construction comes before mending: a dozer that went mending on its own drops it for a site nobody is building
+        if (b->constructed && e.autoTask && (tick + e.gen) % 30 == 0) {
+            Entity* site = siteJob(e);
+            if (site && repairCrew(*site, &e) == 0) { e.targetEnt = refOf(*site); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); break; }
         }
         float d = distToEntity(e.pos, *b);
         // a dozer boxed in by neighbouring structures cannot always get right up to the wall: after a short wait it works from where it is
@@ -2749,7 +2816,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             Vec2 before = e.pos;
             moveAlong(e, ut.speed);
             if (dist(e.pos, before) < 0.05f) e.actionTimer += SIM_DT; else e.actionTimer = 0;   // time spent unable to advance
-            if (e.actionTimer > 14.0f) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; break; }   // the structure cannot be reached: give up
+            if (e.actionTimer > 14.0f) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; e.autoTask = false; break; }   // the structure cannot be reached: give up
             e.stuckTimer += SIM_DT;
             if (e.stuckTimer > 2.0f) { if (dist(e.pos, e.lastPos) < 8) requestPath(e, g_map.nearestFree(b->pos + Vec2(rng.f(-1, 1) * b->bt().w * TILE * 0.8f, rng.f(-1, 1) * b->bt().h * TILE * 0.8f), 6)); e.stuckTimer = 0; e.lastPos = e.pos; }
         }
@@ -2996,7 +3063,7 @@ void Sim::cmdEnter(const std::vector<Ref>& sel, Ref carrier) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || e == c || !canBoard(*e, *c)) continue;
-        e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF;
+        e->zoneR = 0; e->leashed = false; keepSite(*e); takeOrder(*e); e->forceTarget = NOREF;
         e->order = O_ENTER; e->postOrder = O_IDLE; e->targetEnt = carrier; e->engaged = NOREF; e->path.clear(); e->pathIdx = 0; e->repathTimer = 0; e->actionTimer = 0;
     }
 }
@@ -3104,12 +3171,47 @@ void Sim::updateBunkerSelf(Entity& b) {
         b.hp = std::min(b.maxHp, b.hp + b.maxHp * BUNKER_REGEN * SIM_DT);
         if (b.hatchMax > 0 && (b.hatch > 0 || time - b.lastDamaged >= BUNKER_HATCH_REFIT)) b.hatch = std::min(b.hatchMax, b.hatch + b.hatchMax * (b.hatch > 0 ? BUNKER_HATCH_REGEN * SIM_DT : 0.05f));
     }
+    if (b.nukeSalvo > 0 && time >= b.nukeSalvoAt) {   // the next missile of the salvo leaves the hatch: the same warhead, at the same spot
+        b.nukeSalvo--; b.nukeSalvoAt = time + MINI_NUKE_SALVO_GAP;
+        nukes.push_back({b.pos, b.nukeSalvoPos, b.owner, 0, b.nukeSalvoForce, MINI_NUKE_SCALE});
+        emit(EV_SOUND, -1, SND_ROCKET, b.pos);
+        for (int p = 0; p < numPlayers; p++) if (enemies(b.owner, p)) b.detUntil[p] = std::max(b.detUntil[p], time + MINI_NUKE_REVEAL);
+    }
+    // under attack: whoever is wearing it down (the last one to hit it and anything with it as its target, in reach of the pod) is answered
+    Ref bref = refOf(b);
+    bool besieged = b.lastDamaged > 0 && time - b.lastDamaged < BUNKER_RETALIATE;
+    const Weapon& pod = WEAPONS[W_BUNKER_ROCKETS];
+    auto attackerOf = [&](float reachTiles, int wpn) -> Entity* {   // (the pod knows where the shots come from: it needs no sight of the shooter)
+        Entity* best = nullptr; float bs = 1e9f;
+        forEachNear(b.pos, reachTiles * TILE + 2 * TILE, [&](Entity& t) {
+            if (!t.isUnit() && !t.isBuilding()) return;
+            bool onUs = refOf(t) == b.attacker || t.targetEnt == bref || t.engaged == bref;
+            if (!onUs || !enemies(b.owner, t.owner) || t.weapon() < 0) return;   // (an unarmed spy walking up to take it is not wearing it down)
+            if (wpn == W_BUNKER_ROCKETS ? (t.isAir() || t.carrier.valid() || t.fall > 0) : !canTarget(b, t, wpn)) return;
+            float d = distToEntity(b.pos, t) / TILE;
+            if (d > reachTiles + 0.15f) return;
+            float score = d - 3.0f * pod.mult[t.armor()] - (refOf(t) == b.attacker ? 1.5f : 0.0f);
+            if (score < bs) { bs = score; best = &t; }
+        });
+        return best;
+    };
+    if (b.podCd > 0) b.podCd -= SIM_DT;
+    if (besieged && b.podCd <= 0 && (tick + b.gen) % 4 == 0) {   // the rocket pod pops up (hatch or no hatch) and fires a pair at the worst attacker
+        if (Entity* t = attackerOf(pod.range, W_BUNKER_ROCKETS)) {
+            b.podAng = std::atan2(t->pos.y - b.pos.y, t->pos.x - b.pos.x);
+            Vec2 side(-std::sin(b.podAng), std::cos(b.podAng));
+            for (int k = 0; k < pod.burst; k++) { Vec2 m = b.pos + Vec2(0, -10.0f) + side * (k ? 5.0f : -5.0f); fireWeapon(b, *t, pod, &m); }
+            b.podCd = pod.cooldown;
+        }
+    }
     const Weapon& w = WEAPONS[W_BUNKER_MINIGUN];
     float reach = (w.range + 0.2f) * TILE;
+    Entity* hitter = besieged && b.hatch > 0 ? attackerOf(w.range, W_BUNKER_MINIGUN) : nullptr;   // the hatch guns go for an attacker in reach first
     for (int i = 0; i < BUNKER_GUNS; i++) {
         if (b.gunCd[i] > 0) b.gunCd[i] -= SIM_DT;
         if (b.hatch <= 0) { b.gunTgt[i] = NOREF; continue; }   // the guns sit on the hatch: blown off, they are silent
         Entity* t = get(b.gunTgt[i]);
+        if (hitter && t != hitter && (i == 0 || !t)) { t = hitter; b.gunTgt[i] = refOf(*hitter); }
         if (!t || !enemies(b.owner, t->owner) || !canTarget(b, *t, W_BUNKER_MINIGUN) || distToEntity(b.pos, *t) > reach) {
             t = nullptr; b.gunTgt[i] = NOREF;
             if ((tick + b.gen + i) % 3 == 0) { t = acquireTarget(b, w.range, W_BUNKER_MINIGUN); if (t) b.gunTgt[i] = refOf(*t); }

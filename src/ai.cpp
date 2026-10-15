@@ -111,10 +111,52 @@ void AiPlayer::init(int p, u64 seed) {
     for (int y = qy; y < qy + MAP_H / 2; y++) for (int x = qx; x < qx + MAP_W / 2; x++) pl.explored[y * MAP_W + x] = 1;
 }
 
+// A dozer free for a new structure: an idle one first, then one on the move, then one mending a finished structure or helping on a site on its own
+// (it goes back to that site afterwards). A dozer aboard a bunker is not free: it cannot drive to a site from there.
 Entity* AiPlayer::idleDozer() {
-    for (auto& e : g_sim.ents)
-        if (e.alive && e.isUnit() && e.owner == player && e.ut().role == UR_DOZER && (e.order == O_IDLE || e.order == O_MOVE || (e.order == O_BUILD && g_sim.get(e.targetEnt) && g_sim.get(e.targetEnt)->constructed))) return &e;   // a dozer busy mending a finished structure is free to build
-    return nullptr;
+    Entity* best = nullptr; int bestRank = 99;
+    for (auto& e : g_sim.ents) {
+        if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || e.carrier.valid()) continue;
+        const Entity* t = e.order == O_BUILD ? g_sim.get(e.targetEnt) : nullptr;
+        int rank = e.order == O_IDLE ? 0 : e.order == O_MOVE ? 1 : (e.order == O_BUILD && t && t->constructed) ? 2 : (e.order == O_BUILD && e.autoTask) ? 3 : 99;
+        if (rank < bestRank) { bestRank = rank; best = &e; if (rank == 0) break; }
+    }
+    return best;
+}
+
+// Recovery: the core of a base is a Command structure (the only source of dozers), a supply hub (income), power, a barracks and a factory. A commander that has
+// lost most of it puts every free dozer on the next missing piece it can pay for, in that order of need; a hub comes first while a Command structure is
+// out of reach of the treasury, since it is what brings money in.
+bool AiPlayer::recoverBase(int dozers, bool hasHq) {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    int base = firstBuildOf(pl.faction);
+    bool placed = false;
+    for (int k = 0; k < 3; k++) {
+        if (!idleDozer()) break;
+        int hqs = S.countRole(player, BR_HQ, false), hubs = S.countRole(player, BR_SUPPLY, false), pow = S.countRole(player, BR_POWER, false);
+        int bars = S.countRole(player, BR_BARRACKS, false), facs = S.countRole(player, BR_FACTORY, false);
+        int pending = 0;
+        for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && !e.constructed && e.bt().power > 0) pending += e.bt().power;
+        bool powerShort = pl.powerMade + pending < pl.powerUsed + 2;
+        int want = -1;
+        Vec2 at = pl.basePos;
+        if (hqs == 0 && S.canAfford(player, BUILDS[base + BR_HQ].cost)) want = BR_HQ;
+        else if (hubs == 0 && S.canAfford(player, BUILDS[base + BR_SUPPLY].cost)) {
+            want = BR_SUPPLY;
+            float bd = 1e18f;
+            for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0) { float d = dist2(e.pos, pl.basePos); if (d < bd) { bd = d; at = e.pos; } }
+        }
+        else if (hqs == 0) break;   // bank for the Command structure
+        else if (pow == 0 || powerShort) want = BR_POWER;
+        else if (bars == 0) want = BR_BARRACKS;
+        else if (facs == 0) want = BR_FACTORY;
+        if (want < 0 || !S.canAfford(player, BUILDS[base + want].cost)) break;
+        if (!tryBuild(base + want, at, want == BR_SUPPLY ? 26 : 22)) break;
+        placed = true;
+        if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] RECOVER: %s placed (dozers %d, hq %d)\n", player, S.time, BUILDS[base + want].name, dozers, (int)hasHq);
+    }
+    return placed;
 }
 
 bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty) {
@@ -535,7 +577,21 @@ void AiPlayer::think() {
     if (on(FEAT_MACRO) && pl.difficulty >= 1) wantDozers += (pl.money > 6000 ? 1 : 0) + (pl.money > 14000 && pl.difficulty >= 2 ? 1 : 0);   // a rich army builds on several fronts at once
     int queuedDozer = 0;
     if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER) queuedDozer++;
-    if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200)) S.cmdTrain(S.refOf(*hq), ubase + 0);
+    // ---------- recovery: most of the base is gone (a Command structure and at least one more core piece, or two pieces): rebuilding comes before
+    // everything else as soon as there is a dozer and money for it (a relief drop, the bunker's trickle, what haulers still bring in)
+    {
+        int missing = (hq ? 0 : 2) + (hubs == 0 ? 1 : 0) + (powerPlants == 0 ? 1 : 0) + (barracks.empty() ? 1 : 0) + (factories.empty() ? 1 : 0);
+        bool was = recovering;
+        recovering = on(FEAT_RECOVER) && S.time > 150.0f && missing >= 2;
+        if (aiDebug() && recovering != was) fprintf(stderr, "[ai%d t=%.0f] recovery mode %s (missing %d, dozers %d, $%d)\n", player, S.time, recovering ? "ON" : "off", missing, dozers, pl.money);
+    }
+    if (on(FEAT_RECOVER) && dozers > 0 && !idleDozer()) {   // every dozer sits in a bunker (or is busy): a stowed one is let out, it is no use underground
+        bool outside = false;
+        for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.ut().role == UR_DOZER && !e.carrier.valid()) outside = true;
+        if (!outside) for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && e.bt().role == BR_BUNKER && !e.unloading && S.garrisonDozers(e) > 0) { S.cmdUnload(S.refOf(e), false, e.pos); break; }
+    }
+    if (recovering) wantDozers = std::max(wantDozers, 3);
+    if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200 || (recovering && pl.money >= UNITS[ubase].cost))) S.cmdTrain(S.refOf(*hq), ubase + 0);
 
     // ---------- supply areas: every hub gets a gather circle around the piles near it; haulers are spread across them
     struct Mine { Vec2 c; float r; int workers; };
@@ -559,7 +615,8 @@ void AiPlayer::think() {
         else if (e->order == O_IDLE) { Entity* pile = S.findPile(*e, 60 * TILE); if (pile) S.cmdHarvest({r}, S.refOf(*pile)); }   // nothing near a hub: fall back to the nearest pile anywhere
     }
 
-    // ---------- construction (one decision per think, with a reserve for economy)
+    // ---------- construction (one decision per think, with a reserve for economy; in recovery every free dozer gets the next core piece first)
+    if (recovering) recoverBase(dozers, hq != nullptr);
     Entity* dz = idleDozer();
     if (dz) {
         bool built = false;
@@ -687,6 +744,12 @@ void AiPlayer::think() {
     int reserve = (hubs == 0 || pl.powerMade < pl.powerUsed) ? 1600 : 0;
     if (!hq && dozers > 0 && S.countRole(player, BR_HQ, false) == 0) reserve = std::max(reserve, BUILDS[base + BR_HQ].cost + 200);   // bank the price of a new Command Core
     if (harvesters + queuedHarv < 2 && hubs > 0) reserve = std::max(reserve, 900);
+    if (recovering) {   // bank for the missing core before any soldier: the Command structure (with a dozer to raise it), a hub, power and production
+        int need = (S.countRole(player, BR_HQ, false) == 0 && dozers > 0 ? BUILDS[base + BR_HQ].cost : 0) + (hubs == 0 ? BUILDS[base + BR_SUPPLY].cost : 0)
+                 + (powerPlants == 0 ? BUILDS[base + BR_POWER].cost : 0) + (barracks.empty() ? BUILDS[base + BR_BARRACKS].cost : 0) + (factories.empty() ? BUILDS[base + BR_FACTORY].cost : 0);
+        if (hq && dozers < 2) need += UNITS[ubase].cost;
+        reserve = std::max(reserve, need + 200);
+    }
     // save up for a nuke ramp once the tech structure stands
     if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && tm > (pl.difficulty >= 3 ? 6.5f : (pl.difficulty == 2 ? 8.0f : 12.0f)) && !threat) reserve = std::max(reserve, 5300);
     // a smart commander banks the price of the next income structure before spending on units
@@ -1021,7 +1084,7 @@ void AiPlayer::think() {
             }
         }
         bool overwhelming = armyValue > enemyArmyValue * 1.6f + 1500 && armyCount >= 6;
-        bool eligible = armyValue >= waveThreshold * (on(FEAT_LAUNCH) ? 0.7f : 1.0f) || (overwhelming && minutes > 6);
+        bool eligible = (armyValue >= waveThreshold * (on(FEAT_LAUNCH) ? 0.7f : 1.0f) || (overwhelming && minutes > 6)) && !recovering;   // (a recovering army keeps its last units home)
         bool waveModel = useBrain && ablate() != 1;
         if (S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
             Entity* tgt = pickAttackTarget();

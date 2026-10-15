@@ -117,6 +117,13 @@ struct Entity {
     u8 strikePass = 0;                // Hotline Strike fighter: passes made over the target so far
     u8 salvoLeft = 0;                 // ... rockets still to fire from the salvo of the pass in progress
     float lifeUntil = -1;             // a loan (UnitType.temp): sim time at which it is withdrawn whatever it is doing (-1 = never)
+    float autoHoldUntil = -1;         // dozer: a direct move / target order keeps it from wandering off to mend things on its own until then
+    std::vector<Ref> siteQueue;       // dozer: construction sites it was pulled away from before they were finished (resumed once it is idle)
+    u8 nukeSalvo = 0;                 // bunker: missiles of the launch in progress still to go ...
+    float nukeSalvoAt = 0;            // ... when the next one leaves the hatch, where it goes, and whether it may hit friendly ground
+    Vec2 nukeSalvoPos; bool nukeSalvoForce = false;
+    float podCd = 0, podAng = 0;      // bunker: the pop-up rocket pod that answers whoever is wearing it down (cooldown, facing)
+    float ciwsAt = 0;                 // bunker: sim time its hatch guns can swat the next rocket or shell aimed at it
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -343,8 +350,13 @@ struct Sim {
     int droneCount(const Entity& e) const;                   // protector drones it flies with right now (0 while disabled or under a parachute)
     Vec2 dronePos(const Entity& e, int i) const { return dronePosAt(e, i, time); }   // where its i-th drone is (they circle their host)
     Vec2 dronePosAt(const Entity& e, int i, float t) const;
-    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false) const;   // chance the defences covering 'at' stop a warhead (of anybody who would hurt 'victim'): 1 - prod(1 - ANTINUKE_CHANCE)
-    int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false) const;   // how many working defences cover 'at'
+    // chance the defences covering 'at' stop a warhead of 'scale' (of anybody who would hurt 'victim'): 1 - prod(1 - each one's antiNukeShot)
+    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f) const;
+    int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f) const;   // how many working defences cover 'at'
+    bool antiNukeWorking(const Entity& b) const;             // a finished anti-nuke defence that is switched on and powered
+    float antiNukeCover(const Entity& b, float scale) const; // px: how far from it a warhead's target may be for it to engage (lasers: their blast reaching the circle is enough)
+    int antiNukeLinked(const Entity& b) const;               // working Anti-Nuke Lasers of the same army standing close by (they share tracking: see ANTINUKE_LINK)
+    float antiNukeShot(const Entity& b) const;               // its own chance of getting a warhead it engages
     void applyDamagePublic(Entity& tgt, float dmg, int attackerOwner, Ref attacker) { applyDamage(tgt, dmg, attackerOwner, attacker, nullptr); }   // (test scenes)
     void boardQuiet(Entity& u, Entity& c) { board(u, c, true); }   // put a soldier aboard a carrier at once (test scenes; the game walks them in with cmdEnter)
     Vec2 navalExit(const Entity& yard) const;                // where a ship leaves the yard into the water
@@ -365,6 +377,10 @@ struct Sim {
     int roofGun(const Entity& b) const;       // WEAPONS index of a structure's Defense Guns roof gun, -1 without the upgrade
     Vec2 roofGunPos(const Entity& b) const;   // where that gun sits (world px)
     Entity* repairJob(Entity& dozer, float maxDist = 1e9f);   // the damaged structure a dozer should mend next (spreads dozers out, -> nullptr: nothing to do)
+    Entity* siteJob(Entity& dozer, float maxDist = 1e9f);     // the unfinished construction site an idle dozer should help with (always before any repair)
+    bool dozerFindWork(Entity& dozer);                        // an idle dozer: its own unfinished sites first, then any site, then repairs (not during a manual hold)
+    void keepSite(Entity& dozer);                             // a dozer pulled off an unfinished site remembers it (see Entity.siteQueue)
+    bool siteOpen(const Entity& dozer, Ref site) const;       // a structure of the dozer's army that still has construction left
     int repairCrew(const Entity& b, const Entity* except = nullptr) const;   // dozers already mending this structure
     static int repairCrewCap(const Entity& b);   // how many dozers a structure needs at most
 

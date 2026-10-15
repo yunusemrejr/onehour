@@ -1200,6 +1200,13 @@ void Game::drawEntity(Entity& e) {
                     g.fill(mx - 1, my - 3, 3, 3, hudAccent(bt.faction));
                 }
             }
+            if (bt.role == BR_BUNKER && e.constructed && e.lastDamaged > 0 && g_sim.time - e.lastDamaged < BUNKER_RETALIATE) {   // the rocket pod, raised while the bunker is under attack
+                Vec2 pp = p + Vec2(0, -10.0f), d(std::cos(e.podAng), std::sin(e.podAng)), sd(-d.y, d.x);
+                g.fillCircle(pp.x, pp.y + 2.0f, 8.0f, rgb(10, 12, 16, 150));
+                g.fillCircle(pp.x, pp.y, 7.0f, disabled ? rgb(80, 86, 96) : rgb(96, 104, 92));
+                for (int k = -1; k <= 1; k += 2) g.thickLine(pp.x + sd.x * 3.5f * k, pp.y + sd.y * 3.5f * k, pp.x + sd.x * 3.5f * k + d.x * 11, pp.y + sd.y * 3.5f * k + d.y * 11, rgb(26, 28, 30), 3.5f);
+                g.fillCircle(pp.x, pp.y, 2.0f, e.podCd > WEAPONS[W_BUNKER_ROCKETS].cooldown - 0.3f ? rgb(255, 200, 120) : hudAccent(bt.faction));
+            }
             // rotating heads for defenses
             if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
             else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);
@@ -1875,11 +1882,12 @@ void Game::renderHud() {
                     float rw = std::max(0.0f, e->siloTimer - g_sim.time);
                     if (!powered) snprintf(buf, sizeof buf, "OFFLINE: %s", e->disabledUntil > g_sim.time ? "switched off by a pulse" : "no power");
                     else if (rw > 0) snprintf(buf, sizeof buf, "Reloading %ds", (int)std::ceil(rw));
-                    else snprintf(buf, sizeof buf, "ARMED: covers %d tiles around it", (int)(bt.faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K));
+                    else if (bt.faction == F_CYBER) { int ln = g_sim.antiNukeLinked(*e); snprintf(buf, sizeof buf, "ARMED: covers %d tiles, %d beams, %d%% a shot (linked to %d laser%s)", (int)ANTINUKE_COVER_C, 3 + ln, (int)(100.0f * g_sim.antiNukeShot(*e) + 0.5f), ln, ln == 1 ? "" : "s"); }
+                    else snprintf(buf, sizeof buf, "ARMED: covers %d tiles around it", (int)ANTINUKE_COVER_K);
                     g.text(INFO_X + 86, hy + 70, buf, powered && rw <= 0 ? accent : rgb(255, 200, 120));
                     int foe = -1; for (int q = 0; q < g_sim.numPlayers; q++) if (g_sim.enemies(g_sim.humanPlayer, q)) { foe = q; break; }
                     int nd = foe >= 0 ? g_sim.antiNukeCovering(e->pos, foe) : 1;
-                    if (nd > 0) snprintf(buf, sizeof buf, "%d defence%s cover this spot: a warhead aimed here is shot down %d%% of the time (30%% of its damage still falls)", nd, nd == 1 ? "" : "s", (int)(100.0f * (1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)nd)) + 0.5f));
+                    if (nd > 0) snprintf(buf, sizeof buf, "%d defence%s cover this spot: a warhead aimed here is shot down %d%% of the time (30%% of its damage still falls)", nd, nd == 1 ? "" : "s", (int)(100.0f * g_sim.antiNukeChance(e->pos, foe) + 0.5f));
                     else snprintf(buf, sizeof buf, "No working defence covers this spot: a warhead aimed here would not be engaged");
                     g.text(INFO_X + 86, hy + 84, buf, hudDim());
                     snprintf(buf, sizeof buf, "%d of %d anti-nuke defences built", g_sim.countRole(g_sim.humanPlayer, BR_ANTINUKE, false), ANTINUKE_MAX); g.text(INFO_X + 86, hy + 96, buf, hudDim());

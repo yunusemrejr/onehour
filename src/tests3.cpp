@@ -483,6 +483,105 @@ static int trialsShotDown(Vec2 gz, int trials, float scale, int* fragmentsOut) {
     return down;
 }
 
+// The Anti-Nuke Laser (Cyber only) reaches further and sooner: it engages a warhead whose target is inside its cover plus the blast radius, opens
+// fire ANTINUKE_LASER_WINDOW seconds out and recharges straight after its beams, so it can take a second warhead a salvo behind the first; lasers
+// standing close to each other are linked: each link adds a beam, shortens the gap between beams and adds to the hit chance
+static void laserScene(Faction me, u64 seed) {
+    lakeScene(me, me == F_CYBER ? F_CLANKER : F_CYBER, seed);
+    placeNear3(firstBuildOf(me) + BR_TECH, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));
+    givePower3(0);
+}
+static Ref defenceAt(int type, Vec2 at) {
+    flattenArena(at, 10, 10);
+    Ref d = placeNear3(type, 0, at);
+    g_sim.updatePowerPublic();
+    return d;
+}
+// a warhead of player 1 aimed at 'at', already 'age' seconds into its flight (it lands NUKE_FLIGHT seconds after launch)
+static void launchAt(Vec2 at, float age) {
+    Sim::Nuke n{ g_sim.players[1].basePos, at, 1, age, false, 1.0f };
+    g_sim.nukes.push_back(n);
+}
+// whether the warhead in slot k has been engaged by the defence with entity index 'who'
+static bool engagedWith(size_t k, int who) {
+    if (k >= g_sim.nukes.size()) return false;
+    const std::vector<int>& by = g_sim.nukes[k].engagedBy;
+    return std::find(by.begin(), by.end(), who) != by.end();
+}
+static bool laserChecks(u64 seed) {
+    const Vec2 L = lakePoint(0, -16.5f);
+    const float inR = (ANTINUKE_COVER_C + 0.6f * NUKE_RADIUS) * TILE, outR = (ANTINUKE_COVER_C + NUKE_RADIUS + 3.0f) * TILE;
+    // (a) no blind ring: a warhead aimed inside the laser's widened cover is engaged before it lands, one aimed beyond it is not
+    laserScene(F_CYBER, seed);
+    Ref lz = defenceAt(B_C_ANTINUKE, L);
+    CHECK3(lz.valid(), "no spot for an anti-nuke laser");
+    Vec2 lp = g_sim.get(lz)->pos;
+    CHECK3(g_sim.antiNukeLinked(*g_sim.get(lz)) == 0, "a lone laser counts linked neighbours");
+    launchAt(lp + Vec2(inR, 0), 0.0f);
+    run3(1.0f);
+    CHECK3(engagedWith(0, lz.idx), "a laser did not engage a warhead aimed 0.6 blast radii inside its cover");
+    g_sim.nukes.clear(); g_sim.get(lz)->siloTimer = 0;
+    launchAt(lp + Vec2(0, outR), 0.0f);
+    run3(1.0f);
+    CHECK3(!engagedWith(0, lz.idx), "a laser engaged a warhead aimed beyond its widened cover");
+    // (b) a salvo: a second warhead launched 1.2 s after the first, at the same spot, is engaged too (the laser recharges right after its beams)
+    g_sim.nukes.clear(); g_sim.get(lz)->siloTimer = 0;
+    launchAt(lp + Vec2(inR, 0), 0.0f);
+    run3(1.2f);
+    launchAt(lp + Vec2(inR, 0), 0.0f);
+    run3(3.0f);
+    CHECK3(engagedWith(0, lz.idx) && engagedWith(1, lz.idx), "a laser did not engage both warheads of a salvo");
+    // the Clanker missile silo keeps its 12 s reload: it engages the first of the two and not the second
+    laserScene(F_CLANKER, seed + 1);
+    Ref sl = defenceAt(B_K_ANTINUKE, L);
+    CHECK3(sl.valid(), "no spot for an anti-nuke missile silo");
+    Vec2 sp = g_sim.get(sl)->pos + Vec2(10 * TILE, 0);   // (inside its 19 tile cover)
+    launchAt(sp, 0.0f);
+    run3(1.2f);
+    launchAt(sp, 0.0f);
+    run3(4.8f);
+    CHECK3(engagedWith(0, sl.idx), "a missile silo did not engage a warhead inside its cover");
+    CHECK3(!engagedWith(1, sl.idx), "a missile silo engaged a second warhead within its reload time");
+    // (c) stacking: four lasers five tiles apart are linked to the other three: each adds three beams and 3 x 0.09 to its chance
+    laserScene(F_CYBER, seed + 2);
+    const int offs[4][2] = { { 0, 0 }, { 4, 0 }, { 0, 4 }, { 4, 4 } };
+    std::vector<Ref> stack;
+    for (auto& o : offs) {
+        Ref r = defenceAt(B_C_ANTINUKE, L + Vec2(o[0] * TILE, o[1] * TILE));
+        CHECK3(r.valid(), "no spot for a stacked laser");
+        stack.push_back(r);
+    }
+    const float shot3 = ANTINUKE_CHANCE + 3 * ANTINUKE_LINK_BONUS;
+    for (Ref r : stack) {
+        const Entity* e = g_sim.get(r);
+        CHECK3(g_sim.antiNukeLinked(*e) == 3, "a laser with three neighbours within 9 tiles is not linked to all three");
+        CHECK3(std::abs(g_sim.antiNukeShot(*e) - shot3) < 1e-5f, "a linked laser does not get 0.09 more chance per link");
+    }
+    Vec2 spot = L + Vec2(20 * TILE, 0);   // inside the cover of every one of them, yet outside the blast (11 tiles) of a warhead that lands: the trials leave them standing
+    launchAt(spot, 0.0f);
+    for (int k = 0; k < 40 && g_sim.interceptors.empty(); k++) { g_sim.step(); g_sim.events.clear(); }
+    // every laser that engages fires three beams plus one per linked laser (a warhead that an earlier laser's beam already dooms is left alone)
+    const int beamsEach = 3 + ANTINUKE_LINK_MAX;
+    int beams = 0, engaged = 0; bool allEach = true;
+    for (Ref r : stack) {
+        int mine = 0;   // (a beam leaves its laser's muzzle, 22 px above its centre)
+        for (auto& it : g_sim.interceptors) if (dist(it.from, g_sim.get(r)->pos) < TILE) mine++;
+        bool went = g_sim.nukes.size() == 1 && engagedWith(0, r.idx);
+        allEach = allEach && mine == (went ? beamsEach : 0);
+        beams += mine; engaged += went;
+    }
+    CHECK3(engaged >= 1 && allEach && beams == engaged * beamsEach && g_sim.nukes.size() == 1, "a linked laser did not fire 3 + linked beams at the warhead");
+    g_sim.nukes.clear(); g_sim.interceptors.clear();
+    float wantS = g_sim.antiNukeChance(spot, 1);
+    CHECK3(std::abs(wantS - (1.0f - std::pow(1.0f - shot3, 4.0f))) < 1e-4f, "four linked lasers do not stop a warhead with 1 - (1 - p)^4");
+    int trials = 240, downS = trialsShotDown(spot, trials, 1.0f, nullptr);
+    float rateS = downS / (float)trials, sigmaS = std::sqrt(wantS * (1 - wantS) / trials);
+    if (std::abs(rateS - wantS) > 4.0f * sigmaS + 0.02f) { fprintf(stderr, "antinuketest: four linked lasers shot down %.1f%% of %d warheads, expected %.1f%%\n", rateS * 100, trials, wantS * 100); return false; }
+    printf("anti-nuke %s: lasers ok (aimed %.1f tiles off a laser engaged, %.1f tiles off not; a second warhead 1.2 s behind engaged too, a missile silo only the first; four linked lasers (%d beams on the first warhead) stop %.0f%% of warheads, expected %.0f%%)\n",
+           FACTION_NAME[F_CYBER], inR / TILE, outR / TILE, beams, rateS * 100, wantS * 100);
+    return true;
+}
+
 bool antiNukeTest(u64 seed) {
     g_name3 = "antinuketest"; g_ok3 = true;
     for (int fi = 0; fi < 2; fi++) {
@@ -499,7 +598,6 @@ bool antiNukeTest(u64 seed) {
         std::vector<Ref> ds;
         // none: nothing is ever shot down
         CHECK3(trialsShotDown(gz, 20, 1.0f, nullptr) == 0, "a warhead was shot down with no defences");
-        float cover = (me == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE;
         // one defence: about a third; three: about two thirds; six: nearly always
         for (int n = 1; n <= 6; n++) {
             // the defences ring the target at 13.5 tiles: inside everybody's cover and outside the blast of the test warheads
@@ -509,9 +607,9 @@ bool antiNukeTest(u64 seed) {
             ds.push_back(d);
             g_sim.updatePowerPublic();
             if (n == 1 || n == 3 || n == 6) {
-                if (g_sim.antiNukeCovering(gz, 1) != n) { fprintf(stderr, "antinuketest: %d covering, expected %d (power %d/%d disabled? ", g_sim.antiNukeCovering(gz, 1), n, g_sim.players[0].powerMade, g_sim.players[0].powerUsed); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0) fprintf(stderr, "{%s p%d c%d} ", e.bt().name, e.bt().power, (int)e.constructed); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) fprintf(stderr, "[%.0f,%.0f dist %.0f cover %.0f constructed %d disabled %.1f] ", e.pos.x, e.pos.y, dist(e.pos, gz), cover, (int)e.constructed, e.disabledUntil); fprintf(stderr, ")\n"); return failMsg3("the number of defences covering the target is wrong"); }
-                float want = 1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)n);
-                CHECK3(std::abs(g_sim.antiNukeChance(gz, 1) - want) < 1e-4f, "the stated chance is not 1 - (1 - p)^n");
+                if (g_sim.antiNukeCovering(gz, 1) != n) { fprintf(stderr, "antinuketest: %d covering, expected %d (power %d/%d disabled? ", g_sim.antiNukeCovering(gz, 1), n, g_sim.players[0].powerMade, g_sim.players[0].powerUsed); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0) fprintf(stderr, "{%s p%d c%d} ", e.bt().name, e.bt().power, (int)e.constructed); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) fprintf(stderr, "[%.0f,%.0f dist %.0f cover %.0f constructed %d disabled %.1f] ", e.pos.x, e.pos.y, dist(e.pos, gz), g_sim.antiNukeCover(e, 1), (int)e.constructed, e.disabledUntil); fprintf(stderr, ")\n"); return failMsg3("the number of defences covering the target is wrong"); }
+                float want = g_sim.antiNukeChance(gz, 1);   // (the ring is 13.5 tiles across: no two of them are linked)
+                CHECK3(std::abs(want - (1.0f - std::pow(1.0f - ANTINUKE_CHANCE, (float)n))) < 1e-4f, "the stated chance is not 1 - (1 - p)^n");
                 int frag = 0, trials = 240;
                 int down = trialsShotDown(gz, trials, 1.0f, &frag);
                 float rate = down / (float)trials, sigma = std::sqrt(want * (1 - want) / trials);
@@ -523,7 +621,8 @@ bool antiNukeTest(u64 seed) {
         // mini nukes are covered the same way
         { int d1 = trialsShotDown(gz, 120, MINI_NUKE_SCALE, nullptr); CHECK3(d1 > 120 * 0.78f, "six defences let too many bunker missiles through"); }
         // out of cover: untouched
-        Vec2 far = gz + Vec2(0, cover * 2.2f);   // (further from every defence than its cover reaches: they ring the target at 13.5 tiles)
+        float coverD = g_sim.antiNukeCover(*g_sim.get(ds.back()), 1);   // (a laser's cover: its missiles' cover plus the blast radius)
+        Vec2 far = gz + Vec2(0, coverD * 2.2f);   // (further from every defence than its cover reaches: they ring the target at 13.5 tiles)
         CHECK3(g_sim.antiNukeCovering(far, 1) == 0, "a spot beyond the cover counts as covered");
         // no power, or switched off: blind
         for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ANTINUKE) e.disabledUntil = g_sim.time + 1000;
@@ -549,6 +648,7 @@ bool antiNukeTest(u64 seed) {
         CHECK3(whole.x > 0.95f && whole.y > 0.95f, "a whole warhead did not destroy a barracks and a tank at ground zero");
         CHECK3(std::abs(pieces.x - ANTINUKE_FALLOFF) < 0.06f && std::abs(pieces.y - ANTINUKE_FALLOFF) < 0.06f, "the pieces of a shot-down warhead do not do 30% of the damage");
         printf("anti-nuke %s: ok (pieces take %.0f%% of a barracks and %.0f%% of a tank at ground zero where a whole warhead takes %.0f%%/%.0f%%)\n", FACTION_NAME[me], pieces.x * 100, pieces.y * 100, whole.x * 100, whole.y * 100);
+        if (me == F_CYBER && !laserChecks(seed + 20)) return false;
     }
     printf("antinuketest: ok\n");
     return g_ok3;

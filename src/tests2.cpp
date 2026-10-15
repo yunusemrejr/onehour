@@ -559,6 +559,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     int bunkerType = me == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
     Ref bk = placeAt(bunkerType, 0, mid);
     CHECK(bk.valid(), "no spot for the bunker");
+    CHECK(BUILDS[bunkerType].cost == 7500, "a bunker does not cost 7500");
     for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.kind != EK_RESOURCE && g_sim.refOf(e) != bk) g_sim.destroy(e, false);   // (nothing else of the army stands: no power, no ramp, no supply)
     Entity* B = g_sim.get(bk);
     Vec2 bp = B->pos;
@@ -622,7 +623,10 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(g_sim.nukes.size() == 1 && g_sim.nukes[0].scale == MINI_NUKE_SCALE && Sim::nukeRadius(g_sim.nukes[0]) < NUKE_RADIUS * TILE * 0.5f, "the bunker's missile is not a small one");
     CHECK(g_sim.miniNukesReady(0) == 0 && g_sim.miniNukeWait(0) > MINI_NUKE_COOLDOWN - 1.0f && !g_sim.cmdMiniNuke(0, gz), "a bunker launched twice with no cooldown");
     CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "a launch did not give the bunker away");
-    run(Sim::NUKE_FLIGHT + 1.0f);
+    // the salvo: the same missile again, one gap later, at the same spot and scale
+    run(MINI_NUKE_SALVO_GAP + 0.1f);
+    CHECK(g_sim.nukes.size() == 2 && dist(g_sim.nukes[1].pos, g_sim.nukes[0].pos) < 1.0f && g_sim.nukes[1].scale == MINI_NUKE_SCALE, "a bunker's salvo did not follow with a second missile at the same spot");
+    run(Sim::NUKE_FLIGHT + 1.0f + MINI_NUKE_SALVO_GAP);   // (both missiles land)
     CHECK(!alive(centre), "a mini nuke did not destroy a tank at ground zero");
     CHECK(!alive(rim) || hpOf(rim) < g_sim.get(rim)->maxHp * 0.5f, "a mini nuke did not reach the inside of its circle");
     CHECK(alive(outside) && alive(wide), "a mini nuke blasted outside its small circle");
@@ -639,6 +643,86 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     run(0.3f);
     CHECK(!alive(wide2) || hpOf(wide2) < g_sim.get(wide2)->maxHp * 0.9f, "a full nuke did not reach 7.7 tiles from ground zero");
     printf("stealthtest %s: bunker income, self-repair, miniguns and mini nuke ok\n", FACTION_NAME[me]);
+    return true;
+}
+
+// a lone bunker of player 0 in a clean field that the enemy can see
+static Ref retaliationScene(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);
+    Ref bk = placeAt(me == F_CYBER ? B_C_BUNKER : B_K_BUNKER, 0, openField());
+    if (!bk.valid()) return NOREF;
+    for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.kind != EK_RESOURCE && g_sim.refOf(e) != bk) g_sim.destroy(e, false);
+    g_sim.get(bk)->detUntil[1] = g_sim.time + 1000;
+    return bk;
+}
+
+// a bunker that is being worn down answers: a rocket pod pops up (with its hatch blown off too, and beyond its own sight) and fires at whoever is
+// attacking it, never at one that is not; while the hatch stands its guns swat the rockets aimed at it (BUNKER_CIWS_CHANCE)
+static bool bunkerRetaliateTest(Faction me, Faction foe, u64 seed) {
+    int tankFoe = firstUnitOf(foe) + 5, longFoe = firstUnitOf(foe) + 7;   // a tank, and the ground unit with the longest reach (rocket launcher or railgun)
+    float longReach = std::min(9.5f, WEAPONS[UNITS[longFoe].weapon].range - 0.3f);   // tiles: 9.5 for a rocket launcher, 8.2 for a railgun (beyond the bunker's 8 tile sight)
+    // ---- (a) a tank attacking the bunker from 6 tiles, its hatch blown off: the pod shoots back
+    Ref bk = retaliationScene(me, foe, seed);
+    CHECK(bk.valid(), "no spot for the bunker");
+    Vec2 bp = g_sim.get(bk)->pos;
+    g_sim.get(bk)->hatch = 0; g_sim.get(bk)->lastDamaged = g_sim.time;
+    Ref tk = spawnAt(tankFoe, 1, bp + Vec2(6 * TILE, 0));
+    CHECK(tk.valid(), "no spot for the attacking tank");
+    g_sim.get(tk)->maxHp *= 10; g_sim.get(tk)->hp = g_sim.get(tk)->maxHp;
+    float tk0 = hpOf(tk);
+    g_sim.cmdAttack({tk}, bk);
+    bool shot = false;
+    for (int t = 0; t < 60 && !shot; t++) { run(0.1f); shot = !alive(tk) || hpOf(tk) < tk0; }
+    CHECK(shot, "the pod did not shoot a tank attacking the bunker with its hatch blown off");
+    CHECK(g_sim.get(bk) && g_sim.get(bk)->hatch == 0, "the hatch came back during the fight");
+    // ---- (b) an idle tank at the same distance, not attacking: the pod leaves it alone while the bunker is under fire from somewhere else.
+    // (The bunker is kept hidden from the tank: a tank that can see a bunker 6 tiles away picks a fight with it on its own.)
+    bk = retaliationScene(me, foe, seed + 1);
+    CHECK(bk.valid(), "no spot for the bunker");
+    bp = g_sim.get(bk)->pos;
+    g_sim.get(bk)->hatch = 0; g_sim.get(bk)->detUntil[1] = 0;
+    Ref idle = spawnAt(tankFoe, 1, bp + Vec2(6 * TILE, 0));
+    CHECK(idle.valid(), "no spot for the idle tank");
+    g_sim.get(idle)->maxHp *= 10; g_sim.get(idle)->hp = g_sim.get(idle)->maxHp;
+    float idle0 = hpOf(idle);
+    for (int t = 0; t < 60; t++) { g_sim.get(bk)->lastDamaged = g_sim.time; run(0.1f); }   // (kept besieged for the whole time)
+    CHECK(alive(idle) && hpOf(idle) == idle0, "the pod shot a tank that was not attacking the bunker");
+    CHECK(g_sim.get(idle)->targetEnt != bk && g_sim.get(idle)->engaged != bk, "an idle tank went for the bunker on its own");
+    // ---- (c) a long-range attacker just beyond the bunker's sight: the pod reaches it
+    bk = retaliationScene(me, foe, seed + 2);
+    CHECK(bk.valid(), "no spot for the bunker");
+    bp = g_sim.get(bk)->pos;
+    g_sim.get(bk)->hatch = 0; g_sim.get(bk)->lastDamaged = g_sim.time;
+    Ref lr = spawnAt(longFoe, 1, bp + Vec2(longReach * TILE, 0));
+    CHECK(lr.valid(), "no spot for the long-range attacker");
+    g_sim.get(lr)->maxHp *= 10; g_sim.get(lr)->hp = g_sim.get(lr)->maxHp;
+    float lr0 = hpOf(lr), lrDist = dist(g_sim.get(lr)->pos, bp) / TILE;
+    CHECK(lrDist > 8.0f && lrDist < 10.5f, "the long-range attacker did not stand between the bunker's sight and the pod's reach");
+    g_sim.cmdAttack({lr}, bk);
+    bool lrShot = false;
+    for (int t = 0; t < 80 && !lrShot; t++) { run(0.1f); g_sim.get(bk)->lastDamaged = g_sim.time; lrShot = !alive(lr) || hpOf(lr) < lr0; }
+    CHECK(lrShot, "the pod did not shoot a long-range attacker beyond the bunker's sight");
+    // ---- (d) the hatch guns swat rockets aimed at the bunker: about BUNKER_CIWS_CHANCE of them, one roll per rocket
+    bk = retaliationScene(me, foe, seed + 3);
+    CHECK(bk.valid(), "no spot for the bunker");
+    bp = g_sim.get(bk)->pos;
+    int swatted = 0, struck = 0, volleys = 40;
+    for (int k = 0; k < volleys; k++) {
+        Entity* B = g_sim.get(bk);
+        B->hatch = B->hatchMax; B->lastDamaged = g_sim.time;
+        float h0 = B->hatch;
+        Projectile p;   // a rocket of the Clanker RPG, three tiles out and coming straight in
+        p.pos = bp + Vec2(3.0f * TILE, 0); p.prevPos = p.pos; p.vel = Vec2(-WEAPONS[10].projSpeed, 0); p.dest = bp;
+        p.target = bk; p.weapon = 10; p.owner = 1; p.shooter = NOREF; p.life = 3.0f;
+        g_sim.projs.push_back(p);
+        run(1.0f);
+        if (g_sim.get(bk)->hatch < h0) struck++; else swatted++;
+    }
+    float share = swatted / (float)volleys;
+    CHECK(struck + swatted == volleys, "a rocket aimed at the bunker neither hit it nor was swatted");
+    CHECK(share >= 0.3f && share <= 0.8f, "the hatch guns did not swat about BUNKER_CIWS_CHANCE of the rockets aimed at the bunker");
+    printf("stealthtest %s: bunker retaliation ok (a tank attacking from 6 tiles was shot at, an idle one left alone, a %.1f tile attacker beyond sight too, %d of %d rockets swatted)\n",
+           FACTION_NAME[me], lrDist, swatted, volleys);
     return true;
 }
 
@@ -683,9 +767,10 @@ bool stealthTest(u64 seed) {
         if (!infantryTest(me, foe, seed + 50 + fi)) return false;
         if (!uiNewTest(me, foe, seed + 60 + fi)) return false;
         if (!lastHiddenTest(me, foe, seed + 70 + fi)) return false;
+        if (!bunkerSelfTest(me, foe, seed + 100 + fi)) return false;
+        if (!bunkerRetaliateTest(me, foe, seed + 110 + fi)) return false;
         if (!bunkerFloorTest(me, foe, seed + 80 + fi)) return false;
         if (!huntTest(me, foe, seed + 90 + fi)) return false;
-        if (!bunkerSelfTest(me, foe, seed + 100 + fi)) return false;
     }
     printf("stealthtest: ok\n");
     return g_ok;

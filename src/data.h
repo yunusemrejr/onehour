@@ -232,6 +232,15 @@ static const float ANTINUKE_WINDOW = 4.6f;     // seconds before impact it opens
 static const float ANTINUKE_RELOAD = 12.0f;    // seconds before the same defence can engage another warhead
 static const float ANTINUKE_FALLOFF = 0.30f;   // what a shot-down warhead still does: falling pieces and radiation
 static const int   ANTINUKE_MAX = 8;           // per player
+// The Anti-Nuke Laser has no blind spots: it engages any warhead whose blast would reach into its cover (not only one aimed inside it), opens fire
+// earlier on the way down, and its capacitors recharge as soon as the beams are spent, so a salvo cannot slip past it on a reload. Lasers standing
+// close together share their tracking: each linked neighbour (up to ANTINUKE_LINK_MAX) adds beams, fires them closer together and raises the hit chance.
+static const float ANTINUKE_LASER_WINDOW = 6.6f;    // seconds before impact a laser opens fire (the missiles wait for ANTINUKE_WINDOW)
+static const float ANTINUKE_LASER_RECHARGE = 0.8f;  // seconds after its last beam before a laser can engage the next warhead
+static const float ANTINUKE_LINK = 9.0f;            // tiles: lasers this close to each other are linked
+static const int   ANTINUKE_LINK_MAX = 3;
+static const float ANTINUKE_LINK_BONUS = 0.09f;     // hit chance added per linked laser
+static const float ANTINUKE_LINK_TRACK = 0.4f;      // beams fire 1 / (1 + this * linked) as far apart
 
 // Aid Drop: the human player's own power at the tech structure (Data Center / Arms Lab), never a computer army's. A white relief plane
 // nobody shoots at drops crates on parachutes; the army nearest to the spot, other than the sender, receives the money and a dozer.
@@ -248,6 +257,10 @@ static const float BUNKER_PLATING = 0.22f;        // share of the damage that re
 static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky, radiation and nukes can never take it below this share of its health
 static const float BUNKER_LINGER = 25.0f;         // seconds a bunker a spy drone found stays known after the drone has moved on
 static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
+// Dozers: a direct order holds off their own repair rounds for a while; a site they are pulled away from is kept and resumed.
+static const float DOZER_MANUAL_HOLD = 12.0f;     // seconds after a manual move or target order (counted from its arrival) before it mends things on its own again
+static const int   DOZER_SITE_QUEUE = 4;          // unfinished sites a dozer remembers
+static const int   DOZER_SITE_CREW = 2;           // idle dozers join a site with fewer builders than this on their own (then they go mending)
 // A bunker runs by itself, needing no power, no other structure and no supplies: it earns a little money, mends itself, mounts two
 // miniguns on its hatch and keeps one small nuclear missile (a fifth of a Nuke Ramp's warhead) ready.
 static const int   BUNKER_INCOME = 50;            // credits per payout
@@ -262,6 +275,15 @@ static const float MINI_NUKE_SCALE = 0.2f;        // a bunker's missile: a fifth
 static const float MINI_NUKE_COOLDOWN = 90.0f;    // seconds between two launches of one bunker
 static const float MINI_NUKE_ARM = 30.0f;         // seconds after a bunker is finished before its first missile is ready
 static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch gives the bunker away to the enemy (the missile climbs out of its hatch)
+static const int   MINI_NUKE_SALVO = 2;           // missiles per launch: the same warhead twice, one after the other ...
+static const float MINI_NUKE_SALVO_GAP = 1.2f;    // ... this many seconds apart
+// A bunker that is being worn down does not sit still: while it has been hit in the last BUNKER_RETALIATE seconds a rocket pod pops up (even with the
+// hatch blown off) and answers whoever is shooting at it, and the hatch guns go for the attackers first and swat rockets and shells aimed at it.
+static const float BUNKER_RETALIATE = 6.0f;
+static const int   W_BUNKER_ROCKETS = 40;         // WEAPONS index of the rocket pod
+static const float BUNKER_CIWS_RANGE = 3.5f;      // tiles from the bunker an incoming rocket or shell is engaged
+static const float BUNKER_CIWS_GAP = 0.45f;       // seconds between two swats
+static const float BUNKER_CIWS_CHANCE = 0.55f;
 // Spies
 static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
 static const float SPY_REACH = 22.0f;             // px from the structure's edge

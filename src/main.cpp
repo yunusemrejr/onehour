@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -585,6 +585,8 @@ bool jeepTest(u64 seed);
 bool droneTest(u64 seed);
 bool strikeJetTest(u64 seed);
 bool antiNukeTest(u64 seed);
+bool dozerTest(u64 seed);     // tests4.cpp: dozer priorities, manual-order hold, kept build sites
+bool recoveryTest(u64 seed);  // tests5.cpp: a computer army that has lost almost everything rebuilds
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow);   // tests3.cpp: ONEHOUR_AIR=strike|drop|nuke --shot scenes
@@ -2551,6 +2553,8 @@ int main(int argc, char** argv) {
         else if (a == "--dronetest") return droneTest(seed) ? 0 : 1;
         else if (a == "--strikejettest") return strikeJetTest(seed) ? 0 : 1;
         else if (a == "--antinuketest") return antiNukeTest(seed) ? 0 : 1;
+        else if (a == "--dozertest") return dozerTest(seed) ? 0 : 1;
+        else if (a == "--recoverytest") return recoveryTest(seed) ? 0 : 1;
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2746,7 +2750,10 @@ int main(int argc, char** argv) {
                 for (int t = 0; t < 20 * 8; t++) { g_sim.step(); g_sim.events.clear(); }
                 Ref tk = g_sim.spawnUnit(firstUnitOf(ff) + 5, foe, spot(bp + Vec2(150, 40)));
                 Ref tk2 = g_sim.spawnUnit(firstUnitOf(ff) + 5, foe, spot(bp + Vec2(170, 110)));
-                (void)tk; (void)tk2;
+                if (std::string(getenv("ONEHOUR_STEALTH")) == "pod") {   // ONEHOUR_STEALTH=pod: the tanks have found the bunker and go for it (its rocket pod answers)
+                    g_sim.get(bk)->detUntil[foe] = g_sim.time + 1000;
+                    g_sim.cmdAttack({tk, tk2}, bk);
+                }
                 Ref ch = g_sim.spawnUnit(f == F_CYBER ? U_C_CARGO : U_K_CARGO, vp, bp + Vec2(-230, -30)); g_sim.get(ch)->alt = 1; g_sim.get(ch)->angle = 0.4f;
                 std::vector<Ref> load; for (int i = 0; i < 12; i++) load.push_back(g_sim.spawnUnit(firstUnitOf(f) + 2, vp, spot(bp + Vec2(-230 + (i % 6) * 14.0f, 20.0f + (i / 6) * 14.0f))));
                 load.push_back(g_sim.spawnUnit(firstUnitOf(f) + 5, vp, spot(bp + Vec2(-300, 30))));

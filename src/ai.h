@@ -8,8 +8,9 @@
 enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALLY = 16, FEAT_SPECIAL = 32,   // FEAT_SPECIAL: spy drones with the army, spies that capture structures
               FEAT_NAVY = 64,    // a Naval Yard on the lake, a fleet of its own, the Guard Drones upgrade, jeeps loaded with infantry
               FEAT_AEGIS = 128,  // anti-nuke defences round the base and nuke targeting that reckons with the enemy's (and fires a salvo at a covered target)
+              FEAT_RECOVER = 256,   // an army that has lost most of its base rebuilds the core first, with every free dozer, and keeps its last units home
               FEAT_ALL = 0xFFFF,
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS };   // what ships
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER };   // what ships
 
 struct AiPlayer {
     int player = -1;
@@ -56,6 +57,7 @@ struct AiPlayer {
     Vec2 humanFront; bool hasFront = false;   // where a human teammate's army is fighting (computer allies converge on it)
     float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
+    bool recovering = false;    // most of the base is gone: rebuild the core before anything else (see FEAT_RECOVER)
 
     bool on(int f) const { return pro && (feat & f) != 0; }
     void init(int p, u64 seed);
@@ -70,6 +72,7 @@ private:
     float assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy);
     float enemyStrengthNear(Vec2 p, float radiusTiles);
     Entity* idleDozer();
+    bool recoverBase(int dozers, bool hasHq);   // recovery mode: every free dozer raises the next missing core structure (-> something was placed)
     void managePower();
 };
 
