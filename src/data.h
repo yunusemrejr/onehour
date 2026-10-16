@@ -56,12 +56,15 @@ enum UnitTypeId {
     U_C_DESTROYER, U_K_DESTROYER,   // warships of the lake (built at a Naval Yard on the shore)
     U_C_CRUISER, U_K_CRUISER,       // missile ships
     U_C_STRIKEJET, U_K_STRIKEJET,   // the two fighters a Hotline Strike brings: never built, they leave again when the run is over
+    U_C_CIVDOZER, U_K_CIVDOZER,     // civilian dozers: they raise the town (houses, shops, towers, the town hall), never military structures
     U_COUNT
 };
 
 enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIRFIELD, BR_TECH, BR_TURRET, BR_AATURRET, BR_INCOME, BR_NUKE, BR_BUNKER,
                  BR_NAVAL,       // Naval Yard: on the shore of the lake, builds the ships
                  BR_ANTINUKE,    // Anti-Nuke Laser / Anti-Nuke Missiles: small structures that shoot incoming warheads down
+                 BR_CIVIC,       // civilian infrastructure (houses, shops, towers, the town hall): raised by a civilian dozer, pays and sends dozers on its own
+                 BR_UNUKE,       // Underground Nuke silo: a buried launcher as hard to destroy as a bunker, its silver warhead three times a ramp's
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -70,6 +73,10 @@ enum BuildTypeId {
     B_C_BUNKER, B_K_BUNKER,   // the underground bunkers sit after both armies' blocks so every earlier id stays put
     B_C_NAVAL, B_K_NAVAL,     // Naval Yards
     B_C_ANTINUKE, B_K_ANTINUKE,   // anti-nuke defences
+    // civilian infrastructure, the same nine kinds for each army in CivicKind order (see civicKind)
+    B_C_HOUSE, B_C_APARTMENTS, B_C_SKYSCRAPER, B_C_GAS, B_C_GROCERY, B_C_EVENTHALL, B_C_SQUARE, B_C_TOWNHALL, B_C_GOVERNMENT,
+    B_K_HOUSE, B_K_APARTMENTS, B_K_SKYSCRAPER, B_K_GAS, B_K_GROCERY, B_K_EVENTHALL, B_K_SQUARE, B_K_TOWNHALL, B_K_GOVERNMENT,
+    B_C_UNUKE, B_K_UNUKE,     // Underground Nuke silos
     B_COUNT
 };
 
@@ -299,6 +306,36 @@ static const float BUNKER_RAD_COOLDOWN = 16.0f;   // seconds between automatic r
 static const float BUNKER_ANTINUKE_COVER = 16.0f; // tiles around the bunker protected against incoming enemy nuclear warheads
 static const float BUNKER_ANTINUKE_WINDOW = 5.8f; // seconds before impact the bunker's lasers/guns open fire on an incoming warhead
 static const float BUNKER_ANTINUKE_CHANCE = 0.85f;// base interception chance (1.0 when surrounded in overdrive)
+// A bunker also watches over the structures around it, the civilian town included: it answers whoever attacks them as if they attacked the bunker,
+// its seismic sensors find hidden enemies nearby, and its crew mends what is damaged around it once the shooting stops.
+static const float BUNKER_GUARD_RADIUS = 9.0f;    // tiles: friendly structures it protects
+static const float BUNKER_MEND_RATE = 0.006f;     // fraction of max health per second those structures get back (only out of combat) ...
+static const float BUNKER_MEND_DELAY = 5.0f;      // ... this long after they were last hit
+static const float BUNKER_SENSOR = 7.0f;          // tiles: seismic sensors find hidden soldiers (snipers) near the bunker (a spy drone in the air goes unfelt)
+// Civilian infrastructure: raised only by a civilian dozer (same price as a dozer, it mends only the town), it needs no power and runs on its own. Every civilian
+// structure pays its army every CIVIC_INTERVAL seconds and sends out a free dozer now and then (a military one and a civilian one in turn).
+// It has no guns and no plating of its own: only the army's defences (turrets, batteries, anti-nuke towers, troops) protect it, and spies can take it.
+enum CivicKind { CV_HOUSE = 0, CV_APARTMENTS, CV_SKYSCRAPER, CV_GAS, CV_GROCERY, CV_EVENTHALL, CV_SQUARE, CV_TOWNHALL, CV_GOVERNMENT, CV_COUNT };
+struct CivicType { int income; float dozerEvery; int people; };   // credits per payout, seconds between free dozers, townsfolk walking about it
+extern const CivicType CIVICS[CV_COUNT];
+inline int civicKind(int buildType) {
+    if (buildType >= B_C_HOUSE && buildType <= B_C_GOVERNMENT) return buildType - B_C_HOUSE;
+    if (buildType >= B_K_HOUSE && buildType <= B_K_GOVERNMENT) return buildType - B_K_HOUSE;
+    return -1;
+}
+inline bool civicDozerType(int unitType) { return unitType == U_C_CIVDOZER || unitType == U_K_CIVDOZER; }
+static const float CIVIC_INTERVAL = 10.0f;        // seconds between two payouts of a civilian structure
+static const int   CIVIC_MAX = 30;                // civilian structures per player
+static const int   CIVIC_DOZER_CAP = 5;           // no free dozers once the army has this many (both kinds counted: more made bases rebuild faster than they fell)
+// Underground Nuke: a buried silo that fires the same kind of warhead as a Nuke Ramp, but silver and three times as strong: three times the
+// blast radius, the damage and the radiation (strength and how long it lasts). It is as hard to destroy as a bunker (blast doors, plating, and
+// only soldiers and vehicles can take it below BUNKER_FLOOR), and only an Anti-Nuke Laser can shoot its warhead down.
+static const float UNUKE_SCALE = 9.0f;            // share of a full warhead's blast AREA: radius NUKE_RADIUS * sqrt(9) = three times a ramp's
+static const float UNUKE_DAMAGE = 3.0f;           // damage multiplier over a ramp's warhead
+static const float UNUKE_FALLOUT = 3.0f;          // radiation: strength and duration multiplier
+static const float UNUKE_DOOR_HP = 4000.0f;       // the silo's blast doors (they take the damage first, like a bunker's hatch)
+static const float UNUKE_ARM = 60.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)
+static const Color UNUKE_GLOW = rgb(206, 210, 218); // the silver of its warhead, cloud and radiation
 // Spies
 static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
 static const float SPY_REACH = 22.0f;             // px from the structure's edge

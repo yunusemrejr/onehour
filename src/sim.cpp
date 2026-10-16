@@ -77,12 +77,14 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.tx = tx; e.ty = ty;
     const BuildType& b = BUILDS[type];
     e.pos = buildingCenter(type, tx, ty);
-    e.maxHp = b.hp * (hasUpgrade(owner, UPG_RUGGED) ? RUGGED_HP : 1.0f);
+    e.maxHp = b.hp * (hasUpgrade(owner, UPG_RUGGED) && b.role != BR_CIVIC ? RUGGED_HP : 1.0f);   // (the civilian town gets no plating)
     e.constructed = instant;
     e.progress = instant ? 1.0f : 0.0f;
     e.hp = instant ? e.maxHp : e.maxHp * 0.1f;
     e.rally = e.pos + Vec2(0, b.h * TILE * 0.5f + 40);
     if (b.role == BR_BUNKER && instant) { e.hatchMax = e.hatch = BUNKER_HATCH_HP; e.siloTimer = time + MINI_NUKE_ARM; }
+    if (b.role == BR_UNUKE && instant) { e.hatchMax = e.hatch = UNUKE_DOOR_HP; e.actionTimer = time + UNUKE_ARM; }
+    if (b.role == BR_CIVIC && instant) e.dozerAt = time + CIVICS[civicKind(type)].dozerEvery;
     e.angle = -1.5708f;
     e.turret2 = 2.4f;   // (the roof gun idles looking out over a corner)
     g_map.setStructure(tx, ty, b.w, b.h, true);
@@ -260,6 +262,7 @@ bool Sim::atBuildLimit(int player, int buildType) const {
     BuildRole r = BUILDS[buildType].role;
     if (r == BR_NAVAL) return countRole(player, BR_NAVAL, false) >= 3;
     if (r == BR_ANTINUKE) return countRole(player, BR_ANTINUKE, false) >= ANTINUKE_MAX;
+    if (r == BR_CIVIC) return countRole(player, BR_CIVIC, false) >= CIVIC_MAX || (civicKind(buildType) == CV_TOWNHALL && countBuildings(player, buildType) >= 1);   // (one Town Hall)
     return r == BR_HQ && countRole(player, BR_HQ, false) >= HQ_MAX;
 }
 int Sim::countUnits(int player, int type) const {
@@ -482,6 +485,7 @@ bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     Entity* d = get(dozer);
     if (!d || !d->isUnit() || d->ut().role != UR_DOZER || d->carrier.valid()) return false;   // (a dozer aboard a bunker cannot drive to a site)
     int p = d->owner;
+    if (!canRaise(*d, buildType)) return false;   // a civilian dozer raises the town, a dozer the base
     if (!buildAvailable(p, buildType) || !canPlace(p, buildType, tx, ty)) return false;
     const BuildType& b = BUILDS[buildType];
     if (!canAfford(p, b.cost)) { emit(EV_NOFUNDS, p, SND_NOFUNDS, d->pos, "Insufficient funds"); return false; }
@@ -504,7 +508,7 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
     std::vector<Entity*> dz;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (e && e->isUnit() && e->ut().role == UR_DOZER && e->owner == b->owner && !e->carrier.valid()) dz.push_back(e);
+        if (e && e->isUnit() && e->ut().role == UR_DOZER && e->owner == b->owner && !e->carrier.valid() && (b->constructed ? canMend(*e, b->type) : canRaise(*e, b->type))) dz.push_back(e);   // (only the right kind of dozer builds; a civilian one mends only the town)
     }
     Vec2 at = b->pos;
     std::stable_sort(dz.begin(), dz.end(), [&](const Entity* x, const Entity* y) { return dist2(x->pos, at) < dist2(y->pos, at); });
@@ -590,7 +594,7 @@ bool Sim::cmdPower(int player, Vec2 pos, bool force) {
 }
 
 bool Sim::inFallout(Vec2 p, float margin) const {
-    for (auto& f : fallouts) if (f.t < FALLOUT_LIFE - 8.0f && dist(p, f.pos) < f.r + margin) return true;
+    for (auto& f : fallouts) if (f.t < f.life - 8.0f && dist(p, f.pos) < f.r + margin) return true;
     return false;
 }
 
@@ -701,6 +705,41 @@ bool Sim::cmdNuke(int player, Vec2 pos, bool force) {
     nukes.push_back({ramp->pos, pos, player, 0, force});
     emit(EV_SOUND, -1, SND_ROCKET, ramp->pos);
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) { emit(EV_MSG, p, SND_ATTACKED, pos, "NUCLEAR LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Nuclear missile incoming!"); }
+    return true;
+}
+
+// Underground Nuke: the same launch as a ramp's (power needed, NUKE_COOLDOWN per silo), the warhead silver and three times as strong.
+static bool deepReady(const Sim& S, const Entity& e, int player) {
+    return e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_UNUKE && S.time >= e.actionTimer && e.disabledUntil <= S.time;
+}
+int Sim::deepNukesReady(int player) const {
+    if (player < 0 || player >= numPlayers || players[player].lowPower()) return 0;
+    int n = 0;
+    for (auto& e : ents) if (deepReady(*this, e, player)) n++;
+    return n;
+}
+float Sim::deepNukeWait(int player) const {
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_UNUKE) {
+        float w = std::max(0.0f, std::max(e.actionTimer - time, e.disabledUntil - time));
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+bool Sim::cmdDeepNuke(int player, Vec2 pos, bool force, Ref from) {
+    if (player < 0 || player >= numPlayers || players[player].lowPower()) return false;
+    force = force && !players[player].isAI;
+    Entity* silo = get(from);
+    if (!silo || !deepReady(*this, *silo, player)) {
+        silo = nullptr;
+        for (auto& e : ents) if (deepReady(*this, e, player)) { silo = &e; break; }
+    }
+    if (!silo) return false;
+    silo->actionTimer = time + NUKE_COOLDOWN;
+    Nuke n; n.from = silo->pos; n.pos = pos; n.owner = player; n.t = 0; n.force = force; n.scale = UNUKE_SCALE; n.deep = true;
+    nukes.push_back(n);
+    emit(EV_SOUND, -1, SND_ROCKET, silo->pos);
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) { emit(EV_MSG, p, SND_ATTACKED, pos, "UNDERGROUND NUKE LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Silver warhead incoming: only Anti-Nuke Lasers can stop it!"); }
     return true;
 }
 
@@ -1121,6 +1160,7 @@ void Sim::updateNukes() {
 void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
     const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
+    const float D = n.deep ? UNUKE_DAMAGE : 1.0f;   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius)
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
@@ -1135,26 +1175,26 @@ void Sim::nukeBlast(const Nuke& n) {
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
             fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
             for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
-            applyDamage(*e, lessen(e->maxHp * 2.0f, *e), n.owner, NOREF, nullptr);
+            applyDamage(*e, lessen(e->maxHp * 2.0f * D, *e), n.owner, NOREF, nullptr);
             continue;
         }
         Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
         if (foe) {
             if (e->isBuilding()) {
-                bool bunkerB = e->bt().role == BR_BUNKER && e->constructed;
+                bool bunkerB = hardened(*e);
                 bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA && !bunkerB;
-                bool rugged = hasUpgrade(e->owner, UPG_RUGGED);
+                bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && e->bt().role != BR_CIVIC;
                 float dmg;
-                if (bunkerB) dmg = e->maxHp * 1.2f * f;                                           // wrecks the hatch and hurts the bunker, but it is buried deep: it can never be destroyed this way
-                else if (rugged) dmg = e->maxHp * RUGGED_NUKE * f / RUGGED_ARMOR;                   // (after the armour) a bit over half at ground zero: it takes two warheads
-                else if (small) dmg = e->maxHp * 1.6f * f;                                        // f above ~0.63 (the inner blast) brings it down
+                if (bunkerB) dmg = e->maxHp * 1.2f * f * D;                                       // wrecks the hatch and hurts the bunker, but it is buried deep: it can never be destroyed this way
+                else if (rugged) dmg = e->maxHp * RUGGED_NUKE * f * D / RUGGED_ARMOR;               // (after the armour) a bit over half at ground zero: it takes two warheads (one silver one)
+                else if (small) dmg = e->maxHp * 1.6f * f * D;                                    // f above ~0.63 (the inner blast) brings it down
                 else {
-                    dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f);                          // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
-                    dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));           // never lethal
+                    dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f) * D;                      // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
+                    if (!n.deep) dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));   // never lethal (an Underground Nuke's triple blast flattens the inner half)
                 }
                 if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr);
                 e = get(r); if (!e) continue;
-                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f));   // the pulse knocks survivors offline for a while
+                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f) * (n.deep ? 1.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
                     for (int k = 0; k < 4; k++) {
                         Vec2 p = e->pos + Vec2(rng.f(-e->radius() * 0.7f, e->radius() * 0.7f), rng.f(-e->radius() * 0.5f, e->radius() * 0.5f));
@@ -1163,7 +1203,7 @@ void Sim::nukeBlast(const Nuke& n) {
                     }
                 }
             } else {
-                float dmg = 6000.0f * f;
+                float dmg = 6000.0f * f * D;
                 if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f);   // a warship is no match for a warhead anywhere in the blast: it goes down
                 if (!e->passengers.empty() && lessen(dmg, *e) >= e->hp) {   // a vehicle the blast destroys takes its crew with it (nobody climbs out of this one)
                     std::vector<Ref> crew = e->passengers;
@@ -1177,7 +1217,7 @@ void Sim::nukeBlast(const Nuke& n) {
             }
         }
         if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
-            Vec2 np = e->pos + away * (90.0f * f * P);
+            Vec2 np = e->pos + away * (90.0f * f * P * (n.deep ? 1.6f : 1.0f));
             if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
         }
@@ -1201,26 +1241,31 @@ void Sim::nukeBlast(const Nuke& n) {
             fx.push_back({FX_SMOKE, p, p, -rng.f(0, 1.8f), 4.0f, rgb(60, 54, 50), rng.f(16, 34), Vec2(rng.f(-10, 10), rng.f(-34, -14))});
         }
         for (int k = 0; k < 24; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.8f), rng.f(0.7f, 1.6f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-300, 300), rng.f(-380, -90))});
-        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, rgb(120, 255, 90), R * 0.95f});
-        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, P});
+        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), n.deep ? UNUKE_GLOW : rgb(120, 255, 90), R * 0.95f});
+        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, P * (n.deep ? UNUKE_FALLOUT : 1.0f), -1, false, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f)});
         emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
         emit(EV_SOUND, -1, SND_EXPLODE_S, n.pos);
         return;
     }
     // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
-    fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, rgb(255, 240, 200), R * 1.3f});
-    fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, rgb(255, 210, 140), R * 1.2f});
-    fx.push_back({FX_RING, n.pos, n.pos, -0.5f, 2.4f, rgb(255, 180, 100), R * 1.7f});
-    fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.0f, rgb(255, 220, 160), R * 1.3f});
-    fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 18.0f, rgb(255, 255, 255), R});
+    // (an Underground Nuke's is silver: a white-silver fireball, grey-silver rings, cloud and radiation glow. Its shock ring runs out to the whole
+    // triple radius, but the fireball and the cloud are drawn at most 1.7 times a ramp's: three times as wide would be nine times the overdraw)
+    const bool sv = n.deep;
+    const float Rv = sv ? std::min(R, NUKE_RADIUS * TILE * 1.7f) : R;
+    fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, sv ? rgb(240, 242, 246) : rgb(255, 240, 200), Rv * 1.3f});
+    fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, sv ? rgb(214, 218, 224) : rgb(255, 210, 140), sv ? R * 1.05f : R * 1.2f});
+    if (!sv) fx.push_back({FX_RING, n.pos, n.pos, -0.5f, 2.4f, rgb(255, 180, 100), R * 1.7f});
+    fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.0f, sv ? rgb(220, 224, 232) : rgb(255, 220, 160), Rv * 1.3f});
+    fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 18.0f, sv ? UNUKE_GLOW : rgb(255, 255, 255), Rv});
     for (int k = 0; k < 44; k++) {
         float a = rng.f(0, 6.283f), r = R * std::sqrt(rng.f(0.0f, 1.0f)) * 1.05f; Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
-        fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 3.0f) - r / R * 0.8f, 1.0f, rgb(255, 150, 50), rng.f(26, 70)});
-        fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f), 6.0f, rgb(60, 54, 50), rng.f(28, 56), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
+        fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 3.0f) - r / R * 0.8f, 1.0f, sv ? rgb(214, 218, 226) : rgb(255, 150, 50), rng.f(26, 70)});
+        fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f), 6.0f, sv ? rgb(120, 124, 130) : rgb(60, 54, 50), rng.f(28, 56), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
     }
     for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
-    fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, rgb(120, 255, 90), R * 0.95f});
-    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f});
+    const float life = FALLOUT_LIFE * (sv ? UNUKE_FALLOUT : 1.0f);
+    fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, life, sv ? UNUKE_GLOW : rgb(120, 255, 90), R * 0.95f});
+    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, sv ? UNUKE_FALLOUT : 1.0f, -1, false, life});
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
@@ -1232,7 +1277,7 @@ void Sim::updateFallout() {
     for (size_t i = 0; i < fallouts.size();) {
         Fallout& f = fallouts[i];
         f.t += SIM_DT; f.tick += SIM_DT;
-        if (f.t >= FALLOUT_LIFE) { fallouts.erase(fallouts.begin() + i); continue; }
+        if (f.t >= f.life) { fallouts.erase(fallouts.begin() + i); continue; }
         if (f.t < 12.0f && rng.f() < 0.06f) {   // chaos: random blasts and flame inside the crater
             float a = rng.f(0, 6.283f), r = f.r * std::sqrt(rng.f(0.0f, 1.0f)) * 0.9f; Vec2 p = f.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
             fx.push_back({FX_EXPLODE, p, p, 0, 0.8f, rgb(255, 150, 60), rng.f(20, 44)});
@@ -1240,7 +1285,7 @@ void Sim::updateFallout() {
         }
         if (f.tick >= 0.5f) {
             f.tick -= 0.5f;
-            float strength = (f.t < FALLOUT_LIFE - 15.0f ? 1.0f : (FALLOUT_LIFE - f.t) / 15.0f) * f.power;   // dies down at the end (and is weaker for the pieces of a warhead that was shot down)
+            float strength = (f.t < f.life - 15.0f ? 1.0f : (f.life - f.t) / 15.0f) * f.power;   // dies down at the end (and is weaker for the pieces of a warhead that was shot down)
             std::vector<Ref> in;
             forEachNear(f.pos, f.r, [&](Entity& e) { if (e.kind != EK_RESOURCE && !e.isAir() && dist(e.pos, f.pos) <= f.r) in.push_back(refOf(e)); });
             for (auto r : in) {
@@ -1310,7 +1355,7 @@ void Sim::finishUpgrade(int p, int upg) {
     pl.upgBusy[upg] = false; pl.upg[upg] = true; pl.upgProgress[upg] = 1;
     for (auto& e : ents) {
         if (!e.alive || !e.isBuilding() || e.owner != p) continue;
-        if (upg == UPG_RUGGED) { e.maxHp *= RUGGED_HP; e.hp *= RUGGED_HP; }
+        if (upg == UPG_RUGGED && e.bt().role != BR_CIVIC) { e.maxHp *= RUGGED_HP; e.hp *= RUGGED_HP; }
     }
     emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(UPGRADES[pl.faction][upg].name) + " complete: " + UPGRADES[pl.faction][upg].desc).c_str());
 }
@@ -1408,7 +1453,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, bunkers, spy drones)
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
-    if (t.isBuilding() && t.constructed && t.bt().role == BR_BUNKER && t.hatch <= 0 && t.hp <= t.maxHp * BUNKER_FLOOR + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;
+    if (hardened(t) && t.hatch <= 0 && t.hp <= t.maxHp * BUNKER_FLOOR + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;
     if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper
     if (!enemies(e.owner, t.owner)) {   // a friendly is only a legal target for the one the human ordered it to hit
         if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
@@ -1575,7 +1620,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
-    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED)) {   // Rugged: half damage, until so much lands at once that the plating is swamped
+    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED) && tgt.bt().role != BR_CIVIC) {   // Rugged: half damage, until so much lands at once that the plating is swamped (the town has none)
         float load = tgt.dmgLoad / tgt.maxHp;
         real *= RUGGED_ARMOR + (1.0f - RUGGED_ARMOR) * clampf((load - RUGGED_SWAMP_LO) / (RUGGED_SWAMP_HI - RUGGED_SWAMP_LO), 0, 1);
     }
@@ -1583,9 +1628,10 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner)) real *= players[attackerOwner].damageMul();
     const Entity* attU = get(attacker);
     if (attU && attU->isUnit() && attU->rank > 0) real *= 1.0f + 0.2f * attU->rank;   // veterans and elites hit harder
-    // Underground bunker: the surface hatch takes the damage first; what gets past it is stopped by the plating. Only soldiers and vehicles can
-    // ever take the bunker itself below BUNKER_FLOOR of its health: aircraft, structures, shells from the sky, fallout and nukes cannot.
-    bool bunker = tgt.isBuilding() && tgt.constructed && tgt.bt().role == BR_BUNKER;
+    // Underground bunker (and the Underground Nuke silo, its blast doors standing in for the hatch): the surface hatch takes the damage first; what gets
+    // past it is stopped by the plating. Only soldiers and vehicles can ever take it below BUNKER_FLOOR of its health: aircraft, structures, shells
+    // from the sky, fallout and nukes cannot.
+    bool bunker = hardened(tgt);
     float hpBefore = tgt.hp;
     if (bunker) {
         if (tgt.hatch > 0) {
@@ -2410,7 +2456,7 @@ int Sim::repairCrew(const Entity& b, const Entity* except) const {
 Entity* Sim::repairJob(Entity& dz, float maxDist) {
     Entity* best = nullptr; float bs = 1e18f;
     for (auto& b : ents) {
-        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || !b.constructed || (b.hp >= b.maxHp * 0.995f && b.hatch >= b.hatchMax) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
+        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || !b.constructed || !canMend(dz, b.type) || (b.hp >= b.maxHp * 0.995f && b.hatch >= b.hatchMax) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
         if (d > maxDist) continue;
         float hurt = 1.0f - b.hp / b.maxHp;
@@ -2431,7 +2477,7 @@ Entity* Sim::repairJob(Entity& dz, float maxDist) {
 Entity* Sim::siteJob(Entity& dz, float maxDist) {
     Entity* best = nullptr; float bs = 1e18f;
     for (auto& b : ents) {
-        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || b.constructed || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
+        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || b.constructed || !canRaise(dz, b.type) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
         if (d > maxDist) continue;
         int crew = repairCrew(b, &dz);
@@ -2444,7 +2490,7 @@ Entity* Sim::siteJob(Entity& dz, float maxDist) {
 
 bool Sim::siteOpen(const Entity& dz, Ref site) const {
     const Entity* b = get(site);
-    return b && b->isBuilding() && b->owner == dz.owner && !b->constructed;
+    return b && b->isBuilding() && b->owner == dz.owner && !b->constructed && canRaise(dz, b->type);
 }
 
 void Sim::keepSite(Entity& dz) {
@@ -2809,6 +2855,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             Entity* site = siteJob(e);
             if (site && repairCrew(*site, &e) == 0) { e.targetEnt = refOf(*site); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); break; }
         }
+        if (!(b->constructed ? canMend(e, b->type) : canRaise(e, b->type))) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.autoTask = false; break; }   // the wrong kind of dozer for this job
         float d = distToEntity(e.pos, *b);
         // a dozer boxed in by neighbouring structures cannot always get right up to the wall: after a short wait it works from where it is
         bool inReach = d <= BUILD_REACH || (e.actionTimer > 1.5f && d <= BUILD_REACH + 3 * TILE);
@@ -2919,9 +2966,12 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
 void Sim::finishBuilding(Entity& b) {
     b.constructed = true; b.progress = 1; b.hp = std::max(b.hp, b.maxHp);
     if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; b.siloTimer = time + MINI_NUKE_ARM; }
+    if (b.bt().role == BR_UNUKE) b.hatchMax = b.hatch = UNUKE_DOOR_HP;
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
     b.actionTimer = 0;
     if (b.bt().role == BR_NUKE) b.actionTimer = time + 60.0f;   // arming time for the first warhead
+    if (b.bt().role == BR_UNUKE) b.actionTimer = time + UNUKE_ARM;
+    if (b.bt().role == BR_CIVIC) b.dozerAt = time + CIVICS[civicKind(b.type)].dozerEvery;
     if (b.bt().role == BR_HQ && b.owner >= 0) {
         // a rebuilt Command Core becomes the home base again when no other one stands (camera Home key, AI base layout)
         bool other = false;
@@ -2969,8 +3019,10 @@ void Sim::updateBuilding(Entity& b) {
         b.hp = std::min(b.maxHp, b.hp + b.maxHp * rate * SIM_DT);
         if ((tick + b.gen) % 40 == 0) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-bt.w * 12.0f, bt.w * 12.0f), rng.f(-bt.h * 12.0f, bt.h * 12.0f)), Vec2(), 0, 0.3f, pl.faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
     }
+    if (bt.role == BR_CIVIC) { updateCivic(b); return; }   // the town has no roof guns, no queue: it pays and sends out dozers (may spawn a unit: b is done with)
     if (pl.upg[UPG_GUNS] && bt.role != BR_BUNKER) updateRoofGun(b, powered);
-    if (bt.role == BR_BUNKER) { updateBunkerSelf(b); updateBunker(b); }
+    if (bt.role == BR_BUNKER) { updateBunkerSelf(b); updateBunkerWard(b); updateBunker(b); }
+    if (bt.role == BR_UNUKE) updateSilo(b);
     if (bt.role == BR_INCOME) {
         b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
         if (b.actionTimer >= INCOME_INTERVAL) {
@@ -3031,12 +3083,15 @@ bool Sim::visibleTo(const Entity& e, int player) const {
 void Sim::updateDetection() {
     for (size_t i = 0; i < ents.size(); i++) {
         Entity& d = ents[i];
-        if (!d.alive || !d.isUnit() || d.owner < 0 || d.carrier.valid() || d.fall > 0 || d.disabledUntil > time) continue;
-        const UnitType& du = d.ut();
-        if (du.detect <= 0) continue;
-        forEachNear(d.pos, du.detect * TILE, [&](Entity& t) {
+        if (!d.alive || d.owner < 0 || d.disabledUntil > time) continue;
+        bool sensor = d.isBuilding() && d.constructed && d.bt().role == BR_BUNKER;   // a bunker's seismic sensors feel hidden soldiers (snipers) close by, never a drone in the air
+        if (!sensor && (!d.isUnit() || d.carrier.valid() || d.fall > 0)) continue;
+        float range = sensor ? BUNKER_SENSOR : d.ut().detect;
+        int mask = sensor ? DET_SPOTTER : d.ut().detectMask;
+        if (range <= 0) continue;
+        forEachNear(d.pos, range * TILE, [&](Entity& t) {
             int cls = stealthOf(t);
-            if (!cls || !(du.detectMask & (1 << (cls - 1))) || !enemies(d.owner, t.owner)) return;
+            if (!cls || !(mask & (1 << (cls - 1))) || !enemies(d.owner, t.owner) || (sensor && (!t.isUnit() || dist(t.pos, d.pos) > range * TILE))) return;   // (a sensor finds soldiers, not another bunker)
             float linger = t.isBuilding() ? BUNKER_LINGER : (cls == ST_DRONE ? 1.5f : 3.0f);   // a found bunker stays known for a while; a sniper or drone is lost at once
             for (int q = 0; q < numPlayers; q++)
                 if (q == d.owner || players[q].team == players[d.owner].team) t.detUntil[q] = std::max(t.detUntil[q], time + linger);
@@ -3066,7 +3121,7 @@ bool Sim::canBoard(const Entity& u, const Entity& c) const {
     if (c.isBuilding()) {
         if (c.bt().role != BR_BUNKER || !c.constructed) return false;
         if (u.ut().kind == UK_INF) return garrisonInfantry(c) < BUNKER_INF_CAP;
-        if (u.ut().role == UR_DOZER) return garrisonDozers(c) < BUNKER_DOZER_CAP;
+        if (u.ut().role == UR_DOZER) return !civicDozerType(u.type) && garrisonDozers(c) < BUNKER_DOZER_CAP;   // (a civilian dozer cannot patch a hatch)
         return false;
     }
     if (!c.isUnit() || c.ut().cargoCap <= 0 || u.ut().temp) return false;
@@ -3169,7 +3224,7 @@ void Sim::hatchBlown(Entity& b) {
     fx.push_back({FX_SMOKE, b.pos, b.pos, 0, 3.0f, rgb(52, 48, 44), 20, Vec2(rng.f(-8, 8), -26)});
     for (int k = 0; k < 8; k++) fx.push_back({FX_DEBRIS, b.pos, b.pos, 0, rng.f(0.6f, 1.2f), rgb(120, 122, 126), rng.f(2, 5), Vec2(rng.f(-150, 150), rng.f(-190, -50))});
     emit(EV_SOUND, -1, SND_EXPLODE_L, b.pos);
-    if (b.owner >= 0) emit(EV_MSG, b.owner, SND_NONE, b.pos, "Bunker hatch destroyed: the garrison cannot fire (a dozer inside or beside it can patch it)");
+    if (b.owner >= 0) emit(EV_MSG, b.owner, SND_NONE, b.pos, b.bt().role == BR_UNUKE ? "Underground Nuke blast doors destroyed: only troops can hurt the silo now, and it refits them when left alone" : "Bunker hatch destroyed: the garrison cannot fire (a dozer inside or beside it can patch it)");
 }
 
 Vec2 Sim::bunkerGunPos(const Entity& b, int i) const {
@@ -3195,7 +3250,7 @@ void Sim::updateBunkerAntiNuke(Entity& b, bool surrounded) {
     bool cy = b.bt().faction == F_CYBER;
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
-        if (n.broken || n.killT >= 0 || !enemies(n.owner, b.owner)) continue;
+        if (n.broken || n.killT >= 0 || n.deep || !enemies(n.owner, b.owner)) continue;   // (an Underground Nuke's warhead is too much for it: only Anti-Nuke Lasers)
         float cover = BUNKER_ANTINUKE_COVER * TILE + nukeRadius(n);
         if (dist(n.pos, b.pos) > cover) continue;
         float left = NUKE_FLIGHT - n.t;
@@ -3345,6 +3400,7 @@ void Sim::updateBunkerSelf(Entity& b) {
     b.surrounded = bunkerSurrounded(b, &enemyAround);
     if (b.radCd > 0) b.radCd -= SIM_DT;
     bool besieged = b.lastDamaged > 0 && time - b.lastDamaged < BUNKER_RETALIATE;
+    bool warding = time - b.guardHitAt < BUNKER_RETALIATE;   // a structure it watches over was hit (see updateBunkerWard)
     // Automatic radiation spreading when surrounded by enemies and getting hit big time (while the surface hatch/vents stand)
     if (b.surrounded && b.hatch > 0 && besieged && b.radCd <= 0 && !inFallout(b.pos) && (b.dmgLoad >= BUNKER_RAD_DMG || (b.hp < b.maxHp * 0.85f && b.dmgLoad >= 90.0f) || (b.hatch < b.hatchMax * 0.65f && b.dmgLoad >= 90.0f))) {
         b.radCd = BUNKER_RAD_COOLDOWN;
@@ -3366,6 +3422,10 @@ void Sim::updateBunkerSelf(Entity& b) {
         forEachNear(b.pos, reachTiles * TILE + 2 * TILE, [&](Entity& t) {
             if (!t.isUnit() && !t.isBuilding()) return;
             bool onUs = refOf(t) == b.attacker || t.targetEnt == bref || t.engaged == bref;
+            if (!onUs && warding) {   // (or on a friendly structure the bunker watches over)
+                const Entity* o = get(t.targetEnt); if (!o || !o->isBuilding()) o = get(t.engaged);
+                onUs = o && o->isBuilding() && o->owner >= 0 && players[o->owner].team == players[b.owner].team && dist(o->pos, b.pos) <= BUNKER_GUARD_RADIUS * TILE;
+            }
             if (!onUs || !enemies(b.owner, t.owner) || t.weapon() < 0) return;   // (an unarmed spy walking up to take it is not wearing it down)
             if (wpn == W_BUNKER_ROCKETS ? (t.carrier.valid() || t.fall > 0) : !canTarget(b, t, wpn)) return;
             float d = distToEntity(b.pos, t) / TILE;
@@ -3376,7 +3436,7 @@ void Sim::updateBunkerSelf(Entity& b) {
         return best;
     };
     if (b.podCd > 0) b.podCd -= SIM_DT;
-    if (besieged && b.podCd <= 0 && (tick + b.gen) % 4 == 0) {   // the rocket pod pops up (hatch or no hatch) and fires a salvo at the worst attacker
+    if ((besieged || warding) && b.podCd <= 0 && (tick + b.gen) % 4 == 0) {   // the rocket pod pops up (hatch or no hatch) and fires a salvo at the worst attacker
         if (Entity* t = attackerOf(pod.range, W_BUNKER_ROCKETS)) {
             b.podAng = std::atan2(t->pos.y - b.pos.y, t->pos.x - b.pos.x);
             Vec2 side(-std::sin(b.podAng), std::cos(b.podAng));
@@ -3417,7 +3477,7 @@ void Sim::updateBunkerSelf(Entity& b) {
     }
     const Weapon& w = WEAPONS[W_BUNKER_MINIGUN];
     float reach = (w.range + 0.2f) * TILE;
-    Entity* hitter = besieged && b.hatch > 0 ? attackerOf(w.range, W_BUNKER_MINIGUN) : nullptr;   // the hatch guns go for an attacker in reach first
+    Entity* hitter = (besieged || warding) && b.hatch > 0 ? attackerOf(w.range, W_BUNKER_MINIGUN) : nullptr;   // the hatch guns go for an attacker in reach first
     for (int i = 0; i < BUNKER_GUNS; i++) {
         if (b.gunCd[i] > 0) b.gunCd[i] -= SIM_DT;
         if (b.hatch <= 0) { b.gunTgt[i] = NOREF; continue; }   // the guns sit on the hatch: blown off, they are silent
@@ -3495,6 +3555,70 @@ void Sim::updateBunker(Entity& b) {
     }
 }
 
+// The bunker watches over the structures around it (the civilian town above all): a hit on one of them makes the bunker answer the attacker
+// (see updateBunkerSelf: guardHitAt), and once the shooting has stopped its crew mends them a little at a time.
+void Sim::updateBunkerWard(Entity& b) {
+    if ((tick + b.gen) % 10 != 0 || b.owner < 0) return;
+    const float R = BUNKER_GUARD_RADIUS * TILE, dt = SIM_DT * 10;
+    forEachNear(b.pos, R, [&](Entity& o) {
+        if (&o == &b || !o.isBuilding() || !o.constructed || o.owner < 0 || players[o.owner].team != players[b.owner].team || dist(o.pos, b.pos) > R) return;
+        if (o.lastDamaged > 0 && time - o.lastDamaged < BUNKER_RETALIATE) { const Entity* a = get(o.attacker); if (a && enemies(b.owner, a->owner)) b.guardHitAt = std::max(b.guardHitAt, o.lastDamaged); }
+        if (o.owner != b.owner || o.hp >= o.maxHp || time - o.lastDamaged < BUNKER_MEND_DELAY || inFallout(o.pos)) return;
+        o.hp = std::min(o.maxHp, o.hp + o.maxHp * BUNKER_MEND_RATE * dt);
+        if ((tick / 10 + o.gen) % 4 == 0) fx.push_back({FX_SPARK, o.pos + Vec2(rng.f(-o.radius() * 0.6f, o.radius() * 0.6f), rng.f(-o.radius() * 0.4f, o.radius() * 0.4f)), Vec2(), 0, 0.3f, rgb(150, 255, 170), 3});
+    });
+}
+
+// A civilian structure runs on its own: no power, no supplies. It pays its army every CIVIC_INTERVAL seconds and, while the army has fewer than
+// CIVIC_DOZER_CAP dozers, sends out a free one every CIVICS[].dozerEvery seconds (a military dozer and a civilian one in turn).
+void Sim::updateCivic(Entity& b) {
+    int k = civicKind(b.type);
+    if (k < 0 || b.owner < 0) return;
+    Player& pl = players[b.owner];
+    b.actionTimer += SIM_DT;
+    if (b.actionTimer >= CIVIC_INTERVAL) {
+        b.actionTimer -= CIVIC_INTERVAL;
+        int amt = (int)(CIVICS[k].income * pl.econMul());
+        pl.money += amt; pl.mined += amt;
+        fx.push_back({FX_SPARK, b.pos, b.pos, 0, 0.6f, rgb(255, 224, 90), 7});
+    }
+    if (time < b.dozerAt) return;
+    int dozers = 0;
+    for (auto& u : ents) if (u.alive && u.isUnit() && u.owner == b.owner && u.ut().role == UR_DOZER) dozers++;
+    if (dozers >= CIVIC_DOZER_CAP) { b.dozerAt = time + 5.0f; return; }   // the town waits until the army has room for another
+    b.dozerAt = time + CIVICS[k].dozerEvery;
+    int type = b.dozerKind == 0 ? firstUnitOf(pl.faction) : (pl.faction == F_CYBER ? (int)U_C_CIVDOZER : (int)U_K_CIVDOZER);
+    b.dozerKind ^= 1;
+    int owner = b.owner;
+    Vec2 at = unitExit(b), out = at + Vec2(rng.f(-24, 24), rng.f(10, 30));
+    char msg[96]; snprintf(msg, sizeof msg, "The %s sent out a %s", b.bt().name, UNITS[type].name);
+    Ref r = spawnUnit(type, owner, at);   // (may grow the entity array: b is not touched after this)
+    cmdMove({r}, g_map.nearestFree(out, 4), false);
+    if (Entity* u = get(r)) { u->autoHoldUntil = -1; u->autoTask = true; }
+    emit(EV_UNIT_READY, owner, SND_UNIT_READY, at, msg);
+}
+
+// An Underground Nuke silo mends itself like a bunker: the body slowly, the blast doors faster, and blown doors are refitted after a while.
+void Sim::updateSilo(Entity& b) {
+    if (time - b.lastDamaged < BUNKER_REGEN_DELAY) return;
+    b.hp = std::min(b.maxHp, b.hp + b.maxHp * BUNKER_REGEN * SIM_DT);
+    if (b.hatchMax > 0 && (b.hatch > 0 || time - b.lastDamaged >= BUNKER_HATCH_REFIT)) b.hatch = std::min(b.hatchMax, b.hatch + b.hatchMax * (b.hatch > 0 ? BUNKER_HATCH_REGEN * SIM_DT : 0.05f));
+}
+
+bool Sim::hardened(const Entity& b) {
+    return b.isBuilding() && b.constructed && (BUILDS[b.type].role == BR_BUNKER || BUILDS[b.type].role == BR_UNUKE);
+}
+bool Sim::canRaise(const Entity& d, int buildType) {
+    return d.isUnit() && buildType >= 0 && buildType < B_COUNT && civicDozerType(d.type) == (BUILDS[buildType].role == BR_CIVIC);
+}
+bool Sim::canMend(const Entity& d, int buildType) {   // (the town's free civilian dozers mending the whole base made bases nearly impossible to grind down)
+    return d.isUnit() && buildType >= 0 && buildType < B_COUNT && (!civicDozerType(d.type) || BUILDS[buildType].role == BR_CIVIC);
+}
+int Sim::civicPeople(const Entity& b) const {
+    int k = b.isBuilding() && b.constructed ? civicKind(b.type) : -1;
+    return k < 0 ? 0 : CIVICS[k].people;
+}
+
 float Sim::captureTime(const Entity& b) const {
     return SPY_CAPTURE_BASE + SPY_CAPTURE_PER_TILE * (b.bt().w * b.bt().h);
 }
@@ -3520,7 +3644,7 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     b.queue.clear(); b.queueProgress = 0; b.hasRally = false; b.engaged = NOREF; b.engaged2 = NOREF; b.forceTarget = NOREF; b.unloading = false;
     float oldMax = b.maxHp;
     b.owner = to;
-    b.maxHp = b.bt().hp * (hasUpgrade(to, UPG_RUGGED) ? RUGGED_HP : 1.0f);
+    b.maxHp = b.bt().hp * (hasUpgrade(to, UPG_RUGGED) && b.bt().role != BR_CIVIC ? RUGGED_HP : 1.0f);
     b.hp = std::max(1.0f, b.hp * (b.maxHp / std::max(1.0f, oldMax)));
     b.disabledUntil = std::max(b.disabledUntil, time + 3.0f);
     b.attacker = NOREF; b.lastDamaged = -100;
@@ -3660,10 +3784,14 @@ void Sim::checkVictory() {
         Player& pl = players[p];
         if (!pl.alive) continue;
         // an army is out only when nothing of its own still stands: a hidden sniper, spy drone or bunker counts (the enemy has to find it),
-        // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too
+        // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too.
+        // Civilian dozers do not: they are civilians, they cannot raise a base, and nobody hunts them (the town's structures do count)
         bool any = false;
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && e.ut().temp)) { any = true; break; }   // (a Hotline Strike fighter on loan is no army)
-        if (!any) { pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]); }
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type)))) { any = true; break; }   // (a Hotline Strike fighter on loan is no army)
+        if (!any) {
+            pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]);
+            for (auto& e : ents) if (e.alive && e.owner == p && e.isUnit() && civicDozerType(e.type)) destroy(e, false);   // its civilian dozers leave the war behind
+        }
     }
     if (!anyDied) return;
     int aliveTeam = -1; bool multi = false;

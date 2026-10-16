@@ -548,6 +548,7 @@ BArtSize artBuildingSize(int type) {
 void artBuilding(Canvas& c, Canvas& mask, int type) {
     const BuildType& bt = BUILDS[type];
     if (artNavalBuilding(c, mask, type)) return;
+    if (artCivicBuilding(c, mask, type)) return;
     bool cy = bt.faction == F_CYBER;
     Bld b(c, mask, bt.w * TILE, bt.h * TILE, cy, 1000u + (u32)type * 31u);
     switch (bt.role) {
@@ -615,6 +616,7 @@ void artRubble(Canvas& c, int tw, int th, u32 seed) {
 // The warhead itself, drawn live over a nuke ramp only while the ramp is armed (same canvas geometry as the structure).
 void artArmed(Canvas& c, int type) {
     const BuildType& bt = BUILDS[type];
+    if (bt.role == BR_UNUKE) { artSiloArmed(c, type); return; }
     Canvas dummy(4, 4);
     Bld b(c, dummy, bt.w * TILE, bt.h * TILE, bt.faction == F_CYBER, 4000u + (u32)type);
     if (bt.faction == F_CYBER) {

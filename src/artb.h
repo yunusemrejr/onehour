@@ -20,3 +20,7 @@ void artRubble(Canvas& c, int tilesW, int tilesH, u32 seed);
 void artProp(Canvas& c, int which);
 // Naval Yards and anti-nuke defences (artb_naval.cpp). Paints the structure and its team mask; false for any other structure type.
 bool artNavalBuilding(Canvas& c, Canvas& mask, int type);
+// Civilian town buildings and the Underground Nuke silo (artb_civic.cpp). Paints the structure and its team mask; false for any other type.
+bool artCivicBuilding(Canvas& c, Canvas& mask, int type);
+// The silo's armed overlay: the blast doors slid back and the silver warhead rising from the shaft (drawn live, same geometry as the structure).
+void artSiloArmed(Canvas& c, int type);

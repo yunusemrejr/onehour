@@ -51,6 +51,7 @@ const CkTone CK_TONES[12] = {
 // position inside the army's block; the medics live after both blocks but are drawn as the 13th design. The newest designs follow the
 // Cyber helicopter in pairs: spies 15, spy drones 16, cargo lifters 17 (Cyber first in each pair, as everywhere else).
 static int unitLocal(int type) {
+    if (civicDozerType(type)) return 22;   // the civilian dozers: a dozer hull in civilian livery
     if (type == U_C_HELI) return 14;
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
@@ -788,8 +789,16 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 19: artShipBody(c, team, cy, false); break;
     case 20: artShipBody(c, team, cy, true); break;
     case 21: artStrikeJetBody(c, team, cy); break;
+    case 22:   // civilian dozer: the army's dozer in civic white and safety orange, with a roof light bar
+        if (cy) { CYH = rgb(214, 220, 226); CYP = rgb(236, 240, 244); CYM = rgb(232, 120, 44); CYD = rgb(70, 74, 82); CYG = rgb(255, 176, 60); CYW = rgb(255, 236, 200); dozerCyber(A, frame); }
+        else { CKY = rgb(236, 128, 40); CKH = rgb(226, 222, 210); CKS = rgb(150, 152, 150); CKD = rgb(52, 50, 46); dozerClanker(A, frame); }
+        A.box(cy ? 34 : 35, 32, 1.6f, 6.2f, 0.6f, rgb(40, 44, 52), 1.0f, 0.4f);   // light bar across the cab roof: amber and white
+        A.dot(cy ? 34 : 35, 29.6f, 0.9f, rgb(255, 170, 40)); A.dot(cy ? 34 : 35, 34.4f, 0.9f, rgb(255, 255, 255));
+        A.glow(cy ? 34 : 35, 29.6f, 3.5f, rgba(rgb(255, 170, 40), 120));
+        break;
     }
-    if (local >= 18) return;   // (they paint, enhance and outline themselves)
+    if (local >= 18 && local != 22) return;   // (they paint, enhance and outline themselves)
+    if (local == 22) local = 0;                // (the civilian dozers take the dozer's detail layers)
     // the new designs draw all their own detail, so the generic soldier and vehicle layers stay off them
     if (local == 2 || local == 3 || local == 4 || local == 9) soldierDetail(A, cy, local);
     else if (local != 8 && local <= 10) vehicleDetail(A, cy, local);

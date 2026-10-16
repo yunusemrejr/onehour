@@ -9,8 +9,10 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
               FEAT_NAVY = 64,    // a Naval Yard on the lake, a fleet of its own, the Guard Drones upgrade, jeeps loaded with infantry
               FEAT_AEGIS = 128,  // anti-nuke defences round the base and nuke targeting that reckons with the enemy's (and fires a salvo at a covered target)
               FEAT_RECOVER = 256,   // an army that has lost most of its base rebuilds the core first, with every free dozer, and keeps its last units home
+              FEAT_CIVIC = 512,     // a civilian dozer raises a town behind the base once the economy is running (income and free dozers)
+              FEAT_DEEPNUKE = 1024, // a rich commander with a Nuke Ramp sinks an Underground Nuke silo and fires its silver warhead
               FEAT_ALL = 0xFFFF,
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER };   // what ships
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE };   // what ships
 
 struct AiPlayer {
     int player = -1;
@@ -42,7 +44,7 @@ struct AiPlayer {
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastSpyOrder = -100;     // when the spies were last sent after a structure
-    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
+    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0, nextCivicTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
     float nukeHoldSince = -1;   // a covered nuke target is waited out for the second ramp since this time
     int nukesSeen = 0;             // enemy warheads launched so far (a commander that has been nuked builds anti-nuke defences)
     int seenNukeIds = 0;
@@ -72,7 +74,7 @@ private:
     Entity* pickAttackTarget();
     float assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy);
     float enemyStrengthNear(Vec2 p, float radiusTiles);
-    Entity* idleDozer();
+    Entity* idleDozer(bool civic = false);   // civic: a civilian dozer (they raise only the town; the others only the base)
     bool recoverBase(int dozers, bool hasHq);   // recovery mode: every free dozer raises the next missing core structure (-> something was placed)
     void managePower();
 };

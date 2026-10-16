@@ -129,6 +129,9 @@ struct Entity {
     Ref overdriveTgt[2];
     float antiNukeCd = 0;             // bunker: cooldown for engaging incoming nuclear warheads
     bool surrounded = false;          // bunker: enemy forces currently surround it (activates overdrive guns and radiation defense)
+    float guardHitAt = -100;          // bunker: the last time a friendly structure it watches over was hit (its pod and guns answer that too)
+    float dozerAt = 0;                // civilian structure: sim time its next free dozer comes out ...
+    u8 dozerKind = 0;                 // ... and which kind: 0 a military dozer, 1 a civilian one (they take turns)
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -223,7 +226,9 @@ struct Sim {
     // tactical nukes in flight: launched from a Nuke Ramp, they detonate at 'pos' after NUKE_FLIGHT seconds
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
-    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE)
+    struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
+                  bool deep = false; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                                          // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
     static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
@@ -274,7 +279,7 @@ struct Sim {
     static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
-    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; };
+    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; float life = FALLOUT_LIFE; };   // life: seconds it lasts (an Underground Nuke's three times as long)
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid
@@ -335,6 +340,13 @@ struct Sim {
     int dropTier(int player) const;                     // 0-based into DROP_TIERS / DTI_COUNT entries
     std::vector<int> dropManifest(int player) const;    // the load a cargo plane would carry for this army right now (air last)
     bool cmdNuke(int player, Vec2 pos, bool force = false);       // fires one ready Nuke Ramp at pos
+    bool cmdDeepNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready Underground Nuke silo at pos (from that silo if it is ready)
+    int deepNukesReady(int player) const;     // Underground Nuke silos that can launch right now
+    float deepNukeWait(int player) const;     // seconds until the soonest silo is ready (0 = ready, -1 = no silo)
+    static bool hardened(const Entity& b);    // a finished bunker or Underground Nuke silo: doors/hatch first, plating, and only troops can finish it
+    static bool canRaise(const Entity& dozer, int buildType);   // civilian dozers raise only the civilian town, the others only military structures
+    static bool canMend(const Entity& dozer, int buildType);    // civilian dozers mend only the town; the others mend anything
+    int civicPeople(const Entity& b) const;   // townsfolk walking about a civilian structure (decoration; 0 for anything else)
     bool cmdMiniNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready bunker's small missile at pos (from that bunker if it is ready)
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
     bool cmdPhoneStrike(int player, Vec2 pos);   // tech structure: call in a strike package on a spot of your choice (see PhoneStrike)
@@ -356,8 +368,8 @@ struct Sim {
     Vec2 dronePos(const Entity& e, int i) const { return dronePosAt(e, i, time); }   // where its i-th drone is (they circle their host)
     Vec2 dronePosAt(const Entity& e, int i, float t) const;
     // chance the defences covering 'at' stop a warhead of 'scale' (of anybody who would hurt 'victim'): 1 - prod(1 - each one's antiNukeShot)
-    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f) const;
-    int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f) const;   // how many working defences cover 'at'
+    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // deep: an Underground Nuke (only lasers count)
+    int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // how many working defences cover 'at'
     bool antiNukeWorking(const Entity& b) const;             // a finished anti-nuke defence that is switched on and powered
     float antiNukeCover(const Entity& b, float scale) const; // px: how far from it a warhead's target may be for it to engage (lasers: their blast reaching the circle is enough)
     int antiNukeLinked(const Entity& b) const;               // working Anti-Nuke Lasers of the same army standing close by (they share tracking: see ANTINUKE_LINK)
@@ -452,6 +464,9 @@ private:
     void updateRoofGun(Entity& b, bool powered);
     void updateDetection();                              // detectors (spy drones, up-close drones) reveal stealthy enemies to their whole team
     void updateBunkerSelf(Entity& b);                    // the bunker's own business: income, mending, miniguns
+    void updateBunkerWard(Entity& b);                    // the bunker watches over the structures around it: seismic sensors, mending crews
+    void updateCivic(Entity& b);                         // a civilian structure: pays its army and sends out a free dozer now and then
+    void updateSilo(Entity& b);                          // an Underground Nuke silo mends its body and blast doors when left alone
     void updateBunker(Entity& b);                        // garrison: heals, repairs the hatch, fires from the hatch, lets soldiers out
     void updateCarrierUnload(Entity& c);                 // one passenger out every few ticks while 'unloading'
     void board(Entity& u, Entity& c, bool quiet = false);   // quiet: no click sound (a dropped jeep's crew is put aboard in bulk)

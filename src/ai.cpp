@@ -53,12 +53,15 @@ struct Force {
 
 static float unitValue(const Entity& e) { return e.isUnit() ? UNITS[e.type].cost * (0.5f + 0.5f * e.hp / e.maxHp) : 0; }
 
+// ONEHOUR_FEATOFF=bits: switch these pro features off for every computer army (headless balance runs: what does a feature do to the games?)
+static int featOff() { static const int off = getenv("ONEHOUR_FEATOFF") ? atoi(getenv("ONEHOUR_FEATOFF")) : 0; return off; }
+
 void AiManager::init(u64 seed) {
     for (int p = 0; p < MAX_PLAYERS; p++) {
         bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
         ais[p].useBrain = ub;
-        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].brain = brainOverride[p] ? brainOverride[p] : &g_brain; ais[p].feat = featMask[p]; ais[p].init(p, seed + p * 7919); }
+        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].brain = brainOverride[p] ? brainOverride[p] : &g_brain; ais[p].feat = featMask[p] & ~featOff(); ais[p].init(p, seed + p * 7919); }
     }
 }
 void AiManager::update() {
@@ -113,10 +116,10 @@ void AiPlayer::init(int p, u64 seed) {
 
 // A dozer free for a new structure: an idle one first, then one on the move, then one mending a finished structure or helping on a site on its own
 // (it goes back to that site afterwards). A dozer aboard a bunker is not free: it cannot drive to a site from there.
-Entity* AiPlayer::idleDozer() {
+Entity* AiPlayer::idleDozer(bool civic) {
     Entity* best = nullptr; int bestRank = 99;
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || e.carrier.valid()) continue;
+        if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || e.carrier.valid() || civicDozerType(e.type) != civic) continue;
         const Entity* t = e.order == O_BUILD ? g_sim.get(e.targetEnt) : nullptr;
         int rank = e.order == O_IDLE ? 0 : e.order == O_MOVE ? 1 : (e.order == O_BUILD && t && t->constructed) ? 2 : (e.order == O_BUILD && e.autoTask) ? 3 : 99;
         if (rank < bestRank) { bestRank = rank; best = &e; if (rank == 0) break; }
@@ -369,18 +372,19 @@ Entity* AiPlayer::pickAttackTarget() {
         float s = dist(e.pos, hasFront ? humanFront : base) / TILE;   // (with a teammate's push under way, near their front rather than near home)
         if (e.isBuilding()) {
             BuildRole r = e.bt().role;
-            if (smart && r == BR_NUKE) s -= 18; else if (smart && r == BR_INCOME) s -= 12;
+            if (smart && r == BR_NUKE) s -= 18; else if (smart && (r == BR_INCOME || r == BR_CIVIC)) s -= 12;   // (a town keeps paying for its army's rebuilding: raze it like an income structure)
             if (r == BR_SUPPLY) s -= 14; else if (r == BR_POWER) s -= 12; else if (r == BR_FACTORY || r == BR_BARRACKS || r == BR_AIRFIELD) s -= 8;
             else if (r == BR_TURRET || r == BR_AATURRET) s += 4; else if (r == BR_HQ) s += 6;
             // defended targets cost more: count turrets around it
             for (auto& t : g_sim.ents) if (t.alive && t.isBuilding() && t.owner == e.owner && t.constructed && (t.bt().role == BR_TURRET || t.bt().role == BR_AATURRET) && dist(t.pos, e.pos) < 8 * TILE) s += 3;
             if (g_sim.refOf(e) == failedTarget && g_sim.time - failedAt < 240) s += 18;
             s += enemyStrengthNear(e.pos, 9) / 500.0f;   // prefer the softest worthwhile target
-            if (smart) for (auto& f : g_sim.fallouts) if (f.t < Sim::FALLOUT_LIFE - 15.0f && dist(e.pos, f.pos) < f.r) s += 30;   // radiation: come back when it has faded
+            if (smart) for (auto& f : g_sim.fallouts) if (f.t < f.life - 15.0f && dist(e.pos, f.pos) < f.r) s += 30;   // radiation: come back when it has faded
         } else {
             if (e.ut().role == UR_HARVESTER) s -= 10;
-            else {   // armies are met on the way, not hunted - unless nothing else of the enemy is left to find (a stranded fleet, a last tank): then they are the objective
-                if (e.ut().role == UR_COMBAT && (!lastResort || s + 40 < lastResortScore)) { lastResort = &e; lastResortScore = s + 40; }
+            else {   // armies are met on the way, not hunted - unless nothing else of the enemy is left to find (a stranded fleet, a last tank, a last dozer): then they are the objective
+                float lr = s + (e.ut().role == UR_COMBAT ? 40.0f : 60.0f);   // (fighting units first)
+                if (!e.ut().temp && !civicDozerType(e.type) && (!lastResort || lr < lastResortScore)) { lastResort = &e; lastResortScore = lr; }
                 continue;
             }
         }
@@ -474,16 +478,16 @@ void AiPlayer::think() {
     }
 
     // ---------- survey
-    int dozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0, fleetValue = 0;
+    int dozers = 0, civDozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0, fleetValue = 0;
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
-    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0;
+    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0;
     for (auto& e : S.ents) {
         if (!e.alive || e.owner != player) continue;
         if (e.isUnit()) {
             const UnitType& ut = e.ut();
-            if (ut.role == UR_DOZER) dozers++;
+            if (ut.role == UR_DOZER) { if (civicDozerType(e.type)) civDozers++; else dozers++; }   // (a civilian dozer raises only the town: it is counted apart)
             else if (ut.role == UR_HARVESTER) { harvesters++; haulers.push_back(S.refOf(e)); }
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
             else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and coordinate as a swarm
@@ -512,6 +516,8 @@ void AiPlayer::think() {
             case BR_NAVAL: yards.push_back(&e); break;
             case BR_ANTINUKE: antiNukes++; break;
             case BR_BUNKER: bunkers++; break;
+            case BR_CIVIC: civics++; break;
+            case BR_UNUKE: silos++; break;
             case BR_NONE: break;
             }
         }
@@ -609,11 +615,11 @@ void AiPlayer::think() {
         else enemyDir = (Vec2(WORLD_W / 2, WORLD_H / 2) - pl.basePos).norm();
     }
     rally = g_map.nearestFree(pl.basePos + enemyDir * (9 * TILE), 6);
-    if (smart) for (auto& f : S.fallouts) if (f.t < Sim::FALLOUT_LIFE - 10.0f && dist(rally, f.pos) < f.r + 2 * TILE) rally = g_map.nearestFree(pl.basePos + enemyDir * (3 * TILE), 6);   // never muster inside radiation
+    if (smart) for (auto& f : S.fallouts) if (f.t < f.life - 10.0f && dist(rally, f.pos) < f.r + 2 * TILE) rally = g_map.nearestFree(pl.basePos + enemyDir * (3 * TILE), 6);   // never muster inside radiation
     // radiation: whatever is not part of an attack wave walks out of a fallout zone and stays out of it
     if (smart && pl.difficulty >= 1 && !S.fallouts.empty()) {
         for (auto& f : S.fallouts) {
-            if (f.t > Sim::FALLOUT_LIFE - 8.0f) continue;
+            if (f.t > f.life - 8.0f) continue;
             for (auto& e : S.ents) {
                 if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || (e.ut().role == UR_HARVESTER && e.order == O_RETURN)) continue;
                 if (dist(e.pos, f.pos) > f.r) continue;
@@ -639,7 +645,7 @@ void AiPlayer::think() {
     int wantDozers = pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2);
     if (on(FEAT_MACRO) && pl.difficulty >= 1) wantDozers += (pl.money > 6000 ? 1 : 0) + (pl.money > 14000 && pl.difficulty >= 2 ? 1 : 0);   // a rich army builds on several fronts at once
     int queuedDozer = 0;
-    if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER) queuedDozer++;
+    if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER && !civicDozerType(t)) queuedDozer++;
     // ---------- recovery: most of the base is gone (a Command structure and at least one more core piece, or two pieces): rebuilding comes before
     // everything else as soon as there is a dozer and money for it (a relief drop, the bunker's trickle, what haulers still bring in)
     {
@@ -650,7 +656,7 @@ void AiPlayer::think() {
     }
     if (on(FEAT_RECOVER) && dozers > 0 && !idleDozer()) {   // every dozer sits in a bunker (or is busy): a stowed one is let out, it is no use underground
         bool outside = false;
-        for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.ut().role == UR_DOZER && !e.carrier.valid()) outside = true;
+        for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.ut().role == UR_DOZER && !civicDozerType(e.type) && !e.carrier.valid()) outside = true;
         if (!outside) for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && e.bt().role == BR_BUNKER && !e.unloading && S.garrisonDozers(e) > 0) { S.cmdUnload(S.refOf(e), false, e.pos); break; }
     }
     if (recovering) wantDozers = std::max(wantDozers, 3);
@@ -711,7 +717,7 @@ void AiPlayer::think() {
                 Entity* key = nullptr; int bestCover = 1 << 30;
                 for (auto* b : ownBuildings) {
                     BuildRole r = b->bt().role;
-                    if (!b->constructed || !(r == BR_FACTORY || r == BR_AIRFIELD || r == BR_HQ || r == BR_TECH || r == BR_NUKE || r == BR_SUPPLY || r == BR_INCOME)) continue;
+                    if (!b->constructed || !(r == BR_FACTORY || r == BR_AIRFIELD || r == BR_HQ || r == BR_TECH || r == BR_NUKE || r == BR_SUPPLY || r == BR_INCOME || r == BR_CIVIC || r == BR_UNUKE)) continue;
                     int cover = 0; for (auto* t : ownBuildings) if (t->bt().role == BR_AATURRET && dist(t->pos, b->pos) < 9 * TILE) cover++;
                     if (cover < bestCover || (cover == bestCover && key && dist(b->pos, pl.basePos) < dist(key->pos, pl.basePos))) { bestCover = cover; key = b; }
                 }
@@ -806,11 +812,39 @@ void AiPlayer::think() {
         }
         // continue unfinished structures whose dozer died
         if (!built) for (auto& e : S.ents)
-            if (e.alive && e.isBuilding() && e.owner == player && !e.constructed) {
+            if (e.alive && e.isBuilding() && e.owner == player && !e.constructed && Sim::canRaise(*dz, e.type)) {   // (a civilian site waits for a civilian dozer)
                 bool someone = false;
                 for (auto& u : S.ents) if (u.alive && u.owner == player && u.isUnit() && u.order == O_BUILD && u.targetEnt == S.refOf(e)) someone = true;
                 if (!someone) { S.cmdAssist({S.refOf(*dz)}, S.refOf(e)); break; }
             }
+    }
+
+    // ---------- the town: once the base runs (hub, power, barracks, factory) a civilian dozer raises civilian structures behind it, the best
+    // income for the money first, while the treasury can spare it. They pay on their own and send out free dozers; the base's defences cover them.
+    if (on(FEAT_CIVIC) && pl.difficulty >= 1 && !recovering && hq && hq->constructed && hubs > 0 && powerPlants > 0 && !barracks.empty() && !factories.empty() && tm > (pl.difficulty >= 2 ? 9.0f : 11.0f)) {
+        const int wantTown = pl.difficulty >= 2 ? 3 : 2;   // (a bigger, earlier town made bases rebuild faster than waves could flatten them: far more games stalled)
+        int civType = pl.faction == F_CYBER ? U_C_CIVDOZER : U_K_CIVDOZER, queuedCiv = 0;
+        for (int t : hq->queue) if (t == civType) queuedCiv++;
+        if (civics < wantTown && civDozers + queuedCiv == 0 && hq->queue.size() < 2 && pl.money > 2600 && !threat) S.cmdTrain(S.refOf(*hq), civType);
+        Entity* cz = idleDozer(true);
+        if (cz && cz->order == O_IDLE && civics < wantTown && !threat && S.time >= nextCivicTry) {
+            nextCivicTry = S.time + 4.0f;
+            int cb = pl.faction == F_CYBER ? B_C_HOUSE : B_K_HOUSE, pick = -1; float best = 0;
+            for (int k = 0; k < CV_COUNT; k++) {
+                int t = cb + k;
+                if (!S.buildAvailable(player, t) || pl.money < BUILDS[t].cost + (pl.difficulty >= 2 ? 3000 : 4000)) continue;   // (spare money only: the army comes first)
+                float v = CIVICS[k].income / (float)BUILDS[t].cost + 0.02f * (k == CV_TOWNHALL);   // pay per credit (the Town Hall opens the big ones)
+                if (v > best) { best = v; pick = t; }
+            }
+            int tx, ty;
+            Vec2 behind = pl.basePos - enemyDir * (5.0f + 1.2f * std::min(civics, 8)) * TILE + Vec2(-enemyDir.y, enemyDir.x) * ((civics & 1 ? 1.0f : -1.0f) * (2.0f + civics) * TILE);
+            if (pick >= 0 && findSpot(pick, behind, 18, tx, ty)) S.cmdBuild(S.refOf(*cz), pick, tx, ty);
+        }
+    }
+    // ---------- the Underground Nuke: a commander rolling in money that already runs a Nuke Ramp sinks a silo far behind its base
+    if (on(FEAT_DEEPNUKE) && pl.difficulty >= 1 && ramps > 0 && !threat && silos < (pl.difficulty >= 3 ? 2 : 1)) {
+        int siloType = pl.faction == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
+        if (pl.money > BUILDS[siloType].cost + 3000 && idleDozer()) tryBuild(siloType, pl.basePos - enemyDir * 120, 20);
     }
 
     // ---------- production
@@ -942,7 +976,7 @@ void AiPlayer::think() {
 
     // ---------- nukes
     // a warhead kills ground units and small structures in the blast and wrecks the big ones: aim at whatever it would cost the enemy most
-    auto nukeSpot = [&](float R, float& bestScore, float* rawOut = nullptr) {
+    auto nukeSpot = [&](float R, float& bestScore, float* rawOut = nullptr, bool deep = false) {
         std::vector<Entity*> cand;
         for (auto& e : S.ents) {
             if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.isAir()) continue;
@@ -956,13 +990,13 @@ void AiPlayer::think() {
                 float d = dist(c->pos, o->pos); if (d > R) continue;
                 float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
                 if (o->isUnit()) score += UNITS[o->type].cost * (UNITS[o->type].hp > 1200 && f < 0.5f ? 0.3f : 1.0f);
-                else { float cost = (float)BUILDS[o->type].cost; bool small = BUILDS[o->type].w * BUILDS[o->type].h <= 6; score += small ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }
+                else { float cost = (float)BUILDS[o->type].cost * (BUILDS[o->type].role == BR_CIVIC ? 0.4f : 1.0f); bool small = BUILDS[o->type].w * BUILDS[o->type].h <= 6; score += small ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }   // (a town is worth less to a warhead than an army)
             }
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && o.owner != player && !S.enemies(player, o.owner) && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;   // fallout hurts friends too
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner == player && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;
             for (auto& o : S.ents) if (o.alive && o.isAir() && o.owner >= 0 && !S.enemies(player, o.owner) && dist(c->pos, o.pos) < R) score -= UNITS[o.type].cost * 1.2f;   // and every aircraft in the blast falls, ours too
             float raw = score;
-            if (on(FEAT_AEGIS)) score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true);   // the enemy's anti-nuke cover makes a spot worth less: its defences may shoot the warhead down
+            if (on(FEAT_AEGIS)) score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true, deep ? UNUKE_SCALE : 1.0f, deep);   // the enemy's anti-nuke cover makes a spot worth less: its defences may shoot the warhead down
             if (score > bestScore) { bestScore = score; bestPos = c->pos; bestRaw = raw; }
         }
         if (rawOut) *rawOut = bestRaw;
@@ -993,6 +1027,11 @@ void AiPlayer::think() {
             if (score > bestScore) { bestScore = score; bestPos = e.pos; }
         }
         if (bestScore >= 3500.0f) S.cmdNuke(player, bestPos);
+    }
+    // the silver warhead of an Underground Nuke: three times the circle, so it waits for a target worth it (only enemy lasers can stop it)
+    if (smart && silos > 0 && S.deepNukesReady(player) > 0 && (S.tick & 7) == (u32)((player + 3) & 7)) {
+        float bestScore; Vec2 bestPos = nukeSpot(NUKE_RADIUS * TILE * std::sqrt(UNUKE_SCALE), bestScore, nullptr, true);
+        if (bestScore >= nukeBar * 2.0f) S.cmdDeepNuke(player, bestPos);
     }
     // a bunker's small missile (a computer army only has one by capturing a bunker): a smaller circle, so a lower bar
     if (smart && S.miniNukesReady(player) > 0 && (S.tick & 7) == (u32)(player & 7)) {
@@ -1025,7 +1064,7 @@ void AiPlayer::think() {
             float score = 0;
             for (auto& o : S.ents) {
                 if (!o.alive || o.kind == EK_RESOURCE || !S.enemies(player, o.owner) || o.isAir()) continue;
-                if (o.isBuilding() && BUILDS[o.type].role == BR_BUNKER) continue;   // aircraft can never take a bunker below its floor: not a strike target
+                if (o.isBuilding() && (BUILDS[o.type].role == BR_BUNKER || BUILDS[o.type].role == BR_UNUKE)) continue;   // aircraft can never take a bunker (or a silo) below its floor: not a strike target
                 if (dist(e->pos, o.pos) > R) continue;
                 float v = o.isUnit() ? (float)UNITS[o.type].cost : (float)BUILDS[o.type].cost * 0.6f;
                 if (!o.isUnit() && BUILDS[o.type].w * BUILDS[o.type].h > 6) v *= 0.5f;   // a big structure shrugs a strike off
@@ -1108,7 +1147,7 @@ void AiPlayer::think() {
             if (retreatVotes >= 3) { exhausted = true; retreatVotes = 0; }
         }
         // a target that radiation has made deadly is not worth marching into
-        if (smart && tgt) for (auto& f : S.fallouts) if (f.t < Sim::FALLOUT_LIFE - 15.0f && dist(tgt->pos, f.pos) < f.r) { attackTarget = NOREF; break; }
+        if (smart && tgt) for (auto& f : S.fallouts) if (f.t < f.life - 15.0f && dist(tgt->pos, f.pos) < f.r) { attackTarget = NOREF; break; }
         if (exhausted || stale || !tgt) {
             if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] %s value=%.0f/%.0f units=%d\n", player, S.time, exhausted ? "RETREAT" : "REGROUP", waveNow, waveValue, (int)wave.size());
             endWave(waveNow);
@@ -1234,7 +1273,7 @@ void AiPlayer::think() {
         for (auto& e : S.ents) {
             if (!e.alive || !e.isBuilding() || !e.constructed || !S.enemies(player, e.owner) || !(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             float w = 1.0f;
-            switch (e.bt().role) { case BR_NUKE: w = 2.2f; break; case BR_INCOME: w = 1.7f; break; case BR_TECH: w = 1.4f; break; case BR_FACTORY: case BR_AIRFIELD: w = 1.3f; break; case BR_SUPPLY: w = 1.2f; break; case BR_POWER: w = 1.1f; break; case BR_HQ: w = 0.8f; break; default: break; }
+            switch (e.bt().role) { case BR_NUKE: case BR_UNUKE: w = 2.2f; break; case BR_INCOME: w = 1.7f; break; case BR_CIVIC: w = 0.6f; break; case BR_TECH: w = 1.4f; break; case BR_FACTORY: case BR_AIRFIELD: w = 1.3f; break; case BR_SUPPLY: w = 1.2f; break; case BR_POWER: w = 1.1f; break; case BR_HQ: w = 0.8f; break; default: break; }
             float armed = 0;
             S.forEachNear(e.pos, 6.5f * TILE, [&](Entity& g) {
                 if (g.kind == EK_RESOURCE || g.owner < 0 || !(g.owner == e.owner || S.players[g.owner].team == S.players[e.owner].team)) return;
@@ -1305,7 +1344,7 @@ void AiPlayer::think() {
                 if (e.isBuilding()) {
                     float w = 1.0f;
                     switch (e.bt().role) {
-                    case BR_NUKE: w = 1.9f; break; case BR_INCOME: w = 1.5f; break; case BR_SUPPLY: w = 1.3f; break; case BR_POWER: w = 1.25f; break;
+                    case BR_NUKE: case BR_UNUKE: w = 1.9f; break; case BR_INCOME: w = 1.5f; break; case BR_CIVIC: w = 0.45f; break; case BR_SUPPLY: w = 1.3f; break; case BR_POWER: w = 1.25f; break;   // (a town is expensive but fights nobody: bombing it instead of the army stalled games)
                     case BR_TECH: w = 1.1f; break; case BR_HQ: w = 0.55f; break; case BR_TURRET: w = 0.35f; break; case BR_AATURRET: w = 0.2f; break; default: break;
                     }
                     v = BUILDS[e.type].cost * w * (e.constructed ? 1.0f : 0.5f);

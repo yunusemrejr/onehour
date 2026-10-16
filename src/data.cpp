@@ -100,6 +100,9 @@ const UnitType UNITS[U_COUNT] = {
     // the two fighters of a Hotline Strike: never built (no structure makes them), lent to the army for one run
     { "Valkyrie",       "V", F_CYBER,   UK_AIR, UR_COMBAT, AR_AIR, 4200, 900, 4000, 0, 12, 15, W_STRIKE_C, 36, BR_NONE, -1, "Special strike fighter on loan from a Hotline Strike: fastest thing in the sky, three rocket passes over the called spot, armoured and nearly impossible to shoot down. It leaves when its run is over", 0, 1, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 0, 0.62f, 1, 0 },
     { "Warhawk",        "V", F_CLANKER, UK_AIR, UR_COMBAT, AR_AIR, 4400, 880, 4000, 0, 12, 15, W_STRIKE_K, 36, BR_NONE, -1, "Special strike fighter on loan from a Hotline Strike: fastest thing in the sky, three rocket passes over the called spot, armoured and nearly impossible to shoot down. It leaves when its run is over", 0, 1, 0, 0, 0, ST_NONE, 0.0f, 0, 0, 0, 0.58f, 1, 0 },
+    // civilian dozers: the price of a dozer, built at the Command structure, they raise only the civilian town (and mend anything, like any dozer)
+    { "Civic Fabricator","V", F_CYBER,   UK_VEH, UR_DOZER, AR_LIGHT, 400, 88, 1000, 12, 6, 12, -1, 0, BR_HQ, -1, "Civilian builder: raises houses, apartments, skyscrapers, gas stations, grocery stores, event halls, town squares, the town hall and government offices. Each pays on its own and sends out free dozers. Cannot build military structures" },
+    { "Civil Dozer",    "V", F_CLANKER, UK_VEH, UR_DOZER, AR_LIGHT, 420, 82, 1000, 12, 6, 12, -1, 0, BR_HQ, -1, "Civilian builder: raises houses, apartments, skyscrapers, gas stations, grocery stores, event halls, town squares, the town hall and government offices. Each pays on its own and sends out free dozers. Cannot build military structures" },
 };
 
 const BuildType BUILDS[B_COUNT] = {
@@ -135,6 +138,41 @@ const BuildType BUILDS[B_COUNT] = {
     { "Shipyard",       "Y", F_CLANKER, BR_NAVAL,    3200, 2200, 28, 3, 3, -3, 8, -1, B_K_FACTORY, "Naval Yard: must touch the lake. Builds the Iron Destroyer and, with an Arms Lab, the Rocket Cruiser" },
     { "Anti-Nuke Laser","Q", F_CYBER,   BR_ANTINUKE, 1900, 1900, 20, 2, 2, -5, 9, -1, B_C_TECH, "Small tower that spots a nuclear warhead closing in on its 17 tile area (or whose blast would reach into it) and burns it from the sky, early and with no reload gap between warheads. Every one has its own chance; towers within 9 tiles of each other link up for more beams, faster tracking and a better chance each. A warhead shot down still drops pieces and radiation: 30% of the damage. Needs power (max 8)" },
     { "Anti-Nuke Missiles","Q", F_CLANKER, BR_ANTINUKE, 2100, 1800, 20, 2, 2, -2, 9, -1, B_K_TECH, "Small silo that spots a nuclear warhead closing in on its 19 tile area and launches interceptors at it. Every one has its own chance, so the more you build, the likelier a warhead is stopped. A warhead shot down still drops pieces and radiation: 30% of the damage (max 8)" },
+    // civilian infrastructure (Cyber, then Clanker), CivicKind order; hp, cost, time, w, h; no power, no sight beyond its yard, no weapon
+    { "House", "H", F_CYBER, BR_CIVIC, 900, 600, 10, 2, 2, 0, 6, -1, -1, "A family home. Pays $30 every 10s and sends out a free dozer every 480s. No guns, no plating: only your defences protect it" },
+    { "Apartments", "A", F_CYBER, BR_CIVIC, 1500, 1200, 16, 3, 2, 0, 6, -1, -1, "An apartment block. Pays $65 every 10s and sends out a free dozer every 400s. No guns, no plating: only your defences protect it" },
+    { "Skyscraper", "S", F_CYBER, BR_CIVIC, 3000, 4000, 34, 3, 3, 0, 6, -1, B_C_TOWNHALL, "A glass office tower. Pays $220 every 10s and sends out a free dozer every 280s. Needs a Town Hall. No guns, no plating: only your defences protect it" },
+    { "Gas Station", "G", F_CYBER, BR_CIVIC, 900, 900, 12, 3, 2, 0, 6, -1, -1, "Fuel and a corner shop. Pays $50 every 10s and sends out a free dozer every 440s. No guns, no plating: only your defences protect it" },
+    { "Grocery Store", "R", F_CYBER, BR_CIVIC, 1200, 1000, 14, 3, 2, 0, 6, -1, -1, "The town's food market. Pays $55 every 10s and sends out a free dozer every 420s. No guns, no plating: only your defences protect it" },
+    { "Event Hall", "E", F_CYBER, BR_CIVIC, 1800, 1600, 20, 3, 3, 0, 6, -1, -1, "Concerts, weddings and fairs: the social heart of the town. Pays $90 every 10s and sends out a free dozer every 340s. No guns, no plating: only your defences protect it" },
+    { "Town Square", "Q", F_CYBER, BR_CIVIC, 1000, 700, 10, 3, 3, 0, 6, -1, -1, "An open plaza with a fountain where the townsfolk meet. Pays $35 every 10s and sends out a free dozer every 400s. No guns, no plating: only your defences protect it" },
+    { "Town Hall", "T", F_CYBER, BR_CIVIC, 3200, 3000, 30, 4, 3, 0, 6, -1, -1, "Where the town meets and is run (one per army). Pays $170 every 10s and sends out a free dozer every 220s. Unlocks skyscrapers and government offices. No guns, no plating: only your defences protect it" },
+    { "Government Office", "O", F_CYBER, BR_CIVIC, 3000, 3500, 30, 4, 3, 0, 6, -1, B_C_TOWNHALL, "Ministries and records. Pays $190 every 10s and sends out a free dozer every 260s. Needs a Town Hall. No guns, no plating: only your defences protect it" },
+    { "House", "H", F_CLANKER, BR_CIVIC, 900, 600, 10, 2, 2, 0, 6, -1, -1, "A family home. Pays $30 every 10s and sends out a free dozer every 480s. No guns, no plating: only your defences protect it" },
+    { "Apartments", "A", F_CLANKER, BR_CIVIC, 1500, 1200, 16, 3, 2, 0, 6, -1, -1, "An apartment block. Pays $65 every 10s and sends out a free dozer every 400s. No guns, no plating: only your defences protect it" },
+    { "Skyscraper", "S", F_CLANKER, BR_CIVIC, 3000, 4000, 34, 3, 3, 0, 6, -1, B_K_TOWNHALL, "A glass office tower. Pays $220 every 10s and sends out a free dozer every 280s. Needs a Town Hall. No guns, no plating: only your defences protect it" },
+    { "Gas Station", "G", F_CLANKER, BR_CIVIC, 900, 900, 12, 3, 2, 0, 6, -1, -1, "Fuel and a corner shop. Pays $50 every 10s and sends out a free dozer every 440s. No guns, no plating: only your defences protect it" },
+    { "Grocery Store", "R", F_CLANKER, BR_CIVIC, 1200, 1000, 14, 3, 2, 0, 6, -1, -1, "The town's food market. Pays $55 every 10s and sends out a free dozer every 420s. No guns, no plating: only your defences protect it" },
+    { "Event Hall", "E", F_CLANKER, BR_CIVIC, 1800, 1600, 20, 3, 3, 0, 6, -1, -1, "Concerts, weddings and fairs: the social heart of the town. Pays $90 every 10s and sends out a free dozer every 340s. No guns, no plating: only your defences protect it" },
+    { "Town Square", "Q", F_CLANKER, BR_CIVIC, 1000, 700, 10, 3, 3, 0, 6, -1, -1, "An open plaza with a fountain where the townsfolk meet. Pays $35 every 10s and sends out a free dozer every 400s. No guns, no plating: only your defences protect it" },
+    { "Town Hall", "T", F_CLANKER, BR_CIVIC, 3200, 3000, 30, 4, 3, 0, 6, -1, -1, "Where the town meets and is run (one per army). Pays $170 every 10s and sends out a free dozer every 220s. Unlocks skyscrapers and government offices. No guns, no plating: only your defences protect it" },
+    { "Government Office", "O", F_CLANKER, BR_CIVIC, 3000, 3500, 30, 4, 3, 0, 6, -1, B_K_TOWNHALL, "Ministries and records. Pays $190 every 10s and sends out a free dozer every 260s. Needs a Town Hall. No guns, no plating: only your defences protect it" },
+    // Underground Nuke silos: ten times the price of a Nuke Ramp, as hard to kill as a bunker, a silver warhead three times as strong
+    { "Underground Nuke","G", F_CYBER,   BR_UNUKE, 32000, 50000, 60, 3, 3, -6, 8, -1, B_C_NUKE, "Buried nuclear silo (key K with it selected): a silver warhead every 5 min with three times a Nuke Ramp's blast radius, damage and radiation. Blast doors and deep plating: as hard to destroy as a bunker (aircraft, structures and nukes cannot finish it). Only an Anti-Nuke Laser can shoot its warhead down" },
+    { "Underground Nuke","G", F_CLANKER, BR_UNUKE, 34000, 50000, 60, 3, 3, -5, 8, -1, B_K_NUKE, "Buried nuclear silo (key K with it selected): a silver warhead every 5 min with three times a Nuke Ramp's blast radius, damage and radiation. Blast doors and deep plating: as hard to destroy as a bunker (aircraft, structures and nukes cannot finish it). Only an Anti-Nuke Laser can shoot its warhead down" },
+};
+
+// income per payout (every CIVIC_INTERVAL s), seconds between free dozers, townsfolk walking about it (decoration only)
+const CivicType CIVICS[CV_COUNT] = {
+    { 30, 480.0f, 3 },   // House
+    { 65, 400.0f, 7 },   // Apartments
+    { 220, 280.0f, 10 },   // Skyscraper
+    { 50, 440.0f, 4 },   // Gas Station
+    { 55, 420.0f, 7 },   // Grocery Store
+    { 90, 340.0f, 10 },   // Event Hall
+    { 35, 400.0f, 12 },   // Town Square
+    { 170, 220.0f, 8 },   // Town Hall
+    { 190, 260.0f, 7 },   // Government Office
 };
 
 const PowerType POWERS[F_COUNT] = {

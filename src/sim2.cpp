@@ -227,21 +227,21 @@ int Sim::antiNukeLinked(const Entity& b) const {
 float Sim::antiNukeShot(const Entity& b) const {
     return ANTINUKE_CHANCE + ANTINUKE_LINK_BONUS * antiNukeLinked(b);
 }
-int Sim::antiNukeCovering(Vec2 at, int attacker, bool knownOnly, float scale) const {
+int Sim::antiNukeCovering(Vec2 at, int attacker, bool knownOnly, float scale, bool deep) const {
     int n = 0;
     Nuke probe; probe.owner = attacker;
     for (auto& b : ents) {
-        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner)) continue;
+        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && b.bt().faction != F_CYBER)) continue;   // (only a laser stops an Underground Nuke)
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
         if (dist(at, b.pos) <= antiNukeCover(b, scale)) n++;
     }
     return n;
 }
-float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale) const {
+float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bool deep) const {
     float miss = 1.0f;
     Nuke probe; probe.owner = attacker;
     for (auto& b : ents) {
-        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner)) continue;
+        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && b.bt().faction != F_CYBER)) continue;
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
         if (dist(at, b.pos) <= antiNukeCover(b, scale)) miss *= 1.0f - antiNukeShot(b);
     }
@@ -257,6 +257,7 @@ void Sim::updateAntiNuke(Entity& b) {
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
         if (n.broken || n.killT >= 0 || !nukeHurts(n, b.owner) || dist(n.pos, b.pos) > antiNukeCover(b, n.scale)) continue;
+        if (n.deep && !cy) continue;     // an Underground Nuke's warhead outruns interceptor missiles: only the lasers can burn it down
         if (time < b.siloTimer) break;   // (a laser that just fired at one warhead is still recharging)
         float left = NUKE_FLIGHT - n.t;
         int linked = cy ? antiNukeLinked(b) : 0;
