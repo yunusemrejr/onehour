@@ -103,16 +103,19 @@ bool Sim::interceptProjectile(Projectile& p) {
     const Weapon& w = WEAPONS[p.weapon];
     if (w.proj != PJ_ROCKET && w.proj != PJ_SHELL) return false;
     Entity* h = get(p.target);
-    if (h && h->isBuilding() && h->constructed && h->bt().role == BR_BUNKER && h->hatch > 0 && h->disabledUntil <= time) {   // the hatch guns of a bunker swat it
-        if (time < h->ciwsAt || dist(p.pos, h->pos) > BUNKER_CIWS_RANGE * TILE + h->radius()) return false;
-        h->ciwsAt = time + BUNKER_CIWS_GAP;
+    if (w.proj == PJ_ROCKET && h && h->isBuilding() && h->constructed && h->bt().role == BR_BUNKER && h->hatch > 0 && h->disabledUntil <= time) {   // the hatch guns and overdrive lasers of a bunker swat rockets
+        float range = (h->surrounded ? BUNKER_CIWS_RANGE + 1.5f : BUNKER_CIWS_RANGE) * TILE + h->radius();
+        if (time < h->ciwsAt || dist(p.pos, h->pos) > range) return false;
+        h->ciwsAt = time + (h->surrounded ? BUNKER_CIWS_GAP * 0.65f : BUNKER_CIWS_GAP);
         int gi = rng.range(0, BUNKER_GUNS - 1);
-        Vec2 g = bunkerGunPos(*h, gi);
+        Vec2 g = h->surrounded ? bunkerOverdrivePos(*h, gi) : bunkerGunPos(*h, gi);
         h->gunAng[gi] = std::atan2(p.pos.y - g.y, p.pos.x - g.x);
-        fx.push_back({FX_BEAM, g, p.pos, 0, 0.1f, WEAPONS[W_BUNKER_MINIGUN].color, 1.5f});
-        if (rng.f() >= BUNKER_CIWS_CHANCE) return false;
+        Color col = h->surrounded && h->bt().faction == F_CYBER ? WEAPONS[W_BUNKER_LASER].color : WEAPONS[W_BUNKER_MINIGUN].color;
+        fx.push_back({FX_BEAM, g, p.pos, 0, 0.12f, col, h->surrounded ? 2.2f : 1.5f});
+        float chance = h->surrounded ? 0.78f : BUNKER_CIWS_CHANCE;
+        if (rng.f() >= chance) return false;
         fx.push_back({FX_EXPLODE, p.pos, p.pos, 0, 0.4f, rgb(255, 224, 150), 18.0f});
-        for (int k = 0; k < 3; k++) fx.push_back({FX_SPARK, p.pos, p.pos, 0, rng.f(0.2f, 0.4f), rgb(255, 226, 130), 4});
+        for (int k = 0; k < 3; k++) fx.push_back({FX_SPARK, p.pos, p.pos, 0, rng.f(0.2f, 0.4f), col, 4});
         emit(EV_SOUND, h->owner, SND_EXPLODE_S, p.pos);
         return true;
     }

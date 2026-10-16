@@ -1207,6 +1207,19 @@ void Game::drawEntity(Entity& e) {
                 for (int k = -1; k <= 1; k += 2) g.thickLine(pp.x + sd.x * 3.5f * k, pp.y + sd.y * 3.5f * k, pp.x + sd.x * 3.5f * k + d.x * 11, pp.y + sd.y * 3.5f * k + d.y * 11, rgb(26, 28, 30), 3.5f);
                 g.fillCircle(pp.x, pp.y, 2.0f, e.podCd > WEAPONS[W_BUNKER_ROCKETS].cooldown - 0.3f ? rgb(255, 200, 120) : hudAccent(bt.faction));
             }
+            if (bt.role == BR_BUNKER && e.constructed && e.surrounded) {   // surrounded overdrive: pop-up heavy lasers / quad machineguns and radiation warning rim
+                Color oc = bt.faction == F_CYBER ? rgb(100, 245, 255) : rgb(255, 210, 90);
+                g.circle(p.x, p.y, fw * 0.56f + 1.5f * std::sin(wallTime * 9.0f), Color{120, 255, 95, 170}, 24);
+                for (int oi = 0; oi < 2; oi++) {
+                    Vec2 op = p + (g_sim.bunkerOverdrivePos(e, oi) - e.pos);
+                    Vec2 d(std::cos(e.overdriveAng[oi]), std::sin(e.overdriveAng[oi])), sd(-d.y, d.x);
+                    g.fillCircle(op.x, op.y + 1.0f, 6.5f, rgb(14, 18, 22, 180));
+                    g.fillCircle(op.x, op.y, 5.5f, disabled ? rgb(75, 82, 92) : rgb(52, 60, 68));
+                    for (int b = -1; b <= 1; b += 2)
+                        g.thickLine(op.x + sd.x * 2.2f * b, op.y + sd.y * 2.2f * b, op.x + sd.x * 2.2f * b + d.x * 12.0f, op.y + sd.y * 2.2f * b + d.y * 12.0f, oc, 2.2f);
+                    g.fillCircle(op.x, op.y, 2.2f, oc);
+                }
+            }
             // rotating heads for defenses
             if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
             else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);

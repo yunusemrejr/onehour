@@ -124,6 +124,11 @@ struct Entity {
     Vec2 nukeSalvoPos; bool nukeSalvoForce = false;
     float podCd = 0, podAng = 0;      // bunker: the pop-up rocket pod that answers whoever is wearing it down (cooldown, facing)
     float ciwsAt = 0;                 // bunker: sim time its hatch guns can swat the next rocket or shell aimed at it
+    float radCd = 0;                  // bunker: cooldown before it can vent another emergency radiation ring when surrounded and hit hard
+    float overdriveCd[2] = {0, 0}, overdriveAng[2] = {0, 0};   // bunker: surrounded-mode heavy lasers / machineguns
+    Ref overdriveTgt[2];
+    float antiNukeCd = 0;             // bunker: cooldown for engaging incoming nuclear warheads
+    bool surrounded = false;          // bunker: enemy forces currently surround it (activates overdrive guns and radiation defense)
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -269,7 +274,7 @@ struct Sim {
     static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
-    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; };
+    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; };
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid
@@ -366,6 +371,10 @@ struct Sim {
     int miniNukesReady(int player) const;     // bunkers whose missile is ready
     float miniNukeWait(int player) const;     // seconds until the soonest bunker missile is ready (0 = ready, -1 = no bunker)
     Vec2 bunkerGunPos(const Entity& b, int i) const;   // where each of a bunker's two miniguns sits (world px)
+    Vec2 bunkerOverdrivePos(const Entity& b, int i) const;   // where each of a bunker's two overdrive laser/heavy-MG mounts sits (world px)
+    bool bunkerSurrounded(const Entity& b, int* countOut = nullptr);
+    void updateBunkerAntiNuke(Entity& b, bool surrounded);
+    void updateScoutSwarm(Entity& e);
     bool atIncomeLimit(int player, int buildType) const;
     bool atBuildLimit(int player, int buildType) const;   // income structures and Command Cores are capped per player
     bool cmdScan(int player);                 // tech structure: reveal the whole map for SCANS[].duration

@@ -42,7 +42,7 @@ struct AiPlayer {
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastSpyOrder = -100;     // when the spies were last sent after a structure
-    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
+    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
     float nukeHoldSince = -1;   // a covered nuke target is waited out for the second ramp since this time
     int nukesSeen = 0;             // enemy warheads launched so far (a commander that has been nuked builds anti-nuke defences)
     int seenNukeIds = 0;
@@ -64,8 +64,9 @@ struct AiPlayer {
     void endWave(float remainingValue);
     void think();
     void dodgeNukes();                  // cheap per-tick check: pull units out of the circle of an incoming enemy nuke
-private:
     bool findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty);
+    bool findBunkerSpot(int buildType, int& tx, int& ty);
+private:
     bool tryBuild(int buildType, Vec2 preferNear, int maxRing = 22);
     int chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAir);
     Entity* pickAttackTarget();

@@ -34,7 +34,7 @@ const Weapon WEAPONS[] = {
     /* 29 */{ "Defense Laser",   58, 7.5f, 0, 0.80f, PJ_LASER,  0,    true, true,  {1.0f, 1.00f, 0.80f, 0.00f, 1.6f}, 1, 0,    SND_LASER,       rgb(130, 236, 255) },
     /* 30 */{ "Defense MG",      15, 7.5f, 0, 0.15f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.5f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
     /* 31 */{ "Hornet Lasers",   36, 6.0f, 0, 0.60f, PJ_LASER,  0,    true, true,  {1.0f, 1.10f, 0.85f, 0.60f, 1.3f}, 2, 0,    SND_LASER,       rgb(120, 236, 255) },
-    /* 32 */{ "Bunker Minigun",   9, 7.0f, 0, 0.08f, PJ_BULLET, 0,    true, true,  {1.4f, 0.80f, 0.45f, 0.00f, 1.4f}, 1, 1100, SND_MG,          rgb(255, 226, 130) },
+    /* 32 */{ "Bunker Minigun",  16, 6.8f, 0, 0.06f, PJ_BULLET, 0,    true, true,  {1.5f, 1.05f, 0.75f, 0.00f, 1.65f}, 1, 1200, SND_MG,          rgb(255, 226, 130) },
     /* 33 */{ "Jeep Gun",        12, 5.5f, 0, 0.20f, PJ_BULLET, 0,    true, true,  {1.3f, 0.45f, 0.22f, 0.15f, 0.45f}, 1, 950,  SND_MG,         rgb(255, 232, 150) },
     /* 34 */{ "Pulse Cannons",   78, 8.5f, 0, 1.30f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 1.05f, 0.80f, 0.75f}, 2, 0,    SND_LASER_HEAVY, rgb(110, 232, 255) },
     /* 35 */{ "Naval Guns",      92, 9.0f, 0, 1.90f, PJ_SHELL,  0.7f, true, true,  {1.0f, 1.10f, 1.05f, 0.85f, 0.55f}, 2, 560,  SND_CANNON,      rgb(255, 206, 120) },
@@ -42,7 +42,9 @@ const Weapon WEAPONS[] = {
     /* 37 */{ "Rocket Barrage",  96, 13.5f,3.0f, 4.8f, PJ_ROCKET, 1.0f, true, false, {1.0f, 1.10f, 1.05f, 1.35f, 0.0f}, 6, 500,  SND_ROCKET,      rgb(255, 196, 110) },
     /* 38 */{ "Strike Rockets", 130, 11.0f,0, 0.00f, PJ_ROCKET, 1.5f, true, false, {1.1f, 1.20f, 1.10f, 1.40f, 0.0f}, 1, 1150, SND_ROCKET,      rgb(150, 240, 255) },
     /* 39 */{ "Strike Rockets", 130, 11.0f,0, 0.00f, PJ_ROCKET, 1.5f, true, false, {1.1f, 1.20f, 1.10f, 1.40f, 0.0f}, 1, 1150, SND_ROCKET,      rgb(255, 190, 100) },
-    /* 40 */{ "Bunker Rocket Pod",88, 10.5f,0, 2.40f, PJ_ROCKET, 0.4f, true, false, {0.5f, 1.20f, 1.30f, 0.70f, 0.0f}, 2, 640,  SND_ROCKET,      rgb(255, 210, 140) },
+    /* 40 */{ "Bunker Rocket Pod", 98,10.5f,0, 2.40f, PJ_ROCKET, 0.5f, true, true,  {0.85f, 1.20f, 1.18f, 0.85f, 1.35f}, 2, 700, SND_ROCKET,      rgb(255, 210, 140) },
+    /* 41 */{ "Bunker Overdrive Laser", 96, 9.5f, 0, 0.28f, PJ_LASER, 0, true, true, {1.6f, 1.35f, 1.35f, 0.85f, 1.95f}, 2, 0,   SND_LASER_HEAVY, rgb(100, 245, 255) },
+    /* 42 */{ "Bunker Heavy Quad-MG",   30, 9.5f, 0, 0.05f, PJ_BULLET,0, true, true, {1.8f, 1.30f, 1.15f, 0.75f, 1.90f}, 2, 1300,SND_MG,          rgb(255, 232, 120) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -82,8 +84,8 @@ const UnitType UNITS[U_COUNT] = {
 
     { "Infiltrator",    "Z", F_CYBER,   UK_INF, UR_SPY,    AR_INF,   90,  66, 650, 8, 7, 6, -1, 0, BR_BARRACKS, B_C_TECH, "Unarmed spy: walks up to an enemy structure and captures it (right-click it). Survives the capture and can take another" },
     { "Spy",            "Z", F_CLANKER, UK_INF, UR_SPY,    AR_INF,   90,  64, 650, 8, 7, 6, -1, 0, BR_BARRACKS, B_K_TECH, "Unarmed spy: walks up to an enemy structure and captures it (right-click it). Survives the capture and can take another" },
-    { "Ghost Drone",    "D", F_CYBER,   UK_AIR, UR_SCOUT,  AR_AIR,   220, 230, 900, 12, 15, 9, -1, 0, BR_AIRFIELD, B_C_TECH, "Stealth spy drone, no weapons: sees the whole area around it and finds hidden snipers and underground bunkers. Only enemy drones can spot it. Hovers, needs no pad", 0, 0, 0, 0, 1, ST_DRONE, 9.0f, DET_SPOTTER | DET_DRONE },
-    { "Recon Drone",    "D", F_CLANKER, UK_AIR, UR_SCOUT,  AR_AIR,   220, 220, 900, 12, 15, 9, -1, 0, BR_AIRFIELD, B_K_TECH, "Stealth spy drone, no weapons: sees the whole area around it and finds hidden snipers and underground bunkers. Only enemy drones can spot it. Hovers, needs no pad", 0, 0, 0, 0, 1, ST_DRONE, 9.0f, DET_SPOTTER | DET_DRONE },
+    { "Ghost Drone",    "D", F_CYBER,   UK_AIR, UR_SCOUT,  AR_AIR,   220, 230, 900, 12, 15, 9, -1, 0, BR_AIRFIELD, B_C_TECH, "Autonomous stealth spy drone: sweeps the map on its own in coordinated swarms to hunt hidden snipers and underground bunkers, or flies where you call it. Only enemy drones can spot it", 0, 0, 0, 0, 1, ST_DRONE, 9.0f, DET_SPOTTER | DET_DRONE },
+    { "Recon Drone",    "D", F_CLANKER, UK_AIR, UR_SCOUT,  AR_AIR,   220, 220, 900, 12, 15, 9, -1, 0, BR_AIRFIELD, B_K_TECH, "Autonomous stealth spy drone: sweeps the map on its own in coordinated swarms to hunt hidden snipers and underground bunkers, or flies where you call it. Only enemy drones can spot it", 0, 0, 0, 0, 1, ST_DRONE, 9.0f, DET_SPOTTER | DET_DRONE },
     { "Atlas Lifter",   "C", F_CYBER,   UK_AIR, UR_TRANSPORT, AR_AIR, 2400, 150, 2600, 22, 10, 26, -1, 0, BR_AIRFIELD, B_C_TECH, "Huge cargo helicopter: carries 40 infantry, or tanks and other vehicles (a tank takes 6 places, a super-heavy 10). Unarmed but tough. Load by right-clicking it, unload where it hovers", 0, 0, 0, 0, 1, ST_NONE, 0.0f, 0, 40 },
     { "Mammoth Lifter", "C", F_CLANKER, UK_AIR, UR_TRANSPORT, AR_AIR, 2600, 140, 2600, 22, 10, 26, -1, 0, BR_AIRFIELD, B_K_TECH, "Huge cargo helicopter: carries 40 infantry, or tanks and other vehicles (a tank takes 6 places, a super-heavy 10). Unarmed but tough. Load by right-clicking it, unload where it hovers", 0, 0, 0, 0, 1, ST_NONE, 0.0f, 0, 40 },
 
@@ -126,8 +128,8 @@ const BuildType BUILDS[B_COUNT] = {
     { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
     { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "A nuke every 5 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 
-    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 30000, 7500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Fabricator. The garrison fires from a metal hatch. Runs by itself: earns $50 every 5s, mends itself, two miniguns on the hatch and a salvo of two small nukes (a fifth of a full one each, every 90s); a rocket pod answers whoever wears it down. A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
-    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 30000, 7500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Stealth shelter deep underground: 50 infantry and a Dozer. The garrison fires from a metal hatch. Runs by itself: earns $50 every 5s, mends itself, two miniguns on the hatch and a salvo of two small nukes (a fifth of a full one each, every 90s); a rocket pod answers whoever wears it down. A nuke can wreck the hatch but never the bunker; only a spy drone reveals it, only soldiers and vehicles can destroy it" },
+    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 32000, 7500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Fortified stealth shelter deep underground: 50 infantry and a Fabricator. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 65s). When surrounded by enemies, overdrive lasers and heavy guns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
+    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 32000, 7500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Fortified stealth shelter deep underground: 50 infantry and a Dozer. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 65s). When surrounded by enemies, overdrive lasers and heavy machineguns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
 
     { "Nano Drydock",   "Y", F_CYBER,   BR_NAVAL,    3000, 2200, 28, 3, 3, -3, 8, -1, B_C_FACTORY, "Naval Yard: must touch the lake. Builds the Pulse Destroyer and, with a Data Center, the Lancer Cruiser" },
     { "Shipyard",       "Y", F_CLANKER, BR_NAVAL,    3200, 2200, 28, 3, 3, -3, 8, -1, B_K_FACTORY, "Naval Yard: must touch the lake. Builds the Iron Destroyer and, with an Arms Lab, the Rocket Cruiser" },

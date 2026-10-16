@@ -754,6 +754,102 @@ static bool huntTest(Faction me, Faction foe, u64 seed) {
     return true;
 }
 
+// surrounded bunker special abilities: automatic radiation spreading when hit hard, overdrive lasers/heavy MGs shooting
+// aircraft, tanks, and infantry, and intercepting incoming nuclear warheads in flight
+static bool bunkerOverdriveAndRadTest(Faction me, Faction foe, u64 seed) {
+    Ref bk = retaliationScene(me, foe, seed);
+    CHECK(bk.valid(), "no spot for the bunker");
+    Vec2 bp = g_sim.get(bk)->pos;
+    int infFoe = firstUnitOf(foe), tankFoe = firstUnitOf(foe) + 5, heliFoe = foe == F_CYBER ? U_C_HELI : U_K_AIR;
+    int infMe = me == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+    Ref ally = spawnAt(infMe, 0, bp + Vec2(0, 3.0f * TILE));
+    Ref f1 = spawnAt(tankFoe, 1, bp + Vec2(4.0f * TILE, 0));
+    Ref f2 = spawnAt(tankFoe, 1, bp + Vec2(-4.0f * TILE, 0));
+    Ref f3 = spawnAt(infFoe, 1, bp + Vec2(0, -4.0f * TILE));
+    Ref air = spawnAt(heliFoe, 1, bp + Vec2(3.5f * TILE, 3.5f * TILE));
+    if (Entity* a = g_sim.get(air)) a->alt = 1.0f;
+    for (Ref r : {f1, f2, f3, air}) if (Entity* e = g_sim.get(r)) { e->maxHp *= 6; e->hp = e->maxHp; }
+    float airHp0 = hpOf(air), f1Hp0 = hpOf(f1), allyHp0 = hpOf(ally);
+    g_sim.cmdAttack({f1, f2, f3}, bk);
+    // Deal heavy hits while surrounded so automatic radiation triggers
+    g_sim.applyDamagePublic(*g_sim.get(bk), 1800.0f, 1, f1);
+    run(2.5f);
+    Entity* B = g_sim.get(bk);
+    CHECK(B && B->surrounded, "bunker surrounded state did not engage with 4 enemies around it");
+    bool hasBunkerRad = false;
+    for (auto& f : g_sim.fallouts) if (f.enemyOnly && f.owner == 0 && dist(f.pos, bp) < TILE) hasBunkerRad = true;
+    CHECK(hasBunkerRad, "surrounded bunker under heavy fire did not spread automatic defensive radiation");
+    CHECK(hpOf(ally) >= allyHp0 - 1.0f, "bunker defensive radiation hurt a friendly unit");
+    CHECK(hpOf(air) < airHp0 && hpOf(f1) < f1Hp0, "surrounded bunker overdrive weapons did not hit both aircraft and ground forces");
+    // Launch an enemy nuclear warhead at the surrounded bunker and verify it is intercepted in flight
+    B->antiNukeCd = 0;
+    Sim::Nuke nk; nk.from = bp + Vec2(30 * TILE, 0); nk.pos = bp; nk.owner = 1; nk.t = Sim::NUKE_FLIGHT - 3.5f; nk.id = ++g_sim.nukeSeq;
+    g_sim.nukes.push_back(nk);
+    run(1.5f);
+    bool intercepted = g_sim.nukes.empty() || g_sim.nukes[0].killT >= 0 || g_sim.nukes[0].broken;
+    CHECK(intercepted, "surrounded bunker did not shoot down the incoming nuclear warhead");
+    printf("stealthtest %s: surrounded bunker radiation, overdrive & anti-nuke ok\n", FACTION_NAME[me]);
+    return true;
+}
+
+// creative AI bunker placement: never next to the player's bunker, picks flanking/cover positions
+static bool creativeAiBunkerTest(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);
+    g_ai.init(seed);
+    int bkMe = me == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    int bkFoe = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    int turFoe = foe == F_CYBER ? B_C_LASER : B_K_MG;
+    Vec2 mid(WORLD_W * 0.5f, WORLD_H * 0.5f);
+    Ref playerBk = placeAt(bkMe, 0, g_sim.players[1].basePos + (mid - g_sim.players[1].basePos) * 0.35f);
+    CHECK(playerBk.valid(), "no spot for player bunker");
+    Vec2 pbp = g_sim.get(playerBk)->pos;
+    int tx = -1, ty = -1;
+    CHECK(g_ai.ais[1].findBunkerSpot(bkFoe, tx, ty), "AI could not find a creative bunker spot");
+    Vec2 aiBkPos = g_sim.buildingCenter(bkFoe, tx, ty);
+    CHECK(dist(aiBkPos, pbp) >= 22.0f * TILE, "AI placed its bunker too close to the player's bunker");
+    int ttx = -1, tty = -1;
+    if (g_ai.ais[1].findSpot(turFoe, pbp, 14, ttx, tty)) {
+        Vec2 turPos = g_sim.buildingCenter(turFoe, ttx, tty);
+        CHECK(dist(turPos, pbp) >= 16.0f * TILE, "AI placed a turret next to the player's bunker");
+    }
+    printf("stealthtest %s: creative AI bunker placement ok (%.1f tiles from player bunker)\n", FACTION_NAME[me], dist(aiBkPos, pbp) / TILE);
+    return true;
+}
+
+// autonomous Ghost/Recon Drone swarm intelligence for human and AI players
+static bool scoutSwarmAutonomousTest(Faction me, Faction foe, u64 seed) {
+    freshScene(me, foe, seed);
+    int sdroneMe = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
+    int bkFoe = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+    Vec2 start = g_sim.players[0].basePos;
+    Vec2 toMid = (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - start).norm();
+    Vec2 side(-toMid.y, toMid.x);
+    Ref d1 = spawnAt(sdroneMe, 0, start);
+    Ref d2 = spawnAt(sdroneMe, 0, start + side * 24.0f);
+    Ref d3 = spawnAt(sdroneMe, 0, start - side * 24.0f);
+    for (Ref r : {d1, d2, d3}) if (Entity* d = g_sim.get(r)) { d->alt = 1.0f; d->autoHoldUntil = g_sim.time + 20.0f; }
+    // Call d1 manually to a spot and verify it goes there and waits for SCOUT_MANUAL_HOLD
+    Vec2 callSpot = start + toMid * (7.0f * TILE) + side * (2.0f * TILE);
+    g_sim.cmdMove({d1}, callSpot, false);
+    run(3.0f);
+    CHECK(dist(g_sim.get(d1)->pos, callSpot) < 2.5f * TILE, "Ghost Drone did not fly to the spot the player called it to");
+    CHECK(g_sim.get(d1)->autoHoldUntil > g_sim.time, "Ghost Drone did not hold at the player's called spot");
+    // Place a hidden enemy bunker within swarm search range and expire hold timers so the swarm hunts autonomously
+    Ref enemyBk = placeAt(bkFoe, 1, start + toMid * (18.0f * TILE));
+    CHECK(enemyBk.valid(), "no spot for hidden enemy bunker");
+    for (Ref r : {d1, d2, d3}) if (Entity* d = g_sim.get(r)) { d->autoHoldUntil = 0; d->order = O_IDLE; d->autoTask = false; }
+    bool foundHidden = false;
+    for (int t = 0; t < 160 && !foundHidden; t++) {
+        run(0.25f);
+        if (g_sim.visibleTo(*g_sim.get(enemyBk), 0)) foundHidden = true;
+    }
+    CHECK(foundHidden, "autonomous player Ghost/Recon Drone swarm did not hunt down and reveal the hidden enemy bunker");
+    float spread = dist(g_sim.get(d1)->pos, g_sim.get(d2)->pos) + dist(g_sim.get(d2)->pos, g_sim.get(d3)->pos);
+    CHECK(spread > 8.0f * TILE, "Ghost/Recon Drone swarm clumped together instead of coordinating sectors");
+    printf("stealthtest %s: autonomous Ghost/Recon Drone swarm ok (spread %.1f tiles)\n", FACTION_NAME[me], spread / TILE);
+    return true;
+}
+
 bool stealthTest(u64 seed) {
     g_map.generate();
     g_ok = true;
@@ -771,6 +867,9 @@ bool stealthTest(u64 seed) {
         if (!bunkerRetaliateTest(me, foe, seed + 110 + fi)) return false;
         if (!bunkerFloorTest(me, foe, seed + 80 + fi)) return false;
         if (!huntTest(me, foe, seed + 90 + fi)) return false;
+        if (!bunkerOverdriveAndRadTest(me, foe, seed + 120 + fi)) return false;
+        if (!creativeAiBunkerTest(me, foe, seed + 130 + fi)) return false;
+        if (!scoutSwarmAutonomousTest(me, foe, seed + 140 + fi)) return false;
     }
     printf("stealthtest: ok\n");
     return g_ok;

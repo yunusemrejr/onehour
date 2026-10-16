@@ -61,6 +61,7 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
     e.guardPos = e.pos;
+    if (t.role == UR_SCOUT) e.autoHoldUntil = time + 18.0f;   // wait briefly at spawn for player orders before autonomous swarm search (spawnFromQueue sets 2.5s)
     e.angle = rng.f(0, 6.28f);
     e.turret = e.angle;
     if (owner >= 0) players[owner].unitsBuilt++;
@@ -361,6 +362,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     }
     for (auto* a : air) {
         a->zoneR = 0; a->leashed = false; takeOrder(*a); a->forceTarget = NOREF; a->loiterUntil = -1;
+        if (a->ut().role == UR_SCOUT) { a->guardPos = dest; a->autoHoldUntil = time + SCOUT_MANUAL_HOLD; }
         if (a->ammo <= 0 && a->ut().ammo > 0) { a->targetEnt = NOREF; a->order = O_REARM; continue; }
         a->order = attackMove ? O_ATTACKMOVE : O_MOVE; a->postOrder = O_IDLE;
         a->target = dest; a->targetEnt = NOREF; a->engaged = NOREF;
@@ -411,6 +413,7 @@ void Sim::cmdStop(const std::vector<Ref>& sel) {
         if (!e || !e->isUnit() || e->carrier.valid() || e->ut().temp) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF; e->loiterUntil = -1;
         if (e->ut().role == UR_DOZER) { e->siteQueue.clear(); e->autoHoldUntil = time + DOZER_MANUAL_HOLD; }   // stop means stop: the kept sites are dropped too
+        if (e->ut().role == UR_SCOUT) e->autoHoldUntil = time + SCOUT_MANUAL_HOLD;
         if (e->isAir() && e->ammo <= 0 && e->ut().ammo > 0) { e->order = O_REARM; e->targetEnt = NOREF; continue; }
         e->order = O_IDLE; e->postOrder = O_IDLE; e->targetEnt = NOREF; e->engaged = NOREF; e->path.clear(); e->guardPos = e->pos;
     }
@@ -1242,12 +1245,14 @@ void Sim::updateFallout() {
             forEachNear(f.pos, f.r, [&](Entity& e) { if (e.kind != EK_RESOURCE && !e.isAir() && dist(e.pos, f.pos) <= f.r) in.push_back(refOf(e)); });
             for (auto r : in) {
                 Entity* e = get(r); if (!e) continue;
+                if (f.enemyOnly && !enemies(f.owner, e->owner)) continue;   // bunker defense radiation vents only poison enemy forces
                 if (e->isBuilding()) {   // radiation only weakens structures: a slow, non-lethal drain that stops at a tenth of their health
-                    if (e->hp > e->maxHp * 0.12f) applyDamage(*e, e->maxHp * 0.0012f * strength, -1, NOREF, nullptr);
+                    if (e->hp > e->maxHp * 0.12f) applyDamage(*e, e->maxHp * 0.0012f * strength, f.enemyOnly ? f.owner : -1, NOREF, nullptr);
                     continue;
                 }
-                float dmg = std::max(7.0f, e->maxHp * 0.03f);
-                applyDamage(*e, dmg * strength, -1, NOREF, nullptr);
+                float baseHp = f.enemyOnly && e->isUnit() ? (float)UNITS[e->type].hp : e->maxHp;
+                float dmg = std::max(7.0f, baseHp * 0.03f);
+                applyDamage(*e, dmg * strength, f.enemyOnly ? f.owner : -1, NOREF, nullptr);
             }
         }
         i++;
@@ -2488,6 +2493,10 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             if ((tick + e.gen) % 20 == 0) dozerFindWork(e);
             break;
         }
+        if (ut.role == UR_SCOUT) {    // ghost/recon drones wait briefly when spawned or called, then autonomously hunt hidden enemies as a coordinated swarm
+            updateScoutSwarm(e);
+            break;
+        }
         if (ut.weapon < 0) break;
         if (e.isAir()) {
             // between sorties a loaded aircraft waits where it was last sent (for a while) or at its airfield's rally point, circling
@@ -2599,6 +2608,12 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_MOVE: case O_ATTACKMOVE: {
         if (ut.role == UR_DOZER && !e.autoTask) e.autoHoldUntil = std::max(e.autoHoldUntil, time + DOZER_MANUAL_HOLD);   // the hold runs from its arrival
+        if (ut.role == UR_SCOUT && !e.autoTask) e.autoHoldUntil = std::max(e.autoHoldUntil, time + SCOUT_MANUAL_HOLD);
+        if (ut.role == UR_SCOUT && e.autoTask && (tick + e.gen) % 6 == 0) {
+            bool found = false;
+            forEachNear(e.pos, (ut.detect - 1.5f) * TILE, [&](Entity& t) { if (stealthOf(t) && enemies(e.owner, t.owner) && !t.carrier.valid()) found = true; });
+            if (found) { e.order = O_IDLE; e.autoTask = false; updateScoutSwarm(e); break; }
+        }
         if (e.isAir()) {
             // a fixed-wing craft has arrived once it passes within its own turn circle of the spot; it then waits there (circling)
             bool fw = fixedWing(ut);
@@ -2606,7 +2621,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             float arrive = fw ? std::max(48.0f, 1.3f * e.airspeed / airTurnRate(e)) : 6.0f;
             if (d.len() < arrive) {
                 e.order = O_IDLE; e.postOrder = O_IDLE;
-                if (!e.autoTask) { e.loiter = e.target; e.loiterUntil = time + AIR_LOITER_TIME; }
+                if (!e.autoTask) { e.loiter = e.target; e.loiterUntil = time + AIR_LOITER_TIME; e.guardPos = e.target; }
                 e.autoTask = false;
                 break;
             }
@@ -2926,7 +2941,11 @@ void Sim::spawnFromQueue(Entity& b) {
     Vec2 rally = b.rally; bool hasRally = b.hasRally; int owner = b.owner;
     Ref r = spawnUnit(type, owner, at);          // may reallocate ents: b must not be touched afterwards
     Entity& u = ents[r.idx];
-    if (ut.kind == UK_AIR) { u.home = bref; u.order = O_IDLE; if (hasRally) cmdMove({r}, rally, false); }
+    if (ut.kind == UK_AIR) {
+        u.home = bref; u.order = O_IDLE;
+        if (ut.role == UR_SCOUT) u.autoHoldUntil = time + 2.5f;   // wait briefly for player to call it somewhere, then join autonomous swarm
+        if (hasRally) cmdMove({r}, rally, false);
+    }
     else if (ut.role == UR_HARVESTER) {
         Entity* p = findPile(u, 60 * TILE);
         if (p) cmdHarvest({r}, refOf(*p));
@@ -3157,8 +3176,152 @@ Vec2 Sim::bunkerGunPos(const Entity& b, int i) const {
     return b.pos + Vec2((i == 0 ? -0.34f : 0.34f) * b.bt().w * TILE, 0.0f);   // on the plate either side of the hatch
 }
 
+Vec2 Sim::bunkerOverdrivePos(const Entity& b, int i) const {
+    return b.pos + Vec2((i == 0 ? -0.38f : 0.38f) * b.bt().w * TILE, (i == 0 ? -0.30f : 0.30f) * b.bt().h * TILE);
+}
+
+bool Sim::bunkerSurrounded(const Entity& b, int* countOut) {
+    int cnt = 0;
+    forEachNear(b.pos, BUNKER_SURROUND_RADIUS * TILE, [&](Entity& t) {
+        if (!t.isUnit() || !enemies(b.owner, t.owner) || t.carrier.valid() || t.fall > 0 || t.weapon() < 0) return;
+        if (distToEntity(b.pos, t) <= BUNKER_SURROUND_RADIUS * TILE) cnt++;
+    });
+    if (countOut) *countOut = cnt;
+    return cnt >= BUNKER_SURROUND_MIN;
+}
+
+void Sim::updateBunkerAntiNuke(Entity& b, bool surrounded) {
+    if (time < b.antiNukeCd || b.disabledUntil > time) return;
+    bool cy = b.bt().faction == F_CYBER;
+    const int self = (int)(&b - &ents[0]);
+    for (auto& n : nukes) {
+        if (n.broken || n.killT >= 0 || !enemies(n.owner, b.owner)) continue;
+        float cover = BUNKER_ANTINUKE_COVER * TILE + nukeRadius(n);
+        if (dist(n.pos, b.pos) > cover) continue;
+        float left = NUKE_FLIGHT - n.t;
+        const float flight = cy ? 0.28f : 0.45f, gap = 0.22f;
+        if (left > BUNKER_ANTINUKE_WINDOW || left < flight + 0.25f) continue;
+        if (std::find(n.engagedBy.begin(), n.engagedBy.end(), self) != n.engagedBy.end()) continue;
+        n.engagedBy.push_back(self);
+        int shots = surrounded ? 4 : 3;
+        while (shots > 1 && (shots - 1) * gap + flight > left - 0.2f) shots--;
+        float chance = surrounded ? 1.0f : BUNKER_ANTINUKE_CHANCE;
+        int winner = rng.f() < chance ? rng.range(0, shots - 1) : -1;
+        b.antiNukeCd = time + (surrounded ? 1.2f : 3.5f);
+        for (int k = 0; k < shots; k++) {
+            Vec2 muzzle = bunkerOverdrivePos(b, k & 1);
+            Interceptor it;
+            it.from = muzzle; it.owner = b.owner; it.nukeId = n.id; it.laser = cy || (k & 1) == 0; it.hit = (k == winner);
+            it.launchT = time + k * gap; it.dur = flight;
+            float tMeet = n.t + k * gap + flight;
+            it.aim = nukeAirPos(n, tMeet);
+            if (!it.hit) { Vec2 off(rng.f(-1, 1), rng.f(-1, 1)); it.aim += off.norm() * rng.f(36.0f, 84.0f); }
+            interceptors.push_back(it);
+            if (it.hit) n.killT = tMeet;
+            b.overdriveAng[k & 1] = std::atan2(it.aim.y - muzzle.y, it.aim.x - muzzle.x);
+        }
+        emit(EV_SOUND, -1, cy ? SND_LASER_HEAVY : SND_MG, b.pos);
+        break;
+    }
+}
+
+// Autonomous coordinated swarm intelligence for Ghost Drones and Recon Drones (human and AI alike).
+// When spawned or called to a spot by the player, the drone waits briefly at that post (autoHoldUntil);
+// once free, all friendly spy drones act as an intelligent swarm that divides sectors across the map,
+// hunts and locks onto enemy hidden elements (underground bunkers, snipers, enemy drones) and covers frontlines.
+void Sim::updateScoutSwarm(Entity& e) {
+    const UnitType& ut = e.ut();
+    if (time < e.autoHoldUntil) {
+        heliHover(e, heliSpot(e, e.guardPos), ut.speed * 0.6f);
+        return;
+    }
+    // If already revealing a hidden enemy element right here and no other friendly scout is closer, hold/orbit to keep it pinned!
+    Entity* pinned = nullptr; float pinDist = (ut.detect - 1.0f) * TILE;
+    forEachNear(e.pos, pinDist, [&](Entity& t) {
+        if (!stealthOf(t) || !enemies(e.owner, t.owner) || t.carrier.valid()) return;
+        float d = dist(e.pos, t.pos);
+        if (d < pinDist) { pinDist = d; pinned = &t; }
+    });
+    if (pinned) {
+        bool closerFriend = false;
+        for (auto& o : ents) {
+            if (!o.alive || &o == &e || !o.isUnit() || o.owner != e.owner || o.ut().role != UR_SCOUT) continue;
+            if (dist(o.pos, pinned->pos) + 12.0f < dist(e.pos, pinned->pos)) { closerFriend = true; break; }
+        }
+        if (!closerFriend) {
+            float orbitA = time * 0.9f + (e.gen % 7) * 0.9f;
+            Vec2 hold = pinned->pos + Vec2(std::cos(orbitA), std::sin(orbitA)) * (2.5f * TILE);
+            heliHover(e, heliSpot(e, hold), ut.speed * 0.7f);
+            return;
+        }
+    }
+    if ((tick + e.gen) % 10 != 0) {
+        heliHover(e, heliSpot(e, e.pos), ut.speed * 0.5f);
+        return;
+    }
+    // Gather the friendly scout swarm to coordinate sectors and avoid overlapping targets
+    std::vector<const Entity*> swarm;
+    int myIdx = 0;
+    for (auto& o : ents) {
+        if (!o.alive || !o.isUnit() || o.owner != e.owner || o.ut().role != UR_SCOUT || o.fall > 0) continue;
+        if (&o == &e) myIdx = (int)swarm.size();
+        swarm.push_back(&o);
+    }
+    int swarmN = std::max(1, (int)swarm.size());
+    Vec2 base = e.owner >= 0 ? players[e.owner].basePos : Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f);
+    Vec2 bestSpot = e.pos; float bestScore = -1e18f;
+    auto evalCandidate = [&](Vec2 cand, float basePriority) {
+        cand = Vec2(clampf(cand.x, 3 * TILE, WORLD_W - 3 * TILE), clampf(cand.y, 3 * TILE, WORLD_H - 3 * TILE));
+        float sc = basePriority - dist(e.pos, cand) / TILE * 0.85f;
+        // Swarm repulsion: penalize spots near other friendly drones or their current destinations
+        for (const Entity* o : swarm) {
+            if (o == &e) continue;
+            Vec2 oGoal = (o->order == O_MOVE || o->order == O_ATTACKMOVE) ? o->target : o->pos;
+            float dGoal = dist(cand, oGoal) / TILE, dPos = dist(cand, o->pos) / TILE;
+            if (dGoal < SCOUT_SWARM_SEP) sc -= (SCOUT_SWARM_SEP - dGoal) * 18.0f;
+            if (dPos < SCOUT_SWARM_SEP * 0.8f) sc -= (SCOUT_SWARM_SEP * 0.8f - dPos) * 12.0f;
+        }
+        if (inFallout(cand)) sc -= 120.0f;
+        if (sc > bestScore) { bestScore = sc; bestSpot = cand; }
+    };
+    // 1. High-intelligence priority: allied units under fire from unseen attackers or suspected hidden enemy positions
+    for (auto& u : ents) {
+        if (!u.alive || u.kind == EK_RESOURCE) continue;
+        if (u.owner == e.owner && time - u.lastDamaged < 6.0f) {
+            const Entity* att = get(u.attacker);
+            if (att && stealthOf(*att)) evalCandidate(att->pos, 260.0f);
+            else evalCandidate(u.pos, 140.0f);
+        } else if (enemies(e.owner, u.owner) && stealthOf(u)) {
+            // Swarm intelligence: search around hidden enemy elements (bunkers, snipers, stealth drones)
+            // If already spotted recently, lock on; otherwise sweep suspect sectors around enemy presence
+            bool known = visibleTo(u, e.owner);
+            Vec2 hint = known ? u.pos : u.pos + Vec2(std::cos(myIdx * 2.1f + u.gen), std::sin(myIdx * 2.1f + u.gen)) * (3.5f * TILE);
+            evalCandidate(hint, known ? 240.0f : 195.0f);
+        }
+    }
+    // 2. Coordinated sector sweep across the map (golden-angle + enemy base quadrants + unexplored fog)
+    for (int s = 0; s < 16; s++) {
+        float ang = (myIdx * 2.39996f) + s * (6.2831853f / 16.0f) + time * 0.035f;
+        float rad = (14.0f + ((s + myIdx * 3) % 5) * 11.0f) * TILE;
+        Vec2 p = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) + Vec2(std::cos(ang), std::sin(ang)) * rad;
+        p = Vec2(clampf(p.x, 4 * TILE, WORLD_W - 4 * TILE), clampf(p.y, 4 * TILE, WORLD_H - 4 * TILE));
+        int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
+        float prio = (e.owner >= 0 && !explored(e.owner, tx, ty)) ? 135.0f : 75.0f;
+        if (dist(p, base) > 22.0f * TILE) prio += 20.0f;
+        evalCandidate(p, prio);
+    }
+    for (int p = 0; p < numPlayers; p++) if (players[p].alive && enemies(e.owner, p)) {
+        float a = myIdx * (6.2831853f / swarmN) + time * 0.05f;
+        evalCandidate(players[p].basePos + Vec2(std::cos(a), std::sin(a)) * (11.0f * TILE), 150.0f);
+    }
+    if (dist(bestSpot, e.pos) > 3.0f * TILE) {
+        e.order = O_MOVE; e.postOrder = O_IDLE; e.target = bestSpot; e.targetEnt = NOREF; e.autoTask = true;
+    }
+}
+
 // What a bunker does without anybody inside it and without any help: it earns a little money, mends itself, and its two miniguns
-// shoot at whatever comes in reach (ground and air). Nothing here asks for power, supplies or another structure.
+// shoot at whatever comes in reach (ground and air). When surrounded by enemies, its overdrive lasers/heavy machineguns and
+// automatic radiation defense engage. Nothing here asks for power, supplies or another structure.
 void Sim::updateBunkerSelf(Entity& b) {
     Player& pl = players[b.owner];
     b.actionTimer += SIM_DT;
@@ -3177,9 +3340,26 @@ void Sim::updateBunkerSelf(Entity& b) {
         emit(EV_SOUND, -1, SND_ROCKET, b.pos);
         for (int p = 0; p < numPlayers; p++) if (enemies(b.owner, p)) b.detUntil[p] = std::max(b.detUntil[p], time + MINI_NUKE_REVEAL);
     }
+    // Check if enemy forces surround the bunker
+    int enemyAround = 0;
+    b.surrounded = bunkerSurrounded(b, &enemyAround);
+    if (b.radCd > 0) b.radCd -= SIM_DT;
+    bool besieged = b.lastDamaged > 0 && time - b.lastDamaged < BUNKER_RETALIATE;
+    // Automatic radiation spreading when surrounded by enemies and getting hit big time (while the surface hatch/vents stand)
+    if (b.surrounded && b.hatch > 0 && besieged && b.radCd <= 0 && !inFallout(b.pos) && (b.dmgLoad >= BUNKER_RAD_DMG || (b.hp < b.maxHp * 0.85f && b.dmgLoad >= 90.0f) || (b.hatch < b.hatchMax * 0.65f && b.dmgLoad >= 90.0f))) {
+        b.radCd = BUNKER_RAD_COOLDOWN;
+        float radR = BUNKER_RAD_RADIUS * TILE;
+        fallouts.push_back({b.pos, radR, 0.0f, 0.0f, 1.35f, b.owner, true});
+        fx.push_back({FX_FALLOUT, b.pos, b.pos, 0, FALLOUT_LIFE * 0.5f, rgb(120, 255, 90), radR});
+        fx.push_back({FX_RING, b.pos, b.pos, 0, 1.1f, rgb(120, 255, 90), radR});
+        fx.push_back({FX_EMP, b.pos, b.pos, 0, 0.9f, rgb(140, 255, 110), radR * 0.85f});
+        emit(EV_SOUND, -1, SND_EXPLODE_L, b.pos);
+    }
+    // Intercept incoming enemy nuclear warheads with bunker lasers / heavy machineguns
+    updateBunkerAntiNuke(b, b.surrounded);
+
     // under attack: whoever is wearing it down (the last one to hit it and anything with it as its target, in reach of the pod) is answered
     Ref bref = refOf(b);
-    bool besieged = b.lastDamaged > 0 && time - b.lastDamaged < BUNKER_RETALIATE;
     const Weapon& pod = WEAPONS[W_BUNKER_ROCKETS];
     auto attackerOf = [&](float reachTiles, int wpn) -> Entity* {   // (the pod knows where the shots come from: it needs no sight of the shooter)
         Entity* best = nullptr; float bs = 1e9f;
@@ -3187,21 +3367,52 @@ void Sim::updateBunkerSelf(Entity& b) {
             if (!t.isUnit() && !t.isBuilding()) return;
             bool onUs = refOf(t) == b.attacker || t.targetEnt == bref || t.engaged == bref;
             if (!onUs || !enemies(b.owner, t.owner) || t.weapon() < 0) return;   // (an unarmed spy walking up to take it is not wearing it down)
-            if (wpn == W_BUNKER_ROCKETS ? (t.isAir() || t.carrier.valid() || t.fall > 0) : !canTarget(b, t, wpn)) return;
+            if (wpn == W_BUNKER_ROCKETS ? (t.carrier.valid() || t.fall > 0) : !canTarget(b, t, wpn)) return;
             float d = distToEntity(b.pos, t) / TILE;
             if (d > reachTiles + 0.15f) return;
-            float score = d - 3.0f * pod.mult[t.armor()] - (refOf(t) == b.attacker ? 1.5f : 0.0f);
+            float score = d - 3.0f * WEAPONS[wpn].mult[t.armor()] - (refOf(t) == b.attacker ? 1.5f : 0.0f);
             if (score < bs) { bs = score; best = &t; }
         });
         return best;
     };
     if (b.podCd > 0) b.podCd -= SIM_DT;
-    if (besieged && b.podCd <= 0 && (tick + b.gen) % 4 == 0) {   // the rocket pod pops up (hatch or no hatch) and fires a pair at the worst attacker
+    if (besieged && b.podCd <= 0 && (tick + b.gen) % 4 == 0) {   // the rocket pod pops up (hatch or no hatch) and fires a salvo at the worst attacker
         if (Entity* t = attackerOf(pod.range, W_BUNKER_ROCKETS)) {
             b.podAng = std::atan2(t->pos.y - b.pos.y, t->pos.x - b.pos.x);
             Vec2 side(-std::sin(b.podAng), std::cos(b.podAng));
-            for (int k = 0; k < pod.burst; k++) { Vec2 m = b.pos + Vec2(0, -10.0f) + side * (k ? 5.0f : -5.0f); fireWeapon(b, *t, pod, &m); }
+            for (int k = 0; k < pod.burst; k++) { Vec2 m = b.pos + Vec2(0, -10.0f) + side * ((k - 1) * 4.5f); fireWeapon(b, *t, pod, &m); }
             b.podCd = pod.cooldown;
+        }
+    }
+    // Surrounded overdrive turrets: powerful lasers and heavy quad-machineguns that shoot aircraft, tanks and infantry while the surface hatch stands
+    if (b.surrounded && b.hatch > 0) {
+        int owId = b.bt().faction == F_CYBER ? W_BUNKER_LASER : W_BUNKER_HEAVY_MG;
+        const Weapon& ow = WEAPONS[owId];
+        float owReach = (ow.range + 0.25f) * TILE;
+        for (int i = 0; i < 2; i++) {
+            if (b.overdriveCd[i] > 0) b.overdriveCd[i] -= SIM_DT;
+            Entity* t = get(b.overdriveTgt[i]);
+            if (!t || !enemies(b.owner, t->owner) || !canTarget(b, *t, owId) || distToEntity(b.pos, *t) > owReach) {
+                t = nullptr; b.overdriveTgt[i] = NOREF;
+                Entity* best = nullptr; float bs = 1e9f;
+                forEachNear(b.pos, owReach, [&](Entity& c) {
+                    if (!c.isUnit() || !enemies(b.owner, c.owner) || !canTarget(b, c, owId)) return;
+                    float d = distToEntity(b.pos, c) / TILE;
+                    if (d > ow.range + 0.2f) return;
+                    // Prioritize aircraft, tanks and infantry equally fiercely, with a split between the two mounts
+                    float sc = d - 3.2f * ow.mult[c.armor()] - (c.isAir() && i == 0 ? 2.5f : 0.0f) - (c.armor() == AR_HEAVY && i == 1 ? 2.0f : 0.0f);
+                    if (sc < bs) { bs = sc; best = &c; }
+                });
+                if (best) { t = best; b.overdriveTgt[i] = refOf(*best); }
+            }
+            if (!t) continue;
+            Vec2 muzzle = bunkerOverdrivePos(b, i);
+            b.overdriveAng[i] = std::atan2(t->pos.y - muzzle.y, t->pos.x - muzzle.x);
+            if (b.overdriveCd[i] > 0) continue;
+            // Fire both the faction overdrive weapon and a secondary laser/tracer beam so both lasers and heavy MGs tear into targets
+            fireWeapon(b, *t, ow, &muzzle);
+            if (ow.proj != PJ_LASER) fx.push_back({FX_BEAM, muzzle, t->pos, 0, 0.12f, rgb(110, 245, 255), 2.0f});
+            b.overdriveCd[i] = ow.cooldown;
         }
     }
     const Weapon& w = WEAPONS[W_BUNKER_MINIGUN];
@@ -3210,18 +3421,19 @@ void Sim::updateBunkerSelf(Entity& b) {
     for (int i = 0; i < BUNKER_GUNS; i++) {
         if (b.gunCd[i] > 0) b.gunCd[i] -= SIM_DT;
         if (b.hatch <= 0) { b.gunTgt[i] = NOREF; continue; }   // the guns sit on the hatch: blown off, they are silent
+        bool hadTgt = b.gunTgt[i].valid();
         Entity* t = get(b.gunTgt[i]);
         if (hitter && t != hitter && (i == 0 || !t)) { t = hitter; b.gunTgt[i] = refOf(*hitter); }
         if (!t || !enemies(b.owner, t->owner) || !canTarget(b, *t, W_BUNKER_MINIGUN) || distToEntity(b.pos, *t) > reach) {
             t = nullptr; b.gunTgt[i] = NOREF;
-            if ((tick + b.gen + i) % 3 == 0) { t = acquireTarget(b, w.range, W_BUNKER_MINIGUN); if (t) b.gunTgt[i] = refOf(*t); }
+            if (hadTgt || (tick + b.gen + i) % 3 == 0) { t = acquireTarget(b, w.range, W_BUNKER_MINIGUN); if (t) b.gunTgt[i] = refOf(*t); }
         }
         if (!t) continue;
         Vec2 muzzle = bunkerGunPos(b, i);
         b.gunAng[i] = std::atan2(t->pos.y - muzzle.y, t->pos.x - muzzle.x);
         if (b.gunCd[i] > 0) continue;
         fireWeapon(b, *t, w, &muzzle);
-        b.gunCd[i] = w.cooldown;
+        b.gunCd[i] = b.surrounded ? w.cooldown * 0.65f : w.cooldown;
     }
 }
 

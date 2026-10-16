@@ -161,6 +161,7 @@ bool AiPlayer::recoverBase(int dozers, bool hasHq) {
 
 bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty) {
     const BuildType& b = BUILDS[buildType];
+    if (b.role == BR_BUNKER) return findBunkerSpot(buildType, tx, ty);
     Vec2 base = g_sim.players[player].basePos;
     int cx = tileOf(base.x) - b.w / 2, cy = tileOf(base.y) - b.h / 2;
     float bestScore = 1e18f; int bx = -1, by = -1;
@@ -176,12 +177,73 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
                 if (g_map.blocked[j * MAP_W + i] & 2) { gapOk = false; break; }
             }
             if (!gapOk) continue;
-            // don't build on roads leading out (keeps lanes open) unless it's a turret
             Vec2 c = g_sim.buildingCenter(buildType, x, y);
+            // never place bot structures or turrets right next to another player's bunker
+            bool nearBunker = false;
+            for (auto& o : g_sim.ents) {
+                if (!o.alive || !o.isBuilding() || o.bt().role != BR_BUNKER) continue;
+                float minD = (o.owner == player ? 8.0f : 16.0f) * TILE;
+                if (dist(c, o.pos) < minD) { nearBunker = true; break; }
+            }
+            if (nearBunker) continue;
             float score = dist(c, preferNear) + ring * 6.0f;
+            if (b.role == BR_TURRET || b.role == BR_AATURRET) {
+                for (auto& o : g_sim.ents) if (o.alive && o.isBuilding() && (o.bt().role == BR_TURRET || o.bt().role == BR_AATURRET) && dist(c, o.pos) < 5.5f * TILE) score += 140.0f;
+            }
             if (score < bestScore) { bestScore = score; bx = x; by = y; }
         }
         if (bx >= 0 && ring >= 6 && bestScore < ring * TILE) break;  // good enough, stop expanding
+    }
+    if (bx < 0) return false;
+    tx = bx; ty = by; return true;
+}
+
+// Creative bunker placement for bots: instead of clumping near the player's bunkers or sitting in a predictable ring,
+// pick tactical flanking corridors, tree-lined ridges, expansion overlooks or side approaches far from any existing bunker.
+bool AiPlayer::findBunkerSpot(int buildType, int& tx, int& ty) {
+    const BuildType& b = BUILDS[buildType];
+    Vec2 base = g_sim.players[player].basePos;
+    Vec2 mid(WORLD_W * 0.5f, WORLD_H * 0.5f);
+    Vec2 toMid = (mid - base).norm();
+    Vec2 side(-toMid.y, toMid.x);
+    std::vector<Vec2> anchors;
+    // 1. Flanking corridors left and right of the main axis at varied depths
+    for (int s = -1; s <= 1; s += 2) {
+        anchors.push_back(base + toMid * (14.0f * TILE) + side * (s * 11.0f * TILE));
+        anchors.push_back(base + toMid * (22.0f * TILE) + side * (s * 16.0f * TILE));
+        anchors.push_back(base - toMid * (7.0f * TILE) + side * (s * 12.0f * TILE));
+    }
+    // 2. Unclaimed resource piles / expansion overlooks on our half of the map
+    for (auto& e : g_sim.ents) {
+        if (e.alive && e.kind == EK_RESOURCE && dist(e.pos, base) > 12.0f * TILE && dist(e.pos, base) < 42.0f * TILE)
+            anchors.push_back(e.pos + side * ((rng.range(0, 1) ? 1.0f : -1.0f) * 6.0f * TILE));
+    }
+    float bestScore = -1e18f; int bx = -1, by = -1;
+    for (size_t ai = 0; ai < anchors.size(); ai++) {
+        int ax = clampi(tileOf(anchors[ai].x), 4, MAP_W - 6), ay = clampi(tileOf(anchors[ai].y), 4, MAP_H - 6);
+        for (int dy = -7; dy <= 7; dy += 2) for (int dx = -7; dx <= 7; dx += 2) {
+            int x = ax + dx, y = ay + dy;
+            if (!g_sim.canPlace(player, buildType, x, y)) continue;
+            bool gapOk = true;
+            for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++)
+                if (!inMap(i, j) || (g_map.blocked[j * MAP_W + i] & 2)) gapOk = false;
+            if (!gapOk) continue;
+            Vec2 c = g_sim.buildingCenter(buildType, x, y);
+            bool clash = false;
+            for (auto& o : g_sim.ents) {
+                if (!o.alive || !o.isBuilding()) continue;
+                // Strictly keep far away from any player's or bot's bunkers (22 tiles from other players' bunkers, 15 tiles from own)
+                if (o.bt().role == BR_BUNKER && dist(c, o.pos) < (o.owner == player ? 15.0f : 22.0f) * TILE) { clash = true; break; }
+                if (o.owner != player && dist(c, o.pos) < 14.0f * TILE) { clash = true; break; }
+            }
+            if (clash) continue;
+            // Reward natural cover (trees/rocks/ridges nearby), flanking angle diversity, and distance from other bunkers
+            int cover = 0;
+            for (int j = y - 3; j <= y + b.h + 2; j++) for (int i = x - 3; i <= x + b.w + 2; i++)
+                if (inMap(i, j) && (g_map.tile(i, j) == T_TREE || g_map.tile(i, j) == T_ROCK)) cover++;
+            float sc = cover * 18.0f - dist(c, anchors[ai]) / TILE * 4.0f + rng.f(-25.0f, 25.0f);
+            if (sc > bestScore) { bestScore = sc; bx = x; by = y; }
+        }
     }
     if (bx < 0) return false;
     tx = bx; ty = by; return true;
@@ -416,7 +478,7 @@ void AiPlayer::think() {
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
-    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0;
+    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0;
     for (auto& e : S.ents) {
         if (!e.alive || e.owner != player) continue;
         if (e.isUnit()) {
@@ -424,7 +486,7 @@ void AiPlayer::think() {
             if (ut.role == UR_DOZER) dozers++;
             else if (ut.role == UR_HARVESTER) { harvesters++; haulers.push_back(S.refOf(e)); }
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
-            else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and stay with the army
+            else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and coordinate as a swarm
             else if (ut.role == UR_TRANSPORT) {}                             // (the commander has no use for cargo choppers)
             else if (ut.kind == UK_AIR) { if (!ut.temp) aircraft.push_back(S.refOf(e)); }   // (a Hotline Strike fighter is on loan: it flies its own run)
             else if (smart && ut.role == UR_HEALER) medics.push_back(S.refOf(e));   // medics trail the army instead of leading the charge
@@ -449,7 +511,8 @@ void AiPlayer::think() {
             case BR_NUKE: ramps++; break;
             case BR_NAVAL: yards.push_back(&e); break;
             case BR_ANTINUKE: antiNukes++; break;
-            case BR_BUNKER: case BR_NONE: break;
+            case BR_BUNKER: bunkers++; break;
+            case BR_NONE: break;
             }
         }
     }
@@ -657,8 +720,10 @@ void AiPlayer::think() {
         }
         if (!built && turrets < wantTurrets && minutes > 2.5f) {
             int kind = (enemyAir > 0 || nextTurretKind % 2 == 1) ? BR_AATURRET : BR_TURRET;
-            Vec2 spot = pl.basePos + enemyDir * (7 * TILE) + Vec2(-enemyDir.y, enemyDir.x) * ((nextTurretKind % 3 - 1) * 3 * TILE);
-            built = tryBuild(base + kind, spot, 12);
+            float baseAng = std::atan2(enemyDir.y, enemyDir.x) + (nextTurretKind * 2.39996f - 1.2f) * 0.55f;
+            float rad = (6.5f + (nextTurretKind % 4) * 2.2f) * TILE;
+            Vec2 spot = pl.basePos + Vec2(std::cos(baseAng), std::sin(baseAng)) * rad;
+            built = tryBuild(base + kind, spot, 14);
             if (built) nextTurretKind++;
         }
         if (!built && techs == 0 && tm > (pl.difficulty >= 2 ? 4.0f : 6.0f) * style.tech && pl.money > 2600) built = tryBuild(base + BR_TECH, pl.basePos);
@@ -707,6 +772,14 @@ void AiPlayer::think() {
         if (!built && incomes < (pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : 2)) && tm > (pl.difficulty >= 2 ? 3.0f : 5.0f) && pl.money > 2200 && powerPlants > 0) built = tryBuild(base + BR_INCOME, pl.basePos - enemyDir * 80);
         if (!built && techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && tm > (pl.difficulty >= 3 ? 7.0f : (pl.difficulty == 2 ? 9.0f : 13.0f)) * style.nuke && pl.money > 5300) built = tryBuild(base + BR_NUKE, pl.basePos - enemyDir * 100);
         if (!built && barracks.size() < 2 && tm > 10 && pl.money > 3500) built = tryBuild(base + BR_BARRACKS, pl.basePos);
+        // creative underground bunkers: placed in flanking corridors, ridges and expansion overlooks far away from the player's bunkers
+        int bunkerType = pl.faction == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+        int wantBunkers = pl.difficulty >= 3 ? 2 : (pl.difficulty >= 2 ? 1 : 0);
+        if (!built && smart && bunkers < wantBunkers && !barracks.empty() && !threat && tm > (pl.difficulty >= 3 ? 9.5f : 12.5f) && pl.money > BUILDS[bunkerType].cost + 2500 && S.time >= nextBunkerTry) {
+            nextBunkerTry = S.time + 25.0f;
+            int tx, ty;
+            if (S.buildAvailable(player, bunkerType) && findBunkerSpot(bunkerType, tx, ty)) built = S.cmdBuild(S.refOf(*dz), bunkerType, tx, ty);
+        }
         // anti-nuke defences: once the enemy has a nuke ramp (or has launched a warhead) a commander with a tech structure rings its base centre with them. Every one has its
         // own chance at a warhead, so a few overlapping ones stop most of them; the more warheads have been seen, the more of them it builds
         if (!built && on(FEAT_AEGIS) && pl.difficulty >= 1 && techs > 0 && powerPlants > 0 && !threat) {
@@ -777,13 +850,15 @@ void AiPlayer::think() {
         if ((int)medics.size() + queuedMed < std::min(3, 1 + armyCount / 14))
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
     }
-    // spy drones: the only thing that finds hidden snipers and underground bunkers. A smart commander keeps one (two from Hard) with its army.
-    // When the enemy has nothing else left, every level keeps one: without a drone the hunt for its hidden things can never succeed
+    // spy drones: autonomous swarm reconnaissance that finds hidden snipers and underground bunkers. A smart commander fields a coordinated swarm.
+    // When the enemy has nothing else left, every level keeps a swarm hunting its hidden things
     bool hunting = enemyOnlyHidden(player);
     if (on(FEAT_SPECIAL) && (pl.difficulty >= 1 || hunting) && techs > 0 && tm > 5.0f && (armyCount >= 6 || hunting) && pl.money - reserve > 1200) {
         int droneType = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, queued = 0;
         for (auto* a : airfields) for (int t : a->queue) if (t == droneType) queued++;
-        if ((int)scouts.size() + queued < (pl.difficulty >= 2 ? 2 : 1))
+        int wantDrones = hunting ? 3 : (pl.difficulty >= 3 ? 3 : (pl.difficulty >= 2 ? 2 : 1));
+        if (pl.money > 8000 && pl.difficulty >= 2) wantDrones++;
+        if ((int)scouts.size() + queued < wantDrones)
             for (auto* a : airfields) if (a->constructed && a->queue.empty() && S.cmdTrain(S.refOf(*a), droneType)) break;
     }
     // spies: two of them on Hard and Brutal, to take structures nobody is guarding
@@ -1145,13 +1220,12 @@ void AiPlayer::think() {
             }
         }
     }
-    // spy drones trail the army (their detectors reveal what hides near the fighting); without an army they hover over the base
+    // spy drones coordinate autonomously as an intelligent swarm (updateScoutSwarm in Sim);
+    // only pull a badly damaged drone back over a friendly medic if one exists
     for (auto r : scouts) {
         Entity* d = S.get(r);
-        if (!d) continue;
-        Vec2 c = pl.basePos; int n = 0;
-        if (armyCount >= 4) { c = Vec2(); for (auto ar : army) { Entity* a = S.get(ar); if (a && !a->carrier.valid()) { c += a->pos; n++; } } if (n) c = c * (1.0f / n); else c = pl.basePos; }
-        if (dist(d->pos, c) > 4.5f * TILE && !(d->order == O_MOVE && dist(d->target, c) < 3.0f * TILE)) S.cmdMove({r}, c, false);
+        if (!d || d->hp > d->maxHp * 0.45f || medics.empty()) continue;
+        if (Entity* m = S.get(medics[0])) if (dist(d->pos, m->pos) > 4.0f * TILE) S.cmdMove({r}, m->pos, false);
     }
     // spies go for the structure that is worth most and guarded least (nothing armed within six tiles), and the second one tags along
     if (!spies.empty() && S.time - lastSpyOrder > 5.0f) {

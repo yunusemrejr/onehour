@@ -252,8 +252,8 @@ static const float AID_RADIUS = 3.0f;         // tiles: the crates come down wit
 // Underground Bunker: a deep, hidden shelter that holds up to 50 infantry and one dozer. The garrison fires from a metal hatch on the surface;
 // the hatch can be blown off (a nuke does it) which silences the bunker, but only infantry and vehicles can ever destroy the bunker itself.
 static const int   BUNKER_INF_CAP = 50, BUNKER_DOZER_CAP = 1;
-static const float BUNKER_HATCH_HP = 2800.0f;     // the surface opening
-static const float BUNKER_PLATING = 0.22f;        // share of the damage that reaches the buried bunker once the hatch is gone
+static const float BUNKER_HATCH_HP = 3200.0f;     // the surface opening (reinforced plating)
+static const float BUNKER_PLATING = 0.25f;        // share of the damage that reaches the buried bunker once the hatch is gone
 static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky, radiation and nukes can never take it below this share of its health
 static const float BUNKER_LINGER = 25.0f;         // seconds a bunker a spy drone found stays known after the drone has moved on
 static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
@@ -261,18 +261,21 @@ static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldier
 static const float DOZER_MANUAL_HOLD = 12.0f;     // seconds after a manual move or target order (counted from its arrival) before it mends things on its own again
 static const int   DOZER_SITE_QUEUE = 4;          // unfinished sites a dozer remembers
 static const int   DOZER_SITE_CREW = 2;           // idle dozers join a site with fewer builders than this on their own (then they go mending)
+// Ghost / Recon Drones: autonomous swarm reconnaissance that divides the map, hunts hidden enemy elements and waits when called by the player.
+static const float SCOUT_MANUAL_HOLD = 10.0f;     // seconds a spy drone holds at a spot the player manually called it to before resuming autonomous swarm search
+static const float SCOUT_SWARM_SEP = 18.0f;       // tiles: friendly spy drones coordinate as a swarm and spread their search sectors at least this far apart
 // A bunker runs by itself, needing no power, no other structure and no supplies: it earns a little money, mends itself, mounts two
-// miniguns on its hatch and keeps one small nuclear missile (a fifth of a Nuke Ramp's warhead) ready.
-static const int   BUNKER_INCOME = 50;            // credits per payout
+// miniguns on its hatch and keeps a salvo of small nuclear missiles (a fifth of a Nuke Ramp's warhead) ready.
+static const int   BUNKER_INCOME = 85;            // credits per payout
 static const float BUNKER_INCOME_INTERVAL = 5.0f; // seconds between payouts
-static const float BUNKER_REGEN = 0.0015f;        // fraction of max health the body mends per second ...
-static const float BUNKER_HATCH_REGEN = 0.005f;   // ... and the hatch: both only once the bunker has been left alone for BUNKER_REGEN_DELAY seconds
-static const float BUNKER_REGEN_DELAY = 4.0f;
+static const float BUNKER_REGEN = 0.0022f;        // fraction of max health the body mends per second ...
+static const float BUNKER_HATCH_REGEN = 0.0075f;  // ... and the hatch: both only once the bunker has been left alone for BUNKER_REGEN_DELAY seconds
+static const float BUNKER_REGEN_DELAY = 6.0f;
 static const float BUNKER_HATCH_REFIT = 30.0f;   // a blown-off hatch is refitted by the bunker itself this long after the last hit (a dozer does it faster)
 static const int   BUNKER_GUNS = 2;               // miniguns on the hatch (they stop when the hatch is blown off, like the garrison)
 static const int   W_BUNKER_MINIGUN = 32;         // WEAPONS index of those miniguns
 static const float MINI_NUKE_SCALE = 0.2f;        // a bunker's missile: a fifth of the blast area (radius NUKE_RADIUS * sqrt(scale)), same strength per spot
-static const float MINI_NUKE_COOLDOWN = 90.0f;    // seconds between two launches of one bunker
+static const float MINI_NUKE_COOLDOWN = 65.0f;    // seconds between two launches of one bunker
 static const float MINI_NUKE_ARM = 30.0f;         // seconds after a bunker is finished before its first missile is ready
 static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch gives the bunker away to the enemy (the missile climbs out of its hatch)
 static const int   MINI_NUKE_SALVO = 2;           // missiles per launch: the same warhead twice, one after the other ...
@@ -281,9 +284,21 @@ static const float MINI_NUKE_SALVO_GAP = 1.2f;    // ... this many seconds apart
 // hatch blown off) and answers whoever is shooting at it, and the hatch guns go for the attackers first and swat rockets and shells aimed at it.
 static const float BUNKER_RETALIATE = 6.0f;
 static const int   W_BUNKER_ROCKETS = 40;         // WEAPONS index of the rocket pod
-static const float BUNKER_CIWS_RANGE = 3.5f;      // tiles from the bunker an incoming rocket or shell is engaged
-static const float BUNKER_CIWS_GAP = 0.45f;       // seconds between two swats
-static const float BUNKER_CIWS_CHANCE = 0.55f;
+static const float BUNKER_CIWS_RANGE = 4.2f;      // tiles from the bunker an incoming rocket or shell is engaged
+static const float BUNKER_CIWS_GAP = 0.42f;       // seconds between two swats
+static const float BUNKER_CIWS_CHANCE = 0.62f;
+// Surrounded bunker overdrive: when enemy forces surround a bunker, heavy pop-up lasers / quad-machineguns engage aircraft, incoming nukes,
+// tanks and infantry; if the surrounded bunker is taking heavy damage, it automatically vents a ring of radiation around itself.
+static const int   W_BUNKER_LASER = 41;           // WEAPONS index of Cyber bunker overdrive laser
+static const int   W_BUNKER_HEAVY_MG = 42;        // WEAPONS index of Clanker bunker overdrive heavy machinegun
+static const float BUNKER_SURROUND_RADIUS = 9.5f; // tiles within which enemy units count as surrounding the bunker
+static const int   BUNKER_SURROUND_MIN = 3;       // enemy units needed to trigger surrounded overdrive mode
+static const float BUNKER_RAD_DMG = 320.0f;       // recent damage load (or heavy hull/hatch loss under fire) that triggers automatic radiation venting
+static const float BUNKER_RAD_RADIUS = 7.5f;      // tiles: radius of the bunker's automatic radiation cloud
+static const float BUNKER_RAD_COOLDOWN = 16.0f;   // seconds between automatic radiation vents
+static const float BUNKER_ANTINUKE_COVER = 16.0f; // tiles around the bunker protected against incoming enemy nuclear warheads
+static const float BUNKER_ANTINUKE_WINDOW = 5.8f; // seconds before impact the bunker's lasers/guns open fire on an incoming warhead
+static const float BUNKER_ANTINUKE_CHANCE = 0.85f;// base interception chance (1.0 when surrounded in overdrive)
 // Spies
 static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
 static const float SPY_REACH = 22.0f;             // px from the structure's edge
