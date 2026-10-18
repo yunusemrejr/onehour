@@ -285,6 +285,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
     } else if (role == BR_AIRFIELD) {
         cands.push_back({base + 8, smart ? 1.4f + (doctrine == DOC_AIR ? 0.9f : 0.0f) : 1.0f});   // bomber drone / gunship (a smart commander knows what they do to structures)
         cands.push_back({base + 11, 0.8f + fa * 2.2f + fv * 0.9f});       // supersonic jet (needs the tech structure): best against aircraft and vehicles
+        { int sb = pl.faction == F_CYBER ? (int)U_C_SBOMBER : (int)U_K_SBOMBER; cands.push_back({sb, 0.45f + (doctrine == DOC_AIR ? 0.35f : 0.0f)}); }   // Supersonic Bomber: one nuclear bomb a sortie, and slow prey after the drop
         if (pl.faction == F_CYBER) cands.push_back({(int)U_C_HELI, 0.8f + fv * 1.2f + fa * 1.0f});   // attack helicopter: all-round, never rearms
     }
     // weight by how many we already have (diminishing returns), availability, and predicted efficiency:
@@ -895,7 +896,7 @@ void AiPlayer::think() {
         if ((int)medics.size() + queuedMed < std::min(3, 1 + armyCount / 14))
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
     }
-    // spy drones: autonomous swarm reconnaissance that finds hidden snipers and underground bunkers. A smart commander fields a coordinated swarm.
+    // spy drones: autonomous swarm reconnaissance that finds hidden snipers and enemy spy drones. A smart commander fields a coordinated swarm.
     // When the enemy has nothing else left, every level keeps a swarm hunting its hidden things
     bool hunting = enemyOnlyHidden(player);
     if (on(FEAT_SPECIAL) && (pl.difficulty >= 1 || hunting) && techs > 0 && tm > 5.0f && (armyCount >= 6 || hunting) && pl.money - reserve > 1200) {

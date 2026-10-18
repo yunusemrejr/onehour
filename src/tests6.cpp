@@ -118,7 +118,7 @@ static bool townTest(Faction me, Faction foe, u64 seed) {
     return true;
 }
 
-// ---- the Underground Nuke: price, prerequisite, its warhead three times as wide, as hard and as long-lasting, and its silo as hard to kill as a bunker
+// ---- the Underground Nuke: price, prerequisite, its warhead three times as wide and as long-lasting (2.7x the damage), and its silo as hard to kill
 static bool deepNukeTest(Faction me, Faction foe, u64 seed) {
     scene6(me, foe, seed);
     int bb = firstBuildOf(me), silo = me == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
@@ -173,7 +173,7 @@ static bool deepNukeTest(Faction me, Faction foe, u64 seed) {
             CHECK6(!g_sim.fallouts.empty() && std::fabs(g_sim.fallouts.back().life - Sim::FALLOUT_LIFE * UNUKE_FALLOUT) < 0.01f && g_sim.fallouts.back().power >= UNUKE_FALLOUT - 0.01f, "the silver warhead's radiation is not three times as strong and long");
         }
     }
-    printf("civictest %s: underground nuke ok ($%d, needs a ramp, 3x radius, damage and radiation, as hard as a bunker)\n", FACTION_NAME[me], BUILDS[silo].cost);
+    printf("civictest %s: underground nuke ok ($%d, needs a ramp, 3x radius and radiation, 2.7x damage, blast doors and deep plating)\n", FACTION_NAME[me], BUILDS[silo].cost);
     return true;
 }
 

@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -461,7 +461,7 @@ static bool econTest(u64 seed) {
         Player& pl = g_sim.players[0]; pl.money = 100000;
         int bb = firstBuildOf(fac[0]);
         Vec2 b0 = pl.basePos; Ref inc[5];
-        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
+        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 24; dy++) for (int dx = -16; dx < 16; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } for (int r = 1; r < 80; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) { if (std::max(std::abs(dx), std::abs(dy)) != r) continue; int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
         std::fill(pl.explored.begin(), pl.explored.end(), 1);
         g_sim.placeBuilding(bb + BR_POWER, 0, tileOf(b0.x) + 6, tileOf(b0.y) - 2, true);
         g_sim.placeBuilding(bb + BR_POWER, 0, tileOf(b0.x) + 6, tileOf(b0.y) + 1, true);
@@ -511,7 +511,8 @@ static bool econTest(u64 seed) {
         float closest = 1e9f;   // (a fixed-wing craft circles the rally point: it must pass close to it)
         for (int t = 0; t < 20 * 15; t++) { g_sim.step(); g_sim.events.clear(); if (t >= 20 * 9) if (Entity* a = g_sim.get(air)) closest = std::min(closest, dist(a->pos, rp)); }
         Entity* a = g_sim.get(air);
-        if (!a || closest > 4 * TILE) { if (a) fprintf(stderr, "%s at %.0f px from the rally point %.0f,%.0f (pos %.0f,%.0f order %d)\n", a->ut().name, dist(a->pos, rp), rp.x, rp.y, a->pos.x, a->pos.y, (int)a->order); return fail("aircraft did not go to the rally point"); }
+        // (a fixed-wing craft circles the rally point; the circle radius grows with the aircraft's pad slot so a crowd of them spreads out)
+        if (!a || closest > 12 * TILE) { if (a) fprintf(stderr, "%s at %.0f px from the rally point %.0f,%.0f (pos %.0f,%.0f order %d)\n", a->ut().name, dist(a->pos, rp), rp.x, rp.y, a->pos.x, a->pos.y, (int)a->order); return fail("aircraft did not go to the rally point"); }
         printf("econtest %s: ok\n", FACTION_NAME[fac[0]]);
     }
     return true;
@@ -599,6 +600,7 @@ bool dozerTest(u64 seed);     // tests4.cpp: dozer priorities, manual-order hold
 bool recoveryTest(u64 seed);  // tests5.cpp: a computer army that has lost almost everything rebuilds
 bool civicTest(u64 seed);     // tests6.cpp: the civilian town, civilian dozers, the Underground Nuke and the bunker's watch over its neighbours
 bool wallTestMain(u64 seed); // tests7.cpp: walls, Hyper Protection, Anti-Rocket, durability, barracks speed and the 25-pad airfield
+bool supersonicTest(u64 seed); // tests8.cpp: the balance pass (anti-nuke/wall vs nukes, silver damage, bunker health) and the Supersonic Bomber
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow);   // tests3.cpp: ONEHOUR_AIR=strike|drop|nuke --shot scenes
@@ -905,9 +907,13 @@ static bool nukeTest(u64 seed) {
         std::vector<Ref> air;
         int k = 0;
         for (int u = 0; u < U_COUNT; u++) if (UNITS[u].faction == fac[victim] && UNITS[u].kind == UK_AIR && !UNITS[u].temp) {   // (the Hotline Strike fighters leave on their own and are never parked anywhere)
-            air.push_back(g_sim.spawnUnit(u, victim, gz + Vec2((k % 4) * 40.0f - 60, (k / 4) * 40.0f - 20)));
+            Ref still = g_sim.spawnUnit(u, victim, gz + Vec2((k % 4) * 40.0f - 60, (k / 4) * 40.0f - 20));
             Ref mover = g_sim.spawnUnit(u, victim, gz + Vec2(-8 * TILE, 3 * TILE + k * 8.0f));
             g_sim.cmdMove({mover}, gz + Vec2(8 * TILE, 3 * TILE), false);   // crossing ground zero as it lands
+            if (UNITS[u].sprintSpeed > 0) {   // the Supersonic Bomber's dash would carry it far past the circle before the warhead lands: hold the
+                g_sim.get(still)->disabledUntil = 1e9f; g_sim.get(mover)->disabledUntil = 1e9f;   // pair over ground zero so the fireball still has aircraft in it
+            }
+            air.push_back(still);
             air.push_back(mover);
             k++;
         }
@@ -934,7 +940,7 @@ static bool jetTest(u64 seed) {
         int bb = firstBuildOf(fac[0]), jetType = firstUnitOf(fac[0]) + 11;
         if (!UNITS[jetType].jet || UNITS[jetType].kind != UK_AIR) return fail("unit table: the last unit of each army must be the jet");
         Vec2 b0 = pl.basePos;
-        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
+        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 24; dy++) for (int dx = -16; dx < 16; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } for (int r = 1; r < 80; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) { if (std::max(std::abs(dx), std::abs(dy)) != r) continue; int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
         Vec2 sp = spot(bb + BR_POWER, 5); g_sim.placeBuilding(bb + BR_POWER, 0, (int)sp.x, (int)sp.y, true);
         Vec2 sf = spot(bb + BR_FACTORY, 5); g_sim.placeBuilding(bb + BR_FACTORY, 0, (int)sf.x, (int)sf.y, true);
         Vec2 st = spot(bb + BR_TECH, 5); Ref tech = g_sim.placeBuilding(bb + BR_TECH, 0, (int)st.x, (int)st.y, true); (void)tech;
@@ -1513,7 +1519,7 @@ static bool supportTest(u64 seed) {
         std::fill(pl.explored.begin(), pl.explored.end(), 1);
         int bb = firstBuildOf(fac[0]), ub = firstUnitOf(fac[0]);
         Vec2 b0 = pl.basePos;
-        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
+        auto spot = [&](int type, int skipDy) { for (int dy = skipDy; dy < 24; dy++) for (int dx = -16; dx < 16; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } for (int r = 1; r < 80; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) { if (std::max(std::abs(dx), std::abs(dy)) != r) continue; int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (g_sim.canPlace(0, type, tx, ty)) return Vec2((float)tx, (float)ty); } return Vec2(-1, -1); };
         Vec2 sp = spot(bb + BR_POWER, 5); g_sim.placeBuilding(bb + BR_POWER, 0, (int)sp.x, (int)sp.y, true);
         Vec2 sf = spot(bb + BR_FACTORY, 5); Ref fact = g_sim.placeBuilding(bb + BR_FACTORY, 0, (int)sf.x, (int)sf.y, true);
         g_sim.updatePowerPublic();
@@ -2022,6 +2028,7 @@ static bool airMatrixTest(u64 seed) {
         bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
         g_sim.init(2, fac, ai, diff, team, seed + fi);
         for (int p = 0; p < 2; p++) { std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1); g_sim.players[p].money = 100000; }
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit()) g_sim.destroy(e, false);   // (no dozers mending the test target back up between runs)
         int b0 = firstBuildOf(fac[0]), b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]), u1 = firstUnitOf(fac[1]);
         Vec2 mid = g_map.nearestFree(g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f, 40);
         flattenArena(mid, 16, 26);   // (the middle of the map is a lake: the aircraft get an open field)
@@ -2582,6 +2589,7 @@ int main(int argc, char** argv) {
         else if (a == "--recoverytest") return recoveryTest(seed) ? 0 : 1;
         else if (a == "--civictest") return civicTest(seed) ? 0 : 1;
         else if (a == "--walltest") return wallTestMain(seed) ? 0 : 1;
+        else if (a == "--supersonictest") { g_map.generate(); return supersonicTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2674,6 +2682,17 @@ int main(int argc, char** argv) {
                 g.draw(g.unitBody[t][i / 4], x, y, 0, 1);
                 if (UNITS[t].naval) { ShipMounts m = shipMounts(t == U_C_CRUISER || t == U_K_CRUISER); for (int k = 0; k < m.n; k++) g.draw(g.unitTurret[t][i / 4], x + m.x[k] * UNIT_SCALE * artScale(t), y + m.y[k] * UNIT_SCALE * artScale(t), 0.4f, 1); }
             }
+            g_game.screenshot(sheetPath);
+            printf("wrote %s\n", sheetPath);
+            g_gfx.shutdown(); SDL_Quit(); return 0;
+        }
+        if (getenv("ONEHOUR_SBOMBER_SPRITES")) {   // the Supersonic Bomber art: Cyber and Clanker at 4.5x in all four team colours, a 1x strip below
+            const int ids[2] = { U_C_SBOMBER, U_K_SBOMBER };
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 4; p++) {
+                float x = 135 + p * 235, y = 125 + f * 285;
+                g.draw(g.unitBody[ids[f]][p], x, y, 0, 4.5f);
+            }
+            for (int i = 0; i < 8; i++) { int t = ids[i / 4]; float x = 100 + i * 110, y = 610; g.draw(g.unitBody[t][i % 4], x, y, 0, 1.4f); }
             g_game.screenshot(sheetPath);
             printf("wrote %s\n", sheetPath);
             g_gfx.shutdown(); SDL_Quit(); return 0;
@@ -2980,6 +2999,39 @@ int main(int argc, char** argv) {
                 g_game.cam = Vec2(clampf(c.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 g_game.selection.clear(); g_game.selection.push_back(bm[0]);
                 printf("bombs showcase: %d structures placed, %zu projectiles, %zu fx, %zu particles\n", placed, g_sim.projs.size(), g_sim.fx.size(), g_game.parts.size());
+            }
+            if (getenv("ONEHOUR_SBOMBER")) {   // showcase: a Supersonic Bomber's nuclear strike on an enemy outpost (ONEHOUR_SBOMBER=N ticks into the run; =park to show it parked and loaded)
+                Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction; int bb0 = firstBuildOf(f0), bb1 = firstBuildOf(f1);
+                Vec2 bp = g_sim.players[0].basePos, ep = g_sim.players[1].basePos;
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                Vec2 mid = openGroundNear(bp + (ep - bp) * 0.5f);
+                Ref af, tech;
+                for (int dy = -10; dy < 10 && !af.valid(); dy++) for (int dx = -10; dx < 10 && !af.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, bb0 + BR_AIRFIELD, tx, ty)) af = g_sim.placeBuilding(bb0 + BR_AIRFIELD, 0, tx, ty, true); }
+                for (int dy = -14; dy < 14 && !tech.valid(); dy++) for (int dx = -14; dx < 14 && !tech.valid(); dx++) { int tx = tileOf(mid.x) + dx, ty = tileOf(mid.y) + dy; if (g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) tech = g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
+                g_sim.updatePowerPublic();
+                if (!g_sim.get(af)) { fprintf(stderr, "supersonic showcase: no airfield spot\n"); }
+                else {
+                    Vec2 pad = g_sim.get(af)->pos; Vec2 tgc = pad + Vec2(11 * TILE, 4 * TILE); Ref first;
+                    bool park = getenv("ONEHOUR_SBOMBER")[0] == 'p';
+                    int types[4] = { bb1 + BR_FACTORY, bb1 + BR_BARRACKS, bb1 + BR_POWER, bb1 + BR_SUPPLY };
+                    if (!park) {   // (park: no enemy outpost, so the bomber settles on its pad instead of picking a fight)
+                        for (int k = 0; k < 4; k++) for (int ring = 0; ring < 12 && !first.valid(); ring++) for (int a = 0; a < 16 && !first.valid(); a++) { int tx = tileOf(tgc.x) + (int)(std::cos(a * 0.39f + k) * (ring + k * 3)), ty = tileOf(tgc.y) + (int)(std::sin(a * 0.39f + k) * (ring + k * 3)); if (g_sim.canPlace(1, types[k], tx, ty)) { Ref r = g_sim.placeBuilding(types[k], 1, tx, ty, true); if (!first.valid()) first = r; } }
+                        for (int i = 0; i < 6; i++) g_sim.spawnUnit(f1 == F_CYBER ? U_C_INF1 : U_K_INF1, 1, g_map.nearestFree(tgc + Vec2(i * 14 - 40, 40), 10));
+                    }
+                    int sbt = f0 == F_CYBER ? U_C_SBOMBER : U_K_SBOMBER;
+                    Ref b = g_sim.spawnUnit(sbt, 0, pad + Vec2(0, 30)); g_sim.get(b)->home = af;
+                    if (!park && g_sim.get(first)) g_sim.cmdAttack({ b }, first);
+                    int n = park ? 100 : atoi(getenv("ONEHOUR_SBOMBER")); if (n < 2) n = 80;
+                    g_game.cam = Vec2(clampf(tgc.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(tgc.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                    for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                    if (Entity* q = g_sim.get(b)) {
+                        Vec2 look = park ? g_sim.get(af)->pos : q->pos;   // (parked: frame the airfield, the plane settles on one of its pads)
+                        if (!park) if (Entity* t = g_sim.get(q->targetEnt)) look = t->pos;
+                        g_game.cam = Vec2(clampf(look.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(look.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                    }
+                    g_game.selection.clear(); g_game.selection.push_back(b);
+                    printf("supersonic showcase: bomber %s, %zu projectiles, %zu fx, %zu nukes, %zu particles\n", g_sim.get(b) ? "in the air" : "lost", g_sim.projs.size(), g_sim.fx.size(), g_sim.nukes.size(), g_game.parts.size());
+                }
             }
             if (getenv("ONEHOUR_DROP")) {   // showcase: a paradrop over the middle of the map (ONEHOUR_DROP=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera against the plane's heading)
                 for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);

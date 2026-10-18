@@ -101,7 +101,7 @@ Vec2 Sim::dronePosAt(const Entity& e, int i, float t) const {
 // bullets are too quick to be engaged. Returns true if the projectile was shot down.
 bool Sim::interceptProjectile(Projectile& p) {
     const Weapon& w = WEAPONS[p.weapon];
-    if (w.proj != PJ_ROCKET && w.proj != PJ_SHELL) return false;
+    if (w.proj != PJ_ROCKET && w.proj != PJ_SHELL && w.proj != PJ_BOMB) return false;   // (bombs are loosed, not fired, but a point defence burns them too)
     Entity* h = get(p.target);
     if (w.proj == PJ_ROCKET && h && h->isBuilding() && h->constructed && h->bt().role == BR_BUNKER && h->hatch > 0 && h->disabledUntil <= time) {   // the hatch guns and overdrive lasers of a bunker swat rockets
         float range = (h->surrounded ? BUNKER_CIWS_RANGE + 1.5f : BUNKER_CIWS_RANGE) * TILE + h->radius();
@@ -273,6 +273,15 @@ float Sim::antiNukeShot(const Entity& b) const {
     if (isAntiRocketWall(b)) return WALL_PD_CHANCE + ANTINUKE_LINK_BONUS * antiNukeLinked(b);
     return ANTINUKE_CHANCE + ANTINUKE_LINK_BONUS * antiNukeLinked(b);
 }
+// What a defence's warhead interception is actually worth after the sighting nerf: the Anti-Nuke Laser is 40% weaker against nuclear warheads
+// and an Anti-Rocket wall's laser is 70% weaker; the Clanker missile silo is untouched and so is point-defence against rockets, shells and
+// aircraft (those still roll antiNukeShot, see interceptProjectile and updatePointDefenseAir).
+float Sim::antiNukeWarheadShot(const Entity& b) const {
+    float c = antiNukeShot(b);
+    if (isAntiRocketWall(b)) return c * WALL_PD_NUKE_MUL;
+    if (b.bt().faction == F_CYBER) return c * ANTINUKE_LASER_NUKE_MUL;
+    return c;
+}
 int Sim::antiNukeCovering(Vec2 at, int attacker, bool knownOnly, float scale, bool deep) const {
     int n = 0;
     Nuke probe; probe.owner = attacker;
@@ -289,7 +298,7 @@ float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bo
     for (auto& b : ents) {
         if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && !(b.bt().faction == F_CYBER || isAntiRocketWall(b)))) continue;
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
-        if (dist(at, b.pos) <= antiNukeCover(b, scale)) miss *= 1.0f - antiNukeShot(b);
+        if (dist(at, b.pos) <= antiNukeCover(b, scale)) miss *= 1.0f - antiNukeWarheadShot(b);
     }
     return 1.0f - miss;
 }
@@ -339,7 +348,7 @@ void Sim::updateAntiNuke(Entity& b) {
         n.engagedBy.push_back(self);
         int shots = cy ? 3 + linked : 2;
         while (shots > 1 && (shots - 1) * gap + flight > left - 0.2f) shots--;
-        int winner = rng.f() < antiNukeShot(b) ? rng.range(0, shots - 1) : -1;
+        int winner = rng.f() < antiNukeWarheadShot(b) ? rng.range(0, shots - 1) : -1;
         b.siloTimer = time + (cy ? (shots - 1) * gap + flight + ANTINUKE_LASER_RECHARGE : ANTINUKE_RELOAD);
         Vec2 muzzle = b.pos + Vec2(0, cy ? -22.0f : -8.0f);
         for (int k = 0; k < shots; k++) {

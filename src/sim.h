@@ -49,6 +49,7 @@ struct Entity {
     float jetBreak = 0;     // jets and bombers: seconds left of the breakaway after a pass
     u8 jetMode = 0;         // what the breakaway does: 0 peel away from the target, 1 extend straight out (target inside the turn circle)
     float airspeed = 0;     // fixed-wing aircraft: current speed along the heading (px/s)
+    float slowAt = -1;      // Supersonic Bomber: it keeps its dash until this sim time after a drop (clearing its own fireball), then slows down
     Vec2 loiter;            // aircraft: the spot it circles (fixed-wing) or hovers over while it waits in the air
     float loiterUntil = -1; // sim time it stops waiting there and flies home (-1 = never sent anywhere)
     bool autoTask = false;  // the current attack / move was the unit's own idea (helping a friend, answering fire, getting out of danger),
@@ -228,8 +229,9 @@ struct Sim {
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; Ref source; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
+                                          // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
     static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
@@ -319,8 +321,8 @@ struct Sim {
     void cmdAssist(const std::vector<Ref>& sel, Ref building); // dozer: continue construction or repair
     bool cmdTrain(Ref building, int unitType);
     // ---- stealth, transports, bunkers, spies
-    static int stealthOf(const Entity& e);                       // StealthClass of a unit or structure (bunkers count once built)
-    bool visibleTo(const Entity& e, int player) const;           // can this player see e? (always, unless e is stealthy and no detector of the player's team is close)
+    static int stealthOf(const Entity& e);                       // StealthClass of an entity (structures are never stealthy)
+    bool visibleTo(const Entity& e, int player) const;           // can this player see e? (always, unless e is a stealthy unit and no detector of the player's team is close)
     bool canTarget(const Entity& e, const Entity& t, int wpn = -1) const;   // may e shoot t right now (visible, in the right class, not a bunker it cannot hurt); wpn: a weapon other than the entity's own (a roof gun)
     bool canBoard(const Entity& u, const Entity& carrier) const; // may u climb aboard right now (room left, right kind of unit)?
     int cargoUsed(const Entity& carrier) const;                  // transport slots taken
@@ -364,6 +366,7 @@ struct Sim {
     // (edge distance, 0 when the spot is on it); more than one only on an exact tie, which is drawn at random. Returns the count.
     int aidCandidates(int sender, Vec2 at, int* out) const;
     // ---- jeeps, protector drones, anti-nuke defences, ships
+    float airTopSpeed(const Entity& e) const;   // fixed-wing aircraft: the top speed right now (a sprinting nuclear bomber is slower once the bomb is gone)
     int dropJeeps(int player) const;                         // loaded jeeps an airdrop carries: DROP_JEEPS_MIN .. DROP_JEEPS_MAX by what the army has unlocked
     std::vector<int> jeepCrew(int player) const;             // the seven infantry types a jeep of this army is dropped with (one of each useful kind, the rest rocket troopers)
     int droneCount(const Entity& e) const;                   // protector drones it flies with right now (0 while disabled or under a parachute)
@@ -371,6 +374,7 @@ struct Sim {
     Vec2 dronePosAt(const Entity& e, int i, float t) const;
     // chance the defences covering 'at' stop a warhead of 'scale' (of anybody who would hurt 'victim'): 1 - prod(1 - each one's antiNukeShot)
     float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // deep: an Underground Nuke (only lasers count)
+    float antiNukeWarheadShot(const Entity& b) const;        // its chance against a nuclear warhead (the lasers' sighting nerf lives here; rockets, shells and aircraft use antiNukeShot)
     int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // how many working defences cover 'at'
     bool antiNukeWorking(const Entity& b) const;             // a finished anti-nuke defence (or an Anti-Rocket wall) that is switched on and powered
     bool isAntiRocketWall(const Entity& b) const;            // a finished wall of an army that has researched Anti-Rocket

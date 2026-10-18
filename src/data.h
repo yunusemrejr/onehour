@@ -39,7 +39,7 @@ enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER, UR_HEALER,
                 UR_TRANSPORT }; // cargo chopper: carries infantry and vehicles
 // Stealth classes: a stealthy unit or structure is invisible to an enemy (cannot be seen, selected or shot) unless one of the enemy's
 // own detectors is close enough. Detector masks say which classes a unit can see.
-enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers and underground bunkers: only a spy drone finds them
+enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone finds them (buildings are never stealthy)
                     ST_DRONE = 2 };                  // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
 static const int DET_SPOTTER = 1, DET_DRONE = 2;
 
@@ -57,6 +57,7 @@ enum UnitTypeId {
     U_C_CRUISER, U_K_CRUISER,       // missile ships
     U_C_STRIKEJET, U_K_STRIKEJET,   // the two fighters a Hotline Strike brings: never built, they leave again when the run is over
     U_C_CIVDOZER, U_K_CIVDOZER,     // civilian dozers: they raise the town (houses, shops, towers, the town hall), never military structures
+    U_C_SBOMBER, U_K_SBOMBER,       // Supersonic Bomber: a very fast nuclear bomber with one compact nuclear bomb (see SBOMBER_* and nukeBomb)
     U_COUNT
 };
 
@@ -64,7 +65,7 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_NAVAL,       // Naval Yard: on the shore of the lake, builds the ships
                  BR_ANTINUKE,    // Anti-Nuke Laser / Anti-Nuke Missiles: small structures that shoot incoming warheads down
                  BR_CIVIC,       // civilian infrastructure (houses, shops, towers, the town hall): raised by a civilian dozer, pays and sends dozers on its own
-                 BR_UNUKE,       // Underground Nuke silo: a buried launcher as hard to destroy as a bunker, its silver warhead three times a ramp's
+                 BR_UNUKE,       // Underground Nuke silo: a buried launcher with blast doors and deep plating; its silver warhead has 3x a ramp's radius and radiation
                  BR_WALL,        // thick concrete/steel wall segment: unlimited, cheap, very hard to nuke through
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
@@ -113,6 +114,8 @@ struct UnitType {
     float evade;        // 0..1: the share of weapon hits that miss it (the Hotline Strike fighters are very hard to shoot down)
     int temp;           // 1 = a loan from a support power: cannot be built, selected or commanded, and leaves the map when its run is over
     int drones;         // protector drones it flies with (see Sim::droneCount): they shoot down rockets and shells aimed at it
+    int nukeBomb;       // 1 = a nuclear bomber: its single bomb is a compact silver warhead with an Underground Nuke's damage (see W_NUKE_BOMB)
+    float sprintSpeed;  // px/s: the top speed while it still carries its payload (0 = no sprint); it drops to 'speed' once the payload is gone
 };
 // Cargo slots a unit takes in a transport: infantry 1, light vehicles 4, tanks 6, super-heavy walkers 10 (aircraft cannot be carried)
 inline int cargoSize(const UnitType& u) { return u.kind == UK_INF ? 1 : (u.kind == UK_VEH ? (u.hp >= 1500 ? 10 : (u.armor == AR_HEAVY ? 6 : 4)) : 0); }
@@ -174,7 +177,7 @@ static const float HQ_ARMOR = 0.35f;          // fraction of conventional damage
 static const float HQ_NUKE = 0.12f;           // hard ceiling: one warhead takes at most this share of its max health
 // Walls: a cheap, unlimited 1x1 segment with a huge health pool and a very low per-warhead ceiling. At ground zero a normal warhead takes
 // about a tenth of a wall's health, so even a direct hit is only a chip: it takes a long barrage to open a breach. Hyper Protection doubles
-// the pool, so it takes even longer.
+// the pool but the ceiling is a share of it, so the number of warheads it takes is unchanged.
 static const float WALL_HP = 18000.0f;
 static const float WALL_NUKE = 0.10f;         // hard ceiling per warhead (fraction of max health)
 static const float WALL_ARMOR = 0.60f;        // fraction of conventional damage a wall takes
@@ -185,6 +188,10 @@ static const float WALL_PD_CHANCE = 0.38f;    // chance to burn down one incomin
 static const float WALL_PD_RELOAD = 3.2f;     // seconds before the same wall can engage again
 static const float WALL_PD_AA = 190.0f;       // damage a wall laser does to an aircraft it catches
 static const float ANTINUKE_PD_AA = 230.0f;   // damage a Q defence does to an aircraft
+// Nuclear-interception nerf: the Anti-Nuke Laser is 40% weaker against warheads, and an Anti-Rocket wall's laser is 70% weaker against them.
+// Only warheads are affected: burning down rockets, shells, bombs and aircraft is unchanged, and the Clanker missile silo keeps its chance.
+static const float ANTINUKE_LASER_NUKE_MUL = 0.60f;   // chance of an Anti-Nuke Laser to stop a warhead
+static const float WALL_PD_NUKE_MUL = 0.30f;          // chance of an Anti-Rocket wall to stop a warhead
 static const float PD_AIRCRAFT_RELOAD = 1.1f; // seconds between aircraft shots
 static const int   AIRFIELD_CAP = 25;         // fixed-wing aircraft based at one oversized airfield: one per pad
 static const float BARRACKS_SPEED = 3.0f;     // barracks infantry production multiplier (always, even on low power)
@@ -195,6 +202,17 @@ static const int   W_JEEP_MG = 33;                        // the pintle gun of a
 static const int   W_DESTROYER_C = 34, W_DESTROYER_K = 35, W_CRUISER_C = 36, W_CRUISER_K = 37;   // the ships' guns and rocket salvos
 static const int   W_STRIKE_C = 38, W_STRIKE_K = 39;      // the rockets of the Hotline Strike fighters
 static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns of the Defense Guns upgrade (Cyber laser, Clanker machine gun)
+static const int   W_SBOMBER_GUN = 43;   // the Supersonic Bomber's defensive tail cannon (WEAPONS index)
+static const int   W_NUKE_BOMB = 44;     // the compact nuclear bomb it drops (PJ_BOMB: handled by Sim::bombImpact, never fired like a gun)
+// Supersonic Bomber: a small fixed-wing nuclear bomber of both armies, built at the airfield with a tech structure. It is the fastest
+// aircraft in the game while its one bomb is aboard; after the drop it holds the dash just long enough to clear its own fireball, then
+// slows right down and is easy prey for anti-air. Its bomb is a compact casing (drawn small) holding a silver warhead: the damage is an
+// Underground Nuke's (UNUKE_DAMAGE, lethal like a silver warhead) but the blast is only a Nuke Ramp's in area, so it looks much smaller.
+static const float SBOMBER_DASH = 960.0f;         // px/s: top speed while the payload is still aboard (the strike jets do 900)
+static const float SBOMBER_SLOW = 340.0f;         // px/s: top speed once the bomb has been dropped (it is a sitting duck then)
+static const float SBOMBER_CLEAR = 1.2f;          // seconds after the bomb leaves it that it keeps the dash to clear its own blast
+static const float SBOMBER_BOMB_SCALE = 1.0f;     // blast AREA as a share of a Nuke Ramp's: the compact fireball is a ramp's (not a silo's)
+static const float SBOMBER_BOMB_FALL = 0.9f;      // seconds the compact bomb takes to fall from altitude to the ground
 
 // Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes.
 // What the plane carries is never a fixed list: it is composed from what the army can actually field right now (Sim::dropManifest).
@@ -293,7 +311,6 @@ static const int   BUNKER_INF_CAP = 50, BUNKER_DOZER_CAP = 1;
 static const float BUNKER_HATCH_HP = 3200.0f;     // the surface opening (reinforced plating)
 static const float BUNKER_PLATING = 0.25f;        // share of the damage that reaches the buried bunker once the hatch is gone
 static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky, radiation and nukes can never take it below this share of its health
-static const float BUNKER_LINGER = 25.0f;         // seconds a bunker a spy drone found stays known after the drone has moved on
 static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
 // Dozers: a direct order holds off their own repair rounds for a while; a site they are pulled away from is kept and resumed.
 static const float DOZER_MANUAL_HOLD = 12.0f;     // seconds after a manual move or target order (counted from its arrival) before it mends things on its own again
@@ -315,7 +332,7 @@ static const int   W_BUNKER_MINIGUN = 32;         // WEAPONS index of those mini
 static const float MINI_NUKE_SCALE = 0.2f;        // a bunker's missile: a fifth of the blast area (radius NUKE_RADIUS * sqrt(scale)), same strength per spot
 static const float MINI_NUKE_COOLDOWN = 65.0f;    // seconds between two launches of one bunker
 static const float MINI_NUKE_ARM = 30.0f;         // seconds after a bunker is finished before its first missile is ready
-static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch gives the bunker away to the enemy (the missile climbs out of its hatch)
+static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch is announced to the enemy (the missile climbs out of its hatch); the bunker itself is always visible
 static const int   MINI_NUKE_SALVO = 2;           // missiles per launch: the same warhead twice, one after the other ...
 static const float MINI_NUKE_SALVO_GAP = 1.2f;    // ... this many seconds apart
 // A bunker that is being worn down does not sit still: while it has been hit in the last BUNKER_RETALIATE seconds a rocket pod pops up (even with the
@@ -358,11 +375,12 @@ inline bool civicDozerType(int unitType) { return unitType == U_C_CIVDOZER || un
 static const float CIVIC_INTERVAL = 10.0f;        // seconds between two payouts of a civilian structure
 static const int   CIVIC_MAX = 30;                // civilian structures per player
 static const int   CIVIC_DOZER_CAP = 5;           // no free dozers once the army has this many (both kinds counted: more made bases rebuild faster than they fell)
-// Underground Nuke: a buried silo that fires the same kind of warhead as a Nuke Ramp, but silver and three times as strong: three times the
-// blast radius, the damage and the radiation (strength and how long it lasts). It is as hard to destroy as a bunker (blast doors, plating, and
-// only soldiers and vehicles can take it below BUNKER_FLOOR), and only an Anti-Nuke Laser can shoot its warhead down.
+// Underground Nuke: a buried silo that fires the same kind of warhead as a Nuke Ramp, but silver and much stronger: three times the blast
+// radius, 2.7 times the damage (10% weaker than it used to be) and three times the radiation (strength and how long it lasts). It has blast
+// doors and deep plating (only soldiers and vehicles can take it below BUNKER_FLOOR), and only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can
+// shoot its warhead down.
 static const float UNUKE_SCALE = 9.0f;            // share of a full warhead's blast AREA: radius NUKE_RADIUS * sqrt(9) = three times a ramp's
-static const float UNUKE_DAMAGE = 3.0f;           // damage multiplier over a ramp's warhead
+static const float UNUKE_DAMAGE = 2.7f;           // damage multiplier over a ramp's warhead (10% weaker than the original 3x)
 static const float UNUKE_FALLOUT = 3.0f;          // radiation: strength and duration multiplier
 static const float UNUKE_DOOR_HP = 4000.0f;       // the silo's blast doors (they take the damage first, like a bunker's hatch)
 static const float UNUKE_ARM = 60.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)

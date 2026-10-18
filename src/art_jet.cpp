@@ -232,11 +232,200 @@ void warhawk(Art& A) {
     A.line(16, 36.2f, 27, 36.9f, 0.4f, rgba(rgb(220, 220, 200), 90));
 }
 
+// ---------------------------------------------------------------- Supersonic Bomber (Cyber)
+
+// A compact silver nuclear bomb slung under a wing, seen from above: a capsule about 12 canvas px long with the round
+// silver warhead nose of the Underground Nuke's warhead (same gold band), four tail fins, a dark rack strap and a soft
+// shadow thrown to the south-east so it reads as hanging UNDER the aircraft, not resting on the wing. A dark seat ring
+// keeps the silver pod separated from any wing beneath it even where the shadow is weak.
+void nukePod(Art& A, float x0, float x1, float y, float r, Color accent) {
+    const Color SIL = rgb(200, 206, 216), SILD = rgb(104, 112, 126);
+    A.soft((int)(x0 - 4), (int)(y - r - 5), (int)(x1 + 6), (int)(y + r + 6),
+           [=](float px, float py) { return sdCap(px, py, x0 + 1.1f, y + 1.7f, x1 + 0.6f, y + 1.7f, r); }, rgba(INK, 145), 1.7f);
+    A.cap(x0 + r * 0.7f, y, x1 - r * 0.8f, y, r + 0.85f, rgba(INK, 210), 1.1f, 0.4f);   // seat ring: the black rim of the pod
+    // the two tail blades first, so the body covers their roots
+    A.poly({{x0 + 2.0f, y - r * 0.4f}, {x0 - 0.3f, y - r * 1.95f}, {x0 + 1.1f, y - r * 0.1f}}, SILD, 0.7f, 0.3f);
+    A.poly({{x0 + 2.0f, y + r * 0.4f}, {x0 - 0.3f, y + r * 1.95f}, {x0 + 1.1f, y + r * 0.1f}}, SILD, 0.7f, 0.3f);
+    A.cap(x0 + r * 0.8f, y, x1 - r * 0.9f, y, r, SIL, 1.2f, 0.55f);
+    A.ell(x1 - r * 0.8f, y, r * 0.95f, r * 0.88f, shade(SIL, 1.12f), 1.0f, 0.5f);   // rounded warhead nose
+    A.box(x0 + (x1 - x0) * 0.55f, y, r * 0.30f, r * 1.02f, 0.2f, rgb(240, 196, 60), 0.5f, 0.2f);   // gold warhead band
+    A.box(x0 + (x1 - x0) * 0.33f, y, r * 0.22f, r * 1.02f, 0.2f, accent, 0.5f, 0.2f);             // owner's accent stripe
+    A.box(x0 + (x1 - x0) * 0.15f, y, r * 0.26f, r * 1.06f, 0.2f, rgba(INK, 235), 0.4f, 0.2f);     // rack strap
+    A.dot(x1 - r * 1.55f, y - r * 0.42f, r * 0.30f, rgba(WHT, 225));                              // glint
+    A.dot(x1 - r * 0.35f, y, r * 0.22f, INK);                                                      // fuse
+}
+
+// The Cyber bomber: a slender hypersonic waverider - long pale ceramic nose, thin clipped delta, ceramic leading edges
+// and cyan emitter lines in the Valkyrie's language but on a much smaller airframe. Twin canted stealth fins, two
+// slotted vectored exhausts and a small rear-defence turret. Its single compact silver bomb hangs under the south wing.
+void specterBomber(Art& A) {
+    const Color H = rgb(50, 62, 88), HL = rgb(94, 112, 144), CER = rgb(176, 190, 206), RAM = rgb(14, 17, 26);
+    const Color GL = rgb(112, 240, 255), GLS = rgb(28, 80, 106), STL = rgb(132, 140, 152);
+    // thin blended delta: swept leading edge, clipped tip, swept trailing edge
+    symPoly(A, {{51, 29.3f}, {43, 23.3f}, {34, 16.1f}, {25, 11.2f}, {20.2f, 12.0f}, {11.0f, 31.3f}}, H, 2.2f, 0.6f);
+    // dark radar-absorbing root panels and a panel seam
+    symPoly(A, {{41, 27.2f}, {30, 18.2f}, {34.5f, 24.4f}}, RAM, 0.9f, 0.3f);
+    symPoly(A, {{27.5f, 14.4f}, {21.5f, 12.4f}, {23.8f, 16.4f}}, RAM, 0.9f, 0.3f);
+    lineS(A, 39.5f, 21.4f, 18.0f, 11.0f, 0.45f, rgba(INK, 130));
+    // pale ceramic leading edge, with the cyan emitter line hugging it just inboard
+    lineS(A, 50.4f, 29.0f, 43.0f, 23.1f, 1.25f, shade(CER, 0.94f));
+    lineS(A, 43.0f, 23.1f, 34.0f, 15.9f, 1.25f, shade(CER, 0.94f));
+    lineS(A, 34.0f, 15.9f, 25.1f, 11.0f, 1.25f, shade(CER, 0.94f));
+    lineS(A, 50.0f, 28.8f, 42.6f, 22.9f, 2.6f, rgba(GL, 40));
+    lineS(A, 42.6f, 22.9f, 33.6f, 15.7f, 2.6f, rgba(GL, 40));
+    lineS(A, 48.9f, 30.0f, 41.5f, 24.1f, 0.75f, rgba(GL, 235));
+    lineS(A, 41.5f, 24.1f, 32.6f, 16.9f, 0.75f, rgba(GL, 225));
+    lineS(A, 32.6f, 16.9f, 24.4f, 12.2f, 0.7f, rgba(GL, 215));
+    // wingtip pod with an emitter, the team panel and the roundel
+    capS(A, 27.2f, 11.6f, 21.0f, 12.3f, 1.05f, shade(H, 0.84f), 0.9f, 0.4f);
+    A.dot(20.8f, 12.3f, 0.55f, GL); A.dot(20.8f, far(12.3f), 0.55f, GL);
+    A.glow(20.6f, 12.3f, 2.8f, rgba(GL, 120)); A.glow(20.6f, far(12.3f), 2.8f, rgba(GL, 120));
+    symPoly(A, {{26.4f, 12.8f}, {21.4f, 13.6f}, {24.0f, 16.6f}}, A.team, 0.8f, 0.35f);
+    teamMark(A, 31.4f, 19.2f, 1.75f); teamMark(A, 31.4f, far(19.2f), 1.75f);
+    // pale ceramic elevon panel along the trailing edge, its hinge seam and a faint cyan edge light
+    symPoly(A, {{18.8f, 20.6f}, {21.2f, 15.8f}, {23.4f, 17.6f}, {20.4f, 21.8f}}, shade(CER, 0.8f), 0.8f, 0.35f);
+    lineS(A, 21.0f, 16.4f, 12.0f, 29.0f, 0.5f, rgba(INK, 160));
+    lineS(A, 19.6f, 12.6f, 11.4f, 30.4f, 0.4f, rgba(GL, 110));
+    // slender lifting-body fuselage with a bright dorsal spine
+    A.cap(8.4f, 32, 45, 32, 3.5f, shade(H, 1.06f), 2.6f, 0.6f);
+    A.cap(13.5f, 32, 46, 32, 1.85f, shade(HL, 1.03f), 1.8f, 0.5f);
+    A.line(14, 32, 47, 32, 0.5f, rgba(GL, 170));
+    A.box(25.5f, 32, 2.4f, 0.7f, 0.2f, RAM, 0.6f, 0.2f);
+    A.box(25.5f, 32, 0.65f, 1.5f, 0.2f, rgba(GL, 170), 0.5f, 0.2f);
+    // long pale ceramic nose with a dark centre seam, anti-glare panel and the needle pitot
+    symPoly(A, {{45.0f, 28.8f}, {52, 29.6f}, {57, 30.8f}, {62.7f, 32}, {45, 32}}, CER, 1.5f, 0.5f);
+    A.line(46, 32, 62.2f, 32, 0.4f, rgba(INK, 185));
+    A.box(51.0f, 30.3f, 1.5f, 0.35f, 0.1f, rgba(RAM, 220), 0.4f, 0.2f);   // anti-glare panel on the nose
+    A.dot(58.6f, 31.3f, 0.4f, rgba(WHT, 210));
+    A.dot(62.4f, 32, 0.3f, shade(CER, 0.55f));                            // pitot tip
+    // flush canopy behind the nose
+    A.ell(39.6f, 32, 5.4f, 2.35f, GLS, 1.5f, 0.65f);
+    A.ell(38.5f, 31.0f, 2.9f, 0.62f, rgba(WHT, 200), 1, 0);
+    A.line(34.4f, 32, 44.8f, 32, 0.35f, rgba(INK, 190));
+    A.line(36.8f, 30.2f, 42.4f, 30.2f, 0.4f, rgba(HL, 220));
+    // wing-root intakes with a cyan lip
+    for (int m = 0; m < 2; m++) {
+        float y = m ? far(27.4f) : 27.4f;
+        A.box(33.0f, y, 3.0f, 0.95f, 0.25f, INK, 0.8f, 0.2f);
+        A.line(29.8f, y + (m ? 0.55f : -0.55f), 36.2f, y + (m ? 0.55f : -0.55f), 0.4f, rgba(GL, 160));
+    }
+    // swept twin fins with team-coloured tips
+    capS(A, 16.0f, 27.4f, 10.2f, 19.8f, 1.2f, shade(CER, 0.84f), 0.9f, 0.4f);
+    capS(A, 10.9f, 20.6f, 9.7f, 17.2f, 0.95f, A.team, 0.7f, 0.4f);
+    A.dot(9.6f, 17.0f, 0.5f, rgba(WHT, 215)); A.dot(9.6f, far(17.0f), 0.5f, rgba(WHT, 215));
+    // two slotted 2D exhausts with cyan glow
+    for (int m = 0; m < 2; m++) {
+        float y = m ? 35.6f : 28.4f;
+        A.box(9.0f, y, 2.4f, 1.3f, 0.55f, shade(RAM, 2.6f), 0.9f, 0.45f);
+        A.box(7.5f, y, 0.9f, 0.55f, 0.2f, rgba(GL, 230), 0.6f, 0.2f);
+        A.glow(6.4f, y, 4.4f, rgba(GL, 110));
+    }
+    // rear-defence turret: a small drum with two cannon muzzles pointing aft
+    A.cap(14.0f, 32, 9.6f, 32, 1.2f, shade(H, 1.22f), 0.9f, 0.4f);
+    A.box(11.0f, 32, 1.0f, 0.7f, 0.2f, shade(RAM, 2.1f), 0.5f, 0.2f);
+    A.line(9.2f, 31.2f, 5.2f, 31.2f, 0.5f, STL); A.line(9.2f, 32.8f, 5.2f, 32.8f, 0.5f, STL);
+    A.dot(5.1f, 31.2f, 0.35f, INK); A.dot(5.1f, 32.8f, 0.35f, INK);
+    // hatches, panel lines and rivet rows
+    A.box(21.0f, 32, 1.6f, 0.7f, 0.2f, rgba(RAM, 220), 0.5f, 0.2f);
+    A.line(17.0f, 29.7f, 32.0f, 29.7f, 0.45f, rgba(INK, 140));
+    A.line(12.0f, 35.1f, 31.0f, 35.1f, 0.4f, rgba(INK, 120));
+    for (int i = 0; i < 5; i++) { A.dot(20.5f + i * 4.3f, 34.3f, 0.3f, rgba(HL, 215)); A.dot(20.5f + i * 4.3f, far(34.3f), 0.3f, rgba(HL, 215)); }
+    // the one compact silver bomb under the south inboard wing
+    nukePod(A, 18.0f, 30.4f, 37.8f, 2.0f, GL);
+}
+
+// ---------------------------------------------------------------- Supersonic Bomber (Clanker)
+
+// The Clanker bomber: a Hustler-like four-engine delta - long glazed bombardier nose, two big under-wing nacelles with
+// twin exhausts each, a broad tailplane with a single centreline fin, a rear gun turret, and plenty of rivets, rust and
+// hazard yellow. Its one compact silver bomb hangs from the north inboard pylon.
+void ironwingBomber(Art& A) {
+    const Color H = rgb(112, 118, 88), HD = rgb(82, 88, 64), SAND = rgb(184, 166, 118), DK = rgb(32, 34, 28);
+    const Color RUST = rgb(166, 92, 48), YEL = rgb(236, 190, 62), STL = rgb(152, 154, 152);
+    const Color GLS = rgb(70, 106, 122), FLAME = rgb(255, 150, 50);
+    // clean delta wing in olive over sand with camouflage patches
+    symPoly(A, {{47, 28.9f}, {41, 22.6f}, {30, 13.2f}, {22.2f, 8.6f}, {17.0f, 9.8f}, {10.0f, 31.3f}}, H, 2.5f, 0.6f);
+    ellS(A, 35.0f, 17.0f, 6.2f, 2.2f, rgba(SAND, 190));
+    ellS(A, 25.5f, 22.4f, 4.4f, 2.0f, rgba(HD, 185));
+    ellS(A, 32.0f, 26.4f, 3.4f, 1.5f, rgba(SAND, 165));
+    ellS(A, 23.0f, 13.0f, 2.4f, 1.1f, rgba(HD, 150));
+    // pale leading edge, seams, flap hinge and a wing fence
+    lineS(A, 45.6f, 28.2f, 41.2f, 22.8f, 1.5f, shade(SAND, 0.92f));
+    lineS(A, 41.2f, 22.8f, 30.2f, 13.4f, 1.5f, shade(SAND, 0.92f));
+    lineS(A, 30.2f, 13.4f, 22.4f, 8.8f, 1.5f, shade(SAND, 0.92f));
+    lineS(A, 42.2f, 26.6f, 17.8f, 9.8f, 0.55f, rgba(DK, 150));
+    lineS(A, 36.4f, 21.8f, 13.0f, 29.6f, 0.75f, rgba(DK, 165));
+    lineS(A, 29.6f, 16.6f, 15.8f, 25.4f, 0.5f, rgba(DK, 130));
+    lineS(A, 26.0f, 9.4f, 23.0f, 11.6f, 0.7f, rgba(RUST, 180));
+    // wingtip hazard band, wingtip lights, the team panel and the roundel
+    lineS(A, 23.0f, 8.7f, 19.6f, 10.0f, 1.35f, YEL);
+    A.dot(20.6f, 8.2f, 0.8f, rgb(255, 80, 70)); A.dot(20.6f, far(8.2f), 0.8f, rgb(80, 255, 120));
+    symPoly(A, {{28.8f, 11.8f}, {23.6f, 9.8f}, {21.8f, 13.0f}}, A.team, 0.8f, 0.35f);
+    teamMark(A, 35.8f, 23.4f, 1.85f); teamMark(A, 35.8f, far(23.4f), 1.85f);
+    // two big under-wing nacelles: steel intake forward, twin exhausts aft, a hazard band
+    for (int m = 0; m < 2; m++) {
+        float y = m ? far(18.0f) : 18.0f;
+        A.soft(12, (int)(y - 5.5f), 32, (int)(y + 5.5f), [=](float px, float py) { return sdCap(px, py, 14.0f, y + 1.2f, 29.0f, y + 1.2f, 3.0f); }, rgba(INK, 95), 1.6f);
+        A.cap(28.2f, y, 13.6f, y, 2.85f, shade(SAND, 0.86f), 2.0f, 0.55f);
+        A.circle(28.6f, y, 2.25f, DK, 1.2f, 0.4f);
+        A.ring(28.6f, y, 2.25f, 0.45f, STL, 0.8f, 0);
+        A.dot(29.3f, y, 0.95f, shade(DK, 2.0f));
+        A.box(18.4f, y, 0.85f, 2.75f, 0.2f, YEL, 0.5f, 0.2f);
+        for (int k = 0; k < 2; k++) nozzle(A, 11.9f, y + (k ? 1.4f : -1.4f), 1.35f, shade(STL, 0.5f), FLAME);
+    }
+    // thick tubular fuselage with a raised spine and the long tapered nose
+    A.cap(6.4f, 32, 48.5f, 32, 4.1f, shade(H, 1.05f), 2.8f, 0.6f);
+    A.cap(14.0f, 32, 52.0f, 32, 2.5f, shade(H, 1.12f), 2.0f, 0.5f);
+    symPoly(A, {{47.0f, 28.2f}, {55.0f, 29.2f}, {61.0f, 30.6f}, {62.8f, 32}, {47.0f, 32}}, shade(H, 1.1f), 1.8f, 0.55f);
+    // glazed bombardier greenhouse in the nose
+    A.ell(55.4f, 32, 4.8f, 2.6f, GLS, 1.5f, 0.65f);
+    A.ell(54.6f, 31.3f, 2.6f, 0.7f, rgba(rgb(206, 228, 242), 190), 1, 0);
+    A.line(51.0f, 32, 60.2f, 32, 0.4f, rgba(DK, 190));
+    // yellow hazard band and the pale radome seam behind the glass
+    A.box(48.6f, 32, 0.75f, 2.7f, 0.2f, YEL, 0.5f, 0.2f);
+    for (int i = 0; i < 3; i++) A.box(48.6f, 30.8f + i * 1.15f, 0.78f, 0.3f, 0.1f, DK, 0.3f, 0.1f);
+    A.line(47.4f, 29.2f, 61.4f, 30.9f, 0.4f, rgba(SAND, 200));
+    // cockpit canopy behind the bombardier nose
+    A.ell(41.4f, 32, 4.8f, 2.3f, GLS, 1.5f, 0.65f);
+    A.ell(40.4f, 31.1f, 2.6f, 0.6f, rgba(WHT, 200), 1, 0);
+    A.line(37.0f, 32, 45.6f, 32, 0.4f, rgba(DK, 200));
+    // broad tailplane and the single centreline fin, seen from above as a blade with a team-coloured tip
+    symPoly(A, {{16.0f, 30.6f}, {7.0f, 25.6f}, {3.6f, 27.4f}, {9.6f, 31.6f}}, shade(H, 1.06f), 1.2f, 0.5f);
+    A.line(14.5f, 30.0f, 4.4f, 26.6f, 0.45f, rgba(DK, 150));
+    A.cap(13.4f, 32, 4.6f, 32, 1.4f, shade(H, 0.86f), 1.0f, 0.45f);
+    A.line(12.8f, 31.2f, 5.4f, 31.2f, 0.5f, shade(H, 1.55f));   // the lit top edge of the vertical fin
+    A.box(5.8f, 32, 1.6f, 1.0f, 0.25f, A.team, 0.7f, 0.35f);
+    A.line(11.6f, 32.7f, 6.2f, 32.7f, 0.4f, rgba(DK, 160));
+    // rear gun turret: a dome with two cannon muzzles pointing aft
+    A.circle(4.2f, 32, 1.9f, shade(H, 0.82f), 1.2f, 0.45f);
+    A.line(3.2f, 31.2f, 1.4f, 31.2f, 0.5f, STL); A.line(3.2f, 32.8f, 1.4f, 32.8f, 0.5f, STL);
+    A.dot(1.3f, 31.2f, 0.35f, DK); A.dot(1.3f, 32.8f, 0.35f, DK);
+    // hatch, rivet rows, rust streaks and scratches
+    A.box(31.5f, 32, 1.7f, 0.75f, 0.2f, rgba(DK, 190), 0.5f, 0.2f);
+    A.box(25.0f, 29.0f, 1.4f, 0.5f, 0.15f, rgba(STL, 170), 0.4f, 0.2f);
+    for (int i = 0; i < 7; i++) { A.dot(16.0f + i * 4.2f, 28.8f, 0.3f, rgba(DK, 200)); A.dot(16.0f + i * 4.2f, far(28.8f), 0.3f, rgba(DK, 200)); }
+    for (int i = 0; i < 5; i++) { A.dot(35.0f + i * 2.9f, 34.6f, 0.28f, rgba(SAND, 220)); A.dot(35.0f + i * 2.9f, far(34.6f), 0.28f, rgba(SAND, 220)); }
+    A.line(11.0f, 29.4f, 24.0f, 28.0f, 0.5f, rgba(RUST, 135));
+    A.line(17.5f, 35.8f, 32.0f, 36.5f, 0.4f, rgba(rgb(220, 220, 200), 90));
+    A.grain(5, 20, 60, 46, 0.10f, 41);
+    // the one compact silver bomb under the north inboard wing
+    nukePod(A, 16.4f, 29.0f, 26.8f, 2.05f, YEL);
+}
+
 }  // namespace
 
 void artStrikeJetBody(Canvas& c, Color team, bool cyber) {
     Art A(c, team);
     if (cyber) valkyrie(A); else warhawk(A);
+    sharpen(c, 0.6f);
+    c.outline(rgb(8, 10, 14, 200));
+}
+
+// The Supersonic Bomber of both armies: a small, very fast fixed-wing nuclear bomber carrying one compact silver bomb
+// under an inboard wing. It paints, sharpens and outlines itself like the strike jets (the generic unit layers are off it).
+void artSupersonicBomberBody(Canvas& c, Color team, bool cyber) {
+    Art A(c, team);
+    if (cyber) specterBomber(A); else ironwingBomber(A);
     sharpen(c, 0.6f);
     c.outline(rgb(8, 10, 14, 200));
 }

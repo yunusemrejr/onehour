@@ -446,7 +446,7 @@ void Game::buildButtonsRaw() {
         }
         if (role == BR_BUNKER) {
             float mw = g_sim.miniNukeWait(g_sim.humanPlayer);
-            snprintf(tip, sizeof tip, "Launch Mini Nuke  [K]  A bunker's own missile, a fifth of a full warhead (%.1f tile radius, same strength per spot, leaves radiation). Needs no power or ramp; one per bunker every %d s. Launching gives the bunker away for %d s%s", NUKE_RADIUS * std::sqrt(MINI_NUKE_SCALE), (int)MINI_NUKE_COOLDOWN, (int)MINI_NUKE_REVEAL, mw > 0 ? "  (reloading)" : "");
+            snprintf(tip, sizeof tip, "Launch Mini Nuke  [K]  A bunker's own missile, a fifth of a full warhead (%.1f tile radius, same strength per spot, leaves radiation). Needs no power or ramp; one per bunker every %d s%s", NUKE_RADIUS * std::sqrt(MINI_NUKE_SCALE), (int)MINI_NUKE_COOLDOWN, mw > 0 ? "  (reloading)" : "");
             add(BK_MININUKE, 0, g_sim.miniNukesReady(g_sim.humanPlayer) > 0, "Mini Nuke", tip);
             snprintf(tip, sizeof tip, "Unload  [U]  Everybody climbs out onto the ground (%d soldiers, %d dozer inside)", g_sim.garrisonInfantry(*b), g_sim.garrisonDozers(*b));
             add(BK_UNLOAD, 0, !b->passengers.empty(), "Unload", tip);
@@ -1733,17 +1733,18 @@ void Game::renderWorld() {
             g.fillCircle(s.x - 0.8f, s.y - h - 0.8f, 1.3f, rgb(150, 150, 154));
             g.glowAdd(s.x, s.y - h, 6, Color{255, 190, 110, 70});
         } else if (w.proj == PJ_BOMB) {   // a bomb dropping from altitude: tumbling fat body, fins, a glow on the nose and a shadow closing in on the impact point
-            float t = clampf(p.arcT, 0, 1), h = (1.0f - t * t) * 78.0f;
+            const bool nuke = p.weapon == W_NUKE_BOMB;   // the Supersonic Bomber's compact nuclear bomb: much smaller than a stick bomb
+            float t = clampf(p.arcT, 0, 1), h = (1.0f - t * t) * (nuke ? 54.0f : 78.0f);
             Vec2 gd = (p.dest - p.vel).norm();
-            float sc = 0.7f + 0.5f * t;
-            Color glow = p.weapon == W_BOMB_CYBER ? Color{130, 225, 255, 130} : Color{255, 170, 90, 130};
-            g.drawSized(g.shadowSmall, s.x, s.y + 2, 11 * sc, 6 * sc, 0, rgb(255, 255, 255), (u8)(90 + 90 * t));
+            float sc = (nuke ? 0.5f : 0.7f) + (nuke ? 0.22f : 0.5f) * t;
+            Color glow = nuke ? Color{220, 228, 240, 150} : (p.weapon == W_BOMB_CYBER ? Color{130, 225, 255, 130} : Color{255, 170, 90, 130});
+            g.drawSized(g.shadowSmall, s.x, s.y + 2, (nuke ? 5.5f : 11.0f) * sc, (nuke ? 3.0f : 6.0f) * sc, 0, rgb(255, 255, 255), (u8)(90 + 90 * t));
             float bx = s.x, by = s.y - h;
-            g.drawSized(g.fxs.streak, bx - gd.x * 5, by - 6, 4, 16, 1.5708f, rgb(220, 220, 230), (u8)(120 * (1 - t)));
-            g.fillCircle(bx, by, 3.6f, rgb(36, 38, 42));
-            g.fillCircle(bx - 0.9f, by - 0.9f, 1.5f, rgb(128, 132, 140));
-            g.line(bx - 2.6f, by - 4.6f, bx + 2.6f, by - 4.6f, rgb(70, 74, 82));
-            g.glowAdd(bx, by, 7, glow);
+            g.drawSized(g.fxs.streak, bx - gd.x * (nuke ? 2.0f : 5.0f), by - (nuke ? 3.0f : 6.0f), nuke ? 2 : 4, nuke ? 7 : 16, 1.5708f, rgb(220, 220, 230), (u8)(120 * (1 - t)));
+            g.fillCircle(bx, by, nuke ? 1.7f : 3.6f, rgb(36, 38, 42));
+            g.fillCircle(bx - 0.45f, by - 0.45f, nuke ? 0.7f : 1.5f, nuke ? rgb(196, 202, 212) : rgb(128, 132, 140));
+            if (nuke) { g.line(bx - 1.2f, by - 2.1f, bx + 1.2f, by - 2.1f, rgb(160, 166, 176)); g.glowAdd(bx, by, 4, glow); }
+            else { g.line(bx - 2.6f, by - 4.6f, bx + 2.6f, by - 4.6f, rgb(70, 74, 82)); g.glowAdd(bx, by, 7, glow); }
         } else if (w.proj == PJ_ROCKET) {
             Vec2 d = p.vel.norm();
             float ang = std::atan2(d.y, d.x);
@@ -1948,7 +1949,8 @@ void Game::renderHud() {
             hpBar(g, INFO_X + 86, hy + 48, 150, e->isBuilding() && !e->constructed ? e->progress : e->hp / e->maxHp, true);
             if (e->isUnit()) {
                 const UnitType& ut = e->ut();
-                if (ut.bomber) { const Weapon& bw = WEAPONS[ut.faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER]; snprintf(buf, sizeof buf, "%s x%d  dmg %d  blast %.1f  (guns vs air)", bw.name, BOMB_STICK, (int)bw.dmg, bw.splash); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
+                if (ut.nukeBomb) snprintf(buf, sizeof buf, "Nuclear Bomb x1: an Underground Nuke's damage in a compact fireball (tail cannon vs air)"), g.text(INFO_X + 86, hy + 58, buf, hudDim());
+                else if (ut.bomber) { const Weapon& bw = WEAPONS[ut.faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER]; snprintf(buf, sizeof buf, "%s x%d  dmg %d  blast %.1f  (guns vs air)", bw.name, BOMB_STICK, (int)bw.dmg, bw.splash); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 else if (ut.weapon >= 0) { const Weapon& w = WEAPONS[ut.weapon]; snprintf(buf, sizeof buf, "%s  dmg %d  range %.1f%s%s", w.name, (int)w.dmg, w.range, w.air ? "  AA" : "", w.ground ? "" : "  air only"); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.role == UR_HARVESTER) { snprintf(buf, sizeof buf, "Cargo $%d / %d", e->cargo, SUPPLY_PER_TRIP); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.ammo > 0) { snprintf(buf, sizeof buf, "Ammo %d / %d", e->ammo, ut.ammo); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
@@ -1989,7 +1991,7 @@ void Game::renderHud() {
                     float rw = std::max(0.0f, e->siloTimer - g_sim.time);
                     if (!powered) snprintf(buf, sizeof buf, "OFFLINE: %s", e->disabledUntil > g_sim.time ? "switched off by a pulse" : "no power");
                     else if (rw > 0) snprintf(buf, sizeof buf, "Reloading %ds", (int)std::ceil(rw));
-                    else if (bt.faction == F_CYBER) { int ln = g_sim.antiNukeLinked(*e); snprintf(buf, sizeof buf, "ARMED: covers %d tiles, %d beams, %d%% a shot (linked to %d laser%s)", (int)ANTINUKE_COVER_C, 3 + ln, (int)(100.0f * g_sim.antiNukeShot(*e) + 0.5f), ln, ln == 1 ? "" : "s"); }
+                    else if (bt.faction == F_CYBER) { int ln = g_sim.antiNukeLinked(*e); snprintf(buf, sizeof buf, "ARMED: covers %d tiles, %d beams, %d%% vs a warhead (40%% sighting nerf, linked to %d laser%s)", (int)ANTINUKE_COVER_C, 3 + ln, (int)(100.0f * g_sim.antiNukeWarheadShot(*e) + 0.5f), ln, ln == 1 ? "" : "s"); }
                     else snprintf(buf, sizeof buf, "ARMED: covers %d tiles around it", (int)ANTINUKE_COVER_K);
                     g.text(INFO_X + 86, hy + 70, buf, powered && rw <= 0 ? accent : rgb(255, 200, 120));
                     int foe = -1; for (int q = 0; q < g_sim.numPlayers; q++) if (g_sim.enemies(g_sim.humanPlayer, q)) { foe = q; break; }

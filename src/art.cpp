@@ -50,9 +50,12 @@ const CkTone CK_TONES[12] = {
 // type < 0 selects the neutral default palette (structures' turret heads)
 // position inside the army's block; the medics live after both blocks but are drawn as the 13th design. The newest designs follow the
 // Cyber helicopter in pairs: spies 15, spy drones 16, cargo lifters 17 (Cyber first in each pair, as everywhere else).
+// The Supersonic Bombers are the newest pair: local 23, pinned explicitly so appending further pairs to the enum can never
+// silently repaint them (the pair rule below happens to land on 23 today, but it is a spacer rule, not a contract).
 static int unitLocal(int type) {
     if (civicDozerType(type)) return 22;   // the civilian dozers: a dozer hull in civilian livery
     if (type == U_C_HELI) return 14;
+    if (type == U_C_SBOMBER || type == U_K_SBOMBER) return 23;
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -789,6 +792,7 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 19: artShipBody(c, team, cy, false); break;
     case 20: artShipBody(c, team, cy, true); break;
     case 21: artStrikeJetBody(c, team, cy); break;
+    case 23: artSupersonicBomberBody(c, team, cy); break;   // Supersonic Bomber (art_jet.cpp)
     case 22:   // civilian dozer: the army's dozer in civic white and safety orange, with a roof light bar
         if (cy) { CYH = rgb(214, 220, 226); CYP = rgb(236, 240, 244); CYM = rgb(232, 120, 44); CYD = rgb(70, 74, 82); CYG = rgb(255, 176, 60); CYW = rgb(255, 236, 200); dozerCyber(A, frame); }
         else { CKY = rgb(236, 128, 40); CKH = rgb(226, 222, 210); CKS = rgb(150, 152, 150); CKD = rgb(52, 50, 46); dozerClanker(A, frame); }
@@ -1113,6 +1117,7 @@ float artScale(int type) {
     if (local == 19) return 1.75f;   // destroyers
     if (local == 20) return 1.95f;   // cruisers
     if (local == 21) return 1.4f;    // Hotline Strike fighters
+    if (local == 23) return 1.16f;   // Supersonic Bombers: small and fast, a notch smaller than the strike jets
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

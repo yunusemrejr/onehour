@@ -27,3 +27,8 @@ bool artShipMount(Canvas& c, Color team, bool cyber, bool cruiser);
 // The special fighter of a Hotline Strike (Valkyrie / Warhawk): long, slender, swept, twin-tailed, weapon pylons under the wings. 64x64 canvas
 // with a wingspan up to about 52 px and a length up to about 62 px. Afterburner flame and contrails are added live by the renderer.
 void artStrikeJetBody(Canvas& c, Color team, bool cyber);
+
+// The Supersonic Bomber (Specter / Ironwing): a small, very fast fixed-wing nuclear bomber, 64x64 canvas, nose +x, about 58 px long,
+// carrying ONE compact silver bomb (with the silver warhead's gold band, much smaller than a silo's) under an inboard wing; the bomb
+// is painted into the sprite. Afterburner flame and contrails are added live by the renderer.
+void artSupersonicBomberBody(Canvas& c, Color team, bool cyber);

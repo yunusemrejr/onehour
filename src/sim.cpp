@@ -1178,6 +1178,7 @@ void Sim::nukeBlast(const Nuke& n) {
         auto lessen = [&](float dmg, const Entity& t) { return P < 1.0f ? P * std::min(dmg, t.hp) : dmg; };
         bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies and the human's own army as well
         if (e->isAir()) {   // nothing flying survives the fireball and the shock front, whoever owns it: torn apart, it falls out of the sky
+            if (n.source.valid() && refOf(*e) == n.source) continue;   // ... except the bomber that dropped the compact bomb: it is already pulling out of its own blast
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
             fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
             for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
@@ -1467,7 +1468,7 @@ void Sim::moveAlong(Entity& e, float speed) {
 bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
     if (t.fall > 0) return false;   // still under the parachute
-    if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, bunkers, spy drones)
+    if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, spy drones)
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
     if (hardened(t) && t.hatch <= 0 && t.hp <= t.maxHp * BUNKER_FLOOR + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;
@@ -1888,27 +1889,34 @@ static inline bool fixedWing(const UnitType& ut) { return ut.kind == UK_AIR && !
 static inline float wrapAngle(float a) { while (a > 3.14159265f) a -= 6.2831853f; while (a < -3.14159265f) a += 6.2831853f; return a; }
 static inline float baseTurn(const UnitType& ut) { return ut.jet ? JET_TURN : BOMBER_TURN; }   // turn rate at top speed
 
+float Sim::airTopSpeed(const Entity& e) const {
+    const UnitType& ut = e.ut();
+    if (ut.sprintSpeed <= 0.0f) return ut.speed;
+    return (e.ammo > 0 || (e.slowAt >= 0 && time < e.slowAt)) ? ut.sprintSpeed : ut.speed;   // (slowAt: the dash that clears its own fireball)
+}
+
 float Sim::airTurnRate(const Entity& e) const {
     const UnitType& ut = e.ut();
     float base = baseTurn(ut);
-    return std::min(base * AIR_TURN_MAX, base * ut.speed / std::max(1.0f, e.airspeed));
+    return std::min(base * AIR_TURN_MAX, base * airTopSpeed(e) / std::max(1.0f, e.airspeed));
 }
 
 void Sim::airSteer(Entity& e, float want, float wantSpeed, bool keepOnMap) {
     const UnitType& ut = e.ut();
-    float vmin = ut.heli ? 0.0f : ut.speed * AIR_STALL;
+    const float top = airTopSpeed(e);
+    float vmin = ut.heli ? 0.0f : top * AIR_STALL;
     if (keepOnMap) {   // about to leave the map within about one turn: pull round toward the middle, tightly
         float look = e.airspeed / airTurnRate(e) * 1.3f + 40.0f;
         Vec2 ahead = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * look;
         if (ahead.x < 8 || ahead.y < 8 || ahead.x > WORLD_W - 8 || ahead.y > WORLD_H - 8) {
             Vec2 c = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - e.pos; want = std::atan2(c.y, c.x);
-            wantSpeed = std::min(wantSpeed, ut.speed * 0.5f);
+            wantSpeed = std::min(wantSpeed, top * 0.5f);
         }
     }
-    wantSpeed = clampf(wantSpeed, vmin, ut.speed);
+    wantSpeed = clampf(wantSpeed, vmin, top);
     if (ut.heli) e.airspeed = wantSpeed;
-    else if (e.airspeed < wantSpeed) e.airspeed = std::min(wantSpeed, e.airspeed + ut.speed * 1.1f * SIM_DT);   // throttle up
-    else e.airspeed = std::max(wantSpeed, e.airspeed - ut.speed * 1.6f * SIM_DT);                            // airbrakes
+    else if (e.airspeed < wantSpeed) e.airspeed = std::min(wantSpeed, e.airspeed + top * 1.1f * SIM_DT);   // throttle up
+    else e.airspeed = std::max(wantSpeed, e.airspeed - top * 1.6f * SIM_DT);                            // airbrakes
     float turn = airTurnRate(e) * SIM_DT;
     e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want), -turn, turn));
     e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (e.airspeed * SIM_DT);
@@ -1930,8 +1938,9 @@ void Sim::flyTo(Entity& e, Vec2 dest, float speed) {
     float want = std::atan2(d.y, d.x);
     if (l > 260) { airSteer(e, want, speed); return; }
     float vt = std::max(30.0f, std::min(speed, l * 1.6f));
-    if (e.airspeed > vt) e.airspeed = std::max(vt, e.airspeed - ut.speed * 1.6f * SIM_DT);
-    else e.airspeed = std::min(vt, e.airspeed + ut.speed * 1.1f * SIM_DT);
+    const float top = airTopSpeed(e);
+    if (e.airspeed > vt) e.airspeed = std::max(vt, e.airspeed - top * 1.6f * SIM_DT);
+    else e.airspeed = std::min(vt, e.airspeed + top * 1.1f * SIM_DT);
     float turn = airTurnRate(e) * SIM_DT;
     e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want), -turn, turn));
     if (l < 14) e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want) * 0.5f, -turn, turn));
@@ -1996,13 +2005,14 @@ void Sim::heliHover(Entity& e, Vec2 spot, float speed) {
 void Sim::airLoiter(Entity& e, Vec2 c, float R, float speedFrac) {
     const UnitType& ut = e.ut();
     if (!fixedWing(ut)) { heliHover(e, heliSpot(e, Vec2(clampf(c.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(c.y, 2.0f * TILE, WORLD_H - 2.0f * TILE))), ut.speed * 0.6f); return; }
-    float v = ut.speed * speedFrac;
-    float rTurn = v / std::min(baseTurn(ut) * AIR_TURN_MAX, baseTurn(ut) * ut.speed / v);
+    const float top = airTopSpeed(e);
+    float v = top * speedFrac;
+    float rTurn = v / std::min(baseTurn(ut) * AIR_TURN_MAX, baseTurn(ut) * top / v);
     R = std::min(std::max(R, rTurn * 1.5f + 12.0f), WORLD_H * 0.3f);
     float m = R + rTurn * 1.3f + 48.0f;   // the whole circle stays far enough inside the map that the edge look-ahead never fires on it
     c = Vec2(clampf(c.x, m, WORLD_W - m), clampf(c.y, m, WORLD_H - m));
     Vec2 r = e.pos - c; float l = r.len();
-    if (l > R * 2.5f) { airSteer(e, std::atan2(-r.y, -r.x), ut.speed * std::max(speedFrac, 0.85f)); return; }   // still on the way there
+    if (l > R * 2.5f) { airSteer(e, std::atan2(-r.y, -r.x), top * std::max(speedFrac, 0.85f)); return; }   // still on the way there
     float phi = l > 1 ? std::atan2(r.y, r.x) : e.angle;
     Vec2 aim = c + Vec2(std::cos(phi + 0.75f), std::sin(phi + 0.75f)) * R;   // a carrot on the circle a little ahead: converges onto the circle and flies it anticlockwise
     airSteer(e, std::atan2(aim.y - e.pos.y, aim.x - e.pos.x), v);
@@ -2026,14 +2036,15 @@ void Sim::airDogfight(Entity& e, Entity& t) {
     float off = std::abs(angDiff(e.angle, want));
     float d = distToEntity(e.pos, t) / TILE;
     float cone = w.proj == PJ_ROCKET ? 0.9f : 0.55f;
-    float v = ut.speed;
+    const float top = airTopSpeed(e);
+    float v = top;
     float rTurn = std::max(e.airspeed, 1.0f) / airTurnRate(e);
     if (e.jetBreak > 0) {
         e.jetBreak -= SIM_DT;
         want = e.angle;                                                       // extending: straight out at full power
     } else {
-        if (off > 0.45f) v = ut.speed * 0.5f;                                  // corner speed: the tightest turn the airframe can pull
-        else if (D < 2.5f * TILE) v = std::max(ut.speed * 0.5f, std::min(ut.speed, tv.len() * 1.1f));   // tucked in behind: do not overshoot
+        if (off > 0.45f) v = top * 0.5f;                                       // corner speed: the tightest turn the airframe can pull
+        else if (D < 2.5f * TILE) v = std::max(top * 0.5f, std::min(top, tv.len() * 1.1f));   // tucked in behind: do not overshoot
         if (off > 1.9f && D < rTurn * 1.3f) { e.jetBreak = 0.6f; e.jetMode = 1; }
         else if (d <= w.range + 0.1f && off < cone && e.cooldown <= 0 && tryFire(e, t)) { e.stuckTimer = 0; if (ut.jet) emit(EV_SOUND, e.owner, SND_JET, e.pos); }
     }
@@ -2050,7 +2061,8 @@ void Sim::jetAttack(Entity& e, Entity& t) {
     float d = distToEntity(e.pos, t) / TILE;
     float want = std::atan2(to.y, to.x);
     float off = std::abs(angDiff(e.angle, want));
-    float v = ut.speed;
+    const float top = airTopSpeed(e);
+    float v = top;
     if (e.jetBreak > 0) {
         e.jetBreak -= SIM_DT;
         want = e.jetMode == 1 ? e.angle : std::atan2(-to.y, -to.x);          // extend straight out, or peel away from the target's defences
@@ -2059,7 +2071,7 @@ void Sim::jetAttack(Entity& e, Entity& t) {
     } else if (d < 2.0f && e.cooldown > 0) {
         e.jetBreak = 0.9f; e.jetMode = 0;                                     // arrived with the guns still cooling: peel off and come round again
     } else if (d < w.range + 5.0f) {
-        if (off > 0.5f) v = ut.speed * 0.6f;                                  // pull round hard onto the target
+        if (off > 0.5f) v = top * 0.6f;                                       // pull round hard onto the target
         e.stuckTimer += SIM_DT;
         if (e.stuckTimer > 1.1f) { e.jetBreak = 0.8f; e.jetMode = 1; e.stuckTimer = 0; }
     } else e.stuckTimer = 0;
@@ -2070,27 +2082,32 @@ void Sim::jetAttack(Entity& e, Entity& t) {
 // it releases them one after another along the flight line, then flies straight on for a second before swinging round for another pass.
 void Sim::bomberAttack(Entity& e, Entity& t) {
     const UnitType& ut = e.ut();
+    const float top = airTopSpeed(e);
     Vec2 tp = t.pos;
     if (t.isUnit()) tp += (t.pos - t.prevPos) * (1.0f / SIM_DT) * 0.9f;
     Vec2 to = tp - e.pos;
     float D = to.len();
     float want = std::atan2(to.y, to.x);
-    float carry = ut.speed * 0.42f;                                   // a bomb keeps the aircraft's forward speed while it falls
-    float release = carry + ut.speed * 0.11f * (BOMB_STICK - 1) * 0.5f;   // distance at which the middle of the stick lands on the target
+    float carry = top * 0.42f;                                        // a bomb keeps the aircraft's forward speed while it falls
+    float release = carry + top * 0.11f * (BOMB_STICK - 1) * 0.5f;    // distance at which the middle of the stick lands on the target
+    // A supersonic nuclear bomber has one aimed bomb: it can let it go over a wide window (its compact warhead is aimed straight at the
+    // target, so the release distance is not what makes it hit) instead of the narrow stick window a slow bomber flies through.
+    const float releaseAhead = ut.nukeBomb ? top * 0.05f + 8.0f : 8.0f;
+    const float releaseBehind = ut.nukeBomb ? top * 0.25f : 40.0f;
     if (e.jetBreak > 0) {
         e.jetBreak -= SIM_DT;
         want = e.angle;                                               // straight on over and past the target
-    } else if (e.bombsLeft <= 0 && e.ammo > 0 && D <= release + 8 && D >= release - 40 && std::abs(angDiff(e.angle, want)) < 0.2f) {
-        e.bombsLeft = std::min(BOMB_STICK, e.ammo); e.bombTimer = 0; e.jetBreak = 1.15f; e.stuckTimer = 0;
+    } else if (e.bombsLeft <= 0 && e.ammo > 0 && D <= release + releaseAhead && D >= release - releaseBehind && std::abs(angDiff(e.angle, want)) < 0.2f) {
+        e.bombsLeft = std::min(BOMB_STICK, e.ammo); e.bombTimer = 0; e.jetBreak = ut.nukeBomb ? 1.4f : 1.15f; e.stuckTimer = 0;
         emit(EV_SOUND, e.owner, SND_AIR, e.pos);
-    } else if (D < release - 40 && e.bombsLeft <= 0) {
+    } else if (D < release - releaseBehind && e.bombsLeft <= 0) {
         e.jetBreak = 0.8f;                                            // too close or badly lined up: fly through and come round again
     } else if (e.bombsLeft <= 0 && D < release + 160) {
         // near the target but never lining up (it sits inside the bomber's turn circle): straighten out and make a fresh run
         e.stuckTimer += SIM_DT;
         if (e.stuckTimer > 1.6f) { e.jetBreak = 1.0f; e.stuckTimer = 0; }
     } else e.stuckTimer = 0;
-    airSteer(e, want, ut.speed);
+    airSteer(e, want, top);
 }
 
 void Sim::dropBomb(Entity& e, Vec2 at) {
@@ -2098,13 +2115,35 @@ void Sim::dropBomb(Entity& e, Vec2 at) {
     p.pos = e.pos; p.prevPos = e.pos; p.vel = e.pos;      // vel keeps the release point (the ground point under the aircraft), like a shell's launch point
     p.dest = at; p.target = NOREF; p.owner = e.owner; p.shooter = refOf(e);
     { const Entity* ft = get(e.targetEnt); p.forced = ft && e.order == O_ATTACK && !enemies(e.owner, ft->owner); }   // a human-ordered run on a friendly: the bombs hurt everything near it
-    p.weapon = e.ut().faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER;
-    p.arcLen = 0.62f; p.arcT = 0; p.life = p.arcLen + 0.3f;
+    if (e.ut().nukeBomb) {
+        // The compact nuclear bomb: it is aimed at the target itself (the casing is small, so the plane lets it go over a wide window) and
+        // the bomber keeps its dash for a moment after the release to clear the fireball it is about to make (see e.slowAt).
+        const Entity* tg = get(e.targetEnt);
+        if (tg && !tg->isAir()) p.dest = tg->pos;
+        p.weapon = W_NUKE_BOMB;
+        p.arcLen = SBOMBER_BOMB_FALL;
+        p.arcT = 0; p.life = p.arcLen + 0.3f;
+        e.slowAt = time + std::max(SBOMBER_CLEAR, SBOMBER_BOMB_FALL + 0.15f);
+    } else {
+        p.weapon = e.ut().faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER;
+        p.arcLen = 0.62f; p.arcT = 0; p.life = p.arcLen + 0.3f;
+    }
     projs.push_back(p);
 }
 
 // A bomb going off: a fireball with secondary bursts along the ground, a shockwave ring, a rising smoke column, flung debris and sparks.
 void Sim::bombImpact(Projectile& p) {
+    if (p.weapon == W_NUKE_BOMB) {
+        // the small casing cracks open and the silver warhead goes off: the damage of an Underground Nuke (UNUKE_DAMAGE) but a Nuke Ramp's
+        // blast area, so the fireball is much smaller than a silo warhead's. p.vel is the release point (the bomb's arc starts there).
+        Nuke n;
+        n.from = p.vel; n.pos = p.dest; n.owner = p.owner; n.t = NUKE_FLIGHT - 0.001f; n.force = p.forced;
+        n.scale = SBOMBER_BOMB_SCALE; n.deep = true; n.source = p.shooter;
+        nukes.push_back(n);
+        fx.push_back({FX_FLASH, p.dest, p.dest, 0, 0.20f, rgb(240, 244, 250), 44.0f});
+        emit(EV_SOUND, -1, SND_EXPLODE_L, p.dest);
+        return;
+    }
     const Weapon& w = WEAPONS[p.weapon];
     Vec2 at = p.dest;
     float R = w.splash * TILE;
@@ -2413,7 +2452,7 @@ void Sim::updateUnit(Entity& e) {
     if (e.bombsLeft > 0) {
         e.bombTimer -= SIM_DT;
         if (e.bombTimer <= 0) {
-            if (e.ammo > 0) { dropBomb(e, e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * (ut.speed * 0.42f)); e.ammo--; }
+            if (e.ammo > 0) { dropBomb(e, e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * (airTopSpeed(e) * 0.42f)); e.ammo--; }
             else e.bombsLeft = 1;
             e.bombsLeft--; e.bombTimer = 0.11f;
         }
@@ -2428,8 +2467,9 @@ void Sim::updateUnit(Entity& e) {
         }
     }
 
-    // Aircraft: out of ammo -> go rearm (remember the target)
-    if (e.isAir() && ut.ammo > 0 && e.ammo <= 0 && e.order != O_REARM && !ut.temp) { e.order = O_REARM; }
+    // Aircraft: out of ammo -> go rearm (remember the target). A Supersonic Bomber that has just dropped its bomb keeps the dash until
+    // it is clear of its own fireball (e.slowAt), then goes home.
+    if (e.isAir() && ut.ammo > 0 && e.ammo <= 0 && e.order != O_REARM && !ut.temp && !(ut.nukeBomb && time < e.slowAt)) { e.order = O_REARM; }
 
     // Ground units standing on a blocked tile (new structure) get nudged off
     if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && (ut.naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y))))
@@ -2455,7 +2495,7 @@ void Sim::updateUnit(Entity& e) {
     runOrder(e, ut);
     // a fixed-wing aircraft whose order changed this tick (a target lost, a spot reached, a new order) still flies on: it never hangs in the air
     if (e.isAir() && fixedWing(ut) && e.alive && e.pos.x == before.x && e.pos.y == before.y && e.airspeed > 0 && e.disabledUntil <= time)
-        airSteer(e, e.angle, std::max(e.airspeed, ut.speed * AIR_STALL));
+        airSteer(e, e.angle, std::max(e.airspeed, airTopSpeed(e) * AIR_STALL));
     // a ship that has no order to steer by still has its way on: it glides to a halt
     if (ut.naval && e.alive && e.airspeed > 0.5f && e.pos.x == before.x && e.pos.y == before.y) moveShip(e, ut.speed);
     // a land vehicle that did not move this tick has lost its speed (it stood still, or it was blocked)
@@ -2696,7 +2736,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
                 e.autoTask = false;
                 break;
             }
-            if (fw) airSteer(e, std::atan2(d.y, d.x), d.len() < 5 * TILE ? ut.speed * 0.7f : ut.speed);
+            if (fw) { const float top = airTopSpeed(e); airSteer(e, std::atan2(d.y, d.x), d.len() < 5 * TILE ? top * 0.7f : top); }
             else { e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
         } else {
             if (e.path.empty()) requestPath(e, e.target);
@@ -2758,10 +2798,10 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             }
         }
         if (e.isAir()) {
-            if (e.ammo <= 0 && ut.ammo > 0) { e.order = O_REARM; break; }
+            if (e.ammo <= 0 && ut.ammo > 0 && !(ut.nukeBomb && time < e.slowAt)) { e.order = O_REARM; break; }
             if (e.autoTask && e.loiterUntil > time) e.loiterUntil = std::max(e.loiterUntil, time + 4.0f);   // a fight picked up while waiting somewhere keeps it there
+            if (ut.bomber && !t->isAir()) { bomberAttack(e, *t); break; }   // (a bomber's ground attack is its bombing run, jet or not)
             if (ut.jet) { jetAttack(e, *t); break; }
-            if (ut.bomber && !t->isAir()) { bomberAttack(e, *t); break; }
             if (fixedWing(ut)) { airDogfight(e, *t); break; }
             Vec2 dv = t->pos - e.pos;
             if (d > w.range - 0.4f) { e.pos += dv.norm() * std::min(dv.len(), ut.speed * SIM_DT); e.angle = std::atan2(dv.y, dv.x); }
@@ -3096,7 +3136,7 @@ int Sim::stealthOf(const Entity& e) {
     return ST_NONE;   // structures are never stealthy: underground bunkers are plainly visible on the surface
 }
 
-// Stealthy things (snipers, finished underground bunkers, spy drones) are invisible to every army that has no detector close enough: they cannot be
+// Stealthy things (snipers and spy drones) are invisible to every army that has no detector close enough: they cannot be
 // seen, selected, targeted or shot, and the computer commanders do not know they are there. The owner's team always sees them.
 bool Sim::visibleTo(const Entity& e, int player) const {
     if (player < 0 || player >= numPlayers) return true;
@@ -3117,7 +3157,7 @@ void Sim::updateDetection() {
         forEachNear(d.pos, range * TILE, [&](Entity& t) {
             int cls = stealthOf(t);
             if (!cls || !(mask & (1 << (cls - 1))) || !enemies(d.owner, t.owner) || (sensor && (!t.isUnit() || dist(t.pos, d.pos) > range * TILE))) return;   // (a sensor finds soldiers, not another bunker)
-            float linger = t.isBuilding() ? BUNKER_LINGER : (cls == ST_DRONE ? 1.5f : 3.0f);   // a found bunker stays known for a while; a sniper or drone is lost at once
+            float linger = cls == ST_DRONE ? 1.5f : 3.0f;   // a sniper or drone is lost again once no detector is close
             for (int q = 0; q < numPlayers; q++)
                 if (q == d.owner || players[q].team == players[d.owner].team) t.detUntil[q] = std::max(t.detUntil[q], time + linger);
         });
@@ -3308,7 +3348,7 @@ void Sim::updateBunkerAntiNuke(Entity& b, bool surrounded) {
 // Autonomous coordinated swarm intelligence for Ghost Drones and Recon Drones (human and AI alike).
 // When spawned or called to a spot by the player, the drone waits briefly at that post (autoHoldUntil);
 // once free, all friendly spy drones act as an intelligent swarm that divides sectors across the map,
-// hunts and locks onto enemy hidden elements (underground bunkers, snipers, enemy drones) and covers frontlines.
+// hunts and locks onto enemy hidden elements (snipers, enemy drones) and covers frontlines.
 void Sim::updateScoutSwarm(Entity& e) {
     const UnitType& ut = e.ut();
     if (time < e.autoHoldUntil) {
@@ -3372,7 +3412,7 @@ void Sim::updateScoutSwarm(Entity& e) {
             if (att && stealthOf(*att)) evalCandidate(att->pos, 260.0f);
             else evalCandidate(u.pos, 140.0f);
         } else if (enemies(e.owner, u.owner) && stealthOf(u)) {
-            // Swarm intelligence: search around hidden enemy elements (bunkers, snipers, stealth drones)
+            // Swarm intelligence: search around hidden enemy elements (snipers, stealth drones)
             // If already spotted recently, lock on; otherwise sweep suspect sectors around enemy presence
             bool known = visibleTo(u, e.owner);
             Vec2 hint = known ? u.pos : u.pos + Vec2(std::cos(myIdx * 2.1f + u.gen), std::sin(myIdx * 2.1f + u.gen)) * (3.5f * TILE);
