@@ -29,7 +29,6 @@ under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of
 - **Underground bunkers are no longer stealthy**: their surface hatch is plainly visible to both sides. Their deep plating, hatch rules and
   immunity to being finished by nukes/aircraft remain.
 
-
 ## The map
 
 One 104x104 map (30% wider than the original 80x80, 69% more ground): a **big central lake** (about 1020 water tiles, some 38 across, with bays toward the four corners, a sandy beach, two rocky islets and a **buildable island in the middle** — a dozer has to be airlifted in, so whoever holds the water and the sky can fortify the centre) ringed by a road 26.5 tiles out, with a pool inside each corner of the ring, four base quadrants split by rock ridges with a choke gap each, forest belts between the bases and the ring, and a wider river leaving the lake into every quadrant (mirrored or rotated, so no side is favoured), each spreading into a marshy pool on its way to the map edge.
@@ -300,6 +299,7 @@ the last one stands the camera Home key and the AI's base layout move to the new
 sends its dozer when its Command Core falls.
 
 **Dozer priorities** — an idle dozer looks for work on its own in this order: **the sites it was pulled away from**, then **any unfinished site** of its army (one with fewer than two builders, not under fire; idle dozers fan out over the open sites), and only then **repairs**. A dozer that went mending on its own drops it for a site nobody is building; a repair you ordered is kept.
+
 - **Build orders persist**: move a dozer off a site it is building (or give it another site or job) and it remembers the unfinished site (up to four) and drives back to finish it as soon as it is idle; a dozer that flees under fire or ducks out of a nuke's circle goes back too, once the site is no longer being hit. `S` (Stop) is the way to drop them.
 - **A manual order holds autonomy off**: after you move a dozer (or point it at a job, or stop it) it does no repair rounds of its own for 12 seconds after it arrives, so it stays where you put it. Going back to its own kept site is not held.
 `--dozertest` covers it.
