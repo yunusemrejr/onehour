@@ -174,7 +174,8 @@ static const float HYPER_HP = 2.0f;           // structure health multiplier
 static const float HYPER_ARMOR = 0.40f;       // fraction of conventional damage a protected structure takes
 static const float HYPER_NUKE = 0.42f;        // hard ceiling: one warhead takes at most this share of max health
 // The Command Core / Post is the keystone: enormous health, heavy armour against conventional fire, and a hard nuke ceiling. It cannot be
-// destroyed by warheads alone; it takes a sustained conventional assault. The tech structure is deliberately the second-toughest building.
+// destroyed by warheads alone; it takes a sustained conventional assault. The Underground Nuke silo is the second-toughest building now;
+// the tech structure comes third (Hyper Protection and Rugged Nanoshell multiply every structure the same way, so the order holds).
 static const float HQ_ARMOR = 0.35f;          // fraction of conventional damage a Command structure takes
 static const float HQ_NUKE = 0.12f;           // hard ceiling: one warhead takes at most this share of its max health
 // Walls: a cheap, unlimited 1x1 segment with a huge health pool and a very low per-warhead ceiling. At ground zero a normal warhead takes
