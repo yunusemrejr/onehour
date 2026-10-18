@@ -36,7 +36,8 @@ enum UnitKind { UK_INF = 0, UK_VEH, UK_AIR };
 enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER, UR_HEALER,
                 UR_SPY,         // unarmed infantry that captures enemy structures
                 UR_SCOUT,       // stealth spy drone: unarmed, sees what nothing else can
-                UR_TRANSPORT }; // cargo chopper: carries infantry and vehicles
+                UR_TRANSPORT,   // cargo chopper: carries infantry and vehicles
+                UR_DECON };     // anti-radiation truck: unarmed, scrubs fallout in a field around itself (and takes damage doing it)
 // Stealth classes: a stealthy unit or structure is invisible to an enemy (cannot be seen, selected or shot) unless one of the enemy's
 // own detectors is close enough. Detector masks say which classes a unit can see.
 enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone finds them (buildings are never stealthy)
@@ -58,6 +59,7 @@ enum UnitTypeId {
     U_C_STRIKEJET, U_K_STRIKEJET,   // the two fighters a Hotline Strike brings: never built, they leave again when the run is over
     U_C_CIVDOZER, U_K_CIVDOZER,     // civilian dozers: they raise the town (houses, shops, towers, the town hall), never military structures
     U_C_SBOMBER, U_K_SBOMBER,       // Supersonic Bomber: a very fast nuclear bomber with one compact nuclear bomb (see SBOMBER_* and nukeBomb)
+    U_C_RADTRUCK, U_K_RADTRUCK,     // Anti-Radiation Truck: an unarmed support vehicle whose decontamination field scrubs nuclear fallout
     U_COUNT
 };
 
@@ -213,6 +215,14 @@ static const float SBOMBER_SLOW = 340.0f;         // px/s: top speed once the bo
 static const float SBOMBER_CLEAR = 1.2f;          // seconds after the bomb leaves it that it keeps the dash to clear its own blast
 static const float SBOMBER_BOMB_SCALE = 1.0f;     // blast AREA as a share of a Nuke Ramp's: the compact fireball is a ramp's (not a silo's)
 static const float SBOMBER_BOMB_FALL = 0.9f;      // seconds the compact bomb takes to fall from altitude to the ground
+// Anti-Radiation Truck (both armies, built at the Assembly Plant / War Factory): an unarmed support vehicle with a decontamination field.
+// Any fallout zone the field touches is scrubbed: its strength and radius decay exponentially, units and structures inside the field are
+// shielded from fallout, and the truck itself takes damage from the radiation it absorbs (medics heal it). It cannot heal a zone the enemy
+// just fired: radiation also fades on its own, and a silver warhead's much bigger cloud takes the same time but hurts the truck more.
+static const float RADTRUCK_RADIUS = 6.0f;     // tiles: the decontamination field around the truck
+static const float RADTRUCK_SCRUB = 0.35f;     // share of a fallout zone's strength and radius scrubbed per second by one truck (exponential)
+static const float RADTRUCK_DAMAGE = 0.05f;    // fraction of the truck's max health it absorbs per second per zone at full strength ...
+static const float RADTRUCK_DRAIN_CAP = 0.20f; // ... per second at most (so a silver cloud cannot dissolve a truck in one tick)
 
 // Paradrop support power of the tech structure (Zero Hour style): a cargo plane flies in over a spot of your choice and drops a free force on parachutes.
 // What the plane carries is never a fixed list: it is composed from what the army can actually field right now (Sim::dropManifest).

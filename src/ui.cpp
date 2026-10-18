@@ -1025,6 +1025,8 @@ void Game::drawRangeRings() {
         } else if (e->isBuilding() && g_sim.roofGun(*e) >= 0) {
             const BuildType& bt = e->bt();
             rangeRing(sp, WEAPONS[g_sim.roofGun(*e)].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, g_sim.roofGun(*e), WEAPONS[g_sim.roofGun(*e)].name, e->disabledUntil <= g_sim.time, false, false);
+        } else if (e->isUnit() && e->ut().role == UR_DECON) {
+            drawCoverRing(sp, RADTRUCK_RADIUS * TILE, rgb(150, 240, 180), e->disabledUntil <= g_sim.time, "Decontamination field");
         } else if (e->isUnit() && e->weapon() >= 0 && fewUnits <= 3) {
             rangeRing(sp, WEAPONS[e->weapon()].range * TILE + e->radius(), e->weapon(), nullptr, true, false, true);
         }
@@ -1954,6 +1956,13 @@ void Game::renderHud() {
                 else if (ut.weapon >= 0) { const Weapon& w = WEAPONS[ut.weapon]; snprintf(buf, sizeof buf, "%s  dmg %d  range %.1f%s%s", w.name, (int)w.dmg, w.range, w.air ? "  AA" : "", w.ground ? "" : "  air only"); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.role == UR_HARVESTER) { snprintf(buf, sizeof buf, "Cargo $%d / %d", e->cargo, SUPPLY_PER_TRIP); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (ut.ammo > 0) { snprintf(buf, sizeof buf, "Ammo %d / %d", e->ammo, ut.ammo); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
+                if (ut.role == UR_DECON) {
+                    int zones = 0;
+                    for (auto& f : g_sim.fallouts) if (dist(e->pos, f.pos) <= f.r + RADTRUCK_RADIUS * TILE) zones++;
+                    if (zones) snprintf(buf, sizeof buf, "Decontamination field %d tiles: scrubbing %d fallout zone%s (the truck is taking damage)", (int)RADTRUCK_RADIUS, zones, zones == 1 ? "" : "s");
+                    else snprintf(buf, sizeof buf, "Decontamination field %d tiles: drive into the fallout to scrub it, pull out before the truck melts", (int)RADTRUCK_RADIUS);
+                    g.text(INFO_X + 86, hy + 70, buf, zones ? rgb(150, 240, 180) : hudDim());
+                }
                 if (ut.cargoCap > 0) { snprintf(buf, sizeof buf, "Cargo %d / %d places   %d aboard   (right-click it with units selected to load)", g_sim.cargoUsed(*e), ut.cargoCap, (int)e->passengers.size()); g.text(INFO_X + 86, hy + 70, buf, rgb(240, 205, 90)); }
                 if (ut.role == UR_SPY) g.text(INFO_X + 86, hy + 70, "Right-click an enemy structure to capture it", rgb(240, 205, 90));
                 if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }

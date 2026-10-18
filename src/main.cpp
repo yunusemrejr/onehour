@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -601,6 +601,7 @@ bool recoveryTest(u64 seed);  // tests5.cpp: a computer army that has lost almos
 bool civicTest(u64 seed);     // tests6.cpp: the civilian town, civilian dozers, the Underground Nuke and the bunker's watch over its neighbours
 bool wallTestMain(u64 seed); // tests7.cpp: walls, Hyper Protection, Anti-Rocket, durability, barracks speed and the 25-pad airfield
 bool supersonicTest(u64 seed); // tests8.cpp: the balance pass (anti-nuke/wall vs nukes, silver damage, bunker health) and the Supersonic Bomber
+bool radiationTest(u64 seed); // tests9.cpp: the Anti-Radiation Truck (scrubbing fallout, shielding inside its field, and the damage it absorbs)
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow);   // tests3.cpp: ONEHOUR_AIR=strike|drop|nuke --shot scenes
@@ -1724,6 +1725,18 @@ static bool brainTest() {
     bool again = c.load(path.c_str());
     remove(path.c_str());
     if (!again || c.unitSamples[U_K_DOZER] != 12 || c.unitSamples[U_K_TITAN] != 22 || c.unitSamples[U_C_TITAN] != 11) { remove(path.c_str()); return fail("a saved brain did not round-trip"); }
+    // a v13 file (47 unit rows, from before the Anti-Radiation Trucks) loads with the trucks on the prior and every older row where it was
+    {
+        FILE* g13 = fopen(path.c_str(), "w");
+        if (!g13) return fail("cannot write the temporary brain file");
+        fprintf(g13, "onehour-brain 13 9 13\n"); for (int i = 0; i < WAVE_F; i++) fprintf(g13, "0.5 "); fprintf(g13, "\n");
+        for (int r = 0; r < 47; r++) fprintf(g13, "%d %.3f 0.100 0.200 0.300\n", r + 200, 1.7f);
+        fprintf(g13, "doctrines"); for (int d13 = 0; d13 < DOCTRINES; d13++) fprintf(g13, " 1 0.40000"); fprintf(g13, "\ncontexts\n");
+        for (int c13 = 0; c13 < DOC_CTX; c13++) { for (int d13 = 0; d13 < DOCTRINES; d13++) fprintf(g13, " 1 0.50000"); fprintf(g13, "\n"); }
+        fclose(g13);
+        Brain b13; bool ok13 = b13.load(path.c_str()); remove(path.c_str());
+        if (!ok13 || b13.unitSamples[U_C_SBOMBER] != 245 || b13.unitSamples[U_K_SBOMBER] != 246 || b13.unitSamples[U_K_JET] != 223 || b13.unitSamples[U_C_RADTRUCK] != 0 || b13.wu[U_K_RADTRUCK][0] != 1.0f) return fail("a v13 brain file did not keep its rows and leave the new Anti-Radiation Trucks on the prior");
+    }
     // a v9 file (29 unit rows, from before the spies, spy drones and cargo lifters) loads with the newcomers on the prior
     {
         FILE* g9 = fopen(path.c_str(), "w");
@@ -1762,7 +1775,7 @@ static bool brainTest() {
       for (int k = 0; k < 400; k++) { float R = r3.f(0.6f, 3.0f); Brain::waveFeaturesR(R, R, 10, 30, x); w.learnWave(x, R >= 2.0f); }
       Brain::waveFeaturesR(1.5f, 1.5f, 10, 30, x); float mid = w.waveProb(x); Brain::waveFeaturesR(2.6f, 2.6f, 10, 30, x); float hi = w.waveProb(x);
       if (!(mid < before - 0.1f && hi > 0.6f)) { fprintf(stderr, "wave odds at 1.5: %.2f -> %.2f, at 2.6: %.2f\n", before, mid, hi); return fail("the wave model did not calibrate to the outcomes"); } }
-    printf("braintest: ok (v2 weights migrated, jets start from the prior, v10 round-trips (v9 files still load) with per-opponent doctrine statistics; bandit picks air %d / 400 against computers and rush %d / 400 against people; the wave model calibrates)\n", picks[0][DOC_AIR], picks[3][DOC_RUSH]);
+    printf("braintest: ok (v2 weights migrated, jets start from the prior, v13 and v9 files still load, current files round-trip with per-opponent doctrine statistics; bandit picks air %d / 400 against computers and rush %d / 400 against people; the wave model calibrates)\n", picks[0][DOC_AIR], picks[3][DOC_RUSH]);
     return true;
 }
 
@@ -2590,6 +2603,7 @@ int main(int argc, char** argv) {
         else if (a == "--civictest") return civicTest(seed) ? 0 : 1;
         else if (a == "--walltest") return wallTestMain(seed) ? 0 : 1;
         else if (a == "--supersonictest") { g_map.generate(); return supersonicTest(seed) ? 0 : 1; }
+        else if (a == "--radtest") { g_map.generate(); return radiationTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2682,6 +2696,17 @@ int main(int argc, char** argv) {
                 g.draw(g.unitBody[t][i / 4], x, y, 0, 1);
                 if (UNITS[t].naval) { ShipMounts m = shipMounts(t == U_C_CRUISER || t == U_K_CRUISER); for (int k = 0; k < m.n; k++) g.draw(g.unitTurret[t][i / 4], x + m.x[k] * UNIT_SCALE * artScale(t), y + m.y[k] * UNIT_SCALE * artScale(t), 0.4f, 1); }
             }
+            g_game.screenshot(sheetPath);
+            printf("wrote %s\n", sheetPath);
+            g_gfx.shutdown(); SDL_Quit(); return 0;
+        }
+        if (getenv("ONEHOUR_RADTRUCK_SPRITES")) {   // the Anti-Radiation Truck art: Cyber and Clanker at 4.5x in all four team colours, a 1x strip below
+            const int ids[2] = { U_C_RADTRUCK, U_K_RADTRUCK };
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 4; p++) {
+                float x = 135 + p * 235, y = 125 + f * 285;
+                g.draw(g.unitBody[ids[f]][p], x, y, 0, 4.5f);
+            }
+            for (int i = 0; i < 8; i++) { int t = ids[i / 4]; float x = 100 + i * 110, y = 610; g.draw(g.unitBody[t][i % 4], x, y, 0, 1.4f); }
             g_game.screenshot(sheetPath);
             printf("wrote %s\n", sheetPath);
             g_gfx.shutdown(); SDL_Quit(); return 0;
@@ -3032,6 +3057,25 @@ int main(int argc, char** argv) {
                     g_game.selection.clear(); g_game.selection.push_back(b);
                     printf("supersonic showcase: bomber %s, %zu projectiles, %zu fx, %zu nukes, %zu particles\n", g_sim.get(b) ? "in the air" : "lost", g_sim.projs.size(), g_sim.fx.size(), g_sim.nukes.size(), g_game.parts.size());
                 }
+            }
+            if (getenv("ONEHOUR_RADTRUCK")) {   // showcase: two Anti-Radiation Trucks scrubbing a fresh nuke crater (ONEHOUR_RADTRUCK=N ticks)
+                Faction f0 = g_sim.players[0].faction;
+                Vec2 bp = g_sim.players[0].basePos, dir = (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - bp).norm();
+                for (int p = 0; p < g_sim.numPlayers; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                Vec2 mid = openGroundNear(bp + dir * (18 * TILE), 12);
+                flattenArena(mid, 16, 14);
+                Sim::Nuke n; n.from = bp; n.pos = mid; n.owner = 0; n.t = Sim::NUKE_FLIGHT - 0.05f;   // a fresh tactical nuke: leaves the crater behind
+                g_sim.nukes.push_back(n);
+                for (int t = 0; t < 10; t++) { g_sim.step(); g_sim.events.clear(); g_sim.nukes.clear(); }
+                int rt = f0 == F_CYBER ? U_C_RADTRUCK : U_K_RADTRUCK;
+                std::vector<Ref> trucks;
+                for (int k = 0; k < 2; k++) trucks.push_back(g_sim.spawnUnit(rt, 0, mid + Vec2((k * 2 - 1) * 5 * TILE, 0)));
+                for (int k = 0; k < 4; k++) g_sim.spawnUnit(firstUnitOf(f0) + 2, 0, mid + Vec2((k % 2 ? 1 : -1) * 2 * TILE, (k / 2 ? 1 : -1) * 2 * TILE));
+                int n2 = atoi(getenv("ONEHOUR_RADTRUCK")); if (n2 < 2) n2 = 120;
+                g_game.cam = Vec2(clampf(mid.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                for (int t = 0; t < n2; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                g_game.selection = trucks;
+                printf("radiation showcase: %zu fallout zone(s) left, %zu trucks, first truck hp %.0f, %zu particles\n", g_sim.fallouts.size(), trucks.size(), g_sim.get(trucks[0]) ? g_sim.get(trucks[0])->hp : 0.0f, g_game.parts.size());
             }
             if (getenv("ONEHOUR_DROP")) {   // showcase: a paradrop over the middle of the map (ONEHOUR_DROP=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera against the plane's heading)
                 for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);

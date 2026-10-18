@@ -165,6 +165,7 @@ enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_S
 struct Fx {
     FxType type; Vec2 a, b; float t = 0, life = 1; Color color; float size = 8; Vec2 vel;
     bool seen = false;      // render side: cosmetic particles for this effect have been spawned
+    int tag = 0;            // a handle back to the gameplay thing this effect visualises (a fallout zone's haze: see Fallout.visTag)
 };
 
 struct Player {
@@ -236,6 +237,7 @@ struct Sim {
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
     int nukeSeq = 0;
+    int fxTagSeq = 0;   // handles into Sim::fx (a fallout zone shrinks its own haze as an Anti-Radiation Truck scrubs it)
     // The air position of a warhead t seconds into its flight: a long arc over the ground line from the ramp to the target (the renderer draws the missile here too).
     static Vec2 nukeAirPos(const Nuke& n, float t) { float u = clampf(t / NUKE_FLIGHT, 0.0f, 1.0f); Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; }
     // A shot of an anti-nuke defence in the air: a laser beam or an interceptor rocket on its way to meet the warhead at 'aim' (hit: it will get it).
@@ -282,7 +284,7 @@ struct Sim {
     static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
-    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; float life = FALLOUT_LIFE; };   // life: seconds it lasts (an Underground Nuke's three times as long)
+    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; float life = FALLOUT_LIFE; int visTag = 0; };   // life: seconds it lasts (an Underground Nuke's three times as long); visTag: the FX_FALLOUT haze it is drawn as
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid

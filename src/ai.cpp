@@ -480,7 +480,7 @@ void AiPlayer::think() {
 
     // ---------- survey
     int dozers = 0, civDozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0, fleetValue = 0;
-    std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps;
+    std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps, decon;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
     int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0, walls = 0;
@@ -493,6 +493,7 @@ void AiPlayer::think() {
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
             else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and coordinate as a swarm
             else if (ut.role == UR_TRANSPORT) {}                             // (the commander has no use for cargo choppers)
+            else if (ut.role == UR_DECON) decon.push_back(S.refOf(e));       // anti-radiation trucks scrub fallout off the base: never part of a wave
             else if (ut.kind == UK_AIR) { if (!ut.temp) aircraft.push_back(S.refOf(e)); }   // (a Hotline Strike fighter is on loan: it flies its own run)
             else if (smart && ut.role == UR_HEALER) medics.push_back(S.refOf(e));   // medics trail the army instead of leading the charge
             else if (ut.naval) { fleet.push_back(S.refOf(e)); fleetValue += unitValue(e); shipsOrJeeps++; }   // (the fleet is handled apart from the land army)
@@ -623,7 +624,10 @@ void AiPlayer::think() {
         for (auto& f : S.fallouts) {
             if (f.t > f.life - 8.0f) continue;
             for (auto& e : S.ents) {
-                if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || (e.ut().role == UR_HARVESTER && e.order == O_RETURN)) continue;
+                if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || e.ut().role == UR_DECON || (e.ut().role == UR_HARVESTER && e.order == O_RETURN)) continue;   // (a decon truck is in the cloud on purpose)
+                bool shielded = false;
+                for (Ref tr : decon) { const Entity* t = S.get(tr); if (t && !t->carrier.valid() && t->disabledUntil <= S.time && dist(e.pos, t->pos) <= RADTRUCK_RADIUS * TILE) { shielded = true; break; } }
+                if (shielded) continue;   // the decon truck's field is scrubbing this air: stay put and be safe
                 if (dist(e.pos, f.pos) > f.r) continue;
                 if (attacking && std::find(wave.begin(), wave.end(), S.refOf(e)) != wave.end()) continue;
                 if (e.order == O_MOVE && dist(e.target, f.pos) > f.r + TILE) continue;
@@ -631,6 +635,22 @@ void AiPlayer::think() {
                 if (l < 4) { away = pl.basePos - f.pos; l = away.len(); }
                 S.cmdMove({S.refOf(e)}, f.pos + away * (1.0f / std::max(l, 1.0f)) * (f.r + 2.5f * TILE), false);
             }
+        }
+    }
+
+    // decontamination: an idle anti-radiation truck heads for the nearest fallout within 70 tiles and sits in it until it is scrubbed away
+    if (smart && !decon.empty() && !S.fallouts.empty()) {
+        for (Ref dr : decon) {
+            Entity* t = S.get(dr);
+            if (!t || t->order != O_IDLE || t->carrier.valid()) continue;
+            const Sim::Fallout* best = nullptr; float bd = 1e18f;
+            for (auto& f : S.fallouts) {
+                if (f.power <= 0.03f) continue;
+                if (dist(t->pos, f.pos) <= f.r + RADTRUCK_RADIUS * TILE) { best = nullptr; bd = -1.0f; break; }   // already scrubbing this one
+                float d = dist(t->pos, f.pos);
+                if (d < 70.0f * TILE && d < bd) { bd = d; best = &f; }
+            }
+            if (best) S.cmdMove({dr}, best->pos, false);
         }
     }
 
@@ -895,6 +915,14 @@ void AiPlayer::think() {
         for (auto* f : factories) for (int t : f->queue) if (t == medicType) queuedMed++;
         if ((int)medics.size() + queuedMed < std::min(3, 1 + armyCount / 14))
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
+    }
+    // anti-radiation trucks: once enemy warheads are falling (or a cloud is already down), keep a couple to scrub the base clean
+    if (smart && pl.difficulty >= 1 && (nukesSeen > 0 || !S.fallouts.empty()) && pl.money - reserve > 1400) {
+        int rt = pl.faction == F_CYBER ? U_C_RADTRUCK : U_K_RADTRUCK, queuedDec = 0;
+        for (auto* f : factories) for (int t : f->queue) if (t == rt) queuedDec++;
+        int wantDec = 1 + (nukesSeen > 2 ? 1 : 0) + (pl.difficulty >= 3 ? 1 : 0);
+        if ((int)decon.size() + queuedDec < wantDec)
+            for (auto* f : factories) if (f->constructed && f->queue.size() < 2 && S.cmdTrain(S.refOf(*f), rt)) break;
     }
     // spy drones: autonomous swarm reconnaissance that finds hidden snipers and enemy spy drones. A smart commander fields a coordinated swarm.
     // When the enemy has nothing else left, every level keeps a swarm hunting its hidden things

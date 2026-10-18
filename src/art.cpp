@@ -52,10 +52,12 @@ const CkTone CK_TONES[12] = {
 // Cyber helicopter in pairs: spies 15, spy drones 16, cargo lifters 17 (Cyber first in each pair, as everywhere else).
 // The Supersonic Bombers are the newest pair: local 23, pinned explicitly so appending further pairs to the enum can never
 // silently repaint them (the pair rule below happens to land on 23 today, but it is a spacer rule, not a contract).
+// The Anti-Radiation Trucks follow as local 24, pinned for the same reason.
 static int unitLocal(int type) {
     if (civicDozerType(type)) return 22;   // the civilian dozers: a dozer hull in civilian livery
     if (type == U_C_HELI) return 14;
     if (type == U_C_SBOMBER || type == U_K_SBOMBER) return 23;
+    if (type == U_C_RADTRUCK || type == U_K_RADTRUCK) return 24;
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -406,7 +408,175 @@ void behemothBody(Art& A, int frame) {   // Behemoth body: cast-iron slab hull o
     weatherClanker(A, 81, 6, 15, 60, 49);
 }
 
+// ---------------------------------------------------------------- anti-radiation truck
+
+// One truck wheel seen from above: a tyre band across the axle whose tread slides by the frame phase, half a tread pitch apart between
+// the two rolling frames (the same frame convention as the jeep's wheels in art_jeep.cpp). Cyber: slim tyre with pale hex nubs and a cyan
+// rim line. Clanker: fat lugged tyre with mud on the outer edge.
+void radWheel(Art& A, float cx, float cy, float ph, bool cyber, bool top) {
+    const float hl = 5.2f, hh = 2.6f;
+    Color tyre = cyber ? rgb(38, 44, 56) : rgb(40, 37, 29);
+    float outerY = top ? cy - hh + 0.7f : cy + hh - 0.7f;
+    A.box(cx, cy, hl, hh, 1.3f, tyre, 1.6f, 0.5f);
+    A.ell(cx, cy, hl * 0.66f, hh * 0.6f, shade(tyre, 1.55f), 1.2f, 0.4f);        // rim shadow inside
+    float pitch = cyber ? 2.7f : 3.6f;
+    for (float x = cx - hl + 1.2f + ph * pitch; x < cx + hl - 1.0f; x += pitch) {
+        if (cyber) A.dot(x, cy, 0.8f, rgb(128, 142, 160));                        // pale hex nubs
+        else A.box(x, cy, 0.95f, hh - 0.7f, 0.3f, rgb(80, 72, 52), 0.7f, 0.35f);  // chunky lugs
+    }
+    if (cyber) {
+        A.line(cx - hl + 1.5f, outerY, cx + hl - 1.5f, outerY, 0.8f, rgba(rgb(110, 232, 255), 235));
+        A.glow(cx, outerY, 4.2f, rgba(rgb(110, 232, 255), 45));
+    } else {
+        A.ell(cx + 1.0f, outerY, 2.6f, 0.8f, rgba(rgb(70, 54, 36), 140), 1, 0);   // mud on the outer edge
+    }
+}
+
+// The radiation trefoil seen from above on the scrubber roof: a hazard field disc with three dark blades round the hub, which is how
+// the symbol reads as a marking at unit-sprite size.
+void radTrefoil(Art& A, float cx, float cy, float r, Color field, Color blade) {
+    A.circle(cx, cy, r, field, 1.4f, 0.45f);
+    for (int i = 0; i < 3; i++) {
+        float a = -1.5708f + i * 2.0944f;
+        A.poly({{cx, cy}, {cx + std::cos(a - 0.46f) * r * 0.84f, cy + std::sin(a - 0.46f) * r * 0.84f}, {cx + std::cos(a + 0.46f) * r * 0.84f, cy + std::sin(a + 0.46f) * r * 0.84f}}, blade, 0.5f, 0.2f);
+    }
+    A.dot(cx, cy, r * 0.26f, blade);
+}
+
+// Anti-Radiation Truck (both armies): a six-wheel decontamination truck - boxy cab forward (+x), a long scrubber tank behind, a roof
+// sprayer boom and sensor dish, side sprayer arms and rear nozzles, bolted radiation-shield skirts, exhausts and the green decon beacon
+// whose light sells the unit at 1x. Cyber: white ceramic and steel with cyan emitter strips, a pale-green trefoil and a sensor dish.
+// Clanker: olive over sand with hazard-yellow and decon-green bands, chunky lugged tyres, rust, a big soot-blackened stack and a yellow
+// trefoil. Frames 1/2 roll (the tyre tread shifts by half a pitch).
+void radTruckBody(Art& A, bool cyber, int frame) {
+    const Color hull = cyber ? rgb(214, 222, 232) : rgb(102, 110, 78);
+    const Color hullD = cyber ? rgb(142, 154, 172) : rgb(74, 82, 56);
+    const Color deck = cyber ? rgb(236, 240, 246) : rgb(150, 142, 100);
+    const Color steel = cyber ? rgb(120, 134, 152) : rgb(146, 148, 142);
+    const Color dark = cyber ? rgb(42, 50, 64) : rgb(34, 34, 28);
+    const Color glass = cyber ? rgb(38, 84, 120) : rgb(76, 100, 96);
+    const Color trim = cyber ? rgb(110, 232, 255) : rgb(234, 188, 60);        // faction light: cyan / hazard yellow
+    const Color deco = cyber ? rgb(126, 255, 176) : rgb(168, 236, 110);       // decontamination green
+    const Color sand = cyber ? rgb(192, 202, 214) : rgb(180, 162, 116);
+    const Color rust = rgb(158, 86, 44);
+    const Color lamp = rgb(255, 244, 200);
+    // the two rolling frames are half a tread pitch apart, the standing frame sits between them
+    float ph = frame == 1 ? 0.0f : (frame == 2 ? 0.5f : 0.25f);
+    // six wheels first, sticking out past the hull so they read as tyres: the body covers their inner edge only
+    for (float wx : { 13.0f, 22.5f, 46.5f }) {
+        radWheel(A, wx, 21.2f, ph, cyber, true);
+        radWheel(A, wx, 42.8f, ph, cyber, false);
+    }
+    A.box(31, 32, 25, 7.8f, 2.0f, hullD, 2.2f, 0.5f);                          // chassis rails
+    if (cyber) {
+        // ---- scrubber tank: a clean white cylinder with pale bands, a roof walkway and a hose reel
+        A.cap(11.5f, 32, 37.5f, 32, 7.4f, hull, 2.8f, 0.65f);
+        A.ell(37.5f, 32, 3.0f, 7.5f, shade(hull, 1.04f), 2.0f, 0.5f);
+        A.ell(11.5f, 32, 2.6f, 7.3f, shade(hull, 0.9f), 1.8f, 0.5f);
+        for (float bx : { 15.5f, 23.0f, 30.5f }) A.box(bx, 32, 0.8f, 7.5f, 0.3f, deck, 1.0f, 0.45f);
+        A.line(13.5f, 24.8f, 40.5f, 24.8f, 0.6f, rgba(hullD, 210)); A.line(13.5f, 39.2f, 40.5f, 39.2f, 0.6f, rgba(hullD, 210));
+        // bolted radiation-shield skirts and the cyan emitter strips
+        A.box(26.5f, 23.9f, 13.0f, 1.2f, 0.4f, steel, 1.0f, 0.4f);
+        A.box(26.5f, 40.1f, 13.0f, 1.2f, 0.4f, steel, 1.0f, 0.4f);
+        for (int i = 0; i < 6; i++) { A.dot(15.5f + i * 4.4f, 23.9f, 0.4f, rgba(rgb(226, 234, 244), 230)); A.dot(15.5f + i * 4.4f, 40.1f, 0.4f, rgba(rgb(226, 234, 244), 230)); }
+        A.line(14.0f, 25.5f, 40.0f, 25.5f, 0.7f, rgba(trim, 225)); A.line(14.0f, 38.5f, 40.0f, 38.5f, 0.7f, rgba(trim, 225));
+        A.glow(27.0f, 25.5f, 8, rgba(trim, 45)); A.glow(27.0f, 38.5f, 8, rgba(trim, 45));
+        A.box(24.0f, 32, 10.0f, 2.6f, 0.7f, deck, 1.4f, 0.4f);                  // roof walkway
+        A.circle(15.8f, 32, 2.6f, rgb(150, 164, 180), 1.4f, 0.5f); A.circle(15.8f, 32, 1.7f, rgb(60, 70, 86), 1.1f, 0.3f);   // hose reel
+        A.line(15.0f, 30.0f, 12.2f, 27.6f, 0.8f, rgb(70, 82, 100));             // hose
+        // roof sprayer boom across the tank, then the trefoil under a soft green wash
+        A.cap(23.0f, 25.2f, 23.0f, 38.8f, 0.85f, steel, 1.0f, 0.45f);
+        for (float ny : { 26.2f, 32.0f, 37.8f }) { A.dot(23.0f, ny, 0.8f, deco); A.glow(23.0f, ny, 3.0f, rgba(deco, 120)); }
+        A.glow(32.5f, 32, 8, rgba(deco, 75));
+        radTrefoil(A, 32.5f, 32, 3.9f, rgb(176, 246, 198), rgb(22, 28, 24));
+        // rear manifold and the side sprayer arms reaching out behind the wheels
+        A.box(8.8f, 32, 1.3f, 6.6f, 0.5f, steel, 0.9f, 0.4f);
+        for (float ny : { 27.4f, 30.6f, 33.4f, 36.6f }) { A.dot(7.4f, ny, 0.8f, deco); A.glow(7.2f, ny, 3.0f, rgba(deco, 130)); }
+        A.cap(14.0f, 24.0f, 9.6f, 20.2f, 0.9f, steel, 1.0f, 0.45f);
+        A.cap(14.0f, 40.0f, 9.6f, 43.8f, 0.9f, steel, 1.0f, 0.45f);
+        A.dot(9.2f, 19.8f, 0.9f, deco); A.dot(9.2f, 44.2f, 0.9f, deco);
+        A.glow(9.0f, 19.8f, 3.4f, rgba(deco, 140)); A.glow(9.0f, 44.2f, 3.4f, rgba(deco, 140));
+        // ---- cab: white composite over a steel roof, dark windshield, sensor dish and twin slim stacks
+        A.box(49.6f, 32, 8.4f, 8.1f, 2.0f, hull, 2.6f, 0.65f);
+        A.box(48.4f, 32, 6.2f, 5.7f, 1.2f, rgb(164, 176, 192), 1.4f, 0.45f);   // steel cab roof
+        A.box(54.7f, 32, 2.3f, 6.2f, 0.9f, glass, 1.4f, 0.5f);                  // windshield band
+        A.line(51.4f, 29.6f, 54.2f, 29.6f, 0.5f, rgba(trim, 170)); A.line(51.4f, 34.4f, 54.2f, 34.4f, 0.5f, rgba(trim, 170));
+        A.box(57.3f, 32, 0.8f, 6.6f, 0.3f, shade(hull, 0.96f), 0.9f, 0.4f);     // bonnet strip
+        for (int i = 0; i < 3; i++) A.line(56.4f, 28.4f + i * 3.2f, 58.0f, 28.4f + i * 3.2f, 0.7f, rgba(trim, 120));   // front grille
+        A.box(58.6f, 32, 0.6f, 8.8f, 0.3f, steel, 1.0f, 0.4f);                  // bumper
+        A.dot(57.8f, 26.8f, 0.8f, lamp); A.dot(57.8f, 37.2f, 0.8f, lamp);
+        for (int s = -1; s <= 1; s += 2) {                                      // mirrors
+            float my = s < 0 ? 22.6f : 41.4f, ey = s < 0 ? 24.4f : 39.6f;
+            A.line(52.6f, ey, 50.8f, my, 0.6f, rgba(hullD, 230)); A.box(50.4f, my, 1.2f, 0.9f, 0.3f, dark, 0.7f, 0.3f);
+        }
+        A.box(50.4f, 32, 1.7f, 0.9f, 0.2f, A.team, 0.6f, 0.3f);                 // team stripe on the cab roof
+        A.circle(46.4f, 32, 2.9f, steel, 1.2f, 0.5f); A.circle(46.4f, 32, 2.0f, dark, 1.0f, 0.3f);   // sensor dish
+        A.dot(46.4f, 32, 0.75f, deco); A.glow(46.4f, 32, 4.6f, rgba(deco, 120));
+        A.line(48.4f, 30.6f, 47.0f, 31.4f, 0.4f, steel);                        // dish feed arm
+        A.circle(39.6f, 32, 1.6f, steel, 1.0f, 0.4f); A.dot(39.6f, 32, 1.05f, deco); A.glow(39.6f, 32, 6.2f, rgba(deco, 155));   // decon beacon on the tank's front shoulder
+        A.circle(42.8f, 24.9f, 1.4f, steel, 1.0f, 0.4f); A.dot(42.8f, 24.9f, 0.7f, dark);   // exhaust stacks
+        A.circle(42.8f, 39.1f, 1.4f, steel, 1.0f, 0.4f); A.dot(42.8f, 39.1f, 0.7f, dark);
+        A.grain(7, 18, 59, 46, 0.05f, 12);
+    } else {
+        // ---- riveted box tank with a decon-green band at the back and a hazard-yellow band at the front
+        A.box(24.0f, 32, 16.0f, 8.6f, 1.8f, hull, 2.6f, 0.6f);
+        A.box(24.0f, 32, 13.6f, 6.2f, 1.0f, shade(hull, 1.06f), 1.4f, 0.45f);  // raised deck
+        A.box(8.6f, 32, 1.0f, 7.6f, 0.4f, shade(hull, 0.88f), 1.0f, 0.4f);      // bolted rear plate
+        for (int i = 0; i < 5; i++) A.box(8.6f, 27.4f + i * 2.4f, 1.05f, 0.55f, 0.1f, i % 2 ? deco : dark, 0.3f, 0.1f);   // rear hazard chevrons
+        rivets(A, 12, 26.6f, 39.0f, 26.6f, 7, shade(hull, 1.35f));
+        rivets(A, 12, 37.4f, 39.0f, 37.4f, 7, shade(hull, 1.35f));
+        A.box(32.0f, 32, 1.1f, 8.9f, 0.3f, trim, 0.7f, 0.3f);                   // hazard-yellow band
+        for (int i = 0; i < 4; i++) A.box(32.0f, 26.0f + i * 4.0f, 1.15f, 0.55f, 0.1f, dark, 0.3f, 0.1f);
+        A.box(17.6f, 32, 0.8f, 8.9f, 0.3f, rgba(deco, 230), 0.7f, 0.3f);        // decon-green band
+        A.ell(25.0f, 28.0f, 3.4f, 1.5f, rgba(sand, 200), 1, 0);                 // sand camouflage patches
+        A.ell(28.0f, 36.4f, 3.0f, 1.4f, rgba(rgb(86, 92, 64), 190), 1, 0);
+        A.glow(23.5f, 32, 7.5f, rgba(deco, 60));
+        radTrefoil(A, 23.5f, 32, 3.9f, rgb(232, 198, 74), rgb(34, 34, 26));
+        // roof sprayer boom and rear manifold
+        A.cap(20.2f, 24.6f, 20.2f, 39.4f, 1.0f, steel, 1.1f, 0.5f);
+        for (float ny : { 25.6f, 32.0f, 38.4f }) { A.dot(20.2f, ny, 0.9f, deco); A.glow(20.2f, ny, 3.4f, rgba(deco, 120)); }
+        A.box(12.2f, 32, 1.1f, 6.8f, 0.4f, steel, 1.0f, 0.4f);
+        for (float ny : { 27.2f, 30.4f, 33.6f, 36.8f }) { A.dot(11.0f, ny, 0.8f, deco); A.glow(10.8f, ny, 3.0f, rgba(deco, 130)); }
+        // side sprayer arms and bolted radiation-shield skirts (they sit over the tyres like fenders)
+        A.box(26.0f, 23.1f, 13.0f, 1.3f, 0.5f, rgb(118, 120, 110), 1.0f, 0.4f);
+        A.box(26.0f, 40.9f, 13.0f, 1.3f, 0.5f, rgb(118, 120, 110), 1.0f, 0.4f);
+        rivets(A, 14, 23.1f, 38, 23.1f, 7, shade(steel, 1.25f));
+        rivets(A, 14, 40.9f, 38, 40.9f, 7, shade(steel, 1.25f));
+        A.cap(14.0f, 23.6f, 9.6f, 19.8f, 1.0f, steel, 1.0f, 0.45f);
+        A.cap(14.0f, 40.4f, 9.6f, 44.2f, 1.0f, steel, 1.0f, 0.45f);
+        A.dot(9.2f, 19.4f, 0.95f, deco); A.dot(9.2f, 44.6f, 0.95f, deco);
+        A.glow(9.0f, 19.4f, 3.6f, rgba(deco, 140)); A.glow(9.0f, 44.6f, 3.6f, rgba(deco, 140));
+        // ---- cab: olive drab, sand roof, cracked glass, brush guard and the big sooty exhaust stack
+        A.box(49.8f, 32, 8.4f, 8.8f, 1.8f, shade(hull, 0.97f), 2.6f, 0.6f);
+        A.box(48.6f, 32, 6.2f, 6.2f, 1.2f, sand, 1.4f, 0.45f);                  // sand cab roof
+        for (int i = 0; i < 3; i++) A.line(43.8f, 28.6f + i * 3.3f, 53.2f, 28.6f + i * 3.3f, 0.5f, rgba(hullD, 180));
+        A.box(54.9f, 32, 2.3f, 6.6f, 0.9f, glass, 1.4f, 0.5f);                  // windshield band
+        A.line(53.4f, 30.2f, 54.8f, 33.8f, 0.4f, rgba(rgb(220, 226, 220), 150));   // cracked glass
+        for (int i = 0; i < 4; i++) A.line(56.5f, 28.2f + i * 2.3f, 57.9f, 28.2f + i * 2.3f, 0.7f, rgba(dark, 220));   // grille slats
+        A.line(58.7f, 24.6f, 58.7f, 39.4f, 1.1f, steel);                        // brush guard
+        A.dot(58.3f, 24.6f, 0.85f, steel); A.dot(58.3f, 39.4f, 0.85f, steel);
+        A.dot(57.2f, 26.9f, 0.9f, lamp); A.dot(57.2f, 37.1f, 0.9f, lamp);
+        for (int s = -1; s <= 1; s += 2) {                                      // mirrors
+            float my = s < 0 ? 23.0f : 41.0f, ey = s < 0 ? 24.8f : 39.4f;
+            A.line(52.8f, ey, 51.0f, my, 0.6f, rgba(dark, 200)); A.box(50.6f, my, 1.2f, 0.9f, 0.3f, rgb(30, 30, 24), 0.7f, 0.3f);
+        }
+        A.box(50.6f, 32, 1.7f, 0.9f, 0.2f, A.team, 0.6f, 0.3f);                 // team stripe on the cab roof
+        A.box(52.0f, 28.4f, 1.1f, 0.9f, 0.2f, trim, 0.6f, 0.3f);                // yellow filler cap
+        A.circle(43.4f, 22.8f, 2.4f, steel, 1.4f, 0.5f); A.circle(43.4f, 22.8f, 1.5f, dark, 1.1f, 0.3f);   // big exhaust stack
+        A.ell(42.8f, 25.4f, 2.4f, 1.5f, rgba(rgb(22, 22, 18), 135), 1, 0);      // soot stain
+        A.box(43.4f, 22.8f, 2.1f, 0.45f, 0.2f, dark, 0.5f, 0.2f);
+        A.box(44.6f, 32, 3.2f, 1.0f, 0.3f, dark, 0.6f, 0.3f);                   // beacon housing
+        A.dot(44.6f, 32, 1.2f, deco); A.glow(44.6f, 32, 6.4f, rgba(deco, 150));
+        weatherClanker(A, 63, 6, 18, 59, 46);
+        Rng r(63);
+        for (int i = 0; i < 5; i++) A.ell(r.f(11, 38), r.f(25, 39), r.f(1.2f, 2.5f), r.f(0.9f, 1.7f), rgba(rust, 115), 1, 0);
+        A.line(10.4f, 28.0f, 22.0f, 26.8f, 0.5f, rgba(rust, 140));
+    }
+    teamDot(A, 12.0f, 32, 1.9f);
+}
+
 // ---------------------------------------------------------------- aircraft
+
 
 void jetCyber(Art& A) {   // Specter Jet: slender stealth delta, canted twin fins, glowing twin exhausts
     // planform: swept delta wings with a cut-back trailing edge
@@ -793,6 +963,11 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 20: artShipBody(c, team, cy, true); break;
     case 21: artStrikeJetBody(c, team, cy); break;
     case 23: artSupersonicBomberBody(c, team, cy); break;   // Supersonic Bomber (art_jet.cpp)
+    case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
+        radTruckBody(A, cy, frame);
+        enhance(c, 0.7f);
+        c.outline(rgb(8, 10, 14, 200));
+        break;
     case 22:   // civilian dozer: the army's dozer in civic white and safety orange, with a roof light bar
         if (cy) { CYH = rgb(214, 220, 226); CYP = rgb(236, 240, 244); CYM = rgb(232, 120, 44); CYD = rgb(70, 74, 82); CYG = rgb(255, 176, 60); CYW = rgb(255, 236, 200); dozerCyber(A, frame); }
         else { CKY = rgb(236, 128, 40); CKH = rgb(226, 222, 210); CKS = rgb(150, 152, 150); CKD = rgb(52, 50, 46); dozerClanker(A, frame); }
@@ -1118,6 +1293,7 @@ float artScale(int type) {
     if (local == 20) return 1.95f;   // cruisers
     if (local == 21) return 1.4f;    // Hotline Strike fighters
     if (local == 23) return 1.16f;   // Supersonic Bombers: small and fast, a notch smaller than the strike jets
+    if (local == 24) return 1.06f;   // Anti-Radiation Trucks: a medium truck, a touch smaller than the jeeps
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

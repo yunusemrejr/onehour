@@ -1259,7 +1259,8 @@ void Sim::nukeBlast(const Nuke& n) {
         }
         for (int k = 0; k < 24; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.8f), rng.f(0.7f, 1.6f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-300, 300), rng.f(-380, -90))});
         fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), n.deep ? UNUKE_GLOW : rgb(120, 255, 90), R * 0.95f});
-        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, P * (n.deep ? UNUKE_FALLOUT : 1.0f), -1, false, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f)});
+        fx.back().tag = ++fxTagSeq;
+        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, P * (n.deep ? UNUKE_FALLOUT : 1.0f), -1, false, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), fxTagSeq});
         emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
         emit(EV_SOUND, -1, SND_EXPLODE_S, n.pos);
         return;
@@ -1282,7 +1283,8 @@ void Sim::nukeBlast(const Nuke& n) {
     for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
     const float life = FALLOUT_LIFE * (sv ? UNUKE_FALLOUT : 1.0f);
     fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, life, sv ? UNUKE_GLOW : rgb(120, 255, 90), R * 0.95f});
-    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, sv ? UNUKE_FALLOUT : 1.0f, -1, false, life});
+    fx.back().tag = ++fxTagSeq;
+    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, sv ? UNUKE_FALLOUT : 1.0f, -1, false, life, fxTagSeq});
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
@@ -1290,9 +1292,46 @@ void Sim::nukeBlast(const Nuke& n) {
 
 // Radioactive fallout: for FALLOUT_LIFE seconds everything on the ground inside the zone is poisoned, friend and foe alike;
 // during the first seconds fires and secondary blasts keep tearing through it.
+// The active Anti-Radiation Trucks (their decontamination fields are on; an EMP-ed or stowed one is off).
+static void activeDeconTrucks(const Sim& S, std::vector<Ref>& out) {
+    out.clear();
+    for (auto& u : S.ents) if (u.alive && u.isUnit() && u.ut().role == UR_DECON && !u.carrier.valid() && u.fall <= 0 && u.disabledUntil <= S.time) out.push_back(S.refOf(u));
+}
+
 void Sim::updateFallout() {
+    if (fallouts.empty()) return;   // (the common case: no crater to clean and no field to run)
+    // Anti-Radiation Trucks: a field protects everything in it from the radiation of the zones it touches, and scrubs those zones: their
+    // strength and radius decay (so do their hazy visuals), while the truck itself absorbs a dose of what it neutralises. A truck can die
+    // doing it, and a silver cloud's much heavier radiation hurts it more (RADTRUCK_DAMAGE scales with the square root of the zone's power).
+    std::vector<Ref> trucks;
+    activeDeconTrucks(*this, trucks);
+    auto inField = [&](Vec2 p) {
+        for (Ref tr : trucks) { const Entity* t = get(tr); if (t && dist(p, t->pos) <= RADTRUCK_RADIUS * TILE) return true; }
+        return false;
+    };
     for (size_t i = 0; i < fallouts.size();) {
         Fallout& f = fallouts[i];
+        if (!trucks.empty()) {
+            int scrubbing = 0;
+            for (Ref tr : trucks) { const Entity* t = get(tr); if (t && dist(t->pos, f.pos) <= f.r + RADTRUCK_RADIUS * TILE) scrubbing++; }
+            if (scrubbing > 0) {
+                float k = std::exp(-RADTRUCK_SCRUB * scrubbing * SIM_DT);   // exponential: fast at first, then the last wisps
+                f.power = std::max(0.0f, f.power * k);
+                f.r *= k;
+                if (f.visTag) for (auto& vf : fx) if (vf.type == FX_FALLOUT && vf.tag == f.visTag) { vf.size *= k; break; }
+                float dose = RADTRUCK_DAMAGE * std::sqrt(std::max(f.power, 0.05f)) * SIM_DT;   // (a silver cloud's radiation is heavier)
+                for (Ref tr : trucks) {
+                    Entity* t = get(tr);
+                    if (!t || dist(t->pos, f.pos) > f.r + RADTRUCK_RADIUS * TILE) continue;
+                    applyDamage(*t, t->maxHp * std::min(dose, RADTRUCK_DRAIN_CAP * SIM_DT), -1, NOREF, nullptr);
+                }
+                if (f.power <= 0.02f || f.r < 6.0f) {   // washed out: take the haze with it
+                    if (f.visTag) for (auto& vf : fx) if (vf.type == FX_FALLOUT && vf.tag == f.visTag) { vf.t = vf.life; break; }
+                    fallouts.erase(fallouts.begin() + i);
+                    continue;
+                }
+            }
+        }
         f.t += SIM_DT; f.tick += SIM_DT;
         if (f.t >= f.life) { fallouts.erase(fallouts.begin() + i); continue; }
         if (f.t < 12.0f && rng.f() < 0.06f) {   // chaos: random blasts and flame inside the crater
@@ -1308,6 +1347,7 @@ void Sim::updateFallout() {
             for (auto r : in) {
                 Entity* e = get(r); if (!e) continue;
                 if (f.enemyOnly && !enemies(f.owner, e->owner)) continue;   // bunker defense radiation vents only poison enemy forces
+                if (inField(e->pos)) continue;   // inside a decontamination field: the air is being scrubbed, the truck absorbs its dose instead (see above)
                 if (e->isBuilding()) {   // radiation only weakens structures: a slow, non-lethal drain that stops at a tenth of their health
                     if (e->hp > e->maxHp * 0.12f) applyDamage(*e, e->maxHp * 0.0012f * strength, f.enemyOnly ? f.owner : -1, NOREF, nullptr);
                     continue;
@@ -2282,8 +2322,10 @@ bool Sim::dodgeDanger(Entity& e) {
         if (e.resumeOrder != O_IDLE) e.targetEnt = keep;
         return true;
     }
-    // radiation: walk out of it (aircraft fly over it unharmed)
-    if (!e.isAir() && (e.order == O_IDLE || e.order == O_GUARDPOS || e.order == O_GUARDAREA) && inFallout(e.pos, TILE * 0.5f)) {
+    // radiation: walk out of it (aircraft fly over it unharmed; an Anti-Radiation Truck is there on purpose, so it does not, and neither
+    // does anything standing in a decontamination field: that air is being scrubbed)
+    if (!e.isAir() && e.ut().role != UR_DECON && (e.order == O_IDLE || e.order == O_GUARDPOS || e.order == O_GUARDAREA) && inFallout(e.pos, TILE * 0.5f)) {
+        for (auto& t : ents) if (t.alive && t.isUnit() && t.ut().role == UR_DECON && !t.carrier.valid() && t.disabledUntil <= time && dist(e.pos, t.pos) <= RADTRUCK_RADIUS * TILE) return false;
         for (auto& f : fallouts) {
             if (dist(e.pos, f.pos) > f.r + TILE * 0.5f) continue;
             Vec2 away = e.pos - f.pos; float l = away.len();
@@ -3472,6 +3514,8 @@ void Sim::updateBunkerSelf(Entity& b) {
         float radR = BUNKER_RAD_RADIUS * TILE;
         fallouts.push_back({b.pos, radR, 0.0f, 0.0f, 1.35f, b.owner, true});
         fx.push_back({FX_FALLOUT, b.pos, b.pos, 0, FALLOUT_LIFE * 0.5f, rgb(120, 255, 90), radR});
+        fx.back().tag = ++fxTagSeq;
+        fallouts.back().visTag = fxTagSeq;
         fx.push_back({FX_RING, b.pos, b.pos, 0, 1.1f, rgb(120, 255, 90), radR});
         fx.push_back({FX_EMP, b.pos, b.pos, 0, 0.9f, rgb(140, 255, 110), radR * 0.85f});
         emit(EV_SOUND, -1, SND_EXPLODE_L, b.pos);
