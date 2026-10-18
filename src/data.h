@@ -180,7 +180,7 @@ static const float HQ_NUKE = 0.12f;           // hard ceiling: one warhead takes
 // Walls: a cheap, unlimited 1x1 segment with a huge health pool and a very low per-warhead ceiling. At ground zero a normal warhead takes
 // about a tenth of a wall's health, so even a direct hit is only a chip: it takes a long barrage to open a breach. Hyper Protection doubles
 // the pool but the ceiling is a share of it, so the number of warheads it takes is unchanged.
-static const float WALL_HP = 18000.0f;
+static const float WALL_HP = 13500.0f;
 static const float WALL_NUKE = 0.10f;         // hard ceiling per warhead (fraction of max health)
 static const float WALL_ARMOR = 0.60f;        // fraction of conventional damage a wall takes
 // Anti-Rocket walls and the Q defences share a point-defence envelope. A wall's laser is shorter-ranged than a dedicated anti-nuke tower but
@@ -388,11 +388,12 @@ static const int   CIVIC_DOZER_CAP = 5;           // no free dozers once the arm
 // Underground Nuke: a buried silo that fires the same kind of warhead as a Nuke Ramp, but silver and much stronger: three times the blast
 // radius, 2.7 times the damage (10% weaker than it used to be) and three times the radiation (strength and how long it lasts). It has blast
 // doors and deep plating (only soldiers and vehicles can take it below BUNKER_FLOOR), and only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can
-// shoot its warhead down.
+// shoot its warhead down at all - and the armoured silver warhead halves even that chance (UNUKE_INTERCEPT_RESIST).
 static const float UNUKE_SCALE = 9.0f;            // share of a full warhead's blast AREA: radius NUKE_RADIUS * sqrt(9) = three times a ramp's
 static const float UNUKE_DAMAGE = 2.7f;           // damage multiplier over a ramp's warhead (10% weaker than the original 3x)
 static const float UNUKE_FALLOUT = 3.0f;          // radiation: strength and duration multiplier
-static const float UNUKE_DOOR_HP = 4000.0f;       // the silo's blast doors (they take the damage first, like a bunker's hatch)
+static const float UNUKE_INTERCEPT_RESIST = 0.5f; // the silver warhead is armoured against interception: every defence's chance to shoot it down is halved
+static const float UNUKE_DOOR_HP = 5000.0f;       // the silo's blast doors (they take the damage first, like a bunker's hatch)
 static const float UNUKE_ARM = 60.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)
 static const Color UNUKE_GLOW = rgb(206, 210, 218); // the silver of its warhead, cloud and radiation
 // Spies

@@ -78,6 +78,16 @@ static bool constantsTest(Faction me, u64 seed) {
     CHECK8(std::fabs(ANTINUKE_LASER_NUKE_MUL - 0.60f) < 1e-5f && std::fabs(WALL_PD_NUKE_MUL - 0.30f) < 1e-5f, "the anti-nuke laser / wall warhead nerfs are not 40% / 70%");
     CHECK8(std::fabs(BUILDS[bunker].hp - 0.80f * 32000.0f) < 0.01f, "the underground bunkers are not 20% easier to destroy (20% less health)");
     CHECK8(BUILDS[bunker].hp < BUILDS[tech].hp, "a bunker is now tougher than the tech structure");
+    // durability pass: walls, the Command structure and the tech structure are less tough; the Underground Nuke silo is tougher and its
+    // armoured silver warhead is harder to shoot down
+    int wall = me == F_CYBER ? B_C_WALL : B_K_WALL, hq = firstBuildOf(me), silo = me == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
+    CHECK8(std::fabs(WALL_HP - 13500.0f) < 0.01f && std::fabs(BUILDS[wall].hp - WALL_HP) < 0.01f, "the walls are not 25% less durable");
+    CHECK8(BUILDS[hq].hp < 50000.0f && BUILDS[tech].hp < 33000.0f, "the Command structure / tech structure durability was not reduced");
+    CHECK8(BUILDS[silo].hp >= 40000.0f && BUILDS[silo].hp > 32000.0f, "the Underground Nuke silo is not tougher");
+    CHECK8(UNUKE_DOOR_HP >= 5000.0f, "the Underground Nuke silo's blast doors were not strengthened");
+    CHECK8(UNUKE_INTERCEPT_RESIST > 0.0f && UNUKE_INTERCEPT_RESIST < 1.0f, "the silver warhead is not armoured against interception");
+    CHECK8(BUILDS[hq].hp > BUILDS[silo].hp && BUILDS[silo].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[wall].hp,
+           "the Command / silo / tech / bunker / wall durability order is wrong");
     // not stealthy: an enemy can see it and target it like any other building
     Ref bk = place8(bunker, 0, openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 12));
     CHECK8(bk.valid(), "no spot for the test bunker");
@@ -137,6 +147,48 @@ static bool antiNukeNerfTest(Faction me, u64 seed) {
         if (g_sim.fallouts.empty()) bombsDown++;   // (it never went off: the defence got it)
     }
     CHECK8(bombsDown > 0, "the point-defence envelope never burned a falling nuclear bomb out of the air");
+    // the Underground Nuke's silver warhead is armoured: every defence's chance against it is halved (and, alone among warheads, only lasers
+    // can engage it at all - that part is covered by --civictest). Each check gets a clean scene with exactly one defence.
+    if (me == F_CYBER) {
+        scene8(me, foe, seed + 7);
+        Vec2 mid2 = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 12);
+        for (int k = 0; k < 4; k++) place8(b0 + BR_POWER, 0, mid2 + Vec2((-9 + k * 3) * TILE, -8 * TILE));
+        Ref A2 = place8(anT, 0, mid2);
+        g_sim.updatePowerPublic();
+        CHECK8(A2.valid() && g_sim.antiNukeWorking(*g_sim.get(A2)), "no working laser for the silver-warhead check");
+        Vec2 pspot = g_sim.get(A2)->pos + Vec2(15 * TILE, 0), dspot = g_sim.get(A2)->pos + Vec2(45 * TILE, 0);   // (the deep one keeps its 33-tile blast clear of the tower)
+        float pPlain = g_sim.antiNukeChance(pspot, 1, false, 1.0f, false);
+        float pDeep = g_sim.antiNukeChance(dspot, 1, false, UNUKE_SCALE, true);
+        CHECK8(pPlain > 0.0f && std::fabs(pDeep - pPlain * UNUKE_INTERCEPT_RESIST) < 1e-4f, "the armoured silver warhead does not halve the Anti-Nuke Laser's chance");
+        int trials = 400, down = 0;
+        for (int k = 0; k < trials; k++) {
+            for (auto& b : g_sim.ents) if (b.alive && b.isBuilding() && b.bt().role == BR_ANTINUKE) b.siloTimer = 0;
+            g_sim.nukes.clear(); g_sim.interceptors.clear(); g_sim.fallouts.clear(); g_sim.fx.clear();
+            Sim::Nuke n; n.from = g_sim.players[0].basePos; n.pos = dspot; n.owner = 1; n.t = Sim::NUKE_FLIGHT - 4.2f; n.scale = UNUKE_SCALE; n.deep = true;
+            g_sim.nukes.push_back(n);
+            for (int t = 0; t < 20 * 6 && !g_sim.nukes.empty(); t++) {
+                g_sim.step(); g_sim.events.clear();
+                if (!g_sim.nukes.empty() && g_sim.nukes[0].broken) { down++; break; }
+            }
+        }
+        float rate = down / (float)trials, sigma = std::sqrt(pDeep * (1.0f - pDeep) / trials);
+        CHECK8(std::fabs(rate - pDeep) < 4.0f * sigma + 0.03f, "the interception actually rolled against a silver warhead is not the armoured chance");
+        CHECK8(rate < pPlain * 0.75f, "the silver warhead is not meaningfully harder to shoot down than a normal one");
+        printf("supersonictest %s: a lone laser stops %.1f%% of silver warheads (%.1f%% of normal ones); %.1f%% of %d deep trials were shot down\n",
+               FACTION_NAME[me], pDeep * 100.0f, pPlain * 100.0f, rate * 100.0f, trials);
+    }
+    {   // the same for an Anti-Rocket wall's laser, in a clean scene with exactly that wall
+        scene8(me, foe, seed + 8);
+        Vec2 mid3 = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 12);
+        g_sim.players[0].upg[UPG_ANTIROCKET] = true;
+        Ref W2 = place8(wall, 0, mid3);
+        g_sim.updatePowerPublic();
+        CHECK8(W2.valid() && g_sim.isAntiRocketWall(*g_sim.get(W2)), "no working Anti-Rocket wall for the silver-warhead check");
+        Vec2 wspot = g_sim.get(W2)->pos + Vec2(0, 15 * TILE);
+        float wpPlain = g_sim.antiNukeChance(wspot, 1, false, 1.0f, false);
+        float wpDeep = g_sim.antiNukeChance(wspot, 1, false, UNUKE_SCALE, true);
+        CHECK8(wpPlain > 0.0f && std::fabs(wpDeep - wpPlain * UNUKE_INTERCEPT_RESIST) < 1e-4f, "the Anti-Rocket wall's laser is not harder pressed by the armoured silver warhead");
+    }
     return true;
 }
 

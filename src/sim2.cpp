@@ -298,7 +298,11 @@ float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bo
     for (auto& b : ents) {
         if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && !(b.bt().faction == F_CYBER || isAntiRocketWall(b)))) continue;
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
-        if (dist(at, b.pos) <= antiNukeCover(b, scale)) miss *= 1.0f - antiNukeWarheadShot(b);
+        if (dist(at, b.pos) <= antiNukeCover(b, scale)) {
+            float one = antiNukeWarheadShot(b);
+            if (deep) one *= UNUKE_INTERCEPT_RESIST;   // the armoured silver casing: half the chance to stop it
+            miss *= 1.0f - one;
+        }
     }
     return 1.0f - miss;
 }
@@ -348,7 +352,7 @@ void Sim::updateAntiNuke(Entity& b) {
         n.engagedBy.push_back(self);
         int shots = cy ? 3 + linked : 2;
         while (shots > 1 && (shots - 1) * gap + flight > left - 0.2f) shots--;
-        int winner = rng.f() < antiNukeWarheadShot(b) ? rng.range(0, shots - 1) : -1;
+        int winner = rng.f() < antiNukeWarheadShot(b) * (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f) ? rng.range(0, shots - 1) : -1;   // (the silver casing is armoured: harder to shoot down)
         b.siloTimer = time + (cy ? (shots - 1) * gap + flight + ANTINUKE_LASER_RECHARGE : ANTINUKE_RELOAD);
         Vec2 muzzle = b.pos + Vec2(0, cy ? -22.0f : -8.0f);
         for (int k = 0; k < shots; k++) {
