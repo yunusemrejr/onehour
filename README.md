@@ -11,6 +11,25 @@ One map, two armies, you against one to three AI opponents, with an optional com
 Requirements: g++, make, and the SDL2 runtime (`libsdl2-2.0-0`). SDL2 headers are vendored
 under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of the box.
 
+## Defensive overhaul (walls, Hyper Protection, Anti-Rocket, 25-jet airfields)
+
+- **Wall** (new building, key `W`, 1x1, $180, 3 s, **no build limit**): 18,000 hp and a hard ceiling of 10% of its max health per warhead, so a
+  full-health segment survives many direct nukes (about ten ground-zero warheads, about thirty with Hyper Protection). Chain them edge to edge;
+  walls may be placed adjacent to each other and are deliberately exempt from the one-tile gap and corridor-plugin checks.
+- **Hyper Protection** (Data Center / Arms Lab, key `H`, $6000, 55 s): every structure gets **2x health**, takes 60% less conventional damage, and
+  no single warhead (including the silver Underground Nuke) can take more than **42% of its max health**. A full-health protected building can
+  therefore never be erased by one warhead: only already-damaged structures in the blast can be finished.
+- **Anti-Rocket** (Data Center / Arms Lab, key `A`, $4000, 45 s): every wall mounts a 10-tile point-defence laser that burns incoming rockets,
+  shells and **nuclear warheads** (including Underground Nukes) and shoots down **aircraft**. Walls are unlimited, so overlapping wall lines
+  blanket a base. The Q anti-nuke defences also engage rockets, warheads and aircraft; only a laser can stop a silver warhead.
+- **Command Core / Post**: 60,000/62,000 hp, takes 35% of conventional damage, and a warhead can take at most **12%** of its max health. It is by
+  far the toughest building; the **Data Center / Arms Lab is deliberately second** (36,000/38,000 hp, above the 32,000-hp bunkers).
+- **Barracks** infantry production is always **3x** the old rate.
+- **Airfield / Airstrip** is now **10x7 tiles** with **25 fixed-wing pads** (one per jet/drone); helicopters still have no limit.
+- **Underground bunkers are no longer stealthy**: their surface hatch is plainly visible to both sides. Their deep plating, hatch rules and
+  immunity to being finished by nukes/aircraft remain.
+
+
 ## The map
 
 One 104x104 map (30% wider than the original 80x80, 69% more ground): a **big central lake** (about 1020 water tiles, some 38 across, with bays toward the four corners, a sandy beach, two rocky islets and a **buildable island in the middle** — a dozer has to be airlifted in, so whoever holds the water and the sky can fortify the centre) ringed by a road 26.5 tiles out, with a pool inside each corner of the ring, four base quadrants split by rock ridges with a choke gap each, forest belts between the bases and the ring, and a wider river leaving the lake into every quadrant (mirrored or rotated, so no side is favoured), each spreading into a marshy pool on its way to the map edge.
@@ -59,6 +78,8 @@ a choke point against a large force. Artillery and long-range rails can still ou
 | Advanced Program | R | $2500, 45 s (half speed on low power): unlocks the army's two elite units for good |
 | Guard Drones (Aegis / Flak) | N | $2500, 40 s: every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it, and every jeep gets a second drone (see **Protector drones**) |
 | Rugged (Nanoshell / Bulwark) | U | $3000, 40 s: every structure gets 50% more health and takes half damage. One nuke no longer flattens anything (a warhead takes at most 55% at ground zero, so it takes two); the plating only gives way when a massive assault lands a big share of a structure's health within a couple of seconds |
+| Hyper Protection | H | $6000, 55 s: every structure gets 2x health, takes 60% less conventional damage, and one warhead can never take more than 42% of its max health (even an Underground Nuke): it can no longer erase a full-health protected base in one hit |
+| Anti-Rocket | A | $4000, 45 s: every wall gets a 10-tile point-defence laser that shoots down rockets, shells, nuclear warheads and aircraft; unlimited walls give overlapping cover |
 | Defense Guns (Defense Lasers / Bunker Guns) | G | $3500, 45 s: every structure gets a roof gun (Cyber laser, Clanker machine gun, 7.5 tiles) that shoots aircraft, vehicles and infantry; half rate on low power |
 | Self-Repair (Nanite Repair / Repair Crews) | E | $2000, 30 s: every structure mends itself, 1.2% of its health a second once it has been out of fire for 3 s and a quarter of that under fire (never inside fallout). Units are not repaired: that is still the medics' job |
 
@@ -164,12 +185,12 @@ nothing sees it, not soldiers, not tanks, not turrets, not even aircraft. **Only
 until then it cannot be selected, targeted or shot (an area blast that happens to land on it, and a nuke, still hurt it). It stays hidden while it fires. The AI builds them against infantry-heavy enemies and
 builds spy drones to find yours.
 
-**Stealth, detection and spy drones** — three kinds of things hide from the enemy: snipers, finished underground bunkers (class *spotter*) and the spy drone itself (class *drone*). A hidden thing is invisible to the
+**Stealth, detection and spy drones** — two kinds of things hide from the enemy: snipers and the spy drone itself (class *drone*). Finished underground bunkers are **not** stealthy any more: their surface hatch is plainly visible. A hidden thing is invisible to the
 enemy team (not drawn, not on the minimap, not selectable, not a legal target, unknown to the computer commanders; its own side sees it as a faint ghost). It becomes visible only while one of the enemy team's **detectors** is close enough:
 
 | Detector | Finds | Range |
 | --- | --- | --- |
-| **Spy drone** (Ghost Drone / Recon Drone) | snipers, bunkers and enemy spy drones | 9 tiles |
+| **Spy drone** (Ghost Drone / Recon Drone) | snipers and enemy spy drones | 9 tiles |
 | Bomber and attack drones (Wraith Drone, Vulture Gunship, Hornet Gunship) | enemy spy drones only | 3.5 tiles ("your own drones need to be there") |
 | everything else (soldiers, tanks, jets, turrets, lifters) | nothing | - |
 
@@ -186,12 +207,11 @@ trains the new owner's units, a captured power plant, supply hub, tech structure
 super-heavy walker 10: for example 30 soldiers, a tank and a light vehicle, or six tanks and four soldiers). Select soldiers or vehicles and right-click the lifter: they walk to it and climb aboard while it hovers. Select the lifter and press **U** to set down where it is and let
 everybody out, or **D** (Drop Off) and click a spot: it flies there, sets down and unloads (soldiers first, vehicles after). A lifter shot down in the air takes everyone aboard with it; one on the ground lets them climb out. Use it to put a spy, a dozer or an army behind the enemy lines.
 
-**Underground bunkers** — the **Deep Bunker** (Cyber) and the **Underground Bunker** (Clanker): $7500, built by a dozer, needs a Barracks. Only a small steel hatch (2x2 tiles) shows on the surface, and not even that to the enemy: a finished bunker is **stealth**, found
-only by an enemy spy drone. It holds **50 infantry and one dozer** (right-click the bunker with soldiers or a dozer selected; U unloads, the rally point is where they walk to). Everybody inside is untouchable. In a fight the whole garrison **fires from the hatch**, each soldier with its own weapon (rocket troopers
+**Underground bunkers** — the **Deep Bunker** (Cyber) and the **Underground Bunker** (Clanker): $7500, built by a dozer, needs a Barracks. Only a small steel hatch (2x2 tiles) shows on the surface; the bunker is **not stealthy** and is plainly visible to both sides (no detector is needed). It holds **50 infantry and one dozer** (right-click the bunker with soldiers or a dozer selected; U unloads, the rally point is where they walk to). Everybody inside is untouchable. In a fight the whole garrison **fires from the hatch**, each soldier with its own weapon (rocket troopers
 hit tanks and aircraft, snipers pick off infantry), and heals slowly. The rest of the rules:
 
 - the **hatch** (3200 hp) takes the damage first; once it is blown off the garrison cannot shoot, though it stays safe. A **nuke wrecks the hatch and hurts the bunker, but can never destroy it**, however many land (buried deep): the same goes for aircraft, bombs, turrets, shells and fallout, none of which takes it below 10% of its health;
-- only **infantry and vehicles can destroy a bunker**, and it is very hard: 32000 hp and plating that stops 75% of what gets past the hatch (a column of fifteen tanks needs several minutes; they only see it while a spy drone is nearby);
+- only **infantry and vehicles can destroy a bunker**, and it is very hard: 32000 hp and plating that stops 75% of what gets past the hatch (a column of fifteen tanks needs several minutes; it is plainly visible, so no spy drone is needed);
 - a **dozer inside** patches the hatch (6% a second) and the bunker once out of fire for three seconds; any dozer next to it mends it too;
 - when the bunker is destroyed (or captured by a spy) **the whole garrison is back on the ground, exposed**; it still counts, so the army is only beaten once the bunker **and** everybody who was inside are dead;
 - aircraft and turrets stop picking a bunker whose hatch is gone and whose body sits at the floor: they cannot hurt it any more, so they no longer hover over it (ground units keep grinding it).
@@ -242,9 +262,9 @@ their guns, the jets use heavy plasma lances / homing Sidewinders on everything 
 The Cyber Drone Pad also builds the **Hornet Gunship** (key `H`, $950, 640 hp, 280 px/s), an electric attack helicopter whose twin lasers hit ground and air;
 it never needs to rearm.
 
-**Helicopters have no limit** — an airfield has four pads, one per fixed-wing aircraft (drones and jets), and a plane waits in the queue until a pad is free.
+**Helicopters have no limit** — an airfield has **25 pads**, one per fixed-wing aircraft (drones and jets), and a plane waits in the queue until a pad is free.
 Helicopters (Hornet Gunship, Vulture Gunship) do not take a pad: they land on helipads in rings around the airfield, so one airfield builds and houses as
-many of them as you can pay for. The airfield's panel shows `Planes n / 4` and `Helicopters n (no limit)`. **Helicopters never pile up**: wherever several are sent to
+many of them as you can pay for. The airfield's panel shows `Planes n / 25` and `Helicopters n (no limit)`. **Helicopters never pile up**: wherever several are sent to
 the same place (one move order, a rally point, a crowded guard zone, a shared helipad), each one hovers on a spot of its own a small gap from the next (they pack in
 hexagonal rings around the spot, and the one already there keeps it). **Guarding an area, a helicopter hovers still** on its own post in the circle, nose turned out,
 instead of flying circles like the planes; it goes after what enters the zone and comes back to hover on its post.
@@ -340,7 +360,7 @@ and that the pieces really do 30% of a barracks and of a tank at ground zero whe
 | Ships selected | right-click the lake to sail (a land spot sends them to the nearest open water), attack-move, guard area and force fire work as for tanks; ships pick by their whole hull |
 | Naval Yard selected | train ships, right-click the lake to set where new ships sail to |
 | Structure selected | train units (hotkeys shown), Del sells |
-| X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program, P paradrop, I hotline strike, D aid drop, U / G / E / N structure upgrades (N: Guard Drones) with a tech structure selected |
+| X | strike power (from the tech structure, or the Command Core/Post once it exists); V map scan, R Advanced Program, P paradrop, I hotline strike, D aid drop, U / G / E / N / H / A structure upgrades (N: Guard Drones, H: Hyper Protection, A: Anti-Rocket) with a tech structure selected |
 | Space | pause, + / - game speed (x0.5 to x4), F1 help, F2 mute, F11 fullscreen, F12 screenshot |
 | Esc | cancels a pending order, otherwise opens the pause menu: resume, game speed slider, sound, help, restart, surrender, quit to menu / desktop |
 | K | with a Nuke Ramp selected: pick a target for a tactical nuke |

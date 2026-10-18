@@ -42,7 +42,7 @@ struct AiPlayer {
     int doctrine = DOC_BALANCED;
     int docCtx = 0;             // what the doctrine statistics were consulted for: who this commander faces (see doctrineContext)
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
-    struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 6, incomes = 2; float incomeFrom = 3.0f; } style;
+    struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 25, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastSpyOrder = -100;     // when the spies were last sent after a structure
     float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0, nextCivicTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
     float nukeHoldSince = -1;   // a covered nuke target is waited out for the second ramp since this time

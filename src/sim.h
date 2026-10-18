@@ -128,6 +128,7 @@ struct Entity {
     float overdriveCd[2] = {0, 0}, overdriveAng[2] = {0, 0};   // bunker: surrounded-mode heavy lasers / machineguns
     Ref overdriveTgt[2];
     float antiNukeCd = 0;             // bunker: cooldown for engaging incoming nuclear warheads
+    float pdAt = 0;                   // anti-nuke / Anti-Rocket wall: cooldown for aircraft and projectile point-defence
     bool surrounded = false;          // bunker: enemy forces currently surround it (activates overdrive guns and radiation defense)
     float guardHitAt = -100;          // bunker: the last time a friendly structure it watches over was hit (its pod and guns answer that too)
     float dozerAt = 0;                // civilian structure: sim time its next free dozer comes out ...
@@ -344,6 +345,7 @@ struct Sim {
     int deepNukesReady(int player) const;     // Underground Nuke silos that can launch right now
     float deepNukeWait(int player) const;     // seconds until the soonest silo is ready (0 = ready, -1 = no silo)
     static bool hardened(const Entity& b);    // a finished bunker or Underground Nuke silo: doors/hatch first, plating, and only troops can finish it
+    static bool wall(const Entity& b) { return b.isBuilding() && b.bt().role == BR_WALL; }
     static bool canRaise(const Entity& dozer, int buildType);   // civilian dozers raise only the civilian town, the others only military structures
     static bool canMend(const Entity& dozer, int buildType);    // civilian dozers mend only the town; the others mend anything
     int civicPeople(const Entity& b) const;   // townsfolk walking about a civilian structure (decoration; 0 for anything else)
@@ -370,7 +372,9 @@ struct Sim {
     // chance the defences covering 'at' stop a warhead of 'scale' (of anybody who would hurt 'victim'): 1 - prod(1 - each one's antiNukeShot)
     float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // deep: an Underground Nuke (only lasers count)
     int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // how many working defences cover 'at'
-    bool antiNukeWorking(const Entity& b) const;             // a finished anti-nuke defence that is switched on and powered
+    bool antiNukeWorking(const Entity& b) const;             // a finished anti-nuke defence (or an Anti-Rocket wall) that is switched on and powered
+    bool isAntiRocketWall(const Entity& b) const;            // a finished wall of an army that has researched Anti-Rocket
+    void updatePointDefenseAir(Entity& b);                   // Q defences and Anti-Rocket walls shoot at enemy aircraft in reach
     float antiNukeCover(const Entity& b, float scale) const; // px: how far from it a warhead's target may be for it to engage (lasers: their blast reaching the circle is enough)
     int antiNukeLinked(const Entity& b) const;               // working Anti-Nuke Lasers of the same army standing close by (they share tracking: see ANTINUKE_LINK)
     float antiNukeShot(const Entity& b) const;               // its own chance of getting a warhead it engages
@@ -388,7 +392,7 @@ struct Sim {
     void updateBunkerAntiNuke(Entity& b, bool surrounded);
     void updateScoutSwarm(Entity& e);
     bool atIncomeLimit(int player, int buildType) const;
-    bool atBuildLimit(int player, int buildType) const;   // income structures and Command Cores are capped per player
+    bool atBuildLimit(int player, int buildType) const;   // income structures and Command Cores are capped per player (walls are deliberately unlimited)
     bool cmdScan(int player);                 // tech structure: reveal the whole map for SCANS[].duration
     bool cmdResearch(int player);             // tech structure: research the Advanced Program (unlocks special units)
     bool programAvailable(int player) const;  // tech structure standing, program not yet researched or running
@@ -481,7 +485,7 @@ private:
     bool requestPath(Entity& e, Vec2 dest);
     bool tryFire(Entity& e, Entity& tgt);
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle = nullptr);
-    void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w);
+    void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap = -1.0f);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
     Entity* acquireTarget(Entity& e, float range, int wpn = -1);
     Entity* acquireZoneTarget(Entity& e);

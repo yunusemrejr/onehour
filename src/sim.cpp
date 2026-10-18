@@ -77,7 +77,9 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.tx = tx; e.ty = ty;
     const BuildType& b = BUILDS[type];
     e.pos = buildingCenter(type, tx, ty);
-    e.maxHp = b.hp * (hasUpgrade(owner, UPG_RUGGED) && b.role != BR_CIVIC ? RUGGED_HP : 1.0f);   // (the civilian town gets no plating)
+    float hpMul = (hasUpgrade(owner, UPG_RUGGED) && b.role != BR_CIVIC ? RUGGED_HP : 1.0f);
+    if (hasUpgrade(owner, UPG_HYPER) && b.role != BR_CIVIC) hpMul *= HYPER_HP;
+    e.maxHp = b.hp * hpMul;   // (the civilian town gets no plating)
     e.constructed = instant;
     e.progress = instant ? 1.0f : 0.0f;
     e.hp = instant ? e.maxHp : e.maxHp * 0.1f;
@@ -288,7 +290,8 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
         if (!exploredRaw(player, i, j)) return false;
     }
     // keep a one tile gap around resource piles and other structures' edges so paths stay open
-    for (int j = ty - 1; j <= ty + b.h; j++) for (int i = tx - 1; i <= tx + b.w; i++) {
+    // (walls are the exception: they are meant to be chained, and they are exactly what closes a line)
+    if (b.role != BR_WALL) for (int j = ty - 1; j <= ty + b.h; j++) for (int i = tx - 1; i <= tx + b.w; i++) {
         if (!inMap(i, j)) continue;
         if (g_map.blocked[j * MAP_W + i] & 4) return false;
     }
@@ -304,7 +307,7 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
         Vec2 out = g_map.nearestWater(buildingCenter(buildType, tx, ty), 7, true);   // and ships must have open lake to sail out into
         if (!g_map.navOpen(tileOf(out.x), tileOf(out.y))) return false;
     }
-    if (g_map.wouldPlug(tx, ty, b.w, b.h)) return false;   // never plug a corridor or seal a pocket: units must still get through
+    if (b.role != BR_WALL && g_map.wouldPlug(tx, ty, b.w, b.h)) return false;   // never plug a corridor or seal a pocket: units must still get through (a wall's job is to seal)
     // units standing on the footprint are pushed off when placed; no check needed
     return true;
 }
@@ -1146,8 +1149,11 @@ static const int NUKE_SMALL_AREA = 6;
 
 void Sim::updateNukes() {
     for (auto& n : nukes) { n.t += SIM_DT; if (n.id == 0) n.id = ++nukeSeq; }
-    // anti-nuke defences open fire on the warheads closing in on them (their shots are laid out in time: a warhead is shot down when the winning one arrives)
-    for (auto& b : ents) if (b.alive && b.isBuilding() && b.constructed && b.bt().role == BR_ANTINUKE) updateAntiNuke(b);
+    // anti-nuke defences and Anti-Rocket walls engage warheads closing in; all of them also take aircraft under fire
+    for (auto& b : ents) if (b.alive && b.isBuilding() && b.constructed && (b.bt().role == BR_ANTINUKE || isAntiRocketWall(b))) {
+        updateAntiNuke(b);
+        if (time >= b.pdAt) updatePointDefenseAir(b);
+    }
     for (auto& n : nukes) if (!n.broken && n.killT >= 0 && n.t >= n.killT) breakNuke(n);
     for (size_t i = 0; i < nukes.size();) {
         if (nukes[i].t < NUKE_FLIGHT) { i++; continue; }
@@ -1182,17 +1188,27 @@ void Sim::nukeBlast(const Nuke& n) {
         if (foe) {
             if (e->isBuilding()) {
                 bool bunkerB = hardened(*e);
-                bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA && !bunkerB;
+                bool wallB = e->bt().role == BR_WALL;
+                bool hqB = e->bt().role == BR_HQ;
+                bool hyperB = hasUpgrade(e->owner, UPG_HYPER) && e->bt().role != BR_CIVIC;
+                bool protectedB = wallB || hqB || hyperB;
+                bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA && !bunkerB && !protectedB;
                 bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && e->bt().role != BR_CIVIC;
-                float dmg;
+                float dmg, cap = -1.0f;
+                // Hyper Protection, the Command keystone and thick walls each put a hard ceiling on one warhead. A full-health protected
+                // structure survives any single warhead (even the silver Underground Nuke); only already-damaged ones can be finished.
+                if (hyperB) cap = e->maxHp * HYPER_NUKE;
+                if (wallB) cap = cap < 0 ? e->maxHp * WALL_NUKE : std::min(cap, e->maxHp * WALL_NUKE);
+                if (hqB) cap = cap < 0 ? e->maxHp * HQ_NUKE : std::min(cap, e->maxHp * HQ_NUKE);
                 if (bunkerB) dmg = e->maxHp * 1.2f * f * D;                                       // wrecks the hatch and hurts the bunker, but it is buried deep: it can never be destroyed this way
+                else if (protectedB) dmg = e->maxHp * 1.6f * f * D;                              // (capped below; the ceiling is what stops a one-shot erase)
                 else if (rugged) dmg = e->maxHp * RUGGED_NUKE * f * D / RUGGED_ARMOR;               // (after the armour) a bit over half at ground zero: it takes two warheads (one silver one)
                 else if (small) dmg = e->maxHp * 1.6f * f * D;                                    // f above ~0.63 (the inner blast) brings it down
                 else {
                     dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f) * D;                      // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
                     if (!n.deep) dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));   // never lethal (an Underground Nuke's triple blast flattens the inner half)
                 }
-                if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr);
+                if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr, cap > 0 ? lessen(cap, *e) : -1.0f);
                 e = get(r); if (!e) continue;
                 e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f) * (n.deep ? 1.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
@@ -1356,6 +1372,7 @@ void Sim::finishUpgrade(int p, int upg) {
     for (auto& e : ents) {
         if (!e.alive || !e.isBuilding() || e.owner != p) continue;
         if (upg == UPG_RUGGED && e.bt().role != BR_CIVIC) { e.maxHp *= RUGGED_HP; e.hp *= RUGGED_HP; }
+        if (upg == UPG_HYPER && e.bt().role != BR_CIVIC) { e.maxHp *= HYPER_HP; e.hp *= HYPER_HP; }
     }
     emit(EV_MSG, p, SND_BUILD_DONE, pl.basePos, (std::string(UPGRADES[pl.faction][upg].name) + " complete: " + UPGRADES[pl.faction][upg].desc).c_str());
 }
@@ -1611,7 +1628,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle
     }
 }
 
-void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w) {
+void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
     if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
         if (tick % 3 == 0) { fx.push_back({FX_SPARK, tgt.pos, tgt.pos, 0, 0.3f, rgb(255, 236, 190), 5}); fx.push_back({FX_RING, tgt.pos, tgt.pos, 0, 0.25f, rgb(255, 255, 255), 16.0f}); }
@@ -1624,7 +1641,13 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         float load = tgt.dmgLoad / tgt.maxHp;
         real *= RUGGED_ARMOR + (1.0f - RUGGED_ARMOR) * clampf((load - RUGGED_SWAMP_LO) / (RUGGED_SWAMP_HI - RUGGED_SWAMP_LO), 0, 1);
     }
-    if (tgt.isBuilding()) tgt.dmgLoad += real;
+    if (tgt.isBuilding()) {   // Hyper Protection / the Command keystone / thick walls shrug off conventional fire
+        if (hasUpgrade(tgt.owner, UPG_HYPER) && tgt.bt().role != BR_CIVIC) real *= HYPER_ARMOR;
+        if (tgt.bt().role == BR_HQ) real *= HQ_ARMOR;
+        if (tgt.bt().role == BR_WALL) real *= WALL_ARMOR;
+        tgt.dmgLoad += real;
+        if (cap > 0) real = std::min(real, cap);   // a warhead's hard ceiling (absolute HP), applied after every multiplier
+    }
     if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner)) real *= players[attackerOwner].damageMul();
     const Entity* attU = get(attacker);
     if (attU && attU->isUnit() && attU->rank > 0) real *= 1.0f + 0.2f * attU->rank;   // veterans and elites hit harder
@@ -1852,7 +1875,9 @@ Vec2 Sim::padSlot(const Entity& h, const Entity& e) const {
     int slot = 0;
     for (int i = 0; i < idx; i++) { const Entity& o = ents[i]; if (o.alive && o.isUnit() && o.isAir() && !o.ut().heli && o.home == hr) slot++; }
     slot %= AIRFIELD_CAP;
-    return h.pos + Vec2((slot - 1.5f) * 30, 0);
+    // 25 pads in a 5x5 grid: the oversized airfield has room for every one of them
+    int col = slot % 5, row = slot / 5;
+    return h.pos + Vec2((col - 2) * 42, (row - 2) * 34);
 }
 
 // Fixed-wing aircraft (the jets and the Wraith flying wing) fly like aeroplanes: they hold an airspeed between their stall speed and their
@@ -3056,7 +3081,8 @@ void Sim::updateBuilding(Entity& b) {
         bool blocked = false;
         if (bt.role == BR_AIRFIELD && !ut.heli && padsUsed(b) >= AIRFIELD_CAP) blocked = true;   // a plane waits for a free pad; helicopters never wait
         if (!blocked) {
-            float rate = (pl.lowPower() ? 0.5f : 1.0f) / ut.buildTime;
+            // Barracks infantry production is always three times the base speed, even on low power.
+            float rate = (bt.role == BR_BARRACKS) ? BARRACKS_SPEED / ut.buildTime : (pl.lowPower() ? 0.5f : 1.0f) / ut.buildTime;
             rate *= pl.buildMul();
             b.queueProgress += SIM_DT * rate;
             if (b.queueProgress >= 1.0f) spawnFromQueue(b);
@@ -3067,8 +3093,7 @@ void Sim::updateBuilding(Entity& b) {
 // ------------------------------------------------------------ stealth, transports, bunkers and spies
 int Sim::stealthOf(const Entity& e) {
     if (e.isUnit()) return UNITS[e.type].stealth;
-    if (e.isBuilding() && e.constructed && BUILDS[e.type].role == BR_BUNKER) return ST_SPOTTER;
-    return ST_NONE;
+    return ST_NONE;   // structures are never stealthy: underground bunkers are plainly visible on the surface
 }
 
 // Stealthy things (snipers, finished underground bunkers, spy drones) are invisible to every army that has no detector close enough: they cannot be

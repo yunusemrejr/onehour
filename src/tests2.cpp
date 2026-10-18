@@ -168,7 +168,7 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     Entity* B = g_sim.get(bk);
     CHECK(B->hatch > 0 && B->hatch == B->hatchMax, "a finished bunker has no hatch");
     Vec2 bp = B->pos;
-    CHECK(!g_sim.visibleTo(*B, 1) && g_sim.visibleTo(*B, 0), "a bunker is not hidden from the enemy / not visible to its owner");
+    CHECK(g_sim.visibleTo(*B, 1) && g_sim.visibleTo(*B, 0), "an underground bunker should be plainly visible to both sides on the surface");
     // ---- fifty soldiers and one dozer can climb in, the fifty-first soldier and a second dozer cannot
     std::vector<Ref> inf, ones;
     for (int i = 0; i < 52; i++) inf.push_back(spawnAt(i % 3 == 0 ? rpg : rifle, 0, bp + Vec2(((i % 9) - 4) * 22.0f, 3.5f * TILE + (i / 9) * 22.0f)));
@@ -183,14 +183,14 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     CHECK(g_sim.garrisonDozers(*B) == 1, "the bunker does not hold exactly one dozer");
     int outside = 0; for (Ref r : all) if (alive(r) && !g_sim.get(r)->carrier.valid()) outside++;
     CHECK(outside == 3, "two soldiers and one dozer should be left outside a full bunker");
-    // ---- the garrison fires from the hatch at tanks and at aircraft (rocket troopers), the bunker itself stays unseen
+    // ---- the garrison fires from the hatch at tanks and at aircraft (rocket troopers); the surface bunker stays visible
     Ref tk = spawnAt(tankFoe, 1, bp + Vec2(5 * TILE, 0));
     Ref air = spawnAt(vultureFoe, 1, bp + Vec2(-4 * TILE, 2 * TILE)); if (Entity* a = g_sim.get(air)) { a->alt = 1; a->order = O_IDLE; }
     float tk0 = hpOf(tk), air0 = hpOf(air);
     run(6);
     CHECK(!alive(tk) || hpOf(tk) < tk0 * 0.8f, "the garrison did not shoot an enemy tank");
     CHECK(!alive(air) || hpOf(air) < air0 * 0.9f, "the rocket troopers in the bunker did not shoot an aircraft");
-    CHECK(!g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker became visible by firing");
+    CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "a bunker firing its guns should stay plainly visible");
     // ---- a nuke wrecks the hatch, hurts the bunker, and can never destroy it; the garrison inside is untouched but silent
     Ref tk2 = spawnAt(tankFoe, 1, bp + Vec2(12 * TILE, 0));
     for (int k = 0; k < 6; k++) {
@@ -252,13 +252,10 @@ static bool bunkerCapture(Faction me, Faction foe, u64 seed) {
     int spyMe = me == F_CYBER ? U_C_SPY : U_K_SPY, sdroneMe = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
     Ref spy = spawnAt(spyMe, 0, bp + Vec2(0, 8 * TILE));
     g_sim.cmdAttack({spy}, bk);
-    CHECK(g_sim.get(spy)->order != O_CAPTURE, "a spy was ordered to capture a bunker nobody had found");
+    CHECK(g_sim.get(spy)->order == O_CAPTURE, "a spy could not be ordered to capture a plainly visible bunker");
     Ref sd = spawnAt(sdroneMe, 0, bp + Vec2(0, 4 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
-    run(2);
-    CHECK(g_sim.visibleTo(*g_sim.get(bk), 0), "my spy drone did not reveal the bunker");
-    g_sim.cmdAttack({spy}, bk);
-    CHECK(g_sim.get(spy)->order == O_CAPTURE, "a spy could not be ordered to capture a revealed bunker");
-    // the hidden garrison shoots the spy before it gets there: knock the hatch off first
+    CHECK(g_sim.visibleTo(*g_sim.get(bk), 0), "the bunker is no longer visible to its attacker");
+    // the garrison shoots the spy before it gets there: knock the hatch off first
     g_sim.get(bk)->hatch = 0; g_sim.get(bk)->lastDamaged = g_sim.time;
     run(g_sim.captureTime(*g_sim.get(bk)) + 16);
     CHECK(g_sim.get(bk)->owner == 0, "a spy did not capture a bunker");
@@ -392,7 +389,7 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
     int bt2 = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
     Ref enemyBk = placeAt(bt2, 1, mid + Vec2(10 * TILE, 0));
     CHECK(enemyBk.valid(), "no spot for the enemy bunker");
-    CHECK(g_game.pickEntity(g_sim.get(enemyBk)->pos, false) == nullptr, "an undiscovered enemy bunker can be clicked");
+    CHECK(g_game.pickEntity(g_sim.get(enemyBk)->pos, false) == g_sim.get(enemyBk), "a plainly visible enemy bunker cannot be clicked");
     int sdroneMe = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
     Ref sd = spawnAt(sdroneMe, 0, g_sim.get(enemyBk)->pos + Vec2(0, 3 * TILE)); g_sim.get(sd)->alt = 1;
     run(1);
@@ -583,13 +580,14 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     // ---- a blown hatch silences the miniguns; the bunker refits it after a while without any help
     B->hatch = 0; B->lastDamaged = g_sim.time;
     Ref tkQuiet = spawnAt(firstUnitOf(foe) + 5, 1, bp + Vec2(4 * TILE, 0));
+    if (Entity* tq = g_sim.get(tkQuiet)) tq->disabledUntil = 1e9f;   // (the bunker is visible now: keep the idle tank from starting a fight, this check is about the silent hatch)
     float q0 = hpOf(tkQuiet);
     run(BUNKER_HATCH_REFIT - 4.0f);
     CHECK(B->hatch == 0 && hpOf(tkQuiet) == q0, "a bunker with its hatch blown off fired or refitted at once");
     g_sim.destroy(*g_sim.get(tkQuiet), false);
     run(8);
     CHECK(B->hatch > 0, "a bunker never refitted its blown hatch");
-    // ---- two miniguns: ground (tank, infantry) and air, each gun on its own target, and the bunker stays hidden
+    // ---- two miniguns: ground (tank, infantry) and air, each gun on its own target, and the bunker is plainly visible
     B->hatch = B->hatchMax;
     int tankFoe = firstUnitOf(foe) + 5, rifleFoe = firstUnitOf(foe) + 2, airFoe = foe == F_CYBER ? firstUnitOf(foe) + 8 : (int)U_K_AIR;
     Ref tk = spawnAt(tankFoe, 1, bp + Vec2(5 * TILE, 0)), tk2 = spawnAt(tankFoe, 1, bp + Vec2(-5 * TILE, 0));
@@ -605,7 +603,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(hpOf(tk) < tk0 || hpOf(tk2) < tk20, "the miniguns did not shoot a tank");
     CHECK(!alive(air) || hpOf(air) < air0 * 0.9f, "the miniguns did not shoot an aircraft");
     CHECK(hpOf(far) == far0, "the miniguns shot a tank beyond their range");
-    CHECK(!g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker became visible by firing its miniguns");
+    CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker should remain visible while its miniguns fire");
     for (Ref r : {tk, tk2, far, air, inf}) if (alive(r)) g_sim.destroy(*g_sim.get(r), false);
     g_sim.fx.clear();
     // ---- the mini nuke: arming time, then a blast of a fifth of the area, a cooldown, and the launch gives the bunker away for a few seconds
@@ -633,7 +631,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(hpOf(wide) == g_sim.get(wide)->maxHp, "a mini nuke hurt a tank outside its small circle");
     g_sim.fallouts.clear();
     run(MINI_NUKE_REVEAL);
-    CHECK(!g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker stayed given away long after its launch");
+    CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker must stay visible: underground bunkers are no longer stealthy");
     CHECK(alive(bk) && g_sim.miniNukesReady(0) == 0, "the bunker is gone or reloaded too early");
     run(MINI_NUKE_COOLDOWN);
     CHECK(g_sim.miniNukesReady(0) == 1, "the bunker's missile did not reload");
@@ -684,8 +682,14 @@ static bool bunkerRetaliateTest(Faction me, Faction foe, u64 seed) {
     Ref idle = spawnAt(tankFoe, 1, bp + Vec2(6 * TILE, 0));
     CHECK(idle.valid(), "no spot for the idle tank");
     g_sim.get(idle)->maxHp *= 10; g_sim.get(idle)->hp = g_sim.get(idle)->maxHp;
+    if (Entity* it = g_sim.get(idle)) it->disabledUntil = 1e9f;   // (the bunker is visible now: keep the idle tank from picking a fight on its own)
     float idle0 = hpOf(idle);
-    for (int t = 0; t < 60; t++) { g_sim.get(bk)->lastDamaged = g_sim.time; run(0.1f); }   // (kept besieged for the whole time)
+    for (int t = 0; t < 60; t++) {
+        if (Entity* it = g_sim.get(idle)) { it->targetEnt = NOREF; it->engaged = NOREF; it->forceTarget = NOREF; it->disabledUntil = 1e9f; }
+        if (Entity* bb = g_sim.get(bk)) bb->attacker = NOREF;
+        g_sim.get(bk)->lastDamaged = g_sim.time; run(0.1f);
+    }
+    if (Entity* it = g_sim.get(idle)) { it->targetEnt = NOREF; it->engaged = NOREF; }
     CHECK(alive(idle) && hpOf(idle) == idle0, "the pod shot a tank that was not attacking the bunker");
     CHECK(g_sim.get(idle)->targetEnt != bk && g_sim.get(idle)->engaged != bk, "an idle tank went for the bunker on its own");
     // ---- (c) a long-range attacker just beyond the bunker's sight: the pod reaches it

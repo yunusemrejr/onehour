@@ -303,10 +303,11 @@ bool Map::wouldPlug(int tx, int ty, int w, int h) const {
     int x0 = std::max(0, tx - R), y0 = std::max(0, ty - R), x1 = std::min(MAP_W - 1, tx + w - 1 + R), y1 = std::min(MAP_H - 1, ty + h - 1 + R);
     int W = x1 - x0 + 1, H = y1 - y0 + 1;
     auto regions = [&](bool withFootprint) {
-        static u8 seen[(2 * 6 + 8) * (2 * 6 + 8)];
+        // The search window is at most MAP_W*MAP_H; a fixed (2R+8)^2 buffer was too small for the larger structures (10x7 airfields).
+        static u8 seen[MAP_W * MAP_H];
         memset(seen, 0, (size_t)W * H);
         int count = 0;
-        static int stack[(2 * 6 + 8) * (2 * 6 + 8)];
+        static int stack[MAP_W * MAP_H];
         for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
             int li = (y - y0) * W + (x - x0);
             bool inF = x >= tx && x < tx + w && y >= ty && y < ty + h;

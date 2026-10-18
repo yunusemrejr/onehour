@@ -137,34 +137,38 @@ void airfieldCyber(Bld& b) {
     int W = b.W, H = b.H;
     b.a.shadowRect(0, 0, (float)W, (float)H, 3, 3, 4, 85);
     b.a.rect(0, 0, (float)W, (float)H, 4, rgb(46, 54, 70), 2.6f, 0.5f);
-    for (int x = 32; x < W; x += 32) b.a.line((float)x, 2, (float)x, H - 2.0f, 0.7f, rgba(C_SEAM, 110));
+    for (int x = 48; x < W; x += 48) b.a.line((float)x, 2, (float)x, H - 2.0f, 0.7f, rgba(C_SEAM, 110));
     b.a.grain(0, 0, (float)W, (float)H, 0.10f, 23);
-    // landing pads exactly where the aircraft park: centres at W/2 + (slot - 1.5) * 30, y = H/2
-    for (int i = 0; i < 4; i++) {
-        float cx = W * 0.5f + (i - 1.5f) * 30, cy = H * 0.5f;
+    // two long runways, then 25 landing pads in the same 5x5 grid the aircraft use (Sim::padSlot)
+    for (int r = 0; r < 2; r++) {
+        float y = H * (0.36f + 0.28f * r);
+        for (int i = 0; i < W / 14; i++) b.a.rect(8 + i * 14.0f, y - 0.9f, 8, 1.8f, 0.3f, rgba(C_WHITE, 120), 0.5f, 0);
+    }
+    for (int row = 0; row < 5; row++) for (int col = 0; col < 5; col++) {
+        float cx = W * 0.5f + (col - 2) * 42, cy = H * 0.5f + (row - 2) * 34;
         b.a.circle(cx, cy, 12.5f, rgb(36, 44, 58), 1.8f, 0.4f);
         b.a.ngon(cx, cy, 12, 6, 0.5236f, rgba(C_CYAN, 70), 1, 0);
         b.a.ring(cx, cy, 10.5f, 0.9f, rgba(C_CYAN, 200), 0.8f, 0);
         b.a.line(cx - 4, cy - 4.5f, cx - 4, cy + 4.5f, 1.2f, rgba(C_WHITE, 200)); b.a.line(cx + 4, cy - 4.5f, cx + 4, cy + 4.5f, 1.2f, rgba(C_WHITE, 200)); b.a.line(cx - 4, cy, cx + 4, cy, 1.2f, rgba(C_WHITE, 200));
     }
-    for (int i = 0; i < 10; i++) { float x = 8 + i * (W - 16.0f) / 9; b.light(x, 4.5f, 0.8f, C_CYAN, 80); b.light(x, H - 4.5f, 0.8f, C_CYAN, 80); }
+    for (int i = 0; i < 18; i++) { float x = 8 + i * (W - 16.0f) / 17; b.light(x, 4.5f, 0.8f, C_CYAN, 80); b.light(x, H - 4.5f, 0.8f, C_CYAN, 80); }
     // control tower with a sensor mast
-    Roof tw = b.block(6, 6, 26, 20, 22, C_ROOF, C_HULL);
-    b.windows(tw, 22, 3, C_CYAN, 0.7f); b.wallSeams(tw, 22, 9);
+    Roof tw = b.block(10, 10, 30, 22, 24, C_ROOF, C_HULL);
+    b.windows(tw, 24, 3, C_CYAN, 0.7f); b.wallSeams(tw, 24, 9);
     b.a.rect(tw.x + 3, tw.y + 3, tw.w - 6, tw.h - 6, 2, C_GLASS, 2, 0.6f); b.a.line(tw.x + 5, tw.y + 5, tw.x + tw.w - 7, tw.y + 5, 0.8f, rgba(C_WHITE, 150));
     b.mark(tw.x + 3, tw.y + tw.h - 5, tw.w - 6, 2.8f);
-    b.dishTop(tw.x + 6, tw.y - 2, 5, C_ROOF2, rgb(30, 40, 56)); b.antenna(tw.x + tw.w - 4, tw.y + 4, 14, C_RED);
-    // hangar
-    Roof hg = b.block(108, 6, 46, 26, 14, C_ROOF2, C_HULL_D);
-    for (int i = 0; i < 6; i++) b.a.line(hg.x + 3 + i * 7.4f, hg.y + 1, hg.x + 3 + i * 7.4f, hg.y + hg.h - 1, 0.7f, rgba(C_STEEL, 150));
-    b.door(hg.x + hg.w * 0.5f, hg.y + hg.h + 14, 30, 12, C_STEEL, rgb(8, 16, 24));
-    b.stripe(hg.x + 8, hg.y + hg.h + 14 - 13.4f, hg.x + hg.w - 8, hg.y + hg.h + 14 - 13.4f, 0.8f, C_CYAN, 100);
-    b.mark(hg.x + hg.w - 14, hg.y + 2, 10, 3);
-    // charging bay
-    Roof sv = b.block(8, 70, 38, 18, 8, C_ROOF, C_HULL_D);
-    for (int i = 0; i < 4; i++) { b.a.rect(sv.x + 4 + i * 8.5f, sv.y + 4, 5, 9, 0.6f, C_STEEL, 1, 0.4f); b.light(sv.x + 6.5f + i * 8.5f, sv.y + 6, 0.9f, rgb(120, 255, 190), 80); }
-    b.windows(sv, 8, 3, C_CYAN);
-    b.hazard(112, 88.0f, 40, 3.0f);
+    b.dishTop(tw.x + 7, tw.y - 2, 5, C_ROOF2, rgb(30, 40, 56)); b.antenna(tw.x + tw.w - 4, tw.y + 4, 16, C_RED);
+    // wide hangar on the far side
+    Roof hg = b.block(W - 126, 10, 96, 34, 16, C_ROOF2, C_HULL_D);
+    for (int i = 0; i < 12; i++) b.a.line(hg.x + 4 + i * 7.4f, hg.y + 1, hg.x + 4 + i * 7.4f, hg.y + hg.h - 1, 0.7f, rgba(C_STEEL, 150));
+    b.door(hg.x + hg.w * 0.5f, hg.y + hg.h + 18, 58, 14, C_STEEL, rgb(8, 16, 24));
+    b.stripe(hg.x + 8, hg.y + hg.h + 18 - 15.4f, hg.x + hg.w - 8, hg.y + hg.h + 18 - 15.4f, 0.8f, C_CYAN, 100);
+    b.mark(hg.x + hg.w - 16, hg.y + 2, 12, 3);
+    // charging bays along the south edge
+    Roof sv = b.block(10, H - 42, 62, 26, 9, C_ROOF, C_HULL_D);
+    for (int i = 0; i < 6; i++) { b.a.rect(sv.x + 4 + i * 9.2f, sv.y + 4, 6, 12, 0.6f, C_STEEL, 1, 0.4f); b.light(sv.x + 7.0f + i * 9.2f, sv.y + 6, 0.9f, rgb(120, 255, 190), 80); }
+    b.windows(sv, 9, 4, C_CYAN);
+    b.hazard(W - 70.0f, H - 12.0f, 58, 3.0f);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 29);
 }
 
@@ -375,36 +379,39 @@ void airfieldClanker(Bld& b) {
     int W = b.W, H = b.H;
     b.a.shadowRect(0, 0, (float)W, (float)H, 3, 3, 4, 85);
     b.a.rect(0, 0, (float)W, (float)H, 3, rgb(96, 94, 86), 2.6f, 0.5f);
-    for (int i = 0; i < 40; i++) { float x = b.rng.f(4, W - 4.0f), y = b.rng.f(4, H - 4.0f); b.a.ell(x, y, b.rng.f(3, 9), b.rng.f(1.5f, 4), rgba(rgb(70, 66, 58), 60), 1, 0); }   // tyre scuffs
-    for (int x = 32; x < W; x += 32) b.a.line((float)x, 2, (float)x, H - 2.0f, 0.7f, rgba(K_SEAM, 100));
+    for (int i = 0; i < 90; i++) { float x = b.rng.f(4, W - 4.0f), y = b.rng.f(4, H - 4.0f); b.a.ell(x, y, b.rng.f(3, 10), b.rng.f(1.5f, 4), rgba(rgb(70, 66, 58), 60), 1, 0); }   // tyre scuffs
+    for (int x = 48; x < W; x += 48) b.a.line((float)x, 2, (float)x, H - 2.0f, 0.7f, rgba(K_SEAM, 100));
     b.a.grain(0, 0, (float)W, (float)H, 0.14f, 67);
-    // runway centre dashes and the four parking circles
-    for (int i = 0; i < 13; i++) b.a.rect(6 + i * 12.0f, H * 0.5f - 0.8f, 7, 1.6f, 0.3f, rgba(WHITE, 130), 0.5f, 0);
-    for (int i = 0; i < 4; i++) {
-        float cx = W * 0.5f + (i - 1.5f) * 30, cy = H * 0.5f;
+    // runway centre dashes and the 5x5 parking grid the aircraft use
+    for (int r = 0; r < 2; r++) {
+        float y = H * (0.36f + 0.28f * r);
+        for (int i = 0; i < W / 14; i++) b.a.rect(8 + i * 14.0f, y - 0.9f, 8, 1.8f, 0.3f, rgba(WHITE, 130), 0.5f, 0);
+    }
+    for (int row = 0; row < 5; row++) for (int col = 0; col < 5; col++) {
+        float cx = W * 0.5f + (col - 2) * 42, cy = H * 0.5f + (row - 2) * 34;
         b.a.ring(cx, cy, 11.5f, 1.4f, rgba(K_YEL, 225), 0.8f, 0); b.a.ring(cx, cy, 11.5f, 0.5f, rgba(K_DARK, 60), 0.5f, 0);
         b.a.line(cx - 3.5f, cy - 4, cx - 3.5f, cy + 4, 1.4f, rgba(K_YEL, 220)); b.a.line(cx + 3.5f, cy - 4, cx + 3.5f, cy + 4, 1.4f, rgba(K_YEL, 220)); b.a.line(cx - 3.5f, cy, cx + 3.5f, cy, 1.4f, rgba(K_YEL, 220));
     }
-    for (int i = 0; i < 9; i++) { float x = 8 + i * (W - 16.0f) / 8; b.a.rect(x - 0.7f, 3, 1.4f, 3, 0.3f, K_YEL, 0.5f, 0.2f); b.a.rect(x - 0.7f, H - 6.0f, 1.4f, 3, 0.3f, K_YEL, 0.5f, 0.2f); }
+    for (int i = 0; i < 18; i++) { float x = 8 + i * (W - 16.0f) / 17; b.a.rect(x - 0.7f, 3, 1.4f, 3, 0.3f, K_YEL, 0.5f, 0.2f); b.a.rect(x - 0.7f, H - 6.0f, 1.4f, 3, 0.3f, K_YEL, 0.5f, 0.2f); }
     // control tower: a tall steel cab on a concrete leg
-    Roof tw = b.block(8, 6, 16, 14, 26, K_KHAKI, K_OLIVE);
-    b.wallSeams(tw, 26, 5); b.windows(tw, 26, 2, rgb(255, 214, 120), 0.6f);
+    Roof tw = b.block(10, 10, 18, 16, 28, K_KHAKI, K_OLIVE);
+    b.wallSeams(tw, 28, 5); b.windows(tw, 28, 2, rgb(255, 214, 120), 0.6f);
     b.a.rect(tw.x + 2, tw.y + 2, tw.w - 4, tw.h - 4, 1.5f, rgb(74, 98, 110), 2, 0.6f); b.a.line(tw.x + 3, tw.y + 3.4f, tw.x + tw.w - 4, tw.y + 3.4f, 0.8f, rgba(WHITE, 130));
-    b.antenna(tw.x + tw.w - 2, tw.y + 2, 12, K_RED);
+    b.antenna(tw.x + tw.w - 2, tw.y + 2, 14, K_RED);
     b.mark(tw.x + 2, tw.y + tw.h - 4, tw.w - 4, 2.6f);
-    // Quonset hangar
-    Roof hg = b.block(108, 6, 46, 26, 14, K_ROOF, K_OLIVE_D, 5);
-    for (int i = 0; i < 7; i++) b.a.line(hg.x + 4 + i * 6.2f, hg.y + 1.5f, hg.x + 4 + i * 6.2f, hg.y + hg.h - 1.5f, 0.7f, rgba(K_DARK, 120));
+    // wide Quonset hangar
+    Roof hg = b.block(W - 126, 10, 96, 34, 16, K_ROOF, K_OLIVE_D, 6);
+    for (int i = 0; i < 14; i++) b.a.line(hg.x + 4 + i * 6.6f, hg.y + 1.5f, hg.x + 4 + i * 6.6f, hg.y + hg.h - 1.5f, 0.7f, rgba(K_DARK, 120));
     b.a.line(hg.x + 2, hg.y + hg.h * 0.5f, hg.x + hg.w - 2, hg.y + hg.h * 0.5f, 1.2f, rgba(WHITE, 50));
-    b.door(hg.x + hg.w * 0.5f, hg.y + hg.h + 14, 28, 12, K_DARK, rgb(22, 20, 16)); b.hazard(hg.x + 8, hg.y + hg.h + 14 + 1.2f, 30, 3);
-    b.mark(hg.x + hg.w - 14, hg.y + 2, 10, 3);
-    // fuel dump and a windsock
-    b.cyl(14, 84, 7, 8, K_STEEL, K_OLIVE); b.cyl(30, 84, 7, 8, K_STEEL, K_RUST); b.pipe(14, 78, 30, 78, 1.2f, K_STEEL);
-    for (int i = 0; i < 3; i++) b.barrel(46 + i * 5.5f, 82, 2.6f, i == 1 ? K_RUST : K_OLIVE_D);
-    b.a.line(W - 12.0f, 86, W - 12.0f, 74, 0.9f, K_STEEL);
-    b.a.poly({ {W - 12.0f, 74}, {W - 3.0f, 76}, {W - 3.0f, 79}, {W - 12.0f, 78} }, rgb(224, 110, 46), 1.4f, 0.5f);
-    b.a.rect(W - 8.0f, 75.4f, 1.8f, 3.4f, 0.2f, WHITE, 0.6f, 0.2f);
-    b.sandbags(60, H - 5.0f, 100, H - 5.0f);
+    b.door(hg.x + hg.w * 0.5f, hg.y + hg.h + 18, 60, 14, K_DARK, rgb(22, 20, 16)); b.hazard(hg.x + 10, hg.y + hg.h + 19.2f, 64, 3);
+    b.mark(hg.x + hg.w - 16, hg.y + 2, 12, 3);
+    // fuel dump along the south-west edge
+    b.cyl(16, H - 26, 8, 9, K_STEEL, K_OLIVE); b.cyl(36, H - 26, 8, 9, K_STEEL, K_RUST); b.pipe(16, H - 35, 36, H - 35, 1.2f, K_STEEL);
+    for (int i = 0; i < 5; i++) b.barrel(54 + i * 6.0f, H - 18, 2.7f, i == 1 ? K_RUST : K_OLIVE_D);
+    b.a.line(W - 14.0f, H - 10, W - 14.0f, H - 22, 0.9f, K_STEEL);
+    b.a.poly({ {W - 14.0f, (float)(H - 22)}, {W - 5.0f, (float)(H - 20)}, {W - 5.0f, (float)(H - 17)}, {W - 14.0f, (float)(H - 18)} }, rgb(224, 110, 46), 1.4f, 0.5f);
+    b.a.rect(W - 10.0f, H - 20.6f, 1.8f, 3.4f, 0.2f, WHITE, 0.6f, 0.2f);
+    b.sandbags(W * 0.42f, H - 6.0f, W * 0.72f, H - 6.0f);
     b.a.grain(0, 0, (float)W, (float)H, 0.08f, 71);
 }
 
@@ -536,6 +543,29 @@ void bunkerBase(Bld& b) {
     b.a.grain(0, 0, (float)W, (float)H, 0.08f, 93);
 }
 
+// 1x1: a thick wall segment. Heavy concrete, a steel cap and reinforcing ribs; the cap and bolts line up from tile to tile so a chain reads
+// as one long rampart. The footprint is deliberately filled edge to edge (no pad gap) so segments join without a seam a unit could slip through.
+void wallBase(Bld& b) {
+    int W = b.W, H = b.H;
+    bool cy = b.cy;
+    Color slab = cy ? rgb(78, 92, 112) : rgb(126, 116, 92), cap = cy ? rgb(150, 166, 184) : rgb(176, 160, 120);
+    Color seam = cy ? rgb(34, 42, 54) : rgb(62, 54, 42);
+    b.a.shadowRect(0, 0, (float)W, (float)H, 4, 4, 4, 100);
+    b.a.rect(0, 0, (float)W, (float)H, 1.5f, slab, 2.2f, 0.5f);
+    Roof r = b.block(1, 1, W - 2.0f, H - 2.0f, 9, cap, shade(slab, 0.82f), 1.0f);
+    // steel cap plates and reinforcing ribs across the top
+    for (int i = 0; i < 3; i++) b.a.rect(4 + i * 8.5f, r.y + 3, 6, r.h - 6, 0.6f, shade(cap, 1.08f), 1.0f, 0.4f);
+    for (int i = 0; i < 3; i++) b.a.line(3 + i * 9.0f, r.y + 1.5f, 3 + i * 9.0f, r.y + r.h - 1.5f, 0.7f, rgba(seam, 150));
+    b.a.line(2, r.y + r.h * 0.5f, W - 2.0f, r.y + r.h * 0.5f, 0.8f, rgba(seam, 160));
+    // firing slit and cap bolts
+    b.a.rect(W * 0.5f - 7, r.y + r.h * 0.5f - 1.1f, 14, 2.2f, 0.4f, rgb(10, 12, 16), 0.6f, 0.2f);
+    for (float x : { 3.0f, W - 3.0f }) for (float y : { r.y + 2.0f, r.y + r.h - 2.0f }) b.a.dot(x, y, 0.9f, shade(cap, 1.6f));
+    b.hazard(2, H - 6.0f, W - 4.0f, 3.0f, 4);
+    if (cy) { b.light(4.0f, 4.0f, 0.9f, C_CYAN, 80); b.light(W - 4.0f, 4.0f, 0.9f, C_CYAN, 80); }
+    else { b.rust(4, 4, W - 4.0f, H - 6.0f, 5, 80); b.mark(W * 0.5f - 6, r.y + 2, 12, 2.4f); }
+    b.a.grain(0, 0, (float)W, (float)H, 0.12f, 97);
+}
+
 }  // namespace
 
 // ================================================================= entry points
@@ -564,6 +594,7 @@ void artBuilding(Canvas& c, Canvas& mask, int type) {
     case BR_INCOME:   cy ? minerCyber(b)    : oilwell(b);         break;
     case BR_NUKE:     cy ? nukeCyber(b)     : nukeClanker(b);     break;
     case BR_BUNKER:   bunkerBase(b);                                 break;
+    case BR_WALL:     wallBase(b);                                   break;
     default: break;   // (the naval yards and anti-nuke defences are drawn by artNavalBuilding)
     }
     c.outline(rgb(8, 10, 14, 150));

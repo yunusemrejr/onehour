@@ -175,7 +175,7 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
             if (!g_sim.canPlace(player, buildType, x, y)) continue;
             // keep a one-tile corridor around every structure so units can always get through
             bool gapOk = true;
-            for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++) {
+            if (b.role != BR_WALL) for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++) {
                 if (!inMap(i, j)) { gapOk = false; break; }
                 if (g_map.blocked[j * MAP_W + i] & 2) { gapOk = false; break; }
             }
@@ -482,7 +482,7 @@ void AiPlayer::think() {
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
-    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0;
+    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0, walls = 0;
     for (auto& e : S.ents) {
         if (!e.alive || e.owner != player) continue;
         if (e.isUnit()) {
@@ -518,6 +518,7 @@ void AiPlayer::think() {
             case BR_BUNKER: bunkers++; break;
             case BR_CIVIC: civics++; break;
             case BR_UNUKE: silos++; break;
+            case BR_WALL: walls++; break;
             case BR_NONE: break;
             }
         }
@@ -798,6 +799,16 @@ void AiPlayer::think() {
                 built = tryBuild(anType, pl.basePos + Vec2(std::cos(ang), std::sin(ang)) * (5.5f * TILE), 14);
             }
         }
+        // walls: a thick, unlimited belt around the base. The AI builds one segment per think toward a slowly turning ring, then
+        // researches Anti-Rocket so the finished line becomes overlapping point-defence lasers.
+        int wallType = pl.faction == F_CYBER ? B_C_WALL : B_K_WALL;
+        int wantWalls = pl.difficulty >= 3 ? 44 : (pl.difficulty == 2 ? 28 : (pl.difficulty == 1 ? 14 : 0));
+        if (!built && smart && walls < wantWalls && minutes > 1.5f && pl.money > 650 && !threat) {
+            float ang = walls * 0.62f + 0.35f;
+            float rad = (7.5f + 0.55f * (walls % 14)) * TILE;
+            Vec2 spot = pl.basePos + Vec2(std::cos(ang), std::sin(ang) * 0.85f) * rad;
+            built = tryBuild(wallType, spot, 12);
+        }
         // a Naval Yard on the lake shore nearest to the base, once money is piling up (the dozer drives out to it)
         if (!built && on(FEAT_NAVY) && pl.difficulty >= 1 && yards.empty() && !factories.empty() && powerPlants > 0 && !threat && tm > (pl.difficulty >= 2 ? 7.5f : 10.5f) && pl.money > 5200 && S.time >= nextYardTry && S.countRole(player, BR_NAVAL, false) == 0) {
             nextYardTry = S.time + 20.0f;
@@ -946,13 +957,14 @@ void AiPlayer::think() {
     if (techs > 0 && S.programAvailable(player) && tm > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
     // structure upgrades once the economy carries them: self-repair first, then the roof guns, then the rugged armour (easy skips the last two)
     if (techs > 0) {
-        static const int order[UPG_COUNT] = { UPG_REPAIR, UPG_GUNS, UPG_RUGGED, UPG_DRONES };
-        static const float from[UPG_COUNT] = { 13.0f, 11.0f, 8.0f, 14.0f };   // minutes, by UpgradeId
+        static const int order[UPG_COUNT] = { UPG_REPAIR, UPG_GUNS, UPG_RUGGED, UPG_DRONES, UPG_HYPER, UPG_ANTIROCKET };
+        static const float from[UPG_COUNT] = { 13.0f, 11.0f, 8.0f, 14.0f, 12.0f, 10.0f };   // minutes, by UpgradeId
         float pace = pl.difficulty >= 3 ? 0.55f : (pl.difficulty == 2 ? 0.75f : (pl.difficulty == 1 ? 1.0f : 1.6f));
         for (int k = 0; k < UPG_COUNT; k++) {
             int u = order[k];
             if (pl.difficulty == 0 && u != UPG_REPAIR) continue;
             if (u == UPG_DRONES && shipsOrJeeps < 2) continue;   // the screen only pays for an army that has ships or jeeps
+            if (u == UPG_ANTIROCKET && walls < 4) continue;       // the wall laser only matters when there is a line of walls to mount it on
             static const int upgMask = getenv("ONEHOUR_UPGMASK") ? atoi(getenv("ONEHOUR_UPGMASK")) : -1;   // (debug: bit u allows upgrade u)
             if (!(upgMask & (1 << u))) continue;
             if (!S.upgradeAvailable(player, u) || tm < from[u] * pace) continue;

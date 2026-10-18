@@ -39,7 +39,7 @@ static std::string armyName(int p) {
 
 // HUD layout: minimap left, command grid anchored right, the info panel takes whatever is between
 static const int MINIMAP_X = 8, MINIMAP_SIZE = 116, BTN_W = 120, BTN_H = 28, BTN_GAP = 3;
-static const int BTN_MAX = 15, BTN_H_COMPACT = 22;   // up to five rows of three; past four rows (12 buttons) every button shrinks to fit
+static const int BTN_MAX = 18, BTN_H_COMPACT = 22;   // up to six rows of three; past four rows (12 buttons) every button shrinks to fit
 static const int INFO_X = 134;
 static inline int MINIMAP_Y_() { return SCREEN_H - HUD_H + 8; }
 static inline int GRID_X_() { return SCREEN_W - (3 * BTN_W + 2 * BTN_GAP) - 10; }
@@ -189,8 +189,8 @@ void Game::scroll(float dt) {
 static float roofLift(const BuildType& b) {
     switch (b.role) {
     case BR_HQ: return 22; case BR_POWER: return 14; case BR_SUPPLY: return 16; case BR_BARRACKS: return 12; case BR_FACTORY: return 20;
-    case BR_AIRFIELD: return 14; case BR_TECH: return 16; case BR_AATURRET: return 6; case BR_INCOME: return b.faction == F_CYBER ? 10 : 8; case BR_NUKE: return 16;
-    case BR_NAVAL: return 18; case BR_ANTINUKE: return b.faction == F_CYBER ? 22 : 10;
+    case BR_AIRFIELD: return 16; case BR_TECH: return 16; case BR_AATURRET: return 6; case BR_INCOME: return b.faction == F_CYBER ? 10 : 8; case BR_NUKE: return 16;
+    case BR_NAVAL: return 18; case BR_ANTINUKE: return b.faction == F_CYBER ? 22 : 10; case BR_WALL: return 10;
     default: return 0;
     }
 }
@@ -2149,11 +2149,12 @@ void Game::renderHud() {
             "Structure selected         train units; right-click ground for rally; Del sells",
             "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
-            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop, U/G/E/N upgrades",
+            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop, U/G/E/N/H/A upgrades",
+            "Wall (pasture/defense)    W: unlimited thick wall segments; H: Hyper Protection, A: Anti-Rocket wall lasers (rockets, nukes, aircraft)",
             "Spy selected              right-click an enemy structure to capture it (the spy survives)",
             "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",
             "Bunker / lifter selected  U unloads; D (lifter) flies to a spot you click and drops everybody off",
-            "Stealth                    snipers and bunkers show only to an enemy spy drone",
+            "Stealth                    snipers show only to an enemy spy drone; underground bunkers are plainly visible",
             "Lake                       Y: Naval Yard on the shore (ships sail on water only); Q: anti-nuke defence (30% chance each, more of them: likelier)",
             "Jeep                       right-click it with soldiers: seven seats, they shoot from inside; drops carry loaded jeeps; N: Guard Drones upgrade",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",

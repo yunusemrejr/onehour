@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -598,6 +598,7 @@ bool antiNukeTest(u64 seed);
 bool dozerTest(u64 seed);     // tests4.cpp: dozer priorities, manual-order hold, kept build sites
 bool recoveryTest(u64 seed);  // tests5.cpp: a computer army that has lost almost everything rebuilds
 bool civicTest(u64 seed);     // tests6.cpp: the civilian town, civilian dozers, the Underground Nuke and the bunker's watch over its neighbours
+bool wallTestMain(u64 seed); // tests7.cpp: walls, Hyper Protection, Anti-Rocket, durability, barracks speed and the 25-pad airfield
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow);   // tests3.cpp: ONEHOUR_AIR=strike|drop|nuke --shot scenes
@@ -1922,10 +1923,10 @@ static bool uiTest() {
         if (g_game.aidMode || g_sim.aidDrops.size() != 1) return fail("clicking the map did not send the aid flight");
         key(SDLK_d);
         if (g_game.aidMode) return fail("D armed the aid drop during its cooldown");
-        g_sim.players[0].money = 20000;
-        key(SDLK_u); key(SDLK_g); key(SDLK_e); key(SDLK_n);
-        for (int u = 0; u < UPG_COUNT; u++) if (!g_sim.players[0].upgBusy[u]) return fail("U / G / E / N did not start the structure upgrades");
-        { int spent = 0; for (int u = 0; u < UPG_COUNT; u++) spent += UPGRADES[F_CLANKER][u].cost; if (g_sim.players[0].money != 20000 - spent) return fail("upgrade costs not charged"); }
+        g_sim.players[0].money = 40000;
+        key(SDLK_u); key(SDLK_g); key(SDLK_e); key(SDLK_n); key(SDLK_h); key(SDLK_a);
+        for (int u = 0; u < UPG_COUNT; u++) if (!g_sim.players[0].upgBusy[u]) return fail("U / G / E / N / H / A did not start the structure upgrades");
+        { int spent = 0; for (int u = 0; u < UPG_COUNT; u++) spent += UPGRADES[F_CLANKER][u].cost; if (g_sim.players[0].money != 40000 - spent) return fail("upgrade costs not charged"); }
         for (int i = 0; i < 60 * 14; i++) frames(1);   // the plane crosses the map and the troops land (renders every frame: the plane, parachutes and drop circle)
         g_game.cam = Vec2(clampf(te->pos.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(te->pos.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
         g_game.selection.clear(); g_game.selection.push_back(tech);
@@ -2205,12 +2206,12 @@ static bool upgradeTest(u64 seed) {
         for (int guard = 0; guard < 20 * 120 && !(pl.upg[0] && pl.upg[1] && pl.upg[2]); guard++) steps(1);
         if (!(pl.upg[UPG_RUGGED] && pl.upg[UPG_GUNS] && pl.upg[UPG_REPAIR])) return fail("upgrades never finished");
         if (g_sim.upgradeAvailable(0, UPG_GUNS) || g_sim.cmdUpgrade(0, UPG_GUNS)) return fail("a finished upgrade can be bought again");
-        if (std::abs(g_sim.get(barracks)->maxHp - hp0 * RUGGED_HP) > 1) return fail("Rugged did not toughen a standing structure");
+        if (std::abs(g_sim.get(barracks)->maxHp - hp0 * RUGGED_HP * (pl.upg[UPG_HYPER] ? HYPER_HP : 1.0f)) > 1) return fail("Rugged/Hyper Protection did not toughen a standing structure");
         // ---- they last: the tech structure falls, a new structure still gets everything
         g_sim.destroy(*g_sim.get(tech), true);
         Ref fresh = put(b0 + BR_BARRACKS, 9, 5.0f);
         if (!g_sim.get(fresh)) return fail("no room for a new structure");
-        if (std::abs(g_sim.get(fresh)->maxHp - BUILDS[b0 + BR_BARRACKS].hp * RUGGED_HP) > 1) return fail("a structure built after the tech structure fell is not rugged");
+        if (std::abs(g_sim.get(fresh)->maxHp - BUILDS[b0 + BR_BARRACKS].hp * RUGGED_HP * (pl.upg[UPG_HYPER] ? HYPER_HP : 1.0f)) > 1) return fail("a structure built after the tech structure fell is not rugged");
         if (g_sim.roofGun(*g_sim.get(fresh)) < 0) return fail("a new structure has no roof gun");
         // ---- self-repair heals structures, never units
         Entity* br = g_sim.get(barracks);
@@ -2239,17 +2240,16 @@ static bool upgradeTest(u64 seed) {
             if (f && f->hp > h0 - 1) { fprintf(stderr, "upgradetest %s: the roof gun never hit the %s\n", FACTION_NAME[fac[0]], kinds[k]); return false; }
             if (f) g_sim.destroy(*f, false);
         }
-        // ---- Rugged under nukes: one warhead at ground zero leaves a barracks standing, a second flattens it
+        // ---- Rugged under nukes: one warhead at ground zero leaves a barracks standing; a short barrage flattens it (Hyper Protection adds a cap)
         {
             Entity* b = g_sim.get(barracks); b->hp = b->maxHp;
             Vec2 gz = b->pos;
             g_sim.nukes.push_back({g_sim.players[1].basePos, gz, 1, Sim::NUKE_FLIGHT - 0.05f});
             steps(4);
             if (!g_sim.get(barracks)) return fail("one nuke flattened a rugged barracks");
-            if (g_sim.get(barracks)->hp > g_sim.get(barracks)->maxHp * 0.6f) return fail("the nuke barely scratched a rugged barracks");
-            g_sim.nukes.push_back({g_sim.players[1].basePos, gz, 1, Sim::NUKE_FLIGHT - 0.05f});
-            steps(4);
-            if (g_sim.get(barracks)) return fail("two nukes at ground zero did not bring a rugged barracks down");
+            if (!pl.upg[UPG_HYPER] && g_sim.get(barracks)->hp > g_sim.get(barracks)->maxHp * 0.6f) return fail("the nuke barely scratched a rugged barracks");
+            for (int k = 0; k < 3 && g_sim.get(barracks); k++) { g_sim.nukes.push_back({g_sim.players[1].basePos, gz, 1, Sim::NUKE_FLIGHT - 0.05f}); steps(4); }
+            if (g_sim.get(barracks)) return fail("repeated nukes at ground zero did not bring a rugged barracks down");
         }
     }
     // ---- Rugged plating: a small group of tanks does half damage, a massive assault at once swamps it and does full damage
@@ -2340,6 +2340,8 @@ static bool heliTest(u64 seed) {
         bool ai[2] = { false, false }; int diff[2] = { 1, 1 }; int team[2] = { 0, 1 };
         g_sim.init(2, fac, ai, diff, team, seed + fi);
         g_sim.players[0].money = 200000;
+        std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
+        flattenArena(g_sim.players[0].basePos, 42, 42);   // room for the enlarged 10x7 airbase
         int b0 = firstBuildOf(fac[0]);
         auto fail = [&](const char* m) { fprintf(stderr, "helitest %s: %s\n", FACTION_NAME[fac[0]], m); return false; };
         auto put = [&](int type, float distTiles, float ang) {
@@ -2353,6 +2355,14 @@ static bool heliTest(u64 seed) {
             return NOREF;
         };
         Ref pw = put(b0 + BR_POWER, 5, 0.0f), pw2 = put(b0 + BR_POWER, 5, 1.5f), fac0 = put(b0 + BR_FACTORY, 6, 3.0f), tech = put(b0 + BR_TECH, 6, 4.5f), air = put(b0 + BR_AIRFIELD, 8, 2.2f);
+        if (!g_sim.get(air)) {   // the oversized airbase needs more room than the original 5x3 pad: widen the search before giving up
+            for (float extra = 8; extra < 40 && !g_sim.get(air); extra += 1.0f)
+                for (float da = 0; da < 6.2f && !g_sim.get(air); da += 0.1f) {
+                    Vec2 c = g_sim.players[0].basePos + Vec2(std::cos(2.2f + da), std::sin(2.2f + da)) * ((8 + extra) * TILE);
+                    int tx = tileOf(c.x) - BUILDS[b0 + BR_AIRFIELD].w / 2, ty = tileOf(c.y) - BUILDS[b0 + BR_AIRFIELD].h / 2;
+                    if (inMap(tx, ty) && g_sim.canPlace(0, b0 + BR_AIRFIELD, tx, ty)) air = g_sim.placeBuilding(b0 + BR_AIRFIELD, 0, tx, ty, true);
+                }
+        }
         for (Ref r : { pw, pw2, fac0, tech, air }) if (!g_sim.get(r)) return fail("could not set the scene up");
         g_sim.updatePowerPublic();
         int heli = -1, plane = -1;
@@ -2381,9 +2391,9 @@ static bool heliTest(u64 seed) {
         for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == heli) helis.push_back(g_sim.refOf(e));
         auto pairsTooClose = [&]() { int n = 0; for (size_t i = 0; i < helis.size(); i++) for (size_t j = i + 1; j < helis.size(); j++) { Entity* a = g_sim.get(helis[i]); Entity* b = g_sim.get(helis[j]); if (a && b && dist(a->pos, b->pos) < gap) { n++; if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "  pair %d(%.0f,%.0f o%d v%.0f) %d(%.0f,%.0f o%d v%.0f) d %.1f\n", helis[i].idx, a->pos.x, a->pos.y, (int)a->order, a->airspeed, helis[j].idx, b->pos.x, b->pos.y, (int)b->order, b->airspeed, dist(a->pos, b->pos)); } } return n; };
         // all of them sent to one spot: they stop side by side around it, a small gap apart, not in one pile
-        Vec2 meet = g_map.nearestFree(g_sim.players[0].basePos + Vec2(10 * TILE, -6 * TILE), 20);
+        Vec2 meet = g_map.nearestFree(g_sim.get(air)->pos + Vec2(10 * TILE, -6 * TILE), 20);
         g_sim.cmdMove(helis, meet, false);
-        steps(20 * 20);
+        steps(20 * 45);
         if (int n = pairsTooClose()) { fprintf(stderr, "helitest %s: %d helicopter pairs piled up on a move order\n", FACTION_NAME[fac[0]], n); return false; }
         for (Ref r : helis) if (dist(g_sim.get(r)->pos, meet) > 5 * TILE) return fail("a helicopter of a group move stopped far from the spot");
         // guarding an area: each one hovers still on a spot of its own (no circling)
@@ -2399,9 +2409,11 @@ static bool heliTest(u64 seed) {
         if (int n = pairsTooClose()) { fprintf(stderr, "helitest %s: %d helicopter pairs share a guard spot\n", FACTION_NAME[fac[0]], n); return false; }
         g_sim.cmdStop(helis);   // (back to the airfield for the rest of the test)
         steps(20 * 25);
-        // planes still wait for a free pad: six queued, four come out, the rest wait
-        for (int k = 0; k < 6; k++) if (!g_sim.cmdTrain(air, plane)) return fail("could not queue a plane");
-        steps(20 * 200);
+        // planes still wait for a free pad: three full queues, 25 come out, the rest wait
+        for (int batch = 0; batch < 3; batch++) {
+            for (int k = 0; k < 9; k++) if (!g_sim.cmdTrain(air, plane)) return fail("could not queue a plane");
+            steps(20 * 450);
+        }
         if (count(plane) != AIRFIELD_CAP || g_sim.get(air)->queue.size() != 2) { fprintf(stderr, "helitest %s: %d planes out, %zu waiting (want %d and 2)\n", FACTION_NAME[fac[0]], count(plane), g_sim.get(air)->queue.size(), AIRFIELD_CAP); return false; }
         {   // each plane parks on a pad of its own (never two on one pad)
             std::vector<Vec2> pads; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == plane) pads.push_back(e.pos);
@@ -2419,11 +2431,11 @@ static bool heliTest(u64 seed) {
             g_sim.destroy(*g_sim.get(pls[1]), false);
             Vec2 away = g_map.nearestFree(g_sim.players[0].basePos + Vec2(0, 6 * TILE), 20);
             Ref nb;
-            for (int k = 0; k < 16 && !nb.valid(); k++) {
+            for (int k = 0; k < 64 && !nb.valid(); k++) {
                 Ref f = g_sim.spawnUnit(firstUnitOf(fac[0]) + 2, 0, away);   // (a trooper as filler)
                 if (f.idx != keep.idx && (f.idx - keep.idx) % AIRFIELD_CAP == 0) { g_sim.destroy(*g_sim.get(f), false); nb = g_sim.spawnUnit(plane, 0, g_sim.get(air)->pos + Vec2(0, -6 * TILE)); }
             }
-            if (!nb.valid() || (nb.idx - keep.idx) % AIRFIELD_CAP != 0) return fail("could not set up two planes four entity slots apart");
+            if (!nb.valid() || (nb.idx - keep.idx) % AIRFIELD_CAP != 0) return fail("could not set up two planes on the same pad slot");
             g_sim.get(nb)->home = air;
             steps(20 * 40);
             std::vector<Vec2> at; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == plane) at.push_back(e.pos);
@@ -2569,6 +2581,7 @@ int main(int argc, char** argv) {
         else if (a == "--dozertest") return dozerTest(seed) ? 0 : 1;
         else if (a == "--recoverytest") return recoveryTest(seed) ? 0 : 1;
         else if (a == "--civictest") return civicTest(seed) ? 0 : 1;
+        else if (a == "--walltest") return wallTestMain(seed) ? 0 : 1;
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }

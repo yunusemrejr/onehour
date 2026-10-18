@@ -119,6 +119,36 @@ bool Sim::interceptProjectile(Projectile& p) {
         emit(EV_SOUND, h->owner, SND_EXPLODE_S, p.pos);
         return true;
     }
+    // Q defences and Anti-Rocket walls burn incoming rockets, shells and bombs out of the air. They protect their own side: only an enemy
+    // projectile that is not aimed at the defence's enemies is engaged, whichever one is closest and ready takes the shot.
+    if (w.proj == PJ_ROCKET || w.proj == PJ_SHELL || w.proj == PJ_BOMB) {
+        Entity* def = nullptr; float bd = 1e18f;
+        forEachNear(p.pos, (WALL_PD_COVER + 3.0f) * TILE, [&](Entity& b) {
+            if (!b.isBuilding() || !antiNukeWorking(b) || time < b.pdAt || !enemies(b.owner, p.owner)) return;
+            Entity* t = get(p.target);
+            if (t && enemies(b.owner, t->owner)) return;   // it is aimed at somebody on the defence's side only if that somebody is not its enemy
+            float range = isAntiRocketWall(b) ? WALL_PD_COVER * TILE : (b.bt().faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE;
+            float d = dist(p.pos, b.pos);
+            if (d <= range && d < bd) { bd = d; def = &b; }
+        });
+        if (def) {
+            bool wall = isAntiRocketWall(*def);
+            bool cy = wall || def->bt().faction == F_CYBER;
+            def->pdAt = time + (wall ? WALL_PD_RELOAD : 1.0f);
+            Vec2 muzzle = def->pos + Vec2(0, wall ? -10.0f : (cy ? -22.0f : -8.0f));
+            Color col = cy ? rgb(120, 236, 255) : rgb(255, 214, 120);
+            fx.push_back({FX_BEAM, muzzle, p.pos, 0, 0.12f, col, wall ? 1.6f : 2.4f});
+            fx.push_back({FX_FLASH, muzzle, muzzle, 0, 0.10f, col, wall ? 6.0f : 9.0f});
+            if (rng.f() < antiNukeShot(*def)) {
+                fx.push_back({FX_EXPLODE, p.pos, p.pos, 0, 0.4f, rgb(255, 224, 150), 20.0f});
+                fx.push_back({FX_RING, p.pos, p.pos, 0, 0.35f, col, 26.0f});
+                for (int k = 0; k < 4; k++) fx.push_back({FX_SPARK, p.pos, p.pos, 0, rng.f(0.2f, 0.4f), col, 4});
+                emit(EV_SOUND, def->owner, SND_EXPLODE_S, p.pos);
+                return true;
+            }
+            return false;   // a miss: the next ready defence gets the next tick
+        }
+    }
     if (!h || !h->isUnit()) return false;
     int n = droneCount(*h);
     if (n <= 0 || dist(p.pos, h->pos) > DRONE_RANGE + h->radius()) return false;
@@ -206,16 +236,31 @@ bool Sim::shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) cons
 // ------------------------------------------------------------ anti-nuke defences
 // A defence that is switched on, standing and ready covers a circle around itself. Every defence covering the target of a warhead that would hurt
 // its owner gets one chance at it (antiNukeShot), so n of them stop it with probability 1 - prod(1 - chance_i).
+bool Sim::isAntiRocketWall(const Entity& b) const {
+    return b.alive && b.isBuilding() && b.constructed && b.bt().role == BR_WALL && b.owner >= 0 &&
+           hasUpgrade(b.owner, UPG_ANTIROCKET) && b.disabledUntil <= time;
+}
 bool Sim::antiNukeWorking(const Entity& b) const {
-    if (!b.alive || !b.isBuilding() || !b.constructed || b.bt().role != BR_ANTINUKE || b.disabledUntil > time) return false;
+    if (!b.alive || !b.isBuilding() || !b.constructed || b.disabledUntil > time) return false;
+    if (isAntiRocketWall(b)) return true;   // walls fly a laser and need no power
+    if (b.bt().role != BR_ANTINUKE) return false;
     return !(players[b.owner].lowPower() && b.bt().power < 0);   // a defence without power is blind
 }
 float Sim::antiNukeCover(const Entity& b, float scale) const {
-    if (b.bt().faction != F_CYBER) return ANTINUKE_COVER_K * TILE;
     Nuke probe; probe.scale = scale;
+    if (isAntiRocketWall(b)) return WALL_PD_COVER * TILE + nukeRadius(probe);
+    if (b.bt().faction != F_CYBER) return ANTINUKE_COVER_K * TILE;
     return ANTINUKE_COVER_C * TILE + nukeRadius(probe);   // a laser has no blind ring at the edge: a blast that would reach into its circle is engaged
 }
 int Sim::antiNukeLinked(const Entity& b) const {
+    if (isAntiRocketWall(b)) {
+        int n = 0;
+        for (auto& o : ents) {
+            if (&o == &b || o.owner != b.owner || !isAntiRocketWall(o) || dist(o.pos, b.pos) > ANTINUKE_LINK * TILE) continue;
+            if (++n >= ANTINUKE_LINK_MAX) break;
+        }
+        return n;
+    }
     if (b.bt().faction != F_CYBER) return 0;
     int n = 0;
     for (auto& o : ents) {
@@ -225,13 +270,14 @@ int Sim::antiNukeLinked(const Entity& b) const {
     return n;
 }
 float Sim::antiNukeShot(const Entity& b) const {
+    if (isAntiRocketWall(b)) return WALL_PD_CHANCE + ANTINUKE_LINK_BONUS * antiNukeLinked(b);
     return ANTINUKE_CHANCE + ANTINUKE_LINK_BONUS * antiNukeLinked(b);
 }
 int Sim::antiNukeCovering(Vec2 at, int attacker, bool knownOnly, float scale, bool deep) const {
     int n = 0;
     Nuke probe; probe.owner = attacker;
     for (auto& b : ents) {
-        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && b.bt().faction != F_CYBER)) continue;   // (only a laser stops an Underground Nuke)
+        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && !(b.bt().faction == F_CYBER || isAntiRocketWall(b)))) continue;   // (only a laser stops an Underground Nuke)
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
         if (dist(at, b.pos) <= antiNukeCover(b, scale)) n++;
     }
@@ -241,11 +287,37 @@ float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bo
     float miss = 1.0f;
     Nuke probe; probe.owner = attacker;
     for (auto& b : ents) {
-        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && b.bt().faction != F_CYBER)) continue;
+        if (!antiNukeWorking(b) || !nukeHurts(probe, b.owner) || (deep && !(b.bt().faction == F_CYBER || isAntiRocketWall(b)))) continue;
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
         if (dist(at, b.pos) <= antiNukeCover(b, scale)) miss *= 1.0f - antiNukeShot(b);
     }
     return 1.0f - miss;
+}
+
+// Q defences and Anti-Rocket walls also look for enemy aircraft in reach. They fire a short, bright laser burst (or an interceptor for the
+// Clanker missile silo) and the aircraft takes the hit immediately; a target that survives simply gets engaged again after the reload.
+void Sim::updatePointDefenseAir(Entity& b) {
+    if (time < b.pdAt || b.disabledUntil > time) return;
+    bool wall = isAntiRocketWall(b);
+    if (!wall && b.bt().role != BR_ANTINUKE) return;
+    if (!wall && players[b.owner].lowPower() && b.bt().power < 0) return;
+    float range = wall ? WALL_PD_COVER * TILE : (b.bt().faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE;
+    Entity* best = nullptr; float bd = range;
+    forEachNear(b.pos, range, [&](Entity& e) {
+        if (!e.isUnit() || !e.isAir() || !enemies(b.owner, e.owner) || !visibleTo(e, b.owner)) return;
+        float d = dist(e.pos, b.pos);
+        if (d < bd) { bd = d; best = &e; }
+    });
+    if (!best) return;
+    b.pdAt = time + PD_AIRCRAFT_RELOAD;
+    bool cy = wall || b.bt().faction == F_CYBER;
+    Vec2 muzzle = b.pos + Vec2(0, wall ? -10.0f : (cy ? -22.0f : -8.0f));
+    Color col = cy ? rgb(120, 236, 255) : rgb(255, 214, 120);
+    fx.push_back({FX_BEAM, muzzle, best->pos, 0, 0.14f, col, wall ? 1.8f : 2.6f});
+    fx.push_back({FX_FLASH, muzzle, muzzle, 0, 0.10f, col, wall ? 7.0f : 10.0f});
+    fx.push_back({FX_EXPLODE, best->pos, best->pos, 0, 0.30f, rgb(255, 224, 150), 16.0f});
+    applyDamage(*best, wall ? WALL_PD_AA : ANTINUKE_PD_AA, b.owner, refOf(b), nullptr);
+    emit(EV_SOUND, b.owner, cy ? SND_LASER_HEAVY : SND_ROCKET, b.pos);
 }
 
 // A defence watches the warheads in flight. One heading for a spot it covers opens fire some seconds from impact (a laser tower earlier, with three
@@ -253,7 +325,7 @@ float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bo
 // in it or misses with every shot - and the shots are laid out in time so they can be drawn; the warhead is shot down when the winning shot arrives.
 void Sim::updateAntiNuke(Entity& b) {
     if (time < b.siloTimer || !antiNukeWorking(b)) return;
-    bool cy = b.bt().faction == F_CYBER;
+    bool cy = isAntiRocketWall(b) || b.bt().faction == F_CYBER;
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
         if (n.broken || n.killT >= 0 || !nukeHurts(n, b.owner) || dist(n.pos, b.pos) > antiNukeCover(b, n.scale)) continue;

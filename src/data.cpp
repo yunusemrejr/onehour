@@ -107,32 +107,32 @@ const UnitType UNITS[U_COUNT] = {
 
 const BuildType BUILDS[B_COUNT] = {
     // name, key, faction, role, hp, cost, time, w, h, power, sight, weapon, requires, desc
-    { "Command Core",    "C", F_CYBER, BR_HQ,       5000, 3000, 45, 4, 4, 0,  10, -1, -1,        "Trains Fabricators. A Fabricator can raise another one if this falls (max 3)" },
+    { "Command Core",    "C", F_CYBER, BR_HQ,       60000, 3000, 45, 4, 4, 0,  10, -1, -1,        "Trains Fabricators. The keystone of the army: enormously armoured and shielded from warheads, so only a sustained conventional assault can bring it down. A Fabricator can raise another one if this falls (max 3)" },
     { "Fusion Reactor",  "P", F_CYBER, BR_POWER,    1400, 800,  12, 3, 2, 10, 7,  -1, -1,        "Provides 10 power" },
     { "Supply Hub",      "S", F_CYBER, BR_SUPPLY,   2400, 1500, 18, 3, 3, -1, 7,  -1, -1,        "Receives supplies, builds E-Haulers" },
     { "Barracks",        "B", F_CYBER, BR_BARRACKS, 1800, 500,  12, 3, 2, -1, 7,  -1, -1,        "Trains infantry" },
     { "Assembly Plant",  "F", F_CYBER, BR_FACTORY,  2800, 2000, 25, 4, 3, -3, 7,  -1, B_C_POWER, "Builds vehicles" },
-    { "Drone Pad",       "A", F_CYBER, BR_AIRFIELD, 3400, 1000, 20, 5, 3, -2, 8,  -1, B_C_FACTORY,"Builds and rearms Wraith Drones" },
-    { "Data Center",     "E", F_CYBER, BR_TECH,     2000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank, strike powers and structure upgrades" },
+    { "Drone Pad",       "A", F_CYBER, BR_AIRFIELD, 3400, 1000, 20, 10, 7, -2, 8,  -1, B_C_FACTORY,"Huge airbase: builds and rearms Wraith Drones, Hornet Gunships and jets, with 25 fixed-wing pads and room for any number of helicopters" },
+    { "Data Center",     "E", F_CYBER, BR_TECH,     36000, 2000, 30, 3, 3, -4, 8,  -1, B_C_FACTORY,"Unlocks Shock Trooper, Railgun Tank, strike powers and structure upgrades. Second only to the Command Core in durability (with Hyper Protection it becomes even tougher)" },
     { "Laser Turret",    "L", F_CYBER, BR_TURRET,   5200, 1000, 14, 1, 1, -3, 8,  7,  B_C_POWER, "Fortified ground defense laser, needs power: short reach, very hard to kill" },
     { "Patriot Battery", "T", F_CYBER, BR_AATURRET, 6800, 1200, 16, 2, 2, -3, 9,  8,  B_C_POWER, "Fortified missile defense: brutal vs air, good vs ground, very hard to kill" },
     { "Bitcoin Datacenter","M", F_CYBER, BR_INCOME,  1600, 1600, 22, 3, 2, -5, 7, -1, B_C_POWER, "Mines $450 every 5s (max 4), half rate on low power" },
     { "Nuke Ramp",       "K", F_CYBER, BR_NUKE,     2600, 5000, 40, 3, 3, -6, 8, -1, B_C_TECH,  "A nuke every 5 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 
-    { "Command Post",    "C", F_CLANKER, BR_HQ,       5200, 3000, 45, 4, 4, 0,  10, -1, -1,        "Trains Dozers. A Dozer can raise another one if this falls (max 3)" },
+    { "Command Post",    "C", F_CLANKER, BR_HQ,       62000, 3000, 45, 4, 4, 0,  10, -1, -1,        "Trains Dozers. The keystone of the army: enormously armoured and shielded from warheads, so only a sustained conventional assault can bring it down. A Dozer can raise another one if this falls (max 3)" },
     { "Diesel Generator","P", F_CLANKER, BR_POWER,    1500, 800,  12, 3, 2, 10, 7,  -1, -1,        "Provides 10 power" },
     { "Supply Depot",    "S", F_CLANKER, BR_SUPPLY,   2600, 1500, 18, 3, 3, -1, 7,  -1, -1,        "Receives supplies, builds Supply Trucks" },
     { "Barracks",        "B", F_CLANKER, BR_BARRACKS, 2000, 500,  12, 3, 2, -1, 7,  -1, -1,        "Trains infantry" },
     { "War Factory",     "F", F_CLANKER, BR_FACTORY,  3000, 2000, 25, 4, 3, -3, 7,  -1, B_K_POWER, "Builds vehicles" },
-    { "Airstrip",        "A", F_CLANKER, BR_AIRFIELD, 3600, 1000, 20, 5, 3, -2, 8,  -1, B_K_FACTORY,"Builds and rearms Vulture Gunships" },
-    { "Arms Lab",        "E", F_CLANKER, BR_TECH,     2200, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher, strike powers and structure upgrades" },
+    { "Airstrip",        "A", F_CLANKER, BR_AIRFIELD, 3600, 1000, 20, 10, 7, -2, 8,  -1, B_K_FACTORY,"Huge airbase: builds and rearms Vulture Gunships and jets, with 25 fixed-wing pads and room for any number of helicopters" },
+    { "Arms Lab",        "E", F_CLANKER, BR_TECH,     38000, 2000, 30, 3, 3, -3, 8,  -1, B_K_FACTORY,"Unlocks Gunner, Rocket Launcher, strike powers and structure upgrades. Second only to the Command Post in durability (with Hyper Protection it becomes even tougher)" },
     { "Gun Nest",        "N", F_CLANKER, BR_TURRET,   6400, 900,  14, 1, 1, -1, 8,  16, -1,        "Fortified machine gun bunker, ground and light air, very hard to kill" },
     { "Rocket Battery",  "T", F_CLANKER, BR_AATURRET, 5600, 1200, 16, 2, 2, -3, 9,  17, B_K_POWER, "Fortified rocket defense, ground and air, very hard to kill" },
     { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
     { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 5000, 40, 3, 3, -5, 8, -1, B_K_TECH,  "A nuke every 5 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 
-    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 32000, 7500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Fortified stealth shelter deep underground: 50 infantry and a Fabricator. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 65s). When surrounded by enemies, overdrive lasers and heavy guns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
-    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 32000, 7500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Fortified stealth shelter deep underground: 50 infantry and a Dozer. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 65s). When surrounded by enemies, overdrive lasers and heavy machineguns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
+    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 32000, 7500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Fortified deep shelter (visible on the surface, no longer hidden): 50 infantry and a Fabricator. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 65s). When surrounded by enemies, overdrive lasers and heavy guns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
+    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 32000, 7500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Fortified deep shelter (visible on the surface, no longer hidden): 50 infantry and a Dozer. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 65s). When surrounded by enemies, overdrive lasers and heavy machineguns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
 
     { "Nano Drydock",   "Y", F_CYBER,   BR_NAVAL,    3000, 2200, 28, 3, 3, -3, 8, -1, B_C_FACTORY, "Naval Yard: must touch the lake. Builds the Pulse Destroyer and, with a Data Center, the Lancer Cruiser" },
     { "Shipyard",       "Y", F_CLANKER, BR_NAVAL,    3200, 2200, 28, 3, 3, -3, 8, -1, B_K_FACTORY, "Naval Yard: must touch the lake. Builds the Iron Destroyer and, with an Arms Lab, the Rocket Cruiser" },
@@ -160,6 +160,9 @@ const BuildType BUILDS[B_COUNT] = {
     // Underground Nuke silos: ten times the price of a Nuke Ramp, as hard to kill as a bunker, a silver warhead three times as strong
     { "Underground Nuke","G", F_CYBER,   BR_UNUKE, 32000, 50000, 60, 3, 3, -6, 8, -1, B_C_NUKE, "Buried nuclear silo (key K with it selected): a silver warhead every 5 min with three times a Nuke Ramp's blast radius, damage and radiation. Blast doors and deep plating: as hard to destroy as a bunker (aircraft, structures and nukes cannot finish it). Only an Anti-Nuke Laser can shoot its warhead down" },
     { "Underground Nuke","G", F_CLANKER, BR_UNUKE, 34000, 50000, 60, 3, 3, -5, 8, -1, B_K_NUKE, "Buried nuclear silo (key K with it selected): a silver warhead every 5 min with three times a Nuke Ramp's blast radius, damage and radiation. Blast doors and deep plating: as hard to destroy as a bunker (aircraft, structures and nukes cannot finish it). Only an Anti-Nuke Laser can shoot its warhead down" },
+    // thick wall segments: unlimited and cheap, a single segment soaks a barrage of warheads
+    { "Wall", "W", F_CYBER, BR_WALL, WALL_HP, 180, 3, 1, 1, 0, 5, -1, -1, "A thick reinforced wall segment. Build as many as you like and chain them into a line: each one takes a huge pounding, and a warhead at ground zero only chips about a tenth of it. Hyper Protection doubles its health; Anti-Rocket gives it a point-defence laser" },
+    { "Wall", "W", F_CLANKER, BR_WALL, WALL_HP, 180, 3, 1, 1, 0, 5, -1, -1, "A thick reinforced wall segment. Build as many as you like and chain them into a line: each one takes a huge pounding, and a warhead at ground zero only chips about a tenth of it. Hyper Protection doubles its health; Anti-Rocket gives it a point-defence laser" },
 };
 
 // income per payout (every CIVIC_INTERVAL s), seconds between free dozers, townsfolk walking about it (decoration only)
@@ -192,11 +195,15 @@ const UpgradeType UPGRADES[F_COUNT][UPG_COUNT] = {
     { { "Rugged Nanoshell", "U", "Every structure gets 50% more health and shrugs off half of all damage. One nuke can no longer flatten it: it takes two close nukes or a massive assault at once", 3000, 40.0f },
       { "Defense Lasers",   "G", "Every structure gets a roof laser that shoots down aircraft and burns vehicles and infantry", 3500, 45.0f },
       { "Nanite Repair",    "E", "Every structure repairs itself over time (slower while under fire). Units still need Medic Rigs", 2000, 30.0f },
-      { "Aegis Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f } },
+      { "Aegis Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f },
+      { "Hyper Protection", "H", "Every structure gets 100% more health, takes 60% less damage from conventional fire, and can never lose more than 42% of its full health to a single warhead. Even an Underground Nuke can no longer erase a full-health protected base: it only finishes buildings that were already damaged", 6000, 55.0f },
+      { "Anti-Rocket",      "A", "Every wall mounts a point-defence laser (10 tiles): it burns incoming rockets, shells and nuclear warheads, and shoots down aircraft. Walls are unlimited, so a line of them blankets a base in overlapping fire", 4000, 45.0f } },
     { { "Rugged Bulwark",   "U", "Every structure gets 50% more health and shrugs off half of all damage. One nuke can no longer flatten it: it takes two close nukes or a massive assault at once", 3000, 40.0f },
       { "Bunker Guns",      "G", "Every structure gets a roof machine gun that shoots down aircraft and shreds infantry and vehicles", 3500, 45.0f },
       { "Repair Crews",     "E", "Every structure repairs itself over time (slower while under fire). Units still need Field Medics", 2000, 30.0f },
-      { "Flak Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f } },
+      { "Flak Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f },
+      { "Hyper Protection", "H", "Every structure gets 100% more health, takes 60% less damage from conventional fire, and can never lose more than 42% of its full health to a single warhead. Even an Underground Nuke can no longer erase a full-health protected base: it only finishes buildings that were already damaged", 6000, 55.0f },
+      { "Anti-Rocket",      "A", "Every wall mounts a point-defence laser (10 tiles): it burns incoming rockets, shells and nuclear warheads, and shoots down aircraft. Walls are unlimited, so a line of them blankets a base in overlapping fire", 4000, 45.0f } },
 };
 
 const DropType DROPS[F_COUNT] = {

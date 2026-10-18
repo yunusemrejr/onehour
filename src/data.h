@@ -65,6 +65,7 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_ANTINUKE,    // Anti-Nuke Laser / Anti-Nuke Missiles: small structures that shoot incoming warheads down
                  BR_CIVIC,       // civilian infrastructure (houses, shops, towers, the town hall): raised by a civilian dozer, pays and sends dozers on its own
                  BR_UNUKE,       // Underground Nuke silo: a buried launcher as hard to destroy as a bunker, its silver warhead three times a ramp's
+                 BR_WALL,        // thick concrete/steel wall segment: unlimited, cheap, very hard to nuke through
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -77,6 +78,7 @@ enum BuildTypeId {
     B_C_HOUSE, B_C_APARTMENTS, B_C_SKYSCRAPER, B_C_GAS, B_C_GROCERY, B_C_EVENTHALL, B_C_SQUARE, B_C_TOWNHALL, B_C_GOVERNMENT,
     B_K_HOUSE, B_K_APARTMENTS, B_K_SKYSCRAPER, B_K_GAS, B_K_GROCERY, B_K_EVENTHALL, B_K_SQUARE, B_K_TOWNHALL, B_K_GOVERNMENT,
     B_C_UNUKE, B_K_UNUKE,     // Underground Nuke silos
+    B_C_WALL, B_K_WALL,       // wall segments (unlimited; see BR_WALL)
     B_COUNT
 };
 
@@ -148,6 +150,8 @@ extern const ProgramType PROGRAMS[F_COUNT];
 // covers every structure the army owns, the ones standing and the ones it builds later, even if the tech structure falls afterwards.
 enum UpgradeId { UPG_RUGGED = 0, UPG_GUNS, UPG_REPAIR,
                  UPG_DRONES,     // protector drones: every ship flies with a screen of them, and every jeep gets a second one
+                 UPG_HYPER,      // Hyper Protection: far more health, heavy damage reduction, and a hard per-warhead damage cap
+                 UPG_ANTIROCKET, // Anti-Rocket: every wall becomes a laser point-defence that burns rockets, warheads and aircraft
                  UPG_COUNT };
 static const int UPG_STRUCTURE_COUNT = UPG_DRONES;   // the first three change what structures are; they and the Advanced Program set the drop tier
 struct UpgradeType { const char* name; const char* hotkey; const char* desc; int cost; float time; };
@@ -157,6 +161,33 @@ static const float RUGGED_ARMOR = 0.5f;       // Rugged: fraction of incoming da
 static const float RUGGED_SWAMP_LO = 0.03f;  // Rugged: the plating starts to give once this share of max health lands within ~2 s ...
 static const float RUGGED_SWAMP_HI = 0.11f;  // ... and is overwhelmed (full damage) from this share on: only a massive assault breaks through
 static const float RUGGED_NUKE = 0.55f;       // Rugged: fraction of max health one warhead takes at ground zero (two close nukes bring it down)
+// Hyper Protection: the tech structure's ultimate plating. Beyond doubling structural health and shrugging off most conventional fire, it puts a
+// hard ceiling on what one warhead can do to a protected structure: a full-health building can never be erased by a single nuke (even the
+// silver Underground Nuke), so a warhead can only finish structures that were already damaged. Damage that would exceed the cap is stopped by
+// the plating.
+static const float HYPER_HP = 2.0f;           // structure health multiplier
+static const float HYPER_ARMOR = 0.40f;       // fraction of conventional damage a protected structure takes
+static const float HYPER_NUKE = 0.42f;        // hard ceiling: one warhead takes at most this share of max health
+// The Command Core / Post is the keystone: enormous health, heavy armour against conventional fire, and a hard nuke ceiling. It cannot be
+// destroyed by warheads alone; it takes a sustained conventional assault. The tech structure is deliberately the second-toughest building.
+static const float HQ_ARMOR = 0.35f;          // fraction of conventional damage a Command structure takes
+static const float HQ_NUKE = 0.12f;           // hard ceiling: one warhead takes at most this share of its max health
+// Walls: a cheap, unlimited 1x1 segment with a huge health pool and a very low per-warhead ceiling. At ground zero a normal warhead takes
+// about a tenth of a wall's health, so even a direct hit is only a chip: it takes a long barrage to open a breach. Hyper Protection doubles
+// the pool, so it takes even longer.
+static const float WALL_HP = 18000.0f;
+static const float WALL_NUKE = 0.10f;         // hard ceiling per warhead (fraction of max health)
+static const float WALL_ARMOR = 0.60f;        // fraction of conventional damage a wall takes
+// Anti-Rocket walls and the Q defences share a point-defence envelope. A wall's laser is shorter-ranged than a dedicated anti-nuke tower but
+// walls are unlimited, so a line of them can blanket a base. Each defence rolls its own chance and has its own reload.
+static const float WALL_PD_COVER = 10.0f;     // tiles around an Anti-Rocket wall
+static const float WALL_PD_CHANCE = 0.38f;    // chance to burn down one incoming rocket / shell / warhead
+static const float WALL_PD_RELOAD = 3.2f;     // seconds before the same wall can engage again
+static const float WALL_PD_AA = 190.0f;       // damage a wall laser does to an aircraft it catches
+static const float ANTINUKE_PD_AA = 230.0f;   // damage a Q defence does to an aircraft
+static const float PD_AIRCRAFT_RELOAD = 1.1f; // seconds between aircraft shots
+static const int   AIRFIELD_CAP = 25;         // fixed-wing aircraft based at one oversized airfield: one per pad
+static const float BARRACKS_SPEED = 3.0f;     // barracks infantry production multiplier (always, even on low power)
 static const float SELF_REPAIR_RATE = 0.012f; // Self-Repair: fraction of max health a structure restores per second once out of combat
 static const float SELF_REPAIR_HOT = 0.25f;   // ... and the share of that rate it keeps while still taking fire
 static const float SELF_REPAIR_DELAY = 3.0f;  // seconds after the last hit before full-rate repair resumes
@@ -371,8 +402,8 @@ static const float AIR_PAD_REPAIR = 0.03f;    // fraction of max health an aircr
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures
 int firstBuildOf(Faction f);
 static const int UNITS_PER_FACTION = 12;
-static const int AIRFIELD_CAP = 4;            // fixed-wing aircraft (drones, jets) based at one airfield: one per pad. Helicopters do not count:
-                                              // they land on helipads around the airfield, so an airfield can build and house any number of them
+// (AIRFIELD_CAP is declared with the other structure constants above: an oversized airfield houses 25 fixed-wing aircraft.)
+
 static const int BUILDS_PER_FACTION = 11;
 static const float HELI_SPACE = 46.0f;        // px between the centres of neighbouring hovering helicopters (the drawn hulls are about 40 px
                                               // across, so this leaves a small gap between them)
