@@ -1189,19 +1189,17 @@ void Sim::nukeBlast(const Nuke& n) {
         if (foe) {
             if (e->isBuilding()) {
                 bool bunkerB = hardened(*e);
-                bool wallB = e->bt().role == BR_WALL;
                 bool hqB = e->bt().role == BR_HQ;
                 bool hyperB = hasUpgrade(e->owner, UPG_HYPER) && e->bt().role != BR_CIVIC;
-                bool protectedB = wallB || hqB || hyperB;
+                bool protectedB = hqB || hyperB;      // walls are ordinary small structures now: a warhead flattens them like anything else small
                 bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA && !bunkerB && !protectedB;
                 bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && e->bt().role != BR_CIVIC;
                 float dmg, cap = -1.0f;
-                // Hyper Protection, the Command keystone and thick walls each put a hard ceiling on one warhead. A full-health protected
-                // structure survives any single warhead (even the silver Underground Nuke); only already-damaged ones can be finished.
+                // Hyper Protection and the Command keystone put a hard ceiling on one warhead (so neither is erased in a single hit, even by
+                // the silver Underground Nuke); the ceiling is a share of max health, so enough direct hits always bring them down.
                 if (hyperB) cap = e->maxHp * HYPER_NUKE;
-                if (wallB) cap = cap < 0 ? e->maxHp * WALL_NUKE : std::min(cap, e->maxHp * WALL_NUKE);
                 if (hqB) cap = cap < 0 ? e->maxHp * HQ_NUKE : std::min(cap, e->maxHp * HQ_NUKE);
-                if (bunkerB) dmg = e->maxHp * 1.2f * f * D;                                       // wrecks the hatch and hurts the bunker, but it is buried deep: it can never be destroyed this way
+                if (bunkerB) dmg = e->maxHp * 1.2f * f * D;                                       // wrecks the hatch and hurts the buried body; warheads ignore the floor, so repeated direct hits destroy it
                 else if (protectedB) dmg = e->maxHp * 1.6f * f * D;                              // (capped below; the ceiling is what stops a one-shot erase)
                 else if (rugged) dmg = e->maxHp * RUGGED_NUKE * f * D / RUGGED_ARMOR;               // (after the armour) a bit over half at ground zero: it takes two warheads (one silver one)
                 else if (small) dmg = e->maxHp * 1.6f * f * D;                                    // f above ~0.63 (the inner blast) brings it down
@@ -1209,7 +1207,7 @@ void Sim::nukeBlast(const Nuke& n) {
                     dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f) * D;                      // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
                     if (!n.deep) dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));   // never lethal (an Underground Nuke's triple blast flattens the inner half)
                 }
-                if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr, cap > 0 ? lessen(cap, *e) : -1.0f);
+                if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr, cap > 0 ? lessen(cap, *e) : -1.0f, true);
                 e = get(r); if (!e) continue;
                 e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f) * (n.deep ? 1.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
@@ -1669,7 +1667,7 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle
     }
 }
 
-void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap) {
+void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap, bool nuke) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
     if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
         if (tick % 3 == 0) { fx.push_back({FX_SPARK, tgt.pos, tgt.pos, 0, 0.3f, rgb(255, 236, 190), 5}); fx.push_back({FX_RING, tgt.pos, tgt.pos, 0, 0.25f, rgb(255, 255, 255), 16.0f}); }
@@ -1682,10 +1680,10 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         float load = tgt.dmgLoad / tgt.maxHp;
         real *= RUGGED_ARMOR + (1.0f - RUGGED_ARMOR) * clampf((load - RUGGED_SWAMP_LO) / (RUGGED_SWAMP_HI - RUGGED_SWAMP_LO), 0, 1);
     }
-    if (tgt.isBuilding()) {   // Hyper Protection / the Command keystone / thick walls shrug off conventional fire
+    if (tgt.isBuilding()) {   // Hyper Protection / the Command keystone / thick walls shrug off conventional fire (a warhead's blast overwhelms a wall's plating)
         if (hasUpgrade(tgt.owner, UPG_HYPER) && tgt.bt().role != BR_CIVIC) real *= HYPER_ARMOR;
         if (tgt.bt().role == BR_HQ) real *= HQ_ARMOR;
-        if (tgt.bt().role == BR_WALL) real *= WALL_ARMOR;
+        if (tgt.bt().role == BR_WALL && !nuke) real *= WALL_ARMOR;
         tgt.dmgLoad += real;
         if (cap > 0) real = std::min(real, cap);   // a warhead's hard ceiling (absolute HP), applied after every multiplier
     }
@@ -1694,7 +1692,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     if (attU && attU->isUnit() && attU->rank > 0) real *= 1.0f + 0.2f * attU->rank;   // veterans and elites hit harder
     // Underground bunker (and the Underground Nuke silo, its blast doors standing in for the hatch): the surface hatch takes the damage first; what gets
     // past it is stopped by the plating. Only soldiers and vehicles can ever take it below BUNKER_FLOOR of its health: aircraft, structures, shells
-    // from the sky, fallout and nukes cannot.
+    // from the sky and fallout cannot. Nuclear warheads ignore the floor entirely - enough of them destroy even a buried bunker or silo.
     bool bunker = hardened(tgt);
     float hpBefore = tgt.hp;
     if (bunker) {
@@ -1706,7 +1704,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         real *= BUNKER_PLATING;
     }
     tgt.hp -= real;
-    if (bunker && !(attU && attU->isUnit() && attU->ut().kind != UK_AIR)) {
+    if (bunker && !nuke && !(attU && attU->isUnit() && attU->ut().kind != UK_AIR)) {
         float floorHp = tgt.maxHp * BUNKER_FLOOR;
         tgt.hp = std::max(tgt.hp, std::min(hpBefore, floorHp));
     }

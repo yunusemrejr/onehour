@@ -173,17 +173,15 @@ static const float RUGGED_NUKE = 0.55f;       // Rugged: fraction of max health 
 static const float HYPER_HP = 2.0f;           // structure health multiplier
 static const float HYPER_ARMOR = 0.40f;       // fraction of conventional damage a protected structure takes
 static const float HYPER_NUKE = 0.42f;        // hard ceiling: one warhead takes at most this share of max health
-// The Command Core / Post is the keystone: enormous health, heavy armour against conventional fire, and a hard nuke ceiling. It cannot be
-// destroyed by warheads alone; it takes a sustained conventional assault. The Underground Nuke silo is the second-toughest building now;
-// the tech structure comes third (Hyper Protection and Rugged Nanoshell multiply every structure the same way, so the order holds).
+// The Command Core / Post is the keystone: the highest health pool in the game, heavy armour against conventional fire, and a high
+// per-warhead ceiling - three direct hits bring it down and nothing less. The Underground Nuke silo is second, the bunker third, the
+// tech structure fourth (Hyper Protection and Rugged Nanoshell multiply every structure the same way, so the order holds).
 static const float HQ_ARMOR = 0.35f;          // fraction of conventional damage a Command structure takes
-static const float HQ_NUKE = 0.12f;           // hard ceiling: one warhead takes at most this share of its max health
-// Walls: a cheap, unlimited 1x1 segment with a huge health pool and a very low per-warhead ceiling. At ground zero a normal warhead takes
-// about a tenth of a wall's health, so even a direct hit is only a chip: it takes a long barrage to open a breach. Hyper Protection doubles
-// the pool but the ceiling is a share of it, so the number of warheads it takes is unchanged.
-static const float WALL_HP = 13500.0f;
-static const float WALL_NUKE = 0.10f;         // hard ceiling per warhead (fraction of max health)
-static const float WALL_ARMOR = 0.60f;        // fraction of conventional damage a wall takes
+static const float HQ_NUKE = 0.40f;           // hard ceiling: one warhead takes at most this share of its max health (three direct hits kill it)
+// Walls: a cheap, unlimited 1x1 segment. Sturdy enough to soak small arms and light vehicles (their armour), but a warhead flattens one
+// at ground zero like any other small structure; Hyper Protection doubles its pool and caps a single warhead.
+static const float WALL_HP = 1800.0f;
+static const float WALL_ARMOR = 0.50f;        // fraction of conventional damage a wall takes
 // Anti-Rocket walls and the Q defences share a point-defence envelope. A wall's laser is shorter-ranged than a dedicated anti-nuke tower but
 // walls are unlimited, so a line of them can blanket a base. Each defence rolls its own chance and has its own reload.
 static const float WALL_PD_COVER = 10.0f;     // tiles around an Anti-Rocket wall
@@ -321,7 +319,7 @@ static const float AID_RADIUS = 3.0f;         // tiles: the crates come down wit
 static const int   BUNKER_INF_CAP = 50, BUNKER_DOZER_CAP = 1;
 static const float BUNKER_HATCH_HP = 3200.0f;     // the surface opening (reinforced plating)
 static const float BUNKER_PLATING = 0.25f;        // share of the damage that reaches the buried bunker once the hatch is gone
-static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky, radiation and nukes can never take it below this share of its health
+static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky and radiation can never take it below this share of its health - nuclear warheads ignore it entirely (a direct hit or a barrage destroys the bunker)
 static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
 // Dozers: a direct order holds off their own repair rounds for a while; a site they are pulled away from is kept and resumed.
 static const float DOZER_MANUAL_HOLD = 12.0f;     // seconds after a manual move or target order (counted from its arrival) before it mends things on its own again
@@ -388,7 +386,7 @@ static const int   CIVIC_MAX = 30;                // civilian structures per pla
 static const int   CIVIC_DOZER_CAP = 5;           // no free dozers once the army has this many (both kinds counted: more made bases rebuild faster than they fell)
 // Underground Nuke: a buried silo that fires the same kind of warhead as a Nuke Ramp, but silver and much stronger: three times the blast
 // radius, 2.7 times the damage (10% weaker than it used to be) and three times the radiation (strength and how long it lasts). It has blast
-// doors and deep plating (only soldiers and vehicles can take it below BUNKER_FLOOR), and only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can
+// doors and deep plating (only soldiers and vehicles can take it below BUNKER_FLOOR; warheads ignore the floor and can destroy it), and only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can
 // shoot its warhead down at all - and the armoured silver warhead halves even that chance (UNUKE_INTERCEPT_RESIST).
 static const float UNUKE_SCALE = 9.0f;            // share of a full warhead's blast AREA: radius NUKE_RADIUS * sqrt(9) = three times a ramp's
 static const float UNUKE_DAMAGE = 2.7f;           // damage multiplier over a ramp's warhead (10% weaker than the original 3x)

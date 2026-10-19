@@ -52,8 +52,8 @@ static bool constantsTest(Faction me, Faction foe, u64 seed) {
     int hq = firstBuildOf(me), tech = hq + BR_TECH, bunker = me == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
     int wall = me == F_CYBER ? B_C_WALL : B_K_WALL, air = hq + BR_AIRFIELD;
     CHECK7(BUILDS[wall].role == BR_WALL && BUILDS[wall].w == 1 && BUILDS[wall].h == 1 && BUILDS[wall].faction == me, "the wall is not a 1x1 structure of this army");
-    CHECK7(BUILDS[wall].hp == WALL_HP && BUILDS[wall].hp < BUILDS[tech].hp, "the wall does not have its thick health pool");
-    CHECK7(BUILDS[hq].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[bunker].hp, "the Command structure / tech structure / bunker durability order is wrong");
+    CHECK7(BUILDS[wall].hp == WALL_HP && BUILDS[wall].hp < BUILDS[tech].hp, "the wall does not have its health pool");
+    CHECK7(BUILDS[hq].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[wall].hp, "the Command / bunker / tech / wall durability order is wrong");
     CHECK7(BUILDS[air].w == 10 && BUILDS[air].h == 7 && AIRFIELD_CAP == 25, "the airfield is not the larger 10x7 / 25-pad airbase");
     CHECK7(BUILDS[me == F_CYBER ? B_C_WALL : B_K_WALL].role == BR_WALL, "the other army has no wall");
     CHECK7(BARRACKS_SPEED == 3.0f && HYPER_HP == 2.0f && HYPER_NUKE < 1.0f && HQ_NUKE < HYPER_NUKE, "the new durability constants are not the intended ones");
@@ -73,20 +73,16 @@ static bool wallTest(Faction me, Faction foe, u64 seed) {
     }
     CHECK7(made == 32, "could not chain 32 wall segments (walls must be unlimited and adjacent)");
     CHECK7(countB7(0, wall) >= 32 && !g_sim.atBuildLimit(0, wall), "the wall limit kicked in");
-    // thick against warheads: 8 ground-zero nukes leave it standing, a long barrage eventually opens the breach
+    // thin against warheads: a single ground-zero hit flattens a wall segment (any small structure), a silver warhead flattens it too
     Ref w = place7(wall, 0, arena + Vec2(-16 * TILE, -16 * TILE));
     CHECK7(w.valid(), "no isolated wall to nuke");
     Entity* W = g_sim.get(w); W->hp = W->maxHp;
-    for (int k = 0; k < 8; k++) { nuke7(W->pos, 1, false, 1.0f); CHECK7(g_sim.get(w) != nullptr, "a wall fell to fewer than eight warheads"); }
-    CHECK7(g_sim.get(w)->hp > 0.0f, "the wall did not survive eight warheads");
-    for (int k = 0; k < 8; k++) { if (!g_sim.get(w)) break; nuke7(g_sim.get(w)->pos, 1, false, 1.0f); }
-    CHECK7(!g_sim.get(w), "a wall survived sixteen ground-zero warheads");
-    // a silver warhead also only chips it by the cap
+    nuke7(W->pos, 1, false, 1.0f);
+    CHECK7(!g_sim.get(w), "a wall survived a ground-zero warhead");
     Ref w2 = place7(wall, 0, arena + Vec2(16 * TILE, -16 * TILE));
     CHECK7(w2.valid(), "no second wall");
-    float hp0 = g_sim.get(w2)->maxHp; g_sim.get(w2)->hp = hp0;
     nuke7(g_sim.get(w2)->pos, 1, true, UNUKE_SCALE);
-    CHECK7(g_sim.get(w2) && g_sim.get(w2)->hp > hp0 * (1.0f - WALL_NUKE - 0.02f), "an Underground Nuke took more than the wall's hard cap");
+    CHECK7(!g_sim.get(w2), "an Underground Nuke did not flatten a wall");
     // Hyper Protection: researchable at the tech structure, doubles health and caps one warhead
     if (!g_sim.techOnline(0)) {   // (the warhead tests may have caught the first one at the edge of a blast)
         Ref t2 = place7(tech, 0, arena + Vec2(-20 * TILE, 12 * TILE));

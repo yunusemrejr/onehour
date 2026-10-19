@@ -191,22 +191,15 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     CHECK(!alive(tk) || hpOf(tk) < tk0 * 0.8f, "the garrison did not shoot an enemy tank");
     CHECK(!alive(air) || hpOf(air) < air0 * 0.9f, "the rocket troopers in the bunker did not shoot an aircraft");
     CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "a bunker firing its guns should stay plainly visible");
-    // ---- a nuke wrecks the hatch, hurts the bunker, and can never destroy it; the garrison inside is untouched but silent
+    // ---- a nuke wrecks the hatch and hurts the bunker, but the garrison inside is untouched (the hatch guns fall silent)
     Ref tk2 = spawnAt(tankFoe, 1, bp + Vec2(12 * TILE, 0));
-    for (int k = 0; k < 6; k++) {
-        g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false});
-        run(0.2f); g_sim.fallouts.clear();
-        CHECK(alive(bk), "a nuke destroyed an underground bunker");
-        if (k == 0) {
-            B = g_sim.get(bk);
-            CHECK(B->hatch <= 0, "a nuke left the surface hatch intact");
-            CHECK(B->hp < B->maxHp, "a nuke did not hurt the bunker at all");
-            CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP, "a nuke killed soldiers sheltering underground");
-        }
-    }
+    g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false});
+    run(0.2f); g_sim.fallouts.clear();
+    CHECK(alive(bk), "a single nuke destroyed an underground bunker outright");
     B = g_sim.get(bk);
-    CHECK(B->hp >= B->maxHp * BUNKER_FLOOR - 1.0f, "repeated nukes took the bunker below its floor");
-    CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP, "the garrison did not survive the nukes");
+    CHECK(B->hatch <= 0, "a nuke left the surface hatch intact");
+    CHECK(B->hp < B->maxHp, "a nuke did not hurt the bunker at all");
+    CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP, "a nuke killed soldiers sheltering underground");
     Ref tk3 = spawnAt(tankFoe, 1, bp + Vec2(4 * TILE, 3 * TILE));
     float t30 = hpOf(tk3); run(8);
     CHECK(alive(tk3) && hpOf(tk3) >= t30, "a garrison fired with the hatch blown off");
@@ -218,22 +211,30 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     float t31 = hpOf(tk4); run(10);
     CHECK(!alive(tk4) || hpOf(tk4) < t31, "the garrison did not resume fire after the hatch was patched");
     (void)tk2;
-    // ---- only soldiers and vehicles can destroy it: enemy tanks guided by a spy drone grind it down, and the garrison spills out exposed
-    // pre-damage it to the floor with nukes so the grind fits in the test (the nukes also clear the field)
-    for (int k = 0; k < 4; k++) { g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false}); run(0.2f); g_sim.fallouts.clear(); }
-    run(14);   // (until the pulse that knocked the bunker offline has passed)
-    Ref sd = spawnAt(sdroneFoe, 1, bp + Vec2(0, 5 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
+    // ---- repeated warheads destroy a bunker: nukes ignore the floor, so a barrage brings it down and the garrison spills out
+    {
+        int shells = 0;
+        while (alive(bk) && shells < 10) { g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false}); run(0.2f); g_sim.fallouts.clear(); shells++; }
+        CHECK(!alive(bk), "repeated nukes could not destroy the bunker");
+        CHECK(shells <= 6, "a bunker withstood too many warheads");
+    }
+    int exposed = 0; for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) exposed++;
+    CHECK(exposed >= 40, "the garrison did not spill out onto the ground when nukes destroyed the bunker");
+    // ---- conventional ground troops can still grind a bunker down: a fresh bunker, tanks, and the garrison spills out exposed
+    Ref bk2 = placeAt(bunkerType, 0, bp + Vec2(-22 * TILE, 0));
+    CHECK(bk2.valid(), "no second spot for the tank-grind bunker");
+    Entity* B2 = g_sim.get(bk2);
+    B2->hp = B2->maxHp * BUNKER_FLOOR + 200.0f; B2->hatch = 0; B2->lastDamaged = g_sim.time;   // (pre-damaged near the floor so the grind fits the test)
+    Ref sd = spawnAt(sdroneFoe, 1, bp + Vec2(-22 * TILE, 5 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
     std::vector<Ref> tanks;
-    for (int i = 0; i < 14; i++) tanks.push_back(spawnAt(tankFoe, 1, bp + Vec2(((i % 7) - 3) * 30.0f, 4 * TILE + (i / 7) * 30.0f)));
+    for (int i = 0; i < 14; i++) tanks.push_back(spawnAt(tankFoe, 1, bp + Vec2(-22 * TILE + ((i % 7) - 3) * 30.0f, 4 * TILE + (i / 7) * 30.0f)));
     for (Ref t : tanks) if (alive(t)) { g_sim.get(t)->maxHp *= 10; g_sim.get(t)->hp = g_sim.get(t)->maxHp; }   // (the hatch gunfire would kill them: this test is about damage to the bunker)
     run(2);
-    g_sim.cmdAttack(tanks, bk);
+    g_sim.cmdAttack(tanks, bk2);
     CHECK(g_sim.get(tanks[0])->order == O_ATTACK, "enemy tanks could not be ordered to attack a bunker a spy drone had revealed");
     bool dead = false;
-    for (int t = 0; t < 20 * 400 && !dead; t++) { g_sim.step(); g_sim.events.clear(); if (t % 100 == 0 && !g_sim.get(sd)) { Ref nsd = spawnAt(sdroneFoe, 1, bp + Vec2(0, 5 * TILE)); sd = nsd; } dead = !alive(bk); }
+    for (int t = 0; t < 20 * 400 && !dead; t++) { g_sim.step(); g_sim.events.clear(); if (t % 100 == 0 && !g_sim.get(sd)) { Ref nsd = spawnAt(sdroneFoe, 1, bp + Vec2(-22 * TILE, 5 * TILE)); sd = nsd; } dead = !alive(bk2); }
     CHECK(dead, "tanks could not destroy the bunker");
-    int exposed = 0; for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) exposed++;
-    CHECK(exposed >= 40, "the garrison did not spill out onto the ground when the bunker fell");
     printf("stealthtest %s: bunker ok (%d soldiers back on the ground)\n", FACTION_NAME[me], exposed);
     return true;
 }

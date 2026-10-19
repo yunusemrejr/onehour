@@ -348,7 +348,7 @@ struct Sim {
     bool cmdDeepNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready Underground Nuke silo at pos (from that silo if it is ready)
     int deepNukesReady(int player) const;     // Underground Nuke silos that can launch right now
     float deepNukeWait(int player) const;     // seconds until the soonest silo is ready (0 = ready, -1 = no silo)
-    static bool hardened(const Entity& b);    // a finished bunker or Underground Nuke silo: doors/hatch first, plating, and only troops can finish it
+    static bool hardened(const Entity& b);    // a finished bunker or Underground Nuke silo: doors/hatch first, plating, and only troops can finish it with conventional fire - warheads ignore the floor and can destroy it
     static bool wall(const Entity& b) { return b.isBuilding() && b.bt().role == BR_WALL; }
     static bool canRaise(const Entity& dozer, int buildType);   // civilian dozers raise only the civilian town, the others only military structures
     static bool canMend(const Entity& dozer, int buildType);    // civilian dozers mend only the town; the others mend anything
@@ -384,7 +384,7 @@ struct Sim {
     float antiNukeCover(const Entity& b, float scale) const; // px: how far from it a warhead's target may be for it to engage (lasers: their blast reaching the circle is enough)
     int antiNukeLinked(const Entity& b) const;               // working Anti-Nuke Lasers of the same army standing close by (they share tracking: see ANTINUKE_LINK)
     float antiNukeShot(const Entity& b) const;               // its own chance of getting a warhead it engages
-    void applyDamagePublic(Entity& tgt, float dmg, int attackerOwner, Ref attacker) { applyDamage(tgt, dmg, attackerOwner, attacker, nullptr); }   // (test scenes)
+    void applyDamagePublic(Entity& tgt, float dmg, int attackerOwner, Ref attacker) { applyDamage(tgt, dmg, attackerOwner, attacker, nullptr); }   // (test scenes; no nuke flag: floors apply)
     void boardQuiet(Entity& u, Entity& c) { board(u, c, true); }   // put a soldier aboard a carrier at once (test scenes; the game walks them in with cmdEnter)
     Vec2 navalExit(const Entity& yard) const;                // where a ship leaves the yard into the water
     bool shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const;   // a legal spot for a structure that must touch the lake, nearest to 'near' (false: none known)
@@ -491,7 +491,7 @@ private:
     bool requestPath(Entity& e, Vec2 dest);
     bool tryFire(Entity& e, Entity& tgt);
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle = nullptr);
-    void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap = -1.0f);
+    void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap = -1.0f, bool nuke = false);   // nuke: warhead damage (it ignores the hardened floor: a bunker / silo can be destroyed by them)
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
     Entity* acquireTarget(Entity& e, float range, int wpn = -1);
     Entity* acquireZoneTarget(Entity& e);

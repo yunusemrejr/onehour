@@ -141,14 +141,23 @@ static bool deepNukeTest(Faction me, Faction foe, u64 seed) {
     CHECK6(g_sim.nukes.size() == 1 && g_sim.nukes[0].deep && std::fabs(Sim::nukeRadius(g_sim.nukes[0]) - 3.0f * NUKE_RADIUS * TILE) < 1.0f, "the silver warhead's blast radius is not three times a ramp's");
     CHECK6(g_sim.deepNukesReady(0) == 0 && !g_sim.cmdDeepNuke(0, far), "a silo launched twice without reloading");
     g_sim.nukes.clear();
-    // ---- the silo is as hard as a bunker: doors first, plating, and nothing but troops take it below the floor
+    // ---- the silo is as hard as a bunker: doors first, plating, and nothing but troops take it below the floor with conventional attack
+    // (warheads are different: they ignore the floor, so enough direct hits destroy even the silo - verified right after)
     float floorHp = S->maxHp * BUNKER_FLOOR;
-    g_sim.applyDamagePublic(*S, 1e7f, 1, NOREF);   // (a nuke, an aircraft, a structure: no ground unit behind it)
+    g_sim.applyDamagePublic(*S, 1e7f, 1, NOREF);   // (an aircraft, a structure, a shell: no ground unit behind it)
     S = g_sim.get(sr);
     CHECK6(S && S->hatch == 0 && S->hp >= floorHp - 0.5f, "something other than troops took the silo below its floor");
     Ref tank = spawn6(firstUnitOf(foe) + 5, 1, S->pos + Vec2(0, 5 * TILE));
     g_sim.applyDamagePublic(*S, 20000, 1, tank);
     CHECK6(!g_sim.get(sr) || g_sim.get(sr)->hp < floorHp, "a tank could not take the silo below its floor");
+    // warheads ignore the floor: a barrage of direct hits destroys the silo
+    int nHits = 0;
+    while (g_sim.get(sr) && nHits < 10) {
+        Sim::Nuke nn; nn.from = home; nn.pos = g_sim.get(sr)->pos; nn.owner = 0; nn.t = Sim::NUKE_FLIGHT - 0.05f; nn.scale = 1.0f; nn.deep = false;
+        g_sim.nukes.push_back(nn);
+        run6(0.25f); g_sim.fallouts.clear(); nHits++;
+    }
+    CHECK6(!g_sim.get(sr), "warheads could not destroy the Underground Nuke silo (the floor was not bypassed)");
     // ---- three times the damage: a large structure at ground zero survives a ramp's warhead but not the silver one; a tank at 1.6 ramp radii
     // is outside a ramp's blast but inside the silver one; the radiation is three times as strong and lasts three times as long
     Vec2 gz = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 7);
