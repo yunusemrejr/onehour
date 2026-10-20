@@ -17,21 +17,22 @@ ifeq ($(SDL_LIBS),)
 endif
 
 SRC := $(wildcard src/*.cpp)
-OBJ := $(patsubst src/%.cpp,build/%.o,$(SRC))
-BIN := build/onehour
+BUILD_DIR ?= build
+OBJ := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(SRC))
+BIN := $(BUILD_DIR)/onehour
 
 all: $(BIN)
 
 $(BIN): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJ) $(SDL_LIBS) $(LDFLAGS) -lm
 
-build/%.o: src/%.cpp src/*.h | build
+$(BUILD_DIR)/%.o: src/%.cpp src/*.h | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
-build:
-	mkdir -p build
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
 clean:
-	rm -rf build
+	rm -rf $(BUILD_DIR)
 
 .PHONY: all clean

@@ -3,6 +3,7 @@
 #include "map.h"
 #include "ui.h"
 #include "ai.h"
+#include "testutil.h"
 
 static bool g_ok = true;
 static bool failMsg(const char* m) { fprintf(stderr, "stealthtest: %s\n", m); g_ok = false; return false; }
@@ -697,6 +698,7 @@ static bool bunkerRetaliateTest(Faction me, Faction foe, u64 seed) {
     bk = retaliationScene(me, foe, seed + 2);
     CHECK(bk.valid(), "no spot for the bunker");
     bp = g_sim.get(bk)->pos;
+    flattenArena(bp, 13, 13);   // the fixture measures retaliation range, not terrain relocation
     g_sim.get(bk)->hatch = 0; g_sim.get(bk)->lastDamaged = g_sim.time;
     Ref lr = spawnAt(longFoe, 1, bp + Vec2(longReach * TILE, 0));
     CHECK(lr.valid(), "no spot for the long-range attacker");

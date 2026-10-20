@@ -51,11 +51,8 @@ struct AiPlayer {
     float lastBombRun = -100, lastAllyHelp = -100, lastNukeDodge = -100, retreatVotes = 0;
     int dodges = 0, medicsBuilt = 0;   // statistics for the self-play reports
     float waveX[WAVE_F] = {};   // features at launch, for learning from the outcome
-    float waveDealt0 = 0;       // enemy value destroyed by this player when the wave launched
     bool waveHasSample = false;
-    float nextLearn = 30;
-    float prevSpent[U_COUNT] = {}, prevDealt[U_COUNT] = {};
-    float mixFi = 0.33f, mixFv = 0.33f, mixFa = 0.33f;
+    float nextFortOrder = 0;
     Vec2 humanFront; bool hasFront = false;   // where a human teammate's army is fighting (computer allies converge on it)
     float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
@@ -64,6 +61,9 @@ struct AiPlayer {
     bool on(int f) const { return pro && (feat & f) != 0; }
     void init(int p, u64 seed);
     void endWave(float remainingValue);
+    void learnOutcomes();
+    void beginWaveLearning();
+    void garrisonStrongholds();
     void think();
     void dodgeNukes();                  // cheap per-tick check: pull units out of the circle of an incoming enemy nuke
     bool findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty);

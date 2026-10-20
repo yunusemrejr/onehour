@@ -313,19 +313,25 @@ static bool rolledChanceTest(Faction me, u64 seed) {
     scene8(me, foe, seed);
     int b0 = firstBuildOf(me), anT = me == F_CYBER ? B_C_ANTINUKE : B_K_ANTINUKE, wall = me == F_CYBER ? B_C_WALL : B_K_WALL;
     Vec2 gz = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 16);
-    for (int k = 0; k < 4; k++) place8(b0 + BR_POWER, 0, gz + Vec2((-10 + k * 3) * TILE, -9 * TILE));
+    flattenArena(gz, 20, 20);   // retain the intended defence distance on any map scale
+    for (int k = 0; k < 4; k++) place8(b0 + BR_POWER, 0, gz + Vec2((-10 + k * 3) * TILE, -16 * TILE));
     Ref an = place8(anT, 0, gz + Vec2(0, 15 * TILE));
     CHECK8(an.valid(), "no spot for the sampling defence");
     g_sim.updatePowerPublic();
     CHECK8(g_sim.antiNukeWorking(*g_sim.get(an)), "the sampling defence is not working");
+    CHECK8(dist(g_sim.get(an)->pos, gz) < g_sim.antiNukeCover(*g_sim.get(an), 1), "sampling defence is out of coverage");
     float p = g_sim.antiNukeWarheadShot(*g_sim.get(an));
-    int trials = 300, down = trialsShotDown8(gz, g_sim.get(an)->pos, trials);
+    Vec2 defenceAt = g_sim.get(an)->pos;
+    int trials = 300, down = trialsShotDown8(gz, defenceAt, trials);
     float rate = down / (float)trials, sigma = std::sqrt(p * (1.0f - p) / trials);
+    if (std::fabs(rate - p) >= 4.0f * sigma + 0.03f)
+        fprintf(stderr, "sampling defence: rate %.3f expected %.3f, distance %.1f tiles, alive %d working %d time %.1f gameOver %d\n", rate, p, dist(defenceAt, gz)/TILE, (int)(g_sim.get(an)!=nullptr), g_sim.get(an) ? (int)g_sim.antiNukeWorking(*g_sim.get(an)) : 0, g_sim.time, (int)g_sim.gameOver);
     CHECK8(std::fabs(rate - p) < 4.0f * sigma + 0.03f, "the warhead interception that is actually rolled is not the nerfed chance");
     printf("supersonictest %s: the anti-nuke defence stopped %.1f%% of %d warheads (stated %.1f%%)\n", FACTION_NAME[me], rate * 100.0f, trials, p * 100.0f);
     // the wall's chance against warheads is the 30% one (its anti-rocket chance stays as it was)
     scene8(me, foe, seed + 1);
     gz = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 16);
+    flattenArena(gz, 20, 20);
     g_sim.players[0].upg[UPG_ANTIROCKET] = true;
     Ref w = place8(wall, 0, gz + Vec2(0, 15 * TILE));
     CHECK8(w.valid() && g_sim.isAntiRocketWall(*g_sim.get(w)), "no spot for the sampling Anti-Rocket wall");

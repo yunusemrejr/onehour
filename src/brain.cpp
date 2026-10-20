@@ -1,4 +1,6 @@
 #include "brain.h"
+#include <filesystem>
+#include <unistd.h>
 
 Brain g_brain;
 std::string g_brainPath;
@@ -28,27 +30,39 @@ void Brain::waveFeaturesR(float Rt, float Ra, float minutes, int armyCount, floa
     x[4] = std::min((float)armyCount, 40.0f) / 20.0f - 1.0f;
 }
 static float sigmoid(float z) { return 1.0f / (1.0f + std::exp(-clampf(z, -12, 12))); }
-float Brain::waveProb(const float* x) const { float z = 0; for (int i = 0; i < WAVE_F; i++) z += ww[i] * x[i]; return sigmoid(z); }
+static bool finiteFeatures(const float* x, int n) {
+    for (int i = 0; i < n; i++) if (!std::isfinite(x[i]) || std::abs(x[i]) > 8) return false;
+    return true;
+}
+float Brain::waveProb(const float* x) const { if (!finiteFeatures(x, WAVE_F)) return 0.5f; float z = 0; for (int i = 0; i < WAVE_F; i++) z += ww[i] * x[i]; return sigmoid(z); }
 // Online logistic regression pulled toward the prior: waves only launch where the estimate already says they should win, so the outcomes cover a narrow
 // band of ratios and every single result is noisy. A small step and a pull back toward the calibrated weights let the model follow what the opponents
 // really do (it takes many waves to move far) without being thrown off by a lucky or unlucky few.
 void Brain::learnWave(const float* x, bool success) {
-    if (!learning) return;
+    if (!learning || !finiteFeatures(x, WAVE_F)) return;
     static const Brain prior;
     float p = waveProb(x), err = (success ? 1.0f : 0.0f) - p;
     float lr = 0.06f / (1.0f + waveSamples * 0.02f) + 0.008f;
     for (int i = 0; i < WAVE_F; i++) ww[i] = clampf(ww[i] + lr * (err * x[i] - 0.25f * (ww[i] - prior.ww[i])), -6, 6);
-    waveSamples++;
+    waveSamples = std::min(waveSamples + 1, 100000000);
 }
 
-float Brain::unitEff(int type, const float* x) const { float z = 0; for (int i = 0; i < UNIT_F; i++) z += wu[type][i] * x[i]; return clampf(z, 0.05f, 6.0f); }
+float Brain::unitEff(int type, const float* x) const {
+    if (type < 0 || type >= U_COUNT || !finiteFeatures(x, UNIT_F)) return 1.0f;
+    float z = 0; for (int i = 0; i < UNIT_F; i++) z += wu[type][i] * x[i];
+    return clampf(z, 0.05f, 6.0f);
+}
 void Brain::learnUnit(int type, const float* x, float obs) {
-    if (!learning) return;
+    if (!learning || type < 0 || type >= U_COUNT || !std::isfinite(obs) || !finiteFeatures(x, UNIT_F)) return;
     obs = clampf(obs, 0, 4.0f);
     float pred = 0; for (int i = 0; i < UNIT_F; i++) pred += wu[type][i] * x[i];
-    float err = obs - pred, lr = 0.15f / (1.0f + unitSamples[type] * 0.05f) + 0.01f;
-    for (int i = 0; i < UNIT_F; i++) wu[type][i] = clampf(wu[type][i] + lr * err * x[i], -4, 6);
-    unitSamples[type]++;
+    float norm = 0; for (int i = 0; i < UNIT_F; i++) norm += x[i] * x[i];
+    float err = obs - pred, lr = (0.15f / (1.0f + unitSamples[type] * 0.05f) + 0.01f) / std::max(1.0f, norm);
+    for (int i = 0; i < UNIT_F; i++) {
+        float prior = i == 0 ? 1.0f : 0.0f;
+        wu[type][i] = clampf(wu[type][i] + lr * (err * x[i] - 0.01f * (wu[type][i] - prior)), -4, 6);
+    }
+    unitSamples[type] = std::min(unitSamples[type] + 1, 100000000);
 }
 
 float Brain::doctrineValue(int ctx, int d) const {
@@ -68,11 +82,12 @@ int Brain::pickDoctrine(Rng& rng, int ctx) const {
     return best;
 }
 void Brain::learnDoctrine(int ctx, int d, float reward) {
-    if (!learning || d < 0 || d >= DOCTRINES) return;
+    if (!learning || d < 0 || d >= DOCTRINES || !std::isfinite(reward)) return;
+    reward = clampf(reward, 0, 1);
     ctx = clampi(ctx, 0, DOC_CTX - 1);
-    docN[d]++;
+    docN[d] = std::min(docN[d] + 1, 100000000);
     docQ[d] += (reward - docQ[d]) / std::min(docN[d] + 1.0f, 24.0f);   // a running average that forgets slowly, so the table follows the player's habits
-    ctxN[ctx][d]++;
+    ctxN[ctx][d] = std::min(ctxN[ctx][d] + 1, 100000000);
     ctxQ[ctx][d] += (reward - ctxQ[ctx][d]) / std::min(ctxN[ctx][d] + 1.0f, 16.0f);
 }
 
@@ -81,14 +96,22 @@ std::string Brain::defaultPath() {
     const char* home = getenv("HOME");
     if (!home) return "";
     std::string dir = std::string(home) + "/.local/share/onehour";
-    std::string cmd = "mkdir -p '" + dir + "' 2>/dev/null";
-    if (system(cmd.c_str()) != 0) return "";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) return "";
     return dir + "/brain.txt";
 }
 
 bool Brain::save(const char* path) const {
-    FILE* f = fopen(path, "w");
-    if (!f) return false;
+    if (!path || !*path) return false;
+    // Write beside the destination and replace only after a complete, flushed write.
+    // A crash or a full disk must not truncate the last good learned state.
+    std::string pattern = std::string(path) + ".tmp.XXXXXX";
+    std::vector<char> tmp(pattern.begin(), pattern.end()); tmp.push_back('\0');
+    int fd = mkstemp(tmp.data());
+    if (fd < 0) return false;
+    FILE* f = fdopen(fd, "w");
+    if (!f) { close(fd); remove(tmp.data()); return false; }
     fprintf(f, "onehour-brain 14 %d %d\n", games, waveSamples);   // v14: the Anti-Radiation Trucks joined the unit table (v13 files have 47 rows); v13: the Supersonic Bombers joined it (v12 files have 45 rows); v12: the civilian dozers joined it (v11 files have 43 rows); v11: the jeeps, warships and strike fighters joined it (v10 files have 35 rows); v10: the spies, spy drones and cargo choppers joined it (v9 files have 29 rows);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
     for (int i = 0; i < WAVE_F; i++) fprintf(f, "%.5f ", ww[i]);
     fprintf(f, "\n");
@@ -98,11 +121,14 @@ bool Brain::save(const char* path) const {
     fprintf(f, "\n");
     fprintf(f, "contexts\n");   // v9: the doctrine table per opponent context
     for (int c = 0; c < DOC_CTX; c++) { for (int d = 0; d < DOCTRINES; d++) fprintf(f, " %d %.5f", ctxN[c][d], ctxQ[c][d]); fprintf(f, "\n"); }
-    fclose(f);
-    return true;
+    bool ok = !ferror(f) && fflush(f) == 0 && fsync(fd) == 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok && rename(tmp.data(), path) == 0) return true;
+    remove(tmp.data()); return false;
 }
 
 bool Brain::load(const char* path) {
+    if (!path || !*path) return false;
     FILE* f = fopen(path, "r");
     if (!f) return false;
     Brain b;
@@ -129,6 +155,20 @@ bool Brain::load(const char* path) {
         }
     }
     fclose(f);
+    // Validate before installing anything; NaN, negative counts and huge counters
+    // otherwise poison all future matches or overflow the bandit's arithmetic.
+    auto countOk = [](int n) { return n >= 0 && n <= 100000000; };
+    ok = ok && countOk(b.games) && countOk(b.waveSamples);
+    for (float v : b.ww) ok = ok && std::isfinite(v) && v >= -6 && v <= 6;
+    for (int t = 0; t < U_COUNT; t++) {
+        ok = ok && countOk(b.unitSamples[t]);
+        for (float v : b.wu[t]) ok = ok && std::isfinite(v) && v >= -4 && v <= 6;
+    }
+    for (int d = 0; d < DOCTRINES; d++) {
+        if (!countOk(b.docN[d]) || !std::isfinite(b.docQ[d]) || b.docQ[d] < 0 || b.docQ[d] > 1) { b.docN[d] = 0; b.docQ[d] = 0.5f; }
+        for (int c = 0; c < DOC_CTX; c++)
+            if (!countOk(b.ctxN[c][d]) || !std::isfinite(b.ctxQ[c][d]) || b.ctxQ[c][d] < 0 || b.ctxQ[c][d] > 1) { b.ctxN[c][d] = 0; b.ctxQ[c][d] = 0.5f; }
+    }
     if (!ok) return false;
     bool lrn = learning;
     *this = b; learning = lrn;

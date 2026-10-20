@@ -36,6 +36,12 @@ struct Entity {
     u32 fxTick = 0;         // render-side: last tick this unit emitted a dust puff
     float disabledUntil = -1;
     Ref attacker;           // last entity that damaged us
+    // Lifetime combat evidence: only completed trials train composition, never a
+    // purchase window while this unit may still be travelling to the front.
+    float combatValue = 0;
+    float combatMix[3] = {};
+    bool combatSeen = false, combatRecorded = false;
+    u32 waveSerial = 0;
     // unit
     Order order = O_IDLE;
     Order postOrder = O_IDLE;   // what to resume after engaging (attack-move / guard)
@@ -168,6 +174,8 @@ struct Fx {
     int tag = 0;            // a handle back to the gameplay thing this effect visualises (a fallout zone's haze: see Fallout.visTag)
 };
 
+struct UnitOutcome { int type; float value; float mix[3]; };
+
 struct Player {
     bool active = false;
     bool alive = true;
@@ -197,6 +205,9 @@ struct Player {
     int unitsBuilt = 0, unitsLost = 0, unitsKilled = 0, structuresLost = 0, structuresKilled = 0, harvested = 0;
     float valueDealt[U_COUNT] = {};   // enemy value destroyed by each of our unit types (AI adapts composition to this)
     float spentOn[U_COUNT] = {};
+    std::vector<UnitOutcome> unitOutcomes;   // bounded completed trials, drained by the commander
+    u32 waveSerial = 0;
+    float waveCredit = 0;       // only damage from members of the current wave
     std::vector<u8> explored;   // MAP_W*MAP_H
     bool lowPower() const { return powerUsed > powerMade; }
     // Brutal computer armies play with a commander's edge: a bigger war chest, richer income, faster factories and dozers,
@@ -309,6 +320,8 @@ struct Sim {
     Ref placeBuilding(int type, int owner, int tx, int ty, bool instant);
     Ref spawnResource(int tx, int ty, int amount);
     void destroy(Entity& e, bool violent);
+    void finishUnitExperience(Entity& e);   // close a combat trial on death or a completed match
+    bool escapeDestination(const Entity& e, Vec2 threat, float tiles, Vec2& dest) const;
 
     // commands (validated; safe to call with anything)
     void cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove);
@@ -497,6 +510,7 @@ private:
     bool tryFire(Entity& e, Entity& tgt);
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle = nullptr);
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap = -1.0f, bool nuke = false);   // nuke: warhead damage (it ignores the hardened floor: a bunker / silo can be destroyed by them)
+    void noteCombat(Entity& e, const Entity& opponent);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
     Entity* acquireTarget(Entity& e, float range, int wpn = -1);
     Entity* acquireZoneTarget(Entity& e);

@@ -84,7 +84,7 @@ enum BuildTypeId {
     B_C_UNUKE, B_K_UNUKE,     // Underground Nuke silos
     B_C_WALL, B_K_WALL,       // wall segments (unlimited; see BR_WALL)
     // neutral civilian strongholds placed by the map generator (never built; see BR_STRONGHOLD)
-    B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER,
+    B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP,
     B_COUNT
 };
 

@@ -485,7 +485,18 @@ static bool econTest(u64 seed) {
         Vec2 tgt = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 30);
         std::vector<Ref> victims;
         for (int i = 0; i < 6; i++) victims.push_back(g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, tgt + Vec2(i * 20 - 50, (i % 2) * 20)));
-        Ref far = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, g_map.nearestFree(tgt + Vec2(0, 12 * TILE), 30));
+        // Pick real ground beyond the blast; nearestFree can otherwise snap a
+        // point in the larger lake back onto the island inside the blast.
+        Vec2 farAt; float farScore = 1e18f;
+        for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++) {
+            Vec2 p = tileCenter(x, y);
+            if (!g_map.passable(x, y) || dist(p, tgt) < 14 * TILE) continue;
+            float d = dist2(p, tgt + Vec2(0, 16 * TILE));
+            if (d < farScore) { farScore = d; farAt = p; }
+        }
+        Ref far = g_sim.spawnUnit(fac[1] == F_CYBER ? U_C_TANK : U_K_TANK, 1, farAt);
+        if (dist(g_sim.get(far)->pos, tgt) < 14 * TILE) return fail("far blast fixture is not outside the radius");
+        g_sim.get(far)->disabledUntil = 1e9f;
         g_sim.players[1].isAI = true;   // a human army's units see the warhead coming and get out of the circle (see --autotest): test the blast itself
         if (g_sim.nukesReady(0) != 2) return fail("two ramps should both be ready");
         if (!g_sim.cmdNuke(0, tgt)) return fail("nuke launch refused");
@@ -1388,7 +1399,8 @@ static bool dropTest(u64 seed) {
         int bb0 = firstBuildOf(F_CLANKER), bb1 = firstBuildOf(F_CYBER);
         Vec2 b0 = pl.basePos;
         for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(b0.x) + dx, ty = tileOf(b0.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
-        Vec2 target = g_map.nearestFree(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 20);
+        Vec2 target = openGroundNear(g_sim.players[1].basePos, 12);
+        flattenArena(target, 24, 24);   // this fixture tests flak, not the lake's dry-land area
         Vec2 dir = (target - b0).norm(), perp(-dir.y, dir.x);
         int placed = 0;
         for (int k = 0; k < 40 && placed < 8; k++) {
@@ -2548,6 +2560,10 @@ static bool fuzzTest(u64 seed, int seconds) {
     return true;
 }
 
+bool crowdTest(u64 seed);
+bool frontierMapTest(u64 seed);
+bool learningTest(u64 seed);
+bool determinismTest(u64 seed, int seconds);
 bool placementTest(u64 seed);
 bool placementBench(u64 seed);
 
@@ -2615,6 +2631,10 @@ int main(int argc, char** argv) {
         else if (a == "--autotest") { g_map.generate(); return autoTest(seed) ? 0 : 1; }
         else if (a == "--bombtest") { g_map.generate(); return bombTest(seed) && nukeDodgeTest(seed) ? 0 : 1; }
         else if (a == "--braintest") return brainTest() ? 0 : 1;
+        else if (a == "--crowdtest") return crowdTest(seed) ? 0 : 1;
+        else if (a == "--frontiermaptest") return frontierMapTest(seed) ? 0 : 1;
+        else if (a == "--learningtest") return learningTest(seed) ? 0 : 1;
+        else if (a == "--determinismtest") { int secs = 300; if (i + 1 < argc && argv[i + 1][0] != '-') secs = clampi(atoi(argv[++i]), 1, 3600); return determinismTest(seed, secs) ? 0 : 1; }
         else if (a == "--placementtest") return placementTest(seed) ? 0 : 1;
         else if (a == "--placementbench") return placementBench(seed) ? 0 : 1;
         else if (a == "--areatest") { g_map.generate(); return areaTest(seed) ? 0 : 1; }
@@ -2657,7 +2677,9 @@ int main(int argc, char** argv) {
             int first = fac == 0 ? B_C_HQ : B_K_HQ, only = getenv("ONEHOUR_BLDONLY") ? atoi(getenv("ONEHOUR_BLDONLY")) : -1;
             float x = 10, y = 6, rowH = 0;
             std::vector<int> types;   // the faction's base structures, then its underground bunker, Naval Yard and anti-nuke defence (their ids sit after both blocks);
-            if (getenv("ONEHOUR_CIVIC")) {   // ONEHOUR_CIVIC=1: the civilian town and the Underground Nuke silo instead
+            if (getenv("ONEHOUR_FORTS")) {
+                types = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP };
+            } else if (getenv("ONEHOUR_CIVIC")) {   // ONEHOUR_CIVIC=1: the civilian town and the Underground Nuke silo instead
                 for (int k = 0; k < CV_COUNT; k++) types.push_back((fac == 0 ? (int)B_C_HOUSE : (int)B_K_HOUSE) + k);
                 types.push_back(fac == 0 ? (int)B_C_UNUKE : (int)B_K_UNUKE);
             } else {

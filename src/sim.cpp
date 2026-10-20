@@ -118,9 +118,9 @@ Ref Sim::spawnResource(int tx, int ty, int amount) {
 // The map's neutral civilian strongholds. They are ordinary buildings with owner -1: nobody may sell them, they have no production, and no
 // army upgrade ever applies to them. The first infantryman to climb into one claims it (see Sim::board), and its windows become firing ports.
 void Sim::spawnMapLandmarks() {
-    static const int TYPES[3] = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER };
+    static const int TYPES[5] = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP };
     for (auto& L : g_map.landmarks) {
-        int type = TYPES[clampi(L.kind, 0, 2)];
+        int type = TYPES[clampi(L.kind, 0, 4)];
         Ref r = placeBuilding(type, -1, L.tx, L.ty, true);
         if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; }
     }
@@ -170,6 +170,7 @@ void Sim::deathFx(Entity& e) {
 
 void Sim::destroy(Entity& e, bool violent) {
     if (!e.alive) return;
+    if (violent) finishUnitExperience(e);
     if (violent) deathFx(e);
     if (e.isBuilding()) {
         g_map.setStructure(e.tx, e.ty, e.bt().w, e.bt().h, false);
@@ -334,7 +335,7 @@ Vec2 Sim::unitExit(const Entity& b) const {
 
 // ------------------------------------------------------------ commands
 // any direct order (from the player or the computer commander) replaces whatever the unit was doing on its own initiative
-static void takeOrder(Entity& e) { e.autoTask = false; e.resumeOrder = O_IDLE; e.evadeUntil = -1; e.jetBreak = 0; }
+static void takeOrder(Entity& e) { e.stuckTimer = 0; e.lastPos = e.pos; e.autoTask = false; e.resumeOrder = O_IDLE; e.evadeUntil = -1; e.jetBreak = 0; }
 
 static void formationOffsets(const std::vector<Entity*>& units, Vec2 dest, std::vector<Vec2>& out) {
     int n = (int)units.size();
@@ -1456,7 +1457,9 @@ void Sim::updateResearch() {
 bool Sim::requestPath(Entity& e, Vec2 dest) {
     e.path.clear(); e.pathIdx = 0;
     e.repathTimer = PATH_INTERVAL;
-    e.stuckTimer = 0; e.lastPos = e.pos;
+    // Ground progress is measured across replans; resetting here prevented the
+    // 1.5-second stuck check from ever firing in a frequently replanned corridor.
+    if (e.isAir()) { e.stuckTimer = 0; e.lastPos = e.pos; }
     if (e.isAir()) { e.path.push_back(dest); return true; }
     if (e.ut().naval) {   // ships plan over open water only
         bool ok = g_map.findNavalPath(e.pos, dest, e.path);
@@ -1683,6 +1686,27 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle
     }
 }
 
+void Sim::noteCombat(Entity& e, const Entity& opponent) {
+    if (!e.isUnit() || e.owner < 0 || !players[e.owner].isAI || e.ut().role != UR_COMBAT || e.ut().temp || e.combatSeen) return;
+    e.combatSeen = true;
+    int n = 0;
+    forEachNear(e.pos, 12 * TILE, [&](Entity& foe) {
+        if (!foe.isUnit() || !enemies(e.owner, foe.owner) || foe.ut().role != UR_COMBAT || foe.fall > 0 || !visibleTo(foe, e.owner)) return;
+        int k = foe.isAir() ? 2 : foe.ut().kind == UK_INF ? 0 : 1;
+        e.combatMix[k]++; n++;
+    });
+    // A new unit or its opponent may not have reached the spatial grid yet.
+    if (!n && opponent.isUnit()) { e.combatMix[opponent.isAir() ? 2 : opponent.ut().kind == UK_INF ? 0 : 1] = 1; n = 1; }
+    if (n) for (float& v : e.combatMix) v /= n;
+}
+
+void Sim::finishUnitExperience(Entity& e) {
+    if (!e.isUnit() || e.owner < 0 || !players[e.owner].isAI || !e.combatSeen || e.combatRecorded) return;
+    e.combatRecorded = true;
+    auto& outcomes = players[e.owner].unitOutcomes;
+    if (outcomes.size() < 1024) outcomes.push_back({e.type, e.combatValue, {e.combatMix[0], e.combatMix[1], e.combatMix[2]}});
+}
+
 void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap, bool nuke) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
     if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
@@ -1730,10 +1754,18 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     // credit the attacking unit type with the value it chewed through (for adaptive AI composition; friendly fire earns nothing)
     bool foe = attackerOwner >= 0 && tgt.owner >= 0 && enemies(attackerOwner, tgt.owner);
     if (foe) {
-        const Entity* a = get(attacker);
-        if (a && a->isUnit()) {
+        Entity* a = get(attacker);
+        if (a && a->owner == attackerOwner) {
+            noteCombat(*a, tgt); noteCombat(tgt, *a);
+        }
+        if (a && a->isUnit() && a->owner == attackerOwner) {
             float tv = tgt.isUnit() ? UNITS[tgt.type].cost : BUILDS[tgt.type].cost * 0.5f;
-            players[attackerOwner].valueDealt[a->type] += tv * std::min(real, std::max(tgt.hp + real, 0.0f)) / tgt.maxHp;
+            // Credit actual health removed, including overkill/floor handling.
+            // Damage absorbed by a hatch or stopped at the bunker floor is not a kill.
+            float value = tv * std::max(0.0f, hpBefore - std::max(0.0f, tgt.hp)) / tgt.maxHp;
+            players[attackerOwner].valueDealt[a->type] += value;
+            a->combatValue += value;
+            if (a->waveSerial && a->waveSerial == players[attackerOwner].waveSerial) players[attackerOwner].waveCredit += value;
         }
     }
     if (foe) {   // (a human's force fire on an ally raises no alarm)
@@ -2293,14 +2325,40 @@ void Sim::moveAside(Entity& e, Vec2 dest, float holdFor) {
     if (!e.isAir()) requestPath(e, dest);
 }
 
-void Sim::retreatFrom(Entity& e, Vec2 threat, float tiles) {
+bool Sim::escapeDestination(const Entity& e, Vec2 threat, float tiles, Vec2& dest) const {
     Vec2 away = e.pos - threat; float l = away.len();
     away = l > 1 ? away * (1.0f / l) : Vec2(-std::cos(e.angle), -std::sin(e.angle));
     Vec2 home = (players[e.owner].basePos - e.pos).norm();
     Vec2 dir = (away + home * 0.45f).norm();
     if (dir.len2() < 0.01f) dir = away;
-    Vec2 dest = e.pos + dir * (tiles * TILE);
-    if (inFallout(dest)) dest = e.pos + away * (tiles * TILE);
+    float angle = std::atan2(dir.y, dir.x), best = -1e18f;
+    bool found = false;
+    std::vector<Vec2> path;
+    const float offsets[] = {0, -0.65f, 0.65f, -1.2f, 1.2f};
+    for (float off : offsets) {
+        Vec2 p = e.pos + Vec2(std::cos(angle + off), std::sin(angle + off)) * (tiles * TILE);
+        p = Vec2(clampf(p.x, TILE, WORLD_W - TILE), clampf(p.y, TILE, WORLD_H - TILE));
+        if (!e.isAir()) p = e.ut().naval ? g_map.nearestWater(p, 3) : g_map.nearestFree(p, 3);
+        float gain = dist(p, threat) - l;
+        if (gain < TILE * 0.4f || inFallout(p)) continue;
+        bool direct = e.isAir() || (e.ut().naval ? g_map.navLineClear(e.pos, p) : g_map.lineClear(e.pos, p));
+        if (!direct) {
+            bool reachable = e.ut().naval ? g_map.findNavalPath(e.pos, p, path, 800) : g_map.findPath(e.pos, p, path, 800);
+            if (!reachable || path.empty() || dist(path.back(), p) > TILE) continue;
+            bool safe = true;
+            for (Vec2 q : path) if (dist(q, threat) < l - TILE * 0.25f || inFallout(q)) safe = false;
+            if (!safe) continue;
+        }
+        float score = gain + (dist(e.pos, players[e.owner].basePos) - dist(p, players[e.owner].basePos)) * 0.2f - (direct ? 0 : TILE);
+        if (score > best) { best = score; dest = p; found = true; }
+        if (off == 0 && direct) break;
+    }
+    return found;
+}
+
+void Sim::retreatFrom(Entity& e, Vec2 threat, float tiles) {
+    Vec2 dest;
+    if (!escapeDestination(e, threat, tiles, dest)) { e.evadeUntil = time + 1.0f; return; }
     if (e.zoneR <= 0) e.guardPos = dest;   // an idle unit makes its new spot its post; a zone guard goes back to its slot later
     moveAside(e, dest, 6.0f);
     e.targetEnt = NOREF;
@@ -2866,10 +2924,14 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             break;
         }
         if (d < w.minRange) {
-            // back away from the target
-            Vec2 away = (e.pos - t->pos).norm();
-            Vec2 dest = ut.naval ? g_map.nearestWater(e.pos + away * TILE * 2.5f, 6) : g_map.nearestFree(e.pos + away * TILE * 2.0f, 4);
-            if (e.repathTimer <= 0 || e.pathIdx >= e.path.size()) requestPath(e, dest);
+            // Seek a reachable firing distance, including a lateral exit when a
+            // wall or shoreline blocks straight reverse. Never follow the old
+            // approach path further toward a target inside minimum range.
+            if (e.repathTimer <= 0 || e.pathIdx >= e.path.size() || dist(e.path.back(), t->pos) < dist(e.pos, t->pos)) {
+                Vec2 dest;
+                if (escapeDestination(e, t->pos, ut.naval ? 2.5f : 2.0f, dest)) requestPath(e, dest);
+                else { e.path.clear(); e.pathIdx = 0; e.repathTimer = PATH_INTERVAL; }
+            }
             moveAlong(e, ut.speed);
         } else if (d <= w.range) {
             e.path.clear();

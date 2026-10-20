@@ -55,10 +55,9 @@ static bool isGrass(u8 t) { return t == T_GRASS || t == T_GRASS2; }
 
 void Map::generate() {
     const u32 SEED = 1979;
-    // The layout is the classic 80x80 arena scaled by S (104x104 tiles today), with the lake grown well beyond the plain
-    // scaling: its radius went from 11 tiles to about 17.6, so it holds roughly 900 tiles of water (the old one held 432)
-    // with a buildable island in the middle. Everything below is written in old-map coordinates and multiplied by S, except
-    // the lake, the ring road and the lake supply piles, which were re-placed for the bigger water.
+    // The arena's routes scale with the map; structures, road widths and unit
+    // silhouettes stay at their original readable size.
+    const float G = MAP_W / 104.0f;
     const float S = MAP_W / 80.0f;
     const float C = MAP_W * 0.5f;   // map centre, tile units
     auto sc = [&](int v) { return (int)std::lround(v * S); };
@@ -79,17 +78,17 @@ void Map::generate() {
     // rivers leave it (they are cut off by the bridges of the ring road, so only the lake itself is a sea for ships).
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         float dx = x + 0.5f - C, dy = y + 0.5f - C, d = std::sqrt(dx * dx + dy * dy), th = std::atan2(dy, dx);
-        float R = 17.6f + 1.5f * std::cos(4.0f * th + 3.14159f) + 0.6f * std::sin(3.0f * th + 1.1f) + 0.5f * std::sin(8.0f * th + 0.7f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 2.0f;
+        float R = (17.6f + 1.5f * std::cos(4.0f * th + 3.14159f) + 0.6f * std::sin(3.0f * th + 1.1f) + 0.5f * std::sin(8.0f * th + 0.7f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 2.0f) * G;
         if (d <= R + 2.2f) tiles[y * MAP_W + x] = T_SAND;
         if (d <= R) tiles[y * MAP_W + x] = T_WATER;
     }
     // The island in the middle of the lake: a sandy shore round a grassy top big enough for a small structure or two. Nothing
     // drives to it — a dozer has to be airlifted in — so it is a prize for whoever holds the water and the sky.
-    paintDisc(*this, C, C, 3.3f, T_SAND); paintDisc(*this, C, C, 2.5f, T_GRASS);
+    paintDisc(*this, C, C, 5.0f, T_SAND); paintDisc(*this, C, C, 4.0f, T_GRASS);
     paintDisc(*this, C - 7.5f, C + 5.5f, 1.9f, T_ROCK); paintDisc(*this, C + 7.5f, C - 5.5f, 1.9f, T_ROCK);   // rocky islets (nothing can be built on them)
     // Pools inside the ring road's corners, on the diagonals between the lake and the road (decor + partial cover)
     for (int q = 0; q < 4; q++) {
-        float px = C + ((q & 1) ? 18.0f : -18.0f), py = C + ((q & 2) ? 18.0f : -18.0f);
+        float px = C + ((q & 1) ? 18.0f : -18.0f) * G, py = C + ((q & 2) ? 18.0f : -18.0f) * G;
         paintDisc(*this, px, py, 3.0f, T_SAND); paintDisc(*this, px, py, 1.9f, T_WATER);
     }
 
@@ -105,7 +104,7 @@ void Map::generate() {
             tiles[y * MAP_W + x] = T_ROCK;
         }
     };
-    const int tip = (int)(C - 26);   // ridge ends stop under the ring road (its discs paint over the last tiles), leaving a shore corridor inside the ring with the supply piles in it
+    const int tip = (int)(C - 26 * G);   // ridge ends stop under the ring road (its discs paint over the last tiles), leaving a shore corridor inside the ring with the supply piles in it
     ridge(sc(38), sc(41), 1, tip, true, sc(10), sc(14));
     ridge(sc(38), sc(41), MAP_H - 1 - tip, sc(78), true, sc(65), sc(69));
     ridge(1, tip, sc(38), sc(41), false, sc(10), sc(14));
@@ -122,7 +121,7 @@ void Map::generate() {
         int st = sc(11), sf = MAP_W - 1 - st;
         starts = { {st, st}, {sf, st}, {st, sf}, {sf, sf} };
     }
-    const float ring = 26.5f;   // the ring road runs around the lake's beach and the supply piles on its shore
+    const float ring = 26.5f * G;   // the ring road runs around the lake's beach and the supply piles on its shore
     float rx0 = C - ring, rx1 = C + ring;
     paintRoad(*this, rx0, rx0, rx1, rx0, 1.4f);
     paintRoad(*this, rx1, rx0, rx1, rx1, 1.4f);
@@ -205,7 +204,7 @@ void Map::generate() {
         bool nearBase = false;
         for (auto& s : starts) if (std::abs(x - s.tx) < 15 && std::abs(y - s.ty) < 15) nearBase = true;
         float dc = std::sqrt((x - C) * (x - C) + (y - C) * (y - C));
-        if (nearBase || dc < 24) continue;
+        if (nearBase || dc < 24 * G) continue;
         // keep roads' neighbors clear
         bool nearRoad = false;
         for (int dy = -1; dy <= 1 && !nearRoad; dy++) for (int dx = -1; dx <= 1; dx++)
@@ -218,9 +217,9 @@ void Map::generate() {
     {
         static const float BELT[2][2] = { {18, 30}, {36, 22} };   // NW quadrant, tile units
         for (int q = 0; q < 4; q++) for (auto& b : BELT) {
-            float bx = b[0], by = b[1];
+            float bx = b[0] * G, by = b[1] * G;
             for (int k = 0; k < q; k++) { float t = bx; bx = (MAP_W - 1) - by; by = t; }   // rotate 90 degrees q times
-            const float BR = 5.5f;
+            const float BR = 5.5f * G;
             int x0 = clampi((int)(bx - BR - 1), 1, MAP_W - 2), x1 = clampi((int)(bx + BR + 1), 1, MAP_W - 2);
             int y0 = clampi((int)(by - BR - 1), 1, MAP_H - 2), y1 = clampi((int)(by + BR + 1), 1, MAP_H - 2);
             for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
@@ -246,6 +245,10 @@ void Map::generate() {
         {46, 8, 36000}, {8, 57, 36000}, {57, 95, 36000}, {95, 46, 36000},
         {18, 33, 30000}, {70, 18, 30000}, {85, 70, 30000}, {33, 85, 30000},
     };
+    for (auto& supply : supplies) {
+        supply.tx = (int)std::lround((supply.tx + 0.5f) * G - 0.5f);
+        supply.ty = (int)std::lround((supply.ty + 0.5f) * G - 0.5f);
+    }
     // Clear the ground around supply piles and bases so nothing important is walled in
     for (auto& s : supplies) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 3.4f, T_DIRT, [](u8 t) { return t == T_TREE || t == T_ROCK || t == T_WATER; });
     for (auto& s : starts) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 11.5f, T_GRASS, [](u8 t) { return t == T_TREE || t == T_ROCK; });
@@ -301,10 +304,12 @@ void Map::generate() {
     // apron (tiles only: no new obstacle) so the landmark reads as part of the landscape rather than a building dropped on the grass.
     landmarks.clear();
     {
-        static const struct { int x, y, w, h, kind; } BASE[3] = {
+        static const struct { int x, y, w, h, kind; } BASE[5] = {
             { 27, 38, 4, 4, 0 },   // castle
             { 40, 28, 3, 3, 1 },   // civilian bunker
             { 37, 34, 2, 2, 2 },   // watchtower
+            { 24, 39, 2, 2, 3 },   // abandoned cottage beside the castle
+            { 32, 36, 3, 2, 4 },   // old roadside workshop
         };
         auto landmarkFits = [&](int x, int y, int w, int h) {
             for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
@@ -314,7 +319,7 @@ void Map::generate() {
             return !wouldPlug(x, y, w, h);
         };
         for (int q = 0; q < 4; q++) for (auto& L : BASE) {
-            int tx = L.x, ty = L.y, w = L.w, h = L.h;
+            int tx = (int)std::lround(L.x * G), ty = (int)std::lround(L.y * G), w = L.w, h = L.h;
             for (int k = 0; k < q; k++) { int nx = MAP_W - ty - h, ny = tx; tx = nx; ty = ny; }   // rotate the whole set with the quadrant
             auto fits = [&](int x, int y) { return landmarkFits(x, y, w, h); };
             int bx = tx, by = ty;
@@ -345,6 +350,32 @@ void Map::generate() {
             }
         }
     }
+    // Short worn access tracks tie the settlement to its road network. Paint only
+    // traversable ground along a real path: no new bridge, obstacle or water fill.
+    for (const auto& L : landmarks) {
+        int w = L.kind == 0 ? 4 : (L.kind == 1 || L.kind == 4 ? 3 : 2);
+        int h = L.kind == 0 ? 4 : (L.kind == 1 ? 3 : 2);
+        Vec2 entry = nearestFree(tileCenter(L.tx + w / 2, L.ty + h), 4);
+        float best = 12 * TILE; Vec2 road = entry;
+        for (int y = std::max(1, L.ty - 12); y < std::min(MAP_H - 1, L.ty + 13); y++)
+            for (int x = std::max(1, L.tx - 12); x < std::min(MAP_W - 1, L.tx + 13); x++) {
+                if (tile(x, y) != T_ROAD || bridge[y * MAP_W + x]) continue;
+                float d = dist(tileCenter(x, y), entry);
+                if (d < best) { best = d; road = tileCenter(x, y); }
+            }
+        std::vector<Vec2> path;
+        if (best >= 12 * TILE || !findPath(entry, road, path, 800)) continue;
+        Vec2 prev = entry;
+        for (Vec2 next : path) {
+            int steps = (int)(dist(prev, next) / 8) + 1;
+            for (int i = 0; i <= steps; i++) {
+                Vec2 p = prev + (next - prev) * (i / (float)steps);
+                paintDisc(*this, p.x / TILE, p.y / TILE, 0.65f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2; });
+            }
+            prev = next;
+        }
+    }
+
 }
 
 bool Map::wouldPlug(int tx, int ty, int w, int h) const {
@@ -402,6 +433,7 @@ void Map::setResource(int x, int y, bool on) {
 
 Vec2 Map::nearestFree(Vec2 p, int maxR) const {
     int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
+    p = Vec2(clampf(p.x, 0, WORLD_W - 1.0f), clampf(p.y, 0, WORLD_H - 1.0f));
     if (passable(tx, ty)) return p;
     for (int r = 1; r <= maxR; r++) {
         for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
@@ -440,9 +472,12 @@ static u32 curGen = 1;
 
 bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) const {
     out.clear();
+    if (!std::isfinite(from.x) || !std::isfinite(from.y) || !std::isfinite(to.x) || !std::isfinite(to.y) || maxNodes <= 0) return false;
+    to = Vec2(clampf(to.x, 0, WORLD_W - 1.0f), clampf(to.y, 0, WORLD_H - 1.0f));
     int sx = clampi(tileOf(from.x), 0, MAP_W - 1), sy = clampi(tileOf(from.y), 0, MAP_H - 1);
     int gx = clampi(tileOf(to.x), 0, MAP_W - 1), gy = clampi(tileOf(to.y), 0, MAP_H - 1);
     if (!passable(sx, sy)) { Vec2 nf = nearestFree(from); sx = tileOf(nf.x); sy = tileOf(nf.y); }
+    if (!passable(sx, sy)) return false;
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
     curGen++;
     if (curGen == 0) { memset(visitGen, 0, sizeof(visitGen)); memset(closedGen, 0, sizeof(closedGen)); curGen = 1; }

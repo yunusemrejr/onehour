@@ -7,7 +7,7 @@ enum Tile : u8 { T_GRASS = 0, T_GRASS2, T_DIRT, T_SAND, T_ROAD, T_WATER, T_ROCK,
 
 struct StartSpot { int tx, ty; };
 struct SupplySpot { int tx, ty; int amount; };
-// Places on the map where the old civilian strongholds stand. kind: 0 castle, 1 civilian bunker, 2 watchtower (see Sim::spawnMapLandmarks).
+// Places on the map where the old civilian strongholds stand. kind: 0 castle, 1 civilian bunker, 2 watchtower, 3 cottage, 4 workshop (see Sim::spawnMapLandmarks).
 // They are filled in by generate() in four rotated copies, so every corner of the map gets the same set.
 struct LandmarkSpot { int tx, ty; int kind; };
 struct RoadSeg { float x0, y0, x1, y1, halfW; };   // tile units; kept so the baked terrain can paint centre lines
@@ -47,7 +47,7 @@ struct Map {
 
     // Pathfinding: fills out with tile centers (excluding start tile), returns false if unreachable.
     // If the goal is blocked, the nearest reachable tile is used.
-    bool findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 6000) const;
+    bool findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H) const;
     bool lineClear(Vec2 a, Vec2 b) const;   // straight ground line free of blocked tiles
     Vec2 nearestFree(Vec2 p, int maxR = 6) const;
 

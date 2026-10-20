@@ -110,10 +110,18 @@ void house(Bld& b, const CivPal& p) {
     tree(b, p, 13, 57, 5);
     Roof r = b.block(6, 22, 52, 28, 14, p.roof, p.wall);                // walls 36..50, the roof lifted to 8
     b.a.rect(6, 22, 52, 14, 1.0f, p.roofD, 2.3f, 0.58f);                // the south slope; the ridge is its lit north edge
+    for (int row = 0; row < 6; row++) {
+        float yy = 10 + row * 4;
+        b.a.line(7, yy, 57, yy, 0.45f, rgba(p.roofD, 120));
+        for (float xx = 9 + (row & 1 ? 3 : 0); xx < 56; xx += 7)
+            b.a.line(xx, yy, xx, yy + 3.8f, 0.4f, rgba(p.roofD, 115));
+    }
     b.a.line(6, 22, 58, 22, 0.8f, rgba(BLACK, 90));
     b.a.shadowRect(41, 4, 5, 12, 2, 2, 1.5f, 90);
     b.a.rect(41, 4, 5, 12, 0.5f, p.wallD, 0.9f, 0.5f);                  // chimney
     b.windows(r, 14, 2, p.warm, 0.55f);
+    b.a.rect(25, 50, 14, 3, 0.5f, p.stone, 0.8f, 0.4f);
+    b.a.rect(23, 53, 18, 2, 0.5f, p.pave, 0.6f, 0.4f);
     b.door(32, 50, 9, 11, p.sign, p.glassD);
     b.mark(12, 28, 14, 3);                                              // team roof band
     car(b, 40, 54, 16, 6, p.car2);
@@ -134,6 +142,14 @@ void apartments(Bld& b, const CivPal& p) {
     b.cyl(18, 12, 5, 9, p.stone, p.wallD);                              // water tank on the roof
     b.block(44, 14, 12, 7, 3, p.stone, p.wallD); b.vent(46, 12.5f, 8, 3, shade(p.stone, 1.3f));
     b.block(62, 14, 12, 7, 3, p.stone, p.wallD); b.vent(64, 12.5f, 8, 3, shade(p.stone, 1.3f));
+    // Roof service walkway and framed solar collectors distinguish the modern block.
+    if (b.cy) for (int i = 0; i < 3; i++) {
+        float x = 32 + i * 16;
+        b.a.rect(x, -4, 13, 9, 0.4f, p.stone, 0.6f, 0.3f);
+        b.a.rect(x + 1, -3, 11, 7, 0.3f, rgb(35, 73, 104), 0.5f, 0.3f);
+        b.a.line(x + 6, -3, x + 6, 4, 0.4f, rgba(WHITE, 120));
+    }
+    else { b.a.line(10, 26, 88, 26, 1.2f, p.stone); b.a.line(10, 44, 88, 44, 1.2f, p.stone); }
     b.mark(8, 19, 30, 3);                                               // team band along the roof's front
 }
 
@@ -328,62 +344,115 @@ const Color N_STONE = rgb(166, 160, 142), N_STONE_D = rgb(108, 104, 92), N_STONE
 const Color N_MOSS = rgb(92, 112, 62), N_MOSS_D = rgb(62, 80, 42), N_SLATE = rgb(104, 102, 96);
 const Color N_WOOD = rgb(118, 90, 62), N_WARM = rgb(255, 210, 126), N_GLASS = rgb(38, 52, 48);
 
+// Ashlar courses follow the visible wall rather than a grid laid over the roof.
+void stoneCourses(Bld& b, float x, float y, float w, float h, float pitch = 9) {
+    for (int row = 0; row * 5 < h; row++) {
+        float yy = y + row * 5;
+        b.a.line(x, yy, x + w, yy, 0.45f, rgba(N_STONE_D, 130));
+        for (float xx = x + (row & 1 ? pitch * 0.5f : pitch); xx < x + w; xx += pitch)
+            b.a.line(xx, yy, xx, std::min(yy + 5, y + h), 0.45f, rgba(N_STONE_D, 105));
+    }
+}
+
 void castle(Bld& b) {
-    ground(b, rgb(116, 128, 82), 0.15f);
-    // bailey: worn flagstones with moss in the joints
-    b.a.rect(11, 14, 106, 104, 5, rgb(138, 134, 116), 2.4f, 0.45f);
-    for (float y = 20; y < 112; y += 8) b.a.line(13, y, 115, y, 0.5f, rgba(N_STONE_D, 80));
-    for (float x = 18; x < 116; x += 10) b.a.line(x, 16, x, 114, 0.5f, rgba(N_STONE_D, 55));
-    for (int i = 0; i < 18; i++) b.a.ell(b.rng.f(18, 110), b.rng.f(20, 108), b.rng.f(2, 8), b.rng.f(1.5f, 4), rgba(N_MOSS, 45), 1, 0);
-    // rear curtain wall and its battlement teeth
-    Roof nw = b.block(18, 16, 92, 18, 14, N_STONE_L, N_STONE);
-    for (float x = nw.x + 3; x < nw.x + nw.w - 4; x += 9) b.a.rect(x, nw.y + 1, 5, 4, 0.5f, N_STONE, 1.0f, 0.4f);
-    b.wallSeams(nw, 14, 11);
-    // west and east walls, their roofs seen edge-on
-    b.block(16, 20, 18, 82, 12, N_STONE_L, N_STONE);
-    b.block(94, 20, 18, 82, 12, N_STONE_L, N_STONE);
-    // corner towers (back pair first: the front pair stands over the curtain wall)
-    auto tower = [&](float cx, float by, float r, float ht, bool flagHere) {
-        P top = b.cyl(cx, by, r, ht, N_STONE_L, N_STONE);
-        b.a.ngon(top.x, top.y - 2, r * 1.04f, 8, 0.3927f, N_SLATE, 2.0f, 0.65f);   // slate cap
-        b.a.dot(top.x, top.y - 2, 2.0f, N_STONE_D);
-        for (int k = 0; k < 4; k++) { float an = k * 1.5708f + 0.785f; b.a.rect(top.x + std::cos(an) * r * 0.76f - 1.2f, top.y + std::sin(an) * r * 0.76f - 1.2f, 2.4f, 2.4f, 0.5f, N_STONE_D, 0.7f, 0.4f); }
-        for (float yy = by - ht + 8; yy < by - 3; yy += 9) b.a.rect(cx - r * 0.48f, yy, 2.2f, 5, 0.5f, N_GLASS, 0.7f, 0.2f);
-        if (flagHere) flag(b, cx + r * 0.7f, top.y + 2, 22, 10, 6);
+    ground(b, rgb(105, 117, 79), 0.12f);
+    b.a.rect(12, 17, 104, 100, 4, rgb(148, 140, 119), 2.3f, 0.5f);
+    // A recessed bailey, with the gate-to-keep path left clear.
+    for (int row = 0; row < 11; row++) for (int col = 0; col < 10; col++) {
+        float x = 15 + col * 10 + (row & 1 ? 4 : 0), y = 22 + row * 8;
+        b.a.rect(x, y, 8.7f, 6.7f, 0.4f, shade(N_STONE, b.rng.f(0.82f, 1.03f)), 0.55f, 0.25f);
+    }
+    auto curtain = [&](float x, float y, float w, float h, float ht) {
+        Roof r = b.block(x, y, w, h, ht, N_STONE_L, N_STONE);
+        stoneCourses(b, x, r.y + r.h, w, ht);
+        for (float xx = x + 2; xx < x + w - 3; xx += 8) b.a.rect(xx, r.y - 2, 4.8f, 5, 0.5f, N_STONE_L, 1.0f, 0.5f);
     };
-    tower(17, 26, 10, 34, false); tower(111, 26, 10, 34, false);
-    // the keep: two stacked blocks, the upper one set back
-    Roof keep = b.block(40, 62, 48, 42, 48, N_STONE_L, N_STONE);
-    b.wallSeams(keep, 48, 12);
-    for (float x = keep.x + 4; x < keep.x + keep.w - 4; x += 10) b.a.rect(x, keep.y + 1, 5.5f, 5, 0.5f, N_STONE, 1.0f, 0.45f);
-    for (int i = 0; i < 6; i++) { float x = keep.x + 5 + i * 7.5f; b.a.rect(x, keep.y + keep.h + 8, 2.5f, 8, 0.5f, N_GLASS, 0.7f, 0.2f); }   // arrow slits
-    b.block(52, 56, 24, 22, 58, N_STONE_L, N_STONE);   // upper watch chamber
-    b.a.rect(56, 18, 16, 10, 0.5f, N_GLASS, 1.0f, 0.25f);   // its tall window
-    for (float x = 54; x < 76; x += 7) b.a.line(x, 58, x, 72, 0.6f, rgba(N_STONE_D, 120));
-    flag(b, 76, 24, 34, 13, 8);
-    b.mark(43, 70, 18, 4);   // a plain pennant board on the keep face (tinted by the owner)
-    // gatehouse at the south wall, with a timber gate and a raised portcullis
-    Roof gate = b.block(50, 92, 28, 20, 22, N_STONE_L, N_STONE);
-    b.a.rect(56, gate.y + gate.h + 5, 16, 12, 0.6f, N_WOOD, 1.2f, 0.55f);
-    for (float x = 57; x < 72; x += 4) b.a.line(x, gate.y + gate.h + 5, x, gate.y + gate.h + 17, 0.5f, rgba(BLACK, 90));
-    b.a.rect(58, gate.y + gate.h + 17, 12, 2.2f, 0.5f, N_STONE_D, 0.8f, 0.4f);
-    // front towers and flags
-    tower(17, 106, 11, 38, true); tower(111, 106, 11, 38, true);
-    // well, trees and fallen blocks in the bailey
-    b.a.circle(64, 104, 7, N_STONE_D, 1.8f, 0.4f); b.a.circle(64, 104, 5.2f, rgb(36, 48, 48), 1.4f, 0.3f);
-    b.a.cap(64, 101, 64, 92, 1.4f, N_WOOD, 1.0f, 0.4f); b.a.line(58, 94, 70, 94, 1.2f, N_WOOD);
-    tree(b, civPal(false), 32, 54, 7); tree(b, civPal(false), 98, 90, 5);
-    for (int i = 0; i < 7; i++) b.a.rect(b.rng.f(28, 98), b.rng.f(54, 92), b.rng.f(3, 7), b.rng.f(2, 5), 0.5f, N_STONE_D, 0.9f, 0.3f);
-    b.a.grain(0, 0, (float)b.W, (float)b.H, 0.10f, 911u);
-    b.a.rect(16, 40, 15, 42, 0, rgba(N_MOSS, 40), 0, 0);   // damp shade on the west wall
+    curtain(18, 20, 92, 15, 18);
+    b.block(16, 25, 15, 77, 15, N_STONE_L, N_STONE);
+    b.block(97, 25, 15, 77, 15, N_STONE_L, N_STONE);
+    auto tower = [&](float cx, float bottom, bool banner) {
+        float r = 11, ht = 31;
+        P top = b.cyl(cx, bottom, r, ht, N_STONE_L, N_STONE);
+        b.a.ell(top.x, top.y, 8.3f, 5.8f, N_STONE_D, 0.8f, 0.2f);
+        b.a.ell(top.x, top.y, 5.9f, 3.8f, rgb(127, 124, 109), 0.4f, 0.1f);
+        for (int k = 0; k < 8; k++) {
+            float an = k * 0.7854f;
+            b.a.rect(cx + std::cos(an) * r * 0.82f - 2, top.y + std::sin(an) * r * 0.56f - 2, 4, 4, 0.4f, N_STONE_L, 0.8f, 0.4f);
+        }
+        for (float yy = bottom - ht + 8; yy < bottom - 3; yy += 8) b.a.rect(cx - 1.1f, yy, 2.2f, 4.8f, 0.4f, N_GLASS, 0.6f, 0.15f);
+        b.a.line(cx + 6, bottom - 18, cx + 6, bottom - 4, 0.8f, rgba(N_MOSS, 130));
+        if (banner) flag(b, cx + 4, top.y + 1, 16, 9, 5);
+    };
+    tower(17, 29, false); tower(111, 29, false);
+    // A slate-roofed keep makes a distinct silhouette above the curtain wall.
+    Roof keep = b.block(39, 36, 50, 34, 27, N_STONE_L, N_STONE);
+    stoneCourses(b, 39, keep.y + keep.h, 50, 27, 10);
+    b.a.poly({{36, 12}, {64, -5}, {92, 12}, {92, 25}, {36, 25}}, rgb(70, 91, 100), 2.0f, 0.6f);
+    for (float yy = 9; yy < 25; yy += 4) b.a.line(38, yy, 90, yy, 0.6f, rgba(rgb(160, 171, 167), 85));
+    b.a.line(37, 12, 64, -5, 1.3f, rgb(153, 164, 161));
+    for (float x : {47.0f, 63.0f, 79.0f}) {
+        b.a.circle(x, 49, 3.2f, N_STONE_D, 0.6f, 0.2f);
+        b.a.rect(x - 3.2f, 49, 6.4f, 9, 0.4f, N_GLASS, 0.6f, 0.1f);
+        b.a.line(x, 48, x, 57, 0.6f, N_STONE_L);
+    }
+    b.block(43, 61, 6, 12, 15, N_STONE_L, N_STONE_D);
+    b.block(79, 61, 6, 12, 15, N_STONE_L, N_STONE_D);
+    flag(b, 72, 8, 26, 13, 7);
+    b.mark(54, 62, 20, 4);
+    // Foreground curtain, two round towers and an arched, barred entrance.
+    curtain(20, 105, 31, 12, 12); curtain(77, 105, 31, 12, 12);
+    b.block(49, 98, 30, 19, 24, N_STONE_L, N_STONE);
+    stoneCourses(b, 49, 93, 30, 24, 8);
+    b.a.circle(64, 101, 8, N_STONE_D, 0.8f, 0.2f);
+    b.a.rect(56, 101, 16, 16, 0.5f, N_WOOD, 1, 0.4f);
+    for (float x = 58; x < 72; x += 3) b.a.line(x, 98, x, 116, 0.7f, rgb(53, 53, 45));
+    b.a.line(56, 107, 72, 107, 0.9f, N_STONE_D);
+    for (float x = 51; x < 77; x += 7) b.a.rect(x, 73, 4.5f, 5, 0.5f, N_STONE_L, 0.9f, 0.4f);
+    tower(17, 110, true); tower(111, 110, true);
+    // A low well and one surviving tree read as a lived-in courtyard.
+    b.a.ell(37, 83, 7, 5, N_STONE_D, 1, 0.3f);
+    b.a.ell(37, 82, 4.5f, 3, rgb(39, 53, 53), 0.7f, 0.2f);
+    b.a.cap(31, 82, 31, 72, 0.8f, N_WOOD); b.a.cap(43, 82, 43, 72, 0.8f, N_WOOD);
+    b.a.line(30, 72, 44, 72, 1.0f, N_WOOD);
+    tree(b, civPal(false), 91, 85, 6);
+    b.a.grain(0, 0, (float)b.W, (float)b.H, 0.065f, 911u);
+}
+
+// Small, usable map buildings share the old settlement's stone/brick palette.
+void cottage(Bld& b) {
+    CivPal p = civPal(false); p.wall = rgb(183, 169, 141); p.wallD = N_STONE_D;
+    p.roof = rgb(108, 111, 103); p.roofD = rgb(70, 78, 76); p.lawn = rgb(112, 126, 80);
+    house(b, p);
+    b.a.line(8, 26, 56, 26, 0.6f, rgba(N_MOSS, 130));
+}
+void workshop(Bld& b) {
+    ground(b, rgb(134, 126, 105), 0.11f);
+    b.block(7, 21, 82, 32, 17, rgb(109, 112, 104), rgb(150, 109, 83));
+    for (float x = 8; x < 86; x += 26) {
+        b.a.poly({{x, 6}, {x + 20, -1}, {x + 24, 6}, {x + 24, 28}, {x, 28}}, rgb(92, 103, 101), 1.2f, 0.5f);
+        b.a.rect(x + 3, 6, 15, 5, 0.4f, N_GLASS, 0.6f, 0.2f);
+        for (float y = 15; y < 28; y += 4) b.a.line(x + 1, y, x + 23, y, 0.5f, rgba(N_STONE_L, 75));
+    }
+    b.door(55, 53, 24, 17, N_STONE_D, rgb(61, 69, 66));
+    for (float y = 39; y < 53; y += 3) b.a.line(44, y, 66, y, 0.5f, rgba(N_STONE_L, 110));
+    b.a.rect(15, 38, 17, 7, 0.5f, N_GLASS, 0.7f, 0.2f);
+    b.a.line(23, 38, 23, 45, 0.7f, N_STONE_L);
+    b.mark(13, 48, 17, 3); b.crate(76, 55, 10, 7, N_WOOD);
+    b.a.rect(45, 56, 24, 4, 0.5f, N_STONE_L, 0.8f, 0.4f);
+    flag(b, 83, 23, 17, 9, 5);
 }
 
 void civilianBunker(Bld& b) {
     ground(b, rgb(102, 106, 76), 0.14f);
+    b.a.ell(48, 42, 46, 29, rgb(96, 112, 72), 3.5f, 0.4f);
+    for (float x : {14.0f, 31.0f, 65.0f, 82.0f})
+        b.a.rect(x - 3, 43, 6, 32, 0.8f, rgb(138, 136, 118), 1.0f, 0.4f);
     b.a.rect(8, 22, 80, 62, 6, rgb(104, 100, 88), 2.2f, 0.45f);   // concrete apron
     // low, thick shelter with a sloped blast roof: two blocks sharing a base line
     Roof low = b.block(12, 36, 72, 38, 22, rgb(154, 150, 134), rgb(126, 122, 108));
     Roof top = b.block(22, 34, 52, 28, 38, rgb(172, 166, 148), rgb(142, 138, 120));
+    b.a.poly({{18, 2}, {26, -5}, {72, -5}, {78, 2}, {78, 24}, {18, 24}}, rgb(158, 157, 140), 1.8f, 0.5f);
+    b.a.line(26, -5, 72, -5, 1.1f, N_STONE_L);
     for (float x = top.x + 4; x < top.x + top.w - 4; x += 11) b.a.rect(x, top.y + 2, 6, 4, 0.5f, rgb(120, 116, 104), 0.9f, 0.4f);   // roof ribs
     b.a.circle(70, top.y + 8, 7, rgb(142, 138, 124), 1.4f, 0.45f);   // ventilation cap
     b.a.circle(70, top.y + 8, 4.5f, rgb(30, 34, 32), 1.0f, 0.3f);
@@ -413,7 +482,9 @@ void watchtower(Bld& b) {
     b.block(17, 30, 30, 24, 44, N_WOOD, N_STONE);
     b.a.rect(20, 10, 24, 5, 0.5f, N_GLASS, 0.9f, 0.2f);   // gallery windows
     for (float x = 19; x < 47; x += 6) b.a.line(x, 14, x, 28, 0.55f, rgba(N_WOOD, 150));
-    b.a.ngon(32, -12, 19, 4, 0.785f, N_SLATE, 2.2f, 0.65f);   // pyramidal roof
+    b.a.poly({{12, -8}, {32, -24}, {32, 5}}, rgb(111, 128, 133), 1.3f, 0.5f);
+    b.a.poly({{32, -24}, {52, -8}, {32, 5}}, rgb(63, 81, 90), 1.3f, 0.5f);
+    b.a.line(32, -24, 32, 5, 1.1f, rgb(164, 173, 169));   // pyramidal roof
     b.a.dot(32, -12, 2.4f, N_STONE_D);
     flag(b, 46, 8, 34, 12, 7);
     b.mark(22, 16, 10, 3);
@@ -438,6 +509,8 @@ bool artCivicBuilding(Canvas& c, Canvas& mask, int type) {
     else if (bt.role == BR_STRONGHOLD) {
         if (type == B_C_CASTLE) castle(b);
         else if (type == B_C_CIVBUNKER) civilianBunker(b);
+        else if (type == B_C_COTTAGE) cottage(b);
+        else if (type == B_C_WORKSHOP) workshop(b);
         else watchtower(b);
     }
     else {

@@ -1352,8 +1352,10 @@ void Game::drawEntity(Entity& e) {
             char gb[32]; snprintf(gb, sizeof gb, "%d/%d%s", inf, cap, g_sim.garrisonDozers(e) > 0 ? " +D" : "");
             g.text((int)(p.x - g.textW(gb, 1) / 2), (int)(fy + fh + 4), gb, rgb(240, 240, 240));
         }
-        if (bt.role == BR_STRONGHOLD && e.constructed && e.owner < 0) {
-            const char* lbl = "CIVILIAN - UNCLAIMED";
+        if (bt.role == BR_STRONGHOLD && e.constructed && e.owner < 0 && mouseY < VIEW_H &&
+            mouseX >= fx && mouseX <= fx + fw && mouseY >= fy - 18 && mouseY <= fy + fh) {
+            char label[80]; snprintf(label, sizeof label, "%s - UNCLAIMED", bt.name);
+            const char* lbl = label;
             g.text((int)(p.x - g.textW(lbl, 1) / 2), (int)(fy - 18), lbl, rgb(226, 218, 190));
         }
         if (disabled) g.text((int)p.x - 9, (int)p.y - 4, "EMP", rgb(160, 220, 255));
@@ -2153,10 +2155,6 @@ void Game::renderHud() {
         for (size_t i = 0; i < tl.size(); i++) g.text(tx + 6, ty + 4 + (int)i * 16, tl[i].c_str(), rgb(255, 255, 255));
     }
     if (showHelp) {
-        int hx = SCREEN_W / 2 - 312, hy0 = std::max(20, VIEW_H / 2 - 202);
-        g.fill(hx, hy0, 624, 396, rgb(8, 10, 14, 235));
-        g.box(hx, hy0, 624, 396, accent);
-        g.text(hx + 16, hy0 + 12, "ONE HOUR - controls", rgb(255, 255, 255), 2);
         const char* lines[] = {
             "Left click / drag box      select units (double-click: all of that type on screen)",
             "Right click                move / attack / gather / repair / rally (also on the minimap)",
@@ -2175,14 +2173,27 @@ void Game::renderHud() {
             "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",
             "Bunker / lifter selected  U unloads; D (lifter) flies to a spot you click and drops everybody off",
             "Stealth                    snipers show only to an enemy spy drone; underground bunkers are plainly visible",
-            "Lake                       Y: Naval Yard on the shore (ships sail on water only); Q: anti-nuke defence (30% chance each, more of them: likelier)",
+            "Lake                       Y: Naval Yard on the shore (ships sail on water only); Q: anti-nuke defence (laser 18%, missiles 30%; overlapping cover helps)",
             "Jeep                       right-click it with soldiers: seven seats, they shoot from inside; drops carry loaded jeeps; N: Guard Drones upgrade",
             "Space pause    + / - speed    F2 mute    F11 fullscreen    F12 screenshot    Esc menu",
             "",
             "Supplies: haulers carry $300 per trip to a Supply Hub/Depot.",
             "Power: keep production above consumption or turrets and factories slow down.",
         };
-        for (size_t i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) g.text(hx + 16, hy0 + 40 + (int)i * 16, lines[i], hudText());
+        int helpW = std::min(1000, SCREEN_W - 32);
+        std::vector<std::string> wrapped;
+        for (const char* line : lines) {
+            auto row = wrapTip(g, line, helpW - 32);
+            if (row.empty()) wrapped.emplace_back();
+            else wrapped.insert(wrapped.end(), row.begin(), row.end());
+        }
+        int lineH = std::min(16, (VIEW_H - 72) / std::max(1, (int)wrapped.size()));
+        int helpH = 52 + (int)wrapped.size() * lineH;
+        int hx = (SCREEN_W - helpW) / 2, hy0 = std::max(12, (VIEW_H - helpH) / 2);
+        g.fill(hx, hy0, helpW, helpH, rgb(8, 10, 14, 235));
+        g.box(hx, hy0, helpW, helpH, accent);
+        g.text(hx + 16, hy0 + 12, "ONE HOUR - controls", rgb(255, 255, 255), 2);
+        for (size_t i = 0; i < wrapped.size(); i++) g.text(hx + 16, hy0 + 40 + (int)i * lineH, wrapped[i].c_str(), hudText());
     }
 }
 

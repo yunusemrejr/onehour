@@ -178,6 +178,8 @@ const BuildType BUILDS[B_COUNT] = {
     { "Old Castle", "-", F_CYBER, BR_STRONGHOLD, 15000, 0, 0, 4, 4, 0, 11, -1, -1, "An abandoned civilian castle: a weathered stone keep with towers and loopholes. Empty by default. Any army's infantry can walk in and claim it; while a garrison is inside they shoot from the arrow slits and windows. Very heavy masonry (no army upgrade applies), so it takes a sustained siege or repeated warheads to bring down" , 24 },
     { "Civilian Bunker", "-", F_CYBER, BR_STRONGHOLD, 11000, 0, 0, 3, 3, 0, 10, -1, -1, "A civilian shelter of reinforced concrete left over from an older war. Empty by default. Any army's infantry can garrison it and fire from its firing ports; the shelter protects them until the building itself is destroyed. Thick walls shrug off most conventional fire, and no single warhead can erase a full-health bunker" , 14 },
     { "Watchtower", "-", F_CYBER, BR_STRONGHOLD, 7000, 0, 0, 2, 2, 0, 12, -1, -1, "A tall stone watchtower with a commanding view. Empty by default. Any army's infantry can climb in and shoot from the top; its height gives the garrison a clear field of fire. Strong enough to hold a crossing or a wood line until the enemy brings artillery or a warhead" , 8 },
+    { "Abandoned Cottage", "-", F_CYBER, BR_STRONGHOLD, 2400, 0, 0, 2, 2, 0, 7, -1, -1, "A small stone house. Infantry can claim it for cover; no income or production", 6 },
+    { "Roadside Workshop", "-", F_CYBER, BR_STRONGHOLD, 3200, 0, 0, 3, 2, 0, 8, -1, -1, "An old brick workshop. Infantry can claim its firing positions; no income or production", 8 },
 };
 
 // income per payout (every CIVIC_INTERVAL s), seconds between free dozers, townsfolk walking about it (decoration only)

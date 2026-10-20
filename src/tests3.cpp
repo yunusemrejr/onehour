@@ -24,7 +24,7 @@ static void lakeScene(Faction f0, Faction f1, u64 seed) {
         g_sim.players[p].money = 400000; std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
         g_sim.players[p].dropReady = 0;
     }
-    for (auto& e : g_sim.ents) if (e.alive && e.isUnit()) g_sim.destroy(e, false);
+    for (auto& e : g_sim.ents) if (e.alive && (e.isUnit() || (e.isBuilding() && e.owner < 0))) g_sim.destroy(e, false);
 }
 
 static Ref placeNear3(int type, int owner, Vec2 nearP) {
@@ -54,7 +54,7 @@ static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
     int biggest = 0; for (int s : g_map.waterSize) biggest = std::max(biggest, s);
     CHECK3(biggest >= 850, "the central lake is not big (850 tiles or more)");
     CHECK3(g_map.bigWater(MAP_W / 2 + 10, MAP_H / 2) && g_map.navOpen(MAP_W / 2 + 10, MAP_H / 2), "the water east of the island is not open lake");
-    CHECK3(g_map.buildable(MAP_W / 2, MAP_H / 2), "the middle of the lake is not a buildable island");
+    CHECK3(g_map.buildable(MAP_W / 2 + 2, MAP_H / 2), "the island has no buildable ground beside its watchtower");
     {   // ships can sail all the way round the island
         std::vector<Vec2> ring;
         Vec2 w = g_map.nearestWater(lakePoint(-10, 0), 6), e = g_map.nearestWater(lakePoint(10, 0), 6);
@@ -356,11 +356,11 @@ static float shellingDamage(Faction foe, u64 seed, bool drones, int kind) {
     int dT = foe == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER;
     int shooterT = kind == ATK_MISSILES ? U_C_CRUISER : (kind == ATK_LASERS ? U_C_DESTROYER : U_K_DESTROYER);   // (Cyber guns are lasers, Clanker guns fire shells)
     int shooterOwner = 0;
-    Ref tgt = ship3(dT, 1, lakePoint(6, 0));
+    Ref tgt = ship3(dT, 1, lakePoint(8, 4));
     g_sim.get(tgt)->maxHp = g_sim.get(tgt)->hp = 20000.0f;   // (so that the damage done adds up instead of sinking it)
     std::vector<Ref> shooters;
     int n = kind == ATK_LASERS ? 3 : 1;   // (one ship: a screen of three drones stops its volleys; a whole fleet's massed fire would saturate it)
-    for (int i = 0; i < n; i++) { Ref r = ship3(shooterT, shooterOwner, lakePoint(-3.0f, -3.0f + i * 3.0f)); shooters.push_back(r); }
+    for (int i = 0; i < n; i++) { Ref r = ship3(shooterT, shooterOwner, lakePoint(8.0f + i * 2.0f, -4.0f)); shooters.push_back(r); }
     g_sim.get(tgt)->order = O_IDLE;
     g_sim.cmdAttack(shooters, tgt);
     for (int t = 0; t < 20 * 14 && alive3(tgt); t++) {   // the target never moves or shoots back (it would just sail out of range)

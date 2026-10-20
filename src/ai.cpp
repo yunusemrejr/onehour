@@ -69,6 +69,12 @@ void AiManager::update() {
 }
 // A finished match is the reward signal for the doctrine each commander opened with (a win counts 1, a loss a little for lasting long).
 void AiManager::finish(int winnerTeam) {
+    for (auto& e : g_sim.ents) if (e.alive) g_sim.finishUnitExperience(e);
+    for (auto& a : ais) if (a.player >= 0) {
+        a.learnOutcomes();
+        float remaining = 0; for (Ref r : a.wave) if (Entity* e = g_sim.get(r)) remaining += unitValue(*e);
+        a.endWave(remaining);
+    }
     for (int p = 0; p < MAX_PLAYERS; p++) {
         AiPlayer& a = ais[p];
         if (a.player < 0 || !a.smart || !a.useBrain || !a.brain->learning || g_sim.players[p].difficulty < 1) continue;
@@ -178,6 +184,9 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
             float score = dist(c, preferNear) + ring * 6.0f;
             if (score >= bestScore) continue;
             if (!g_sim.canPlace(player, buildType, x, y)) continue;
+            // Human wall orders may seal a base by choice. The commander must
+            // preserve an exit for its builders, haulers and reinforcement waves.
+            if (b.role == BR_WALL && g_map.wouldPlug(x, y, b.w, b.h)) continue;
             // keep a one-tile corridor around every structure so units can always get through
             bool gapOk = true;
             if (b.role != BR_WALL) for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++) {
@@ -331,7 +340,11 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         float w = c.w / (1.0f + have * 0.25f) * rng.f(0.85f, 1.15f);
         if (estMax > 0.02f) w *= 0.4f + 1.2f * estGain[k] / estMax;
         if (useBrain && ablate() != 2) {
-            if (avgEff > 0) w *= clampf(0.65f + 0.7f * (brain->unitEff(c.type, x) / avgEff), 0.5f, 1.8f);
+            if (avgEff > 0) {
+                float confidence = brain->unitSamples[c.type] / (brain->unitSamples[c.type] + 8.0f);
+                float learned = clampf(0.65f + 0.7f * (brain->unitEff(c.type, x) / avgEff), 0.5f, 1.8f);
+                w *= 1.0f + confidence * (learned - 1.0f);
+            }
         } else if (pl.spentOn[c.type] >= 1500 && avgEff > 0) {
             float eff = pl.valueDealt[c.type] / pl.spentOn[c.type];
             w *= clampf(0.7f + 0.6f * (eff / avgEff), 0.5f, 1.8f);
@@ -414,12 +427,60 @@ float AiPlayer::assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float r
     return Force::ratio(A, B) / 1.08f;
 }
 
+// Close only complete unit lives (or survivors of a completed match). Waiting in
+// reserve never produces a zero-efficiency label; quiet cleanup is censored.
+void AiPlayer::learnOutcomes() {
+    auto& outcomes = g_sim.players[player].unitOutcomes;
+    for (const auto& o : outcomes) if (useBrain && o.type >= 0 && o.type < U_COUNT && UNITS[o.type].cost > 0) {
+        float x[UNIT_F]; Brain::unitFeatures(o.mix[0], o.mix[1], o.mix[2], x);
+        brain->learnUnit(o.type, x, o.value / UNITS[o.type].cost);
+    }
+    outcomes.clear();
+}
+
+void AiPlayer::beginWaveLearning() {
+    Player& pl = g_sim.players[player];
+    if (++pl.waveSerial == 0) { ++pl.waveSerial; for (auto& e : g_sim.ents) if (e.owner == player) e.waveSerial = 0; }
+    pl.waveCredit = 0;
+    for (Ref r : wave) if (Entity* e = g_sim.get(r)) e->waveSerial = pl.waveSerial;
+}
+
+// A few reserve infantry secure a nearby, reachable landmark. Do not pull a
+// committed wave, medic or boarding passenger away from its job.
+void AiPlayer::garrisonStrongholds() {
+    Sim& S = g_sim;
+    if (!on(FEAT_SPECIAL) || S.players[player].difficulty < 1 || S.time < nextFortOrder) return;
+    nextFortOrder = S.time + 12;
+    Entity* best = nullptr; float bd = 30 * TILE;
+    for (auto& fort : S.ents) {
+        if (!fort.alive || !fort.isBuilding() || fort.bt().role != BR_STRONGHOLD || (fort.owner >= 0 && fort.owner != player)) continue;
+        if (!S.explored(player, fort.tx, fort.ty) || S.garrisonInfantry(fort) >= std::min(4, S.garrisonCap(fort))) continue;
+        float d = dist(fort.pos, rally); if (d < bd && !S.inFallout(fort.pos)) { best = &fort; bd = d; }
+    }
+    if (!best) return;
+    std::vector<Ref> pick;
+    int incoming = S.garrisonInfantry(*best);
+    Ref target = S.refOf(*best);
+    for (auto& e : S.ents) if (e.alive && e.owner == player && e.order == O_ENTER && e.targetEnt == target) incoming++;
+    int want = std::min(4, S.garrisonCap(*best)) - incoming;
+    std::vector<Vec2> path;
+    for (auto& e : S.ents) {
+        if ((int)pick.size() >= want) break;
+        if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0) continue;
+        if (e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) continue;
+        if (dist(e.pos, best->pos) > 25 * TILE || !S.canBoard(e, *best)) continue;
+        Vec2 entry = g_map.nearestFree(best->pos + (e.pos - best->pos).norm() * (best->radius() + TILE), 6);
+        if (g_map.findPath(e.pos, entry, path)) pick.push_back(S.refOf(e));
+    }
+    if (!pick.empty()) S.cmdEnter(pick, target);
+}
+
 // Feed the outcome of a finished wave back into the model: did it destroy at least as much as it lost?
 void AiPlayer::endWave(float remainingValue) {
     if (!waveHasSample) return;
     waveHasSample = false;
     Player& pl = g_sim.players[player];
-    float dealt = -waveDealt0; for (int u = 0; u < U_COUNT; u++) dealt += pl.valueDealt[u];
+    float dealt = pl.waveCredit;
     float lost = std::max(0.0f, waveValue - remainingValue);
     bool success = dealt >= lost * 0.9f && dealt > 300;
     if (useBrain) brain->learnWave(waveX, success);
@@ -501,6 +562,7 @@ void AiPlayer::think() {
             else if (smart && ut.role == UR_HEALER) medics.push_back(S.refOf(e));   // medics trail the army instead of leading the charge
             else if (ut.naval) { fleet.push_back(S.refOf(e)); fleetValue += unitValue(e); shipsOrJeeps++; }   // (the fleet is handled apart from the land army)
             else {
+                if (e.carrier.valid() || e.order == O_ENTER) continue;
                 army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e);
                 if (e.order == O_IDLE && !e.carrier.valid()) idleArmy.push_back(S.refOf(e));
                 if (ut.cargoCap > 0 && ut.kind == UK_VEH) { jeeps.push_back(S.refOf(e)); shipsOrJeeps++; }
@@ -599,20 +661,7 @@ void AiPlayer::think() {
         }
     }
 
-    // enemy mix, and periodic learning of per-type efficiency from the last interval
-    {
-        float tot = std::max(1, enemyInf + enemyVeh + enemyAir);
-        if (enemyInf + enemyVeh + enemyAir > 0) { mixFi = enemyInf / tot; mixFv = enemyVeh / tot; mixFa = enemyAir / tot; }
-        if (S.time >= nextLearn) {
-            nextLearn = S.time + 30;
-            float x[UNIT_F]; Brain::unitFeatures(mixFi, mixFv, mixFa, x);
-            for (int u = 0; u < U_COUNT; u++) {
-                float ds = pl.spentOn[u] - prevSpent[u], dd = pl.valueDealt[u] - prevDealt[u];
-                if (ds >= 400 && useBrain) brain->learnUnit(u, x, dd / ds);
-                if (ds >= 400) { prevSpent[u] = pl.spentOn[u]; prevDealt[u] = pl.valueDealt[u]; }
-            }
-        }
-    }
+    learnOutcomes();
 
     // main enemy = nearest living enemy base
     if (mainEnemy < 0 || !S.players[mainEnemy].alive) {
@@ -1154,7 +1203,7 @@ void AiPlayer::think() {
 
     // a teammate is pushing out: the army moves up to the same front and fights beside theirs
     if (frontTarget && !threat && !attacking && armyCount >= 6 && armyValue >= waveThreshold * 0.5f && S.time > regroupUntil && S.time - lastJoin > 30.0f) {
-        lastJoin = S.time; attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*frontTarget); wave = army; waveHasSample = false;
+        lastJoin = S.time; attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*frontTarget); wave = army; waveHasSample = false; beginWaveLearning();
         S.cmdMove(army, frontTarget->pos, true);
         nextOrderTime = S.time + 6;
         if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] JOIN the teammate's push at %d,%d with %d units\n", player, S.time, tileOf(frontTarget->pos.x), tileOf(frontTarget->pos.y), armyCount);
@@ -1216,6 +1265,7 @@ void AiPlayer::think() {
             if (reserveValue >= waveThreshold * 0.6f && reserveUnits.size() >= 5) {
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] REINFORCE value=%.0f units=%d\n", player, S.time, reserveValue, (int)reserveUnits.size());
                 S.cmdMove(reserveUnits, tgt->pos, true);
+                for (Ref r : reserveUnits) if (Entity* e = S.get(r)) e->waveSerial = pl.waveSerial;
                 wave.insert(wave.end(), reserveUnits.begin(), reserveUnits.end());
                 waveValue += reserveValue;
             }
@@ -1277,7 +1327,7 @@ void AiPlayer::think() {
             if (tgt && go) {
                 attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*tgt);
                 wave = army;
-                memcpy(waveX, x, sizeof x); waveHasSample = true; waveDealt0 = 0; for (int u = 0; u < U_COUNT; u++) waveDealt0 += pl.valueDealt[u];
+                memcpy(waveX, x, sizeof x); waveHasSample = true; beginWaveLearning();
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d -> %s at %d,%d\n", player, S.time, armyValue, armyCount, tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
                 S.cmdMove(army, tgt->pos, true);
                 nextOrderTime = S.time + 6;
@@ -1436,4 +1486,5 @@ void AiPlayer::think() {
         if (!e || e->weapon() < 0) continue;
         if (e->hp < e->maxHp * 0.22f && e->ut().kind == UK_VEH && !attacking && dist(e->pos, pl.basePos) > 12 * TILE && e->order != O_MOVE) S.cmdMove({r}, pl.basePos, false);
     }
+    if (!threat && !attacking) garrisonStrongholds();
 }
