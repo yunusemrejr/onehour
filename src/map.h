@@ -7,6 +7,9 @@ enum Tile : u8 { T_GRASS = 0, T_GRASS2, T_DIRT, T_SAND, T_ROAD, T_WATER, T_ROCK,
 
 struct StartSpot { int tx, ty; };
 struct SupplySpot { int tx, ty; int amount; };
+// Places on the map where the old civilian strongholds stand. kind: 0 castle, 1 civilian bunker, 2 watchtower (see Sim::spawnMapLandmarks).
+// They are filled in by generate() in four rotated copies, so every corner of the map gets the same set.
+struct LandmarkSpot { int tx, ty; int kind; };
 struct RoadSeg { float x0, y0, x1, y1, halfW; };   // tile units; kept so the baked terrain can paint centre lines
 
 struct Map {
@@ -19,6 +22,7 @@ struct Map {
     int lakeComp = 0;               // waterComp id of the central lake (the largest body of water)
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
     std::vector<SupplySpot> supplies;
+    std::vector<LandmarkSpot> landmarks;   // neutral civilian castles / bunkers / watchtowers, 4 rotated copies of each kind
     std::vector<RoadSeg> roads;
     // Interior water (water with water on all four sides), pre-grouped for the animated-caustics pass: origins of aligned 4x4
     // all-interior blocks (one 128 px draw each) and every interior tile no block covers. Filled by generate().

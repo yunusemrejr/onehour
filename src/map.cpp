@@ -296,6 +296,55 @@ void Map::generate() {
         for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++)
             if (!covered[y * MAP_W + x] && interior(x, y)) waterTiles.push_back(y * MAP_W + x);
     }
+    // Neutral civilian strongholds: four rotated copies of a castle, a civilian bunker and a watchtower, so every quadrant gets the same set.
+    // They are placed on valid open ground away from roads and, before they are reserved, checked not to seal a corridor. Each gets a worn dirt
+    // apron (tiles only: no new obstacle) so the landmark reads as part of the landscape rather than a building dropped on the grass.
+    landmarks.clear();
+    {
+        static const struct { int x, y, w, h, kind; } BASE[3] = {
+            { 27, 38, 4, 4, 0 },   // castle
+            { 40, 28, 3, 3, 1 },   // civilian bunker
+            { 37, 34, 2, 2, 2 },   // watchtower
+        };
+        auto landmarkFits = [&](int x, int y, int w, int h) {
+            for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
+                if (!buildable(i, j) || tile(i, j) == T_ROAD) return false;
+                if ((blocked[j * MAP_W + i] & 2) || (blocked[j * MAP_W + i] & 4)) return false;
+            }
+            return !wouldPlug(x, y, w, h);
+        };
+        for (int q = 0; q < 4; q++) for (auto& L : BASE) {
+            int tx = L.x, ty = L.y, w = L.w, h = L.h;
+            for (int k = 0; k < q; k++) { int nx = MAP_W - ty - h, ny = tx; tx = nx; ty = ny; }   // rotate the whole set with the quadrant
+            auto fits = [&](int x, int y) { return landmarkFits(x, y, w, h); };
+            int bx = tx, by = ty;
+            if (!fits(bx, by)) {   // a river, rock or a narrow corridor shifted on this seed: take the nearest legal footprint
+                float best = 1e18f; int fx = -1, fy = -1;
+                for (int r = 1; r <= 10; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                    int x = tx + dx, y = ty + dy;
+                    if (!fits(x, y)) continue;
+                    float d2 = (float)(dx * dx + dy * dy);
+                    if (d2 < best) { best = d2; fx = x; fy = y; }
+                }
+                if (fx < 0) continue;   // no legal spot: leave this copy out rather than wall a corridor off
+                bx = fx; by = fy;
+            }
+            landmarks.push_back({ bx, by, L.kind });
+            setStructure(bx, by, w, h, true);
+            paintDisc(*this, bx + w * 0.5f, by + h * 0.5f, std::max(w, h) * 0.5f + 2.3f, T_DIRT,
+                      [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_SAND; });
+        }
+        // One more watchtower on the lake island: a prize for whoever can airlift infantry in. It is not part of the four-corner symmetry.
+        {
+            int tx = (int)C - 1, ty = (int)C - 1;
+            if (landmarkFits(tx, ty, 2, 2)) {
+                landmarks.push_back({ tx, ty, 2 });
+                setStructure(tx, ty, 2, 2, true);
+                paintDisc(*this, tx + 1.0f, ty + 1.0f, 3.5f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_SAND; });
+            }
+        }
+    }
 }
 
 bool Map::wouldPlug(int tx, int ty, int w, int h) const {

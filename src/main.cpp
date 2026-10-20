@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -602,6 +602,7 @@ bool civicTest(u64 seed);     // tests6.cpp: the civilian town, civilian dozers,
 bool wallTestMain(u64 seed); // tests7.cpp: walls, Hyper Protection, Anti-Rocket, durability, barracks speed and the 25-pad airfield
 bool supersonicTest(u64 seed); // tests8.cpp: the balance pass (anti-nuke/wall vs nukes, silver damage, bunker health) and the Supersonic Bomber
 bool radiationTest(u64 seed); // tests9.cpp: the Anti-Radiation Truck (scrubbing fallout, shielding inside its field, and the damage it absorbs)
+bool fortTest(u64 seed);     // tests10.cpp: the map's neutral civilian strongholds (claim, garrison, fire, durability)
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
 void airShowcase(int vp, const char* which, Vec2& camOut, Ref& follow);   // tests3.cpp: ONEHOUR_AIR=strike|drop|nuke --shot scenes
@@ -2604,6 +2605,7 @@ int main(int argc, char** argv) {
         else if (a == "--walltest") return wallTestMain(seed) ? 0 : 1;
         else if (a == "--supersonictest") { g_map.generate(); return supersonicTest(seed) ? 0 : 1; }
         else if (a == "--radtest") { g_map.generate(); return radiationTest(seed) ? 0 : 1; }
+        else if (a == "--forttest") { g_map.generate(); return fortTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2814,6 +2816,14 @@ int main(int argc, char** argv) {
             for (int t = 0; t < ticks; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
             Vec2 b = g_sim.players[std::min(viewPlayer, 3)].basePos;
             Vec2 stealthCam; bool haveStealthCam = false;
+            if (getenv("ONEHOUR_FORTS")) {   // showcase: the three neutral civilian strongholds on the north-west of the map
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                Vec2 focus; int n = 0;
+                for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_STRONGHOLD && e.type != B_C_WATCHTOWER) { focus += e.pos; n++; if (n >= 2) break; }
+                if (n == 0) for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_STRONGHOLD) { focus += e.pos; n++; if (n >= 3) break; }
+                if (n > 0) { focus = focus * (1.0f / n); g_game.cam = Vec2(clampf(focus.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(focus.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H)); }
+                for (int p = 0; p < g_sim.numPlayers; p++) for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_STRONGHOLD) { int tx = e.tx + e.bt().w + 1, ty = e.ty + e.bt().h + 1; (void)tx; (void)ty; }
+            }
             if (getenv("ONEHOUR_STEALTH")) {   // ONEHOUR_STEALTH=1: an underground bunker whose garrison fires at an enemy tank, a loaded cargo lifter, a spy drone and a spy at work, near the viewed base
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), foe = vp == 0 ? 1 : 0; Faction f = g_sim.players[vp].faction, ff = g_sim.players[foe].faction;
                 for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);

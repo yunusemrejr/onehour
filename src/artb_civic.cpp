@@ -321,14 +321,125 @@ void undergroundSilo(Bld& b) {
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, cy ? 113u : 117u);
 }
 
+// ================================================================= NEUTRAL CIVILIAN STRONGHOLDS (map landmarks)
+// Weathered stone and old concrete rather than either army's clean materials: the castle, the civilian shelter and the watchtower were here
+// before the war. They carry a plain flag (the team mask) so whoever garrisons one sees it change colour, but no other army markings.
+const Color N_STONE = rgb(166, 160, 142), N_STONE_D = rgb(108, 104, 92), N_STONE_L = rgb(204, 198, 178);
+const Color N_MOSS = rgb(92, 112, 62), N_MOSS_D = rgb(62, 80, 42), N_SLATE = rgb(104, 102, 96);
+const Color N_WOOD = rgb(118, 90, 62), N_WARM = rgb(255, 210, 126), N_GLASS = rgb(38, 52, 48);
+
+void castle(Bld& b) {
+    ground(b, rgb(116, 128, 82), 0.15f);
+    // bailey: worn flagstones with moss in the joints
+    b.a.rect(11, 14, 106, 104, 5, rgb(138, 134, 116), 2.4f, 0.45f);
+    for (float y = 20; y < 112; y += 8) b.a.line(13, y, 115, y, 0.5f, rgba(N_STONE_D, 80));
+    for (float x = 18; x < 116; x += 10) b.a.line(x, 16, x, 114, 0.5f, rgba(N_STONE_D, 55));
+    for (int i = 0; i < 18; i++) b.a.ell(b.rng.f(18, 110), b.rng.f(20, 108), b.rng.f(2, 8), b.rng.f(1.5f, 4), rgba(N_MOSS, 45), 1, 0);
+    // rear curtain wall and its battlement teeth
+    Roof nw = b.block(18, 16, 92, 18, 14, N_STONE_L, N_STONE);
+    for (float x = nw.x + 3; x < nw.x + nw.w - 4; x += 9) b.a.rect(x, nw.y + 1, 5, 4, 0.5f, N_STONE, 1.0f, 0.4f);
+    b.wallSeams(nw, 14, 11);
+    // west and east walls, their roofs seen edge-on
+    b.block(16, 20, 18, 82, 12, N_STONE_L, N_STONE);
+    b.block(94, 20, 18, 82, 12, N_STONE_L, N_STONE);
+    // corner towers (back pair first: the front pair stands over the curtain wall)
+    auto tower = [&](float cx, float by, float r, float ht, bool flagHere) {
+        P top = b.cyl(cx, by, r, ht, N_STONE_L, N_STONE);
+        b.a.ngon(top.x, top.y - 2, r * 1.04f, 8, 0.3927f, N_SLATE, 2.0f, 0.65f);   // slate cap
+        b.a.dot(top.x, top.y - 2, 2.0f, N_STONE_D);
+        for (int k = 0; k < 4; k++) { float an = k * 1.5708f + 0.785f; b.a.rect(top.x + std::cos(an) * r * 0.76f - 1.2f, top.y + std::sin(an) * r * 0.76f - 1.2f, 2.4f, 2.4f, 0.5f, N_STONE_D, 0.7f, 0.4f); }
+        for (float yy = by - ht + 8; yy < by - 3; yy += 9) b.a.rect(cx - r * 0.48f, yy, 2.2f, 5, 0.5f, N_GLASS, 0.7f, 0.2f);
+        if (flagHere) flag(b, cx + r * 0.7f, top.y + 2, 22, 10, 6);
+    };
+    tower(17, 26, 10, 34, false); tower(111, 26, 10, 34, false);
+    // the keep: two stacked blocks, the upper one set back
+    Roof keep = b.block(40, 62, 48, 42, 48, N_STONE_L, N_STONE);
+    b.wallSeams(keep, 48, 12);
+    for (float x = keep.x + 4; x < keep.x + keep.w - 4; x += 10) b.a.rect(x, keep.y + 1, 5.5f, 5, 0.5f, N_STONE, 1.0f, 0.45f);
+    for (int i = 0; i < 6; i++) { float x = keep.x + 5 + i * 7.5f; b.a.rect(x, keep.y + keep.h + 8, 2.5f, 8, 0.5f, N_GLASS, 0.7f, 0.2f); }   // arrow slits
+    b.block(52, 56, 24, 22, 58, N_STONE_L, N_STONE);   // upper watch chamber
+    b.a.rect(56, 18, 16, 10, 0.5f, N_GLASS, 1.0f, 0.25f);   // its tall window
+    for (float x = 54; x < 76; x += 7) b.a.line(x, 58, x, 72, 0.6f, rgba(N_STONE_D, 120));
+    flag(b, 76, 24, 34, 13, 8);
+    b.mark(43, 70, 18, 4);   // a plain pennant board on the keep face (tinted by the owner)
+    // gatehouse at the south wall, with a timber gate and a raised portcullis
+    Roof gate = b.block(50, 92, 28, 20, 22, N_STONE_L, N_STONE);
+    b.a.rect(56, gate.y + gate.h + 5, 16, 12, 0.6f, N_WOOD, 1.2f, 0.55f);
+    for (float x = 57; x < 72; x += 4) b.a.line(x, gate.y + gate.h + 5, x, gate.y + gate.h + 17, 0.5f, rgba(BLACK, 90));
+    b.a.rect(58, gate.y + gate.h + 17, 12, 2.2f, 0.5f, N_STONE_D, 0.8f, 0.4f);
+    // front towers and flags
+    tower(17, 106, 11, 38, true); tower(111, 106, 11, 38, true);
+    // well, trees and fallen blocks in the bailey
+    b.a.circle(64, 104, 7, N_STONE_D, 1.8f, 0.4f); b.a.circle(64, 104, 5.2f, rgb(36, 48, 48), 1.4f, 0.3f);
+    b.a.cap(64, 101, 64, 92, 1.4f, N_WOOD, 1.0f, 0.4f); b.a.line(58, 94, 70, 94, 1.2f, N_WOOD);
+    tree(b, civPal(false), 32, 54, 7); tree(b, civPal(false), 98, 90, 5);
+    for (int i = 0; i < 7; i++) b.a.rect(b.rng.f(28, 98), b.rng.f(54, 92), b.rng.f(3, 7), b.rng.f(2, 5), 0.5f, N_STONE_D, 0.9f, 0.3f);
+    b.a.grain(0, 0, (float)b.W, (float)b.H, 0.10f, 911u);
+    b.a.rect(16, 40, 15, 42, 0, rgba(N_MOSS, 40), 0, 0);   // damp shade on the west wall
+}
+
+void civilianBunker(Bld& b) {
+    ground(b, rgb(102, 106, 76), 0.14f);
+    b.a.rect(8, 22, 80, 62, 6, rgb(104, 100, 88), 2.2f, 0.45f);   // concrete apron
+    // low, thick shelter with a sloped blast roof: two blocks sharing a base line
+    Roof low = b.block(12, 36, 72, 38, 22, rgb(154, 150, 134), rgb(126, 122, 108));
+    Roof top = b.block(22, 34, 52, 28, 38, rgb(172, 166, 148), rgb(142, 138, 120));
+    for (float x = top.x + 4; x < top.x + top.w - 4; x += 11) b.a.rect(x, top.y + 2, 6, 4, 0.5f, rgb(120, 116, 104), 0.9f, 0.4f);   // roof ribs
+    b.a.circle(70, top.y + 8, 7, rgb(142, 138, 124), 1.4f, 0.45f);   // ventilation cap
+    b.a.circle(70, top.y + 8, 4.5f, rgb(30, 34, 32), 1.0f, 0.3f);
+    b.vent(34, top.y + 7, 9, 5, rgb(78, 80, 74));
+    for (float x = 20; x < 78; x += 11) { b.a.rect(x, low.y + low.h + 3, 7, 3, 0.5f, N_GLASS, 0.8f, 0.2f); }   // firing ports
+    b.a.rect(42, low.y + low.h + 1, 14, 11, 0.6f, rgb(62, 66, 62), 1.2f, 0.4f);   // blast door vestibule
+    b.door(49, low.y + low.h + 1, 10, 9, rgb(86, 90, 84), rgb(30, 34, 32));
+    b.hazard(12, 74, 72, 3, 6, rgb(196, 176, 78), rgb(52, 52, 46));
+    // sandbag ring, crates, a rusted drum and a radio mast
+    b.sandbags(6, 84, 28, 84, 2); b.sandbags(68, 84, 90, 84, 2);
+    b.crate(80, 58, 8, 7, rgb(126, 118, 96)); b.barrel(82, 70, 4, rgb(112, 92, 64));
+    b.antenna(24, top.y + 10, 18, N_WARM);
+    flag(b, 30, 32, 28, 12, 7);
+    b.a.rect(10, 30, 4, 30, 0, rgba(N_MOSS, 50), 0, 0);
+    b.rust(14, 40, 82, 76, 6, 30);
+    b.a.grain(0, 0, (float)b.W, (float)b.H, 0.08f, 933u);
+}
+
+void watchtower(Bld& b) {
+    ground(b, rgb(112, 122, 80), 0.14f);
+    // stone shaft, timber gallery and a steep slate cap
+    b.a.rect(20, 26, 24, 36, 3, rgb(154, 148, 130), 2.0f, 0.45f);   // foundation
+    Roof shaft = b.block(22, 32, 20, 28, 20, N_STONE_L, N_STONE);
+    b.wallSeams(shaft, 20, 7);
+    b.a.rect(30, 42, 2.4f, 8, 0.5f, N_GLASS, 0.7f, 0.2f);
+    b.a.rect(24, 50, 16, 3, 0.5f, N_STONE_D, 0.9f, 0.4f);   // string course
+    b.block(17, 30, 30, 24, 44, N_WOOD, N_STONE);
+    b.a.rect(20, 10, 24, 5, 0.5f, N_GLASS, 0.9f, 0.2f);   // gallery windows
+    for (float x = 19; x < 47; x += 6) b.a.line(x, 14, x, 28, 0.55f, rgba(N_WOOD, 150));
+    b.a.ngon(32, -12, 19, 4, 0.785f, N_SLATE, 2.2f, 0.65f);   // pyramidal roof
+    b.a.dot(32, -12, 2.4f, N_STONE_D);
+    flag(b, 46, 8, 34, 12, 7);
+    b.mark(22, 16, 10, 3);
+    // ladder, sandbags and a little camp at the foot
+    for (float y = 58; y < 84; y += 4) b.a.line(24, y, 32, y, 0.5f, rgba(N_WOOD, 200));
+    b.a.line(24, 58, 24, 82, 0.6f, N_WOOD); b.a.line(32, 58, 32, 82, 0.6f, N_WOOD);
+    b.sandbags(12, 82, 36, 82, 2); b.sandbags(36, 86, 52, 86, 1);
+    b.crate(42, 70, 8, 7, rgb(126, 118, 96));
+    tree(b, civPal(true), 8, 72, 5);
+    b.a.ell(18, 34, 5, 10, rgba(N_MOSS, 50), 1, 0);
+    b.a.grain(0, 0, (float)b.W, (float)b.H, 0.09f, 947u);
+}
+
 }  // namespace
 
 bool artCivicBuilding(Canvas& c, Canvas& mask, int type) {
     const BuildType& bt = BUILDS[type];
-    if (bt.role != BR_CIVIC && bt.role != BR_UNUKE) return false;
+    if (bt.role != BR_CIVIC && bt.role != BR_UNUKE && bt.role != BR_STRONGHOLD) return false;
     bool cy = bt.faction == F_CYBER;
     Bld b(c, mask, bt.w * TILE, bt.h * TILE, cy, 8000u + (u32)type * 31u);
     if (bt.role == BR_UNUKE) undergroundSilo(b);
+    else if (bt.role == BR_STRONGHOLD) {
+        if (type == B_C_CASTLE) castle(b);
+        else if (type == B_C_CIVBUNKER) civilianBunker(b);
+        else watchtower(b);
+    }
     else {
         CivPal p = civPal(cy);
         switch (civicKind(type)) {

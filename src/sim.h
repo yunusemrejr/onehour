@@ -330,6 +330,10 @@ struct Sim {
     int cargoUsed(const Entity& carrier) const;                  // transport slots taken
     int garrisonInfantry(const Entity& bunker) const;
     int garrisonDozers(const Entity& bunker) const;
+    int garrisonCap(const Entity& b) const;                     // infantry slots of a bunker / neutral stronghold (0 for anything else)
+    static bool stronghold(const Entity& e) { return e.isBuilding() && e.bt().role == BR_STRONGHOLD; }
+    void spawnMapLandmarks();                                  // put the map's neutral castles / bunkers / watchtowers on the field
+    void updateStronghold(Entity& b);                          // a claimed civilian stronghold: the garrison fires from its windows
     void cmdEnter(const std::vector<Ref>& sel, Ref carrier);     // walk to a cargo chopper / bunker and board it
     void cmdUnload(Ref carrier, bool atSpot, Vec2 spot);         // let everybody out: here, or after flying to 'spot' (cargo choppers)
     void cmdCapture(const std::vector<Ref>& sel, Ref building);  // spies take an enemy structure
@@ -385,6 +389,7 @@ struct Sim {
     int antiNukeLinked(const Entity& b) const;               // working Anti-Nuke Lasers of the same army standing close by (they share tracking: see ANTINUKE_LINK)
     float antiNukeShot(const Entity& b) const;               // its own chance of getting a warhead it engages
     void applyDamagePublic(Entity& tgt, float dmg, int attackerOwner, Ref attacker) { applyDamage(tgt, dmg, attackerOwner, attacker, nullptr); }   // (test scenes; no nuke flag: floors apply)
+    void nukeBlastPublic(const Nuke& n) { nukeBlast(n); }   // (test scenes: detonate a warhead directly)
     void boardQuiet(Entity& u, Entity& c) { board(u, c, true); }   // put a soldier aboard a carrier at once (test scenes; the game walks them in with cmdEnter)
     Vec2 navalExit(const Entity& yard) const;                // where a ship leaves the yard into the water
     bool shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const;   // a legal spot for a structure that must touch the lake, nearest to 'near' (false: none known)

@@ -191,6 +191,7 @@ static float roofLift(const BuildType& b) {
     case BR_HQ: return 22; case BR_POWER: return 14; case BR_SUPPLY: return 16; case BR_BARRACKS: return 12; case BR_FACTORY: return 20;
     case BR_AIRFIELD: return 16; case BR_TECH: return 16; case BR_AATURRET: return 6; case BR_INCOME: return b.faction == F_CYBER ? 10 : 8; case BR_NUKE: return 16;
     case BR_NAVAL: return 18; case BR_ANTINUKE: return b.faction == F_CYBER ? 22 : 10; case BR_WALL: return 10;
+    case BR_STRONGHOLD: return b.w >= 4 ? 26 : (b.w >= 3 ? 12 : 24);   // castle keep / low bunker / watchtower
     default: return 0;
     }
 }
@@ -299,7 +300,9 @@ void Game::issueRightClick(Vec2 w) {
         g_sim.cmdMove(selection, t->pos, false); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
-    if (t && t->owner == g_sim.humanPlayer && ((t->isBuilding() && t->bt().role == BR_BUNKER) || (t->isUnit() && t->ut().cargoCap > 0))) {   // climb aboard a cargo chopper / bunker
+    bool neutralFort = t && t->isBuilding() && t->bt().role == BR_STRONGHOLD && (t->owner < 0 || !g_sim.enemies(g_sim.humanPlayer, t->owner));
+    bool boardable = t && ((t->isBuilding() && t->bt().role == BR_BUNKER && t->owner == g_sim.humanPlayer) || neutralFort || (t->isUnit() && t->owner == g_sim.humanPlayer && t->ut().cargoCap > 0));
+    if (boardable) {   // climb aboard a cargo chopper / bunker / neutral (or friendly) civilian stronghold
         std::vector<Ref> riders; Ref tr = g_sim.refOf(*t);
         for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o != t && g_sim.canBoard(*o, *t)) riders.push_back(r); }
         if (!riders.empty()) { g_sim.cmdEnter(riders, tr); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
@@ -464,7 +467,7 @@ void Game::buildButtonsRaw() {
         // the Command Core / Post comes last so the other buttons keep their places
         for (int pass = 0; pass < 2; pass++) for (int t = 0; t < B_COUNT; t++) {
             const BuildType& bt = BUILDS[t];
-            if (bt.faction != pl.faction || (bt.role == BR_CIVIC) != civ || (bt.role == BR_HQ) != (pass == 1)) continue;
+            if (bt.faction != pl.faction || strongholdRole(bt.role) || (bt.role == BR_CIVIC) != civ || (bt.role == BR_HQ) != (pass == 1)) continue;
             bool ok = g_sim.buildAvailable(g_sim.humanPlayer, t);
             bool lim = g_sim.atBuildLimit(g_sim.humanPlayer, t);
             snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", bt.name, bt.cost, bt.hotkey, bt.desc, ok ? "" : (lim ? "  Limit reached" : "  Requires "), ok || lim ? "" : BUILDS[bt.requires_].name);
@@ -1281,7 +1284,7 @@ void Game::drawEntity(Entity& e) {
                     g.circle(hc.x, hc.y, 15.0f, rim, 24);
                 }
             }
-            if (g.buildingTeam[e.type].tex) { Color tc = playerColor(owner); if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
+            if (g.buildingTeam[e.type].tex) { Color tc = e.owner < 0 ? rgb(206, 200, 180) : playerColor(owner); if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
             drawBuildingAnim(e, p, disabled);
             if (bt.role == BR_BUNKER && e.constructed && e.hatchMax > 0 && e.hatch > 0) {   // the two miniguns on the hatch
                 for (int gi = 0; gi < BUNKER_GUNS; gi++) {
@@ -1344,10 +1347,14 @@ void Game::drawEntity(Entity& e) {
             g.circle(p.x, p.y, fw * 0.62f + 2.0f * std::sin(wallTime * 7.0f), rgb(110, 230, 255), 28);
             g.text((int)p.x - 20, (int)(fy - 20), "BUNKER SPOTTED", rgb(110, 230, 255));
         }
-        if (bt.role == BR_BUNKER && e.constructed && e.owner >= 0 && g_sim.players[e.owner].team == g_sim.players[g_sim.humanPlayer].team && (selected || !e.passengers.empty())) {   // garrison: soldiers inside / 50
-            int inf = g_sim.garrisonInfantry(e);
-            char gb[24]; snprintf(gb, sizeof gb, "%d/%d%s", inf, BUNKER_INF_CAP, g_sim.garrisonDozers(e) > 0 ? " +D" : "");
+        if ((bt.role == BR_BUNKER || bt.role == BR_STRONGHOLD) && e.constructed && e.owner >= 0 && g_sim.players[e.owner].team == g_sim.players[g_sim.humanPlayer].team && (selected || !e.passengers.empty())) {   // garrison count
+            int inf = g_sim.garrisonInfantry(e), cap = g_sim.garrisonCap(e);
+            char gb[32]; snprintf(gb, sizeof gb, "%d/%d%s", inf, cap, g_sim.garrisonDozers(e) > 0 ? " +D" : "");
             g.text((int)(p.x - g.textW(gb, 1) / 2), (int)(fy + fh + 4), gb, rgb(240, 240, 240));
+        }
+        if (bt.role == BR_STRONGHOLD && e.constructed && e.owner < 0) {
+            const char* lbl = "CIVILIAN - UNCLAIMED";
+            g.text((int)(p.x - g.textW(lbl, 1) / 2), (int)(fy - 18), lbl, rgb(226, 218, 190));
         }
         if (disabled) g.text((int)p.x - 9, (int)p.y - 4, "EMP", rgb(160, 220, 255));
         return;
@@ -1816,8 +1823,10 @@ void Game::renderWorld() {
         } else if (h && h->kind != EK_RESOURCE && h->owner != g_sim.humanPlayer) {
             const char* nm = h->isUnit() ? h->ut().name : h->bt().name;
             bool foe = g_sim.enemies(g_sim.humanPlayer, h->owner);
-            char buf[96]; snprintf(buf, sizeof buf, "%s (%s%s)", nm, foe || h->owner < 0 ? "" : "ally, ", h->owner >= 0 ? FACTION_NAME[g_sim.players[h->owner].faction] : "");
-            g.text(mouseX + 12, mouseY - 4, buf, foe ? rgb(255, 150, 140) : rgb(150, 235, 165));
+            char buf[128];
+            if (h->owner < 0) snprintf(buf, sizeof buf, "%s (neutral civilian%s)", nm, h->isBuilding() && h->bt().role == BR_STRONGHOLD ? ": send infantry to garrison it" : "");
+            else snprintf(buf, sizeof buf, "%s (%s%s)", nm, foe ? "" : "ally, ", FACTION_NAME[g_sim.players[h->owner].faction]);
+            g.text(mouseX + 12, mouseY - 4, buf, foe ? rgb(255, 150, 140) : (h->owner < 0 ? rgb(228, 220, 190) : rgb(150, 235, 165)));
         } else if (h && h->kind == EK_RESOURCE) { char buf[40]; snprintf(buf, sizeof buf, "Supplies: $%d", h->amount); g.text(mouseX + 12, mouseY - 4, buf, rgb(240, 220, 150)); }
     }
     SDL_RenderSetClipRect(g.ren, nullptr);
@@ -1843,7 +1852,7 @@ void Game::drawMinimap(int x, int y, int size) {
         if (e.kind == EK_RESOURCE) { if (rev || ex[ty * MAP_W + tx]) g.fill((int)(x + tx * sc), (int)(y + ty * sc), 2, 2, rgb(230, 200, 90)); continue; }
         if (!rev && e.owner != g_sim.humanPlayer && !ex[ty * MAP_W + tx]) continue;
         if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
-        Color c = playerColor(e.owner);
+        Color c = e.owner < 0 ? rgb(198, 190, 170) : playerColor(e.owner);
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
     }

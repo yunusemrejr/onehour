@@ -521,6 +521,7 @@ void AiPlayer::think() {
             case BR_CIVIC: civics++; break;
             case BR_UNUKE: silos++; break;
             case BR_WALL: walls++; break;
+            case BR_STRONGHOLD: break;   // neutral map landmarks are not the army's production
             case BR_NONE: break;
             }
         }

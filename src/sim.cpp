@@ -10,6 +10,7 @@ static const float EMP_DURATION = 8.0f;
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
     ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); nukeSeq = 0;
+    for (auto& c : grid) c.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -36,6 +37,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
         spawnUnit(firstUnitOf(pl.faction) + 0, p, g_map.nearestFree(dz));
     }
     for (auto& s : g_map.supplies) spawnResource(s.tx, s.ty, s.amount);
+    spawnMapLandmarks();   // the map's neutral civilian strongholds: empty until somebody garrisons them
     for (int p = 0; p < numPlayers; p++) { players[p].powerReady = 120.0f; players[p].scanReady = 90.0f; players[p].dropReady = 150.0f; } // powers unlock a couple of minutes in (and need the tech structure)
     rebuildGrid();
     updateVision();
@@ -77,8 +79,8 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.tx = tx; e.ty = ty;
     const BuildType& b = BUILDS[type];
     e.pos = buildingCenter(type, tx, ty);
-    float hpMul = (hasUpgrade(owner, UPG_RUGGED) && b.role != BR_CIVIC ? RUGGED_HP : 1.0f);
-    if (hasUpgrade(owner, UPG_HYPER) && b.role != BR_CIVIC) hpMul *= HYPER_HP;
+    float hpMul = (!civilianRole(b.role) && hasUpgrade(owner, UPG_RUGGED) ? RUGGED_HP : 1.0f);
+    if (!civilianRole(b.role) && hasUpgrade(owner, UPG_HYPER)) hpMul *= HYPER_HP;
     e.maxHp = b.hp * hpMul;   // (the civilian town gets no plating)
     e.constructed = instant;
     e.progress = instant ? 1.0f : 0.0f;
@@ -111,6 +113,17 @@ Ref Sim::spawnResource(int tx, int ty, int amount) {
     e.hp = e.maxHp = 1;
     g_map.setResource(tx, ty, true);
     return refOf(i);
+}
+
+// The map's neutral civilian strongholds. They are ordinary buildings with owner -1: nobody may sell them, they have no production, and no
+// army upgrade ever applies to them. The first infantryman to climb into one claims it (see Sim::board), and its windows become firing ports.
+void Sim::spawnMapLandmarks() {
+    static const int TYPES[3] = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER };
+    for (auto& L : g_map.landmarks) {
+        int type = TYPES[clampi(L.kind, 0, 2)];
+        Ref r = placeBuilding(type, -1, L.tx, L.ty, true);
+        if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; }
+    }
 }
 
 void Sim::deathFx(Entity& e) {
@@ -251,6 +264,7 @@ bool Sim::unitAvailable(int player, int unitType) const {
 }
 bool Sim::buildAvailable(int player, int buildType) const {
     const BuildType& b = BUILDS[buildType];
+    if (b.role == BR_STRONGHOLD) return false;   // map landmarks: never raised by a dozer or sold
     if (b.faction != players[player].faction) return false;
     if (atBuildLimit(player, buildType)) return false;
     return prereqMet(player, b.requires_);
@@ -1190,15 +1204,17 @@ void Sim::nukeBlast(const Nuke& n) {
             if (e->isBuilding()) {
                 bool bunkerB = hardened(*e);
                 bool hqB = e->bt().role == BR_HQ;
-                bool hyperB = hasUpgrade(e->owner, UPG_HYPER) && e->bt().role != BR_CIVIC;
+                bool hyperB = hasUpgrade(e->owner, UPG_HYPER) && !civilianRole(e->bt().role);
                 bool protectedB = hqB || hyperB;      // walls are ordinary small structures now: a warhead flattens them like anything else small
                 bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA && !bunkerB && !protectedB;
-                bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && e->bt().role != BR_CIVIC;
+                bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && !civilianRole(e->bt().role);
+                bool fortB = e->bt().role == BR_STRONGHOLD;
                 float dmg, cap = -1.0f;
                 // Hyper Protection and the Command keystone put a hard ceiling on one warhead (so neither is erased in a single hit, even by
                 // the silver Underground Nuke); the ceiling is a share of max health, so enough direct hits always bring them down.
                 if (hyperB) cap = e->maxHp * HYPER_NUKE;
                 if (hqB) cap = cap < 0 ? e->maxHp * HQ_NUKE : std::min(cap, e->maxHp * HQ_NUKE);
+                if (fortB) cap = cap < 0 ? e->maxHp * STRONGHOLD_NUKE : std::min(cap, e->maxHp * STRONGHOLD_NUKE);
                 if (bunkerB) dmg = e->maxHp * 1.2f * f * D;                                       // wrecks the hatch and hurts the buried body; warheads ignore the floor, so repeated direct hits destroy it
                 else if (protectedB) dmg = e->maxHp * 1.6f * f * D;                              // (capped below; the ceiling is what stops a one-shot erase)
                 else if (rugged) dmg = e->maxHp * RUGGED_NUKE * f * D / RUGGED_ARMOR;               // (after the armour) a bit over half at ground zero: it takes two warheads (one silver one)
@@ -1676,14 +1692,15 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
-    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED) && tgt.bt().role != BR_CIVIC) {   // Rugged: half damage, until so much lands at once that the plating is swamped (the town has none)
+    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED) && !civilianRole(tgt.bt().role)) {   // Rugged: half damage, until so much lands at once that the plating is swamped (the town has none)
         float load = tgt.dmgLoad / tgt.maxHp;
         real *= RUGGED_ARMOR + (1.0f - RUGGED_ARMOR) * clampf((load - RUGGED_SWAMP_LO) / (RUGGED_SWAMP_HI - RUGGED_SWAMP_LO), 0, 1);
     }
     if (tgt.isBuilding()) {   // Hyper Protection / the Command keystone / thick walls shrug off conventional fire (a warhead's blast overwhelms a wall's plating)
-        if (hasUpgrade(tgt.owner, UPG_HYPER) && tgt.bt().role != BR_CIVIC) real *= HYPER_ARMOR;
+        if (hasUpgrade(tgt.owner, UPG_HYPER) && !civilianRole(tgt.bt().role)) real *= HYPER_ARMOR;
         if (tgt.bt().role == BR_HQ) real *= HQ_ARMOR;
         if (tgt.bt().role == BR_WALL && !nuke) real *= WALL_ARMOR;
+        if (tgt.bt().role == BR_STRONGHOLD) real *= STRONGHOLD_ARMOR;   // heavy old masonry: no army upgrade applies to it
         tgt.dmgLoad += real;
         if (cap > 0) real = std::min(real, cap);   // a warhead's hard ceiling (absolute HP), applied after every multiplier
     }
@@ -3116,7 +3133,9 @@ void Sim::updateBuilding(Entity& b) {
     if (b.dmgLoad > 0) b.dmgLoad *= 0.975f;   // (a time constant of two seconds)
     if (!b.constructed) return;
     if (b.disabledUntil > time) return;
+    if (b.owner < 0) return;   // a neutral map landmark has nobody to pay, repair or command it until it is garrisoned
     const BuildType& bt = b.bt();
+    if (bt.role == BR_STRONGHOLD) { updateStronghold(b); return; }
     Player& pl = players[b.owner];
     bool powered = !(pl.lowPower() && bt.power < 0);
     if (pl.upg[UPG_REPAIR] && b.hp < b.maxHp && !inFallout(b.pos)) {   // Self-Repair: full rate once out of combat, a trickle under fire
@@ -3219,16 +3238,29 @@ int Sim::garrisonDozers(const Entity& c) const {
     for (Ref r : c.passengers) { const Entity* u = get(r); if (u && u->ut().role == UR_DOZER) n++; }
     return n;
 }
+int Sim::garrisonCap(const Entity& b) const {
+    if (!b.isBuilding()) return 0;
+    if (b.bt().role == BR_BUNKER) return BUNKER_INF_CAP;
+    if (b.bt().role == BR_STRONGHOLD) return b.bt().garrison;
+    return 0;
+}
 
 bool Sim::canBoard(const Entity& u, const Entity& c) const {
     if (!u.alive || !c.alive || !u.isUnit() || u.isAir() || u.carrier.valid() || c.carrier.valid() || u.fall > 0 || c.fall > 0) return false;
-    if (u.owner != c.owner || u.owner < 0) return false;
+    if (u.owner < 0) return false;
     if (c.isBuilding()) {
+        if (c.bt().role == BR_STRONGHOLD) {   // a neutral landmark is open to any army; a claimed one to its owner and allies
+            if (!c.constructed || u.ut().kind != UK_INF) return false;
+            if (c.owner >= 0 && c.owner != u.owner && players[c.owner].team != players[u.owner].team) return false;
+            return garrisonInfantry(c) < garrisonCap(c);
+        }
+        if (u.owner != c.owner) return false;
         if (c.bt().role != BR_BUNKER || !c.constructed) return false;
         if (u.ut().kind == UK_INF) return garrisonInfantry(c) < BUNKER_INF_CAP;
         if (u.ut().role == UR_DOZER) return !civicDozerType(u.type) && garrisonDozers(c) < BUNKER_DOZER_CAP;   // (a civilian dozer cannot patch a hatch)
         return false;
     }
+    if (u.owner != c.owner) return false;
     if (!c.isUnit() || c.ut().cargoCap <= 0 || u.ut().temp) return false;
     if (c.ut().kind == UK_VEH && u.ut().kind != UK_INF) return false;   // a jeep seats soldiers, nothing else
     if (!u.passengers.empty()) return false;                            // a loaded jeep is not itself lifted (no loads inside loads)
@@ -3249,6 +3281,16 @@ void Sim::cmdEnter(const std::vector<Ref>& sel, Ref carrier) {
 
 void Sim::board(Entity& u, Entity& c, bool quiet) {
     Ref uref = refOf(u);
+    bool claim = c.isBuilding() && c.bt().role == BR_STRONGHOLD && c.owner < 0;   // the first infantry inside takes the empty landmark for their army
+    if (claim) {
+        c.owner = u.owner;
+        c.attacker = NOREF; c.lastDamaged = -100; c.detUntil[MAX_PLAYERS - 1] = 0;
+        char msg[128];
+        snprintf(msg, sizeof msg, "Garrisoned the neutral %s", c.bt().name);
+        if (c.owner >= 0) emit(EV_MSG, c.owner, SND_NONE, c.pos, msg);
+        for (int q = 0; q < numPlayers; q++) if (q != c.owner && c.owner >= 0 && players[q].team == players[c.owner].team) emit(EV_MSG, q, SND_NONE, c.pos, msg);
+        updateVision();
+    }
     u.carrier = refOf(c);
     c.passengers.push_back(uref);
     u.order = O_IDLE; u.postOrder = O_IDLE; u.targetEnt = NOREF; u.engaged = NOREF; u.path.clear(); u.pathIdx = 0; u.actionTimer = 0; u.cooldown = 0;
@@ -3286,7 +3328,7 @@ void Sim::ejectAll(Entity& c, bool lost) {
 void Sim::cmdUnload(Ref carrier, bool atSpot, Vec2 spot) {
     Entity* c = get(carrier);
     if (!c || c->passengers.empty()) return;
-    if (c->isBuilding()) { if (c->bt().role == BR_BUNKER && c->constructed) { c->unloading = true; c->unloadTimer = 0; } return; }
+    if (c->isBuilding()) { if ((c->bt().role == BR_BUNKER || c->bt().role == BR_STRONGHOLD) && c->constructed) { c->unloading = true; c->unloadTimer = 0; } return; }
     if (!c->isUnit() || c->ut().cargoCap <= 0) return;
     if (c->ut().kind == UK_VEH) {   // a jeep stops and the crew climbs out onto the ground around it
         c->unloading = true; c->unloadTimer = 0.1f;
@@ -3662,6 +3704,51 @@ void Sim::updateBunker(Entity& b) {
     }
 }
 
+// A claimed civilian stronghold: the garrison holds the windows and loopholes and fires with its own weapons. There are no hatch or floor rules:
+// the men are inside the masonry and cannot be hit until the structure itself falls. A neutral stronghold (owner < 0) has no enemies and does nothing.
+void Sim::updateStronghold(Entity& b) {
+    Ref bref = refOf(b);
+    int n = (int)b.passengers.size();
+    for (size_t i = 0; i < b.passengers.size();) {
+        Entity* u = get(b.passengers[i]);
+        if (!u || u->carrier != bref) { b.passengers.erase(b.passengers.begin() + i); n--; continue; }
+        // stand them around the inside of the footprint; their muzzle flashes come from different windows
+        float a = i * 2.39996f;
+        u->pos = b.pos + Vec2(std::cos(a), std::sin(a)) * (b.radius() * 0.42f * std::sqrt(n > 0 ? (float)i / n : 1.0f));
+        u->prevPos = u->pos;
+        i++;
+    }
+    if (b.unloading) updateCarrierUnload(b);
+    if (b.passengers.empty()) { b.unloading = false; return; }
+    if (b.owner < 0 || (tick + b.gen) % 2 != 0) return;   // a neutral place has no side to shoot for
+    static std::vector<Ref> cand; cand.clear();
+    forEachNear(b.pos, 13.0f * TILE, [&](Entity& t) {
+        if (t.kind == EK_RESOURCE || !enemies(b.owner, t.owner) || t.carrier.valid() || t.fall > 0 || !visibleTo(t, b.owner)) return;
+        cand.push_back(refOf(t));
+    });
+    if (cand.empty()) return;
+    for (Ref r : b.passengers) {
+        Entity* u = get(r);
+        if (!u) continue;
+        if (u->cooldown > 0) u->cooldown -= 2 * SIM_DT;
+        int wi = u->weapon();
+        if (wi < 0 || u->cooldown > 0) continue;
+        const Weapon& w = WEAPONS[wi];
+        Entity* best = nullptr; float bs = 1e9f;
+        for (Ref cr : cand) {
+            Entity* t = get(cr);
+            if (!t || !canTarget(*u, *t)) continue;
+            float d = distToEntity(b.pos, *t) / TILE;   // fire from the building, not from an accidental window offset
+            if (d > w.range + 0.15f || d < w.minRange) continue;
+            float score = d - 2.5f * w.mult[t->armor()];
+            if (t->isUnit() && t->weapon() >= 0) score -= 1.5f;
+            if (t->isBuilding() && !t->constructed) score += 1.0f;
+            if (score < bs) { bs = score; best = t; }
+        }
+        if (best) { tryFire(*u, *best); b.cooldown2 = 0.6f; }
+    }
+}
+
 // The bunker watches over the structures around it (the civilian town above all): a hit on one of them makes the bunker answer the attacker
 // (see updateBunkerSelf: guardHitAt), and once the shooting has stopped its crew mends them a little at a time.
 void Sim::updateBunkerWard(Entity& b) {
@@ -3716,7 +3803,7 @@ bool Sim::hardened(const Entity& b) {
     return b.isBuilding() && b.constructed && (BUILDS[b.type].role == BR_BUNKER || BUILDS[b.type].role == BR_UNUKE);
 }
 bool Sim::canRaise(const Entity& d, int buildType) {
-    return d.isUnit() && buildType >= 0 && buildType < B_COUNT && civicDozerType(d.type) == (BUILDS[buildType].role == BR_CIVIC);
+    return d.isUnit() && buildType >= 0 && buildType < B_COUNT && !strongholdRole(BUILDS[buildType].role) && civicDozerType(d.type) == (BUILDS[buildType].role == BR_CIVIC);
 }
 bool Sim::canMend(const Entity& d, int buildType) {   // (the town's free civilian dozers mending the whole base made bases nearly impossible to grind down)
     return d.isUnit() && buildType >= 0 && buildType < B_COUNT && (!civicDozerType(d.type) || BUILDS[buildType].role == BR_CIVIC);
@@ -3751,7 +3838,7 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     b.queue.clear(); b.queueProgress = 0; b.hasRally = false; b.engaged = NOREF; b.engaged2 = NOREF; b.forceTarget = NOREF; b.unloading = false;
     float oldMax = b.maxHp;
     b.owner = to;
-    b.maxHp = b.bt().hp * (hasUpgrade(to, UPG_RUGGED) && b.bt().role != BR_CIVIC ? RUGGED_HP : 1.0f);
+    b.maxHp = b.bt().hp * (!civilianRole(b.bt().role) && hasUpgrade(to, UPG_RUGGED) ? RUGGED_HP : 1.0f);
     b.hp = std::max(1.0f, b.hp * (b.maxHp / std::max(1.0f, oldMax)));
     b.disabledUntil = std::max(b.disabledUntil, time + 3.0f);
     b.attacker = NOREF; b.lastDamaged = -100;

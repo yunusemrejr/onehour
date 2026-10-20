@@ -69,6 +69,7 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_CIVIC,       // civilian infrastructure (houses, shops, towers, the town hall): raised by a civilian dozer, pays and sends dozers on its own
                  BR_UNUKE,       // Underground Nuke silo: a buried launcher with blast doors and deep plating; its silver warhead has 3x a ramp's radius and radiation
                  BR_WALL,        // thick concrete/steel wall segment: unlimited, cheap, very hard to nuke through
+                 BR_STRONGHOLD,  // neutral civilian castle / bunker / watchtower: empty at the start, any army's infantry may garrison it and fire from it
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -82,6 +83,8 @@ enum BuildTypeId {
     B_K_HOUSE, B_K_APARTMENTS, B_K_SKYSCRAPER, B_K_GAS, B_K_GROCERY, B_K_EVENTHALL, B_K_SQUARE, B_K_TOWNHALL, B_K_GOVERNMENT,
     B_C_UNUKE, B_K_UNUKE,     // Underground Nuke silos
     B_C_WALL, B_K_WALL,       // wall segments (unlimited; see BR_WALL)
+    // neutral civilian strongholds placed by the map generator (never built; see BR_STRONGHOLD)
+    B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER,
     B_COUNT
 };
 
@@ -136,6 +139,7 @@ struct BuildType {
     int weapon;
     int requires_;      // BuildTypeId prerequisite or -1
     const char* desc;
+    int garrison = 0;   // neutral stronghold: infantry it can shelter (0 for every normal structure)
 };
 
 extern const Weapon WEAPONS[];
@@ -188,6 +192,13 @@ static const float WALL_PD_COVER = 10.0f;     // tiles around an Anti-Rocket wal
 static const float WALL_PD_CHANCE = 0.38f;    // chance to burn down one incoming rocket / shell / warhead
 static const float WALL_PD_RELOAD = 3.2f;     // seconds before the same wall can engage again
 static const float WALL_PD_AA = 190.0f;       // damage a wall laser does to an aircraft it catches
+// Neutral civilian strongholds (Old Castle / Civilian Bunker / Watchtower): map landmarks that start empty and unowned. Any army's infantry
+// can walk in; the first one inside claims the place for their army and the garrison fires from its windows and loopholes. They are deliberately
+// tough: heavy masonry, a damage reduction and a per-warhead ceiling, but no army upgrade ever applies to them.
+static const float STRONGHOLD_ARMOR = 0.62f;  // fraction of conventional damage a stronghold takes
+static const float STRONGHOLD_NUKE = 0.58f;   // hard ceiling: one warhead takes at most this share of its max health
+inline bool strongholdRole(BuildRole r) { return r == BR_STRONGHOLD; }
+inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD; }   // no Rugged / Hyper / roof-gun upgrades
 static const float ANTINUKE_PD_AA = 230.0f;   // damage a Q defence does to an aircraft
 // Nuclear-interception nerf: the Anti-Nuke Laser is 40% weaker against warheads, and an Anti-Rocket wall's laser is 70% weaker against them.
 // Only warheads are affected: burning down rockets, shells, bombs and aircraft is unchanged, and the Clanker missile silo keeps its chance.
