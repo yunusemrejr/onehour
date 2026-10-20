@@ -172,6 +172,11 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
         for (int dy = -ring; dy <= ring; dy++) for (int dx = -ring; dx <= ring; dx++) {
             if (std::abs(dx) != ring && std::abs(dy) != ring) continue;
             int x = cx + dx, y = cy + dy;
+            Vec2 c = g_sim.buildingCenter(buildType, x, y);
+            // All later penalties are nonnegative. A candidate already worse than the best
+            // cannot win, so avoid its footprint/connectivity and nearby-structure scans.
+            float score = dist(c, preferNear) + ring * 6.0f;
+            if (score >= bestScore) continue;
             if (!g_sim.canPlace(player, buildType, x, y)) continue;
             // keep a one-tile corridor around every structure so units can always get through
             bool gapOk = true;
@@ -180,7 +185,6 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
                 if (g_map.blocked[j * MAP_W + i] & 2) { gapOk = false; break; }
             }
             if (!gapOk) continue;
-            Vec2 c = g_sim.buildingCenter(buildType, x, y);
             // never place bot structures or turrets right next to another player's bunker
             bool nearBunker = false;
             for (auto& o : g_sim.ents) {
@@ -189,7 +193,6 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
                 if (dist(c, o.pos) < minD) { nearBunker = true; break; }
             }
             if (nearBunker) continue;
-            float score = dist(c, preferNear) + ring * 6.0f;
             if (b.role == BR_TURRET || b.role == BR_AATURRET) {
                 for (auto& o : g_sim.ents) if (o.alive && o.isBuilding() && (o.bt().role == BR_TURRET || o.bt().role == BR_AATURRET) && dist(c, o.pos) < 5.5f * TILE) score += 140.0f;
             }

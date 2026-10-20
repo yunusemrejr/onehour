@@ -348,6 +348,14 @@ void Map::generate() {
 }
 
 bool Map::wouldPlug(int tx, int ty, int w, int h) const {
+    // If the one-tile ring is open, every exit from the removed footprint is
+    // still connected around it. This is an exact shortcut, not a relaxed rule.
+    bool ringOpen = w > 0 && h > 0;
+    for (int x = tx - 1; ringOpen && x <= tx + w; x++)
+        ringOpen = passable(x, ty - 1) && passable(x, ty + h);
+    for (int y = ty; ringOpen && y < ty + h; y++)
+        ringOpen = passable(tx - 1, y) && passable(tx + w, y);
+    if (ringOpen) return false;
     const int R = 6;
     int x0 = std::max(0, tx - R), y0 = std::max(0, ty - R), x1 = std::min(MAP_W - 1, tx + w - 1 + R), y1 = std::min(MAP_H - 1, ty + h - 1 + R);
     int W = x1 - x0 + 1, H = y1 - y0 + 1;
