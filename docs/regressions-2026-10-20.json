@@ -1,0 +1,200 @@
+{
+  "baseline": "fe85192ac7e87500377aea05f555eec9d37aa7e4",
+  "tests": [
+    {
+      "test": "braintest",
+      "exit_code": 0,
+      "seconds": 0.006
+    },
+    {
+      "test": "learningtest",
+      "exit_code": 0,
+      "seconds": 0.017
+    },
+    {
+      "test": "frontiermaptest",
+      "exit_code": 0,
+      "seconds": 0.012
+    },
+    {
+      "test": "placementtest",
+      "exit_code": 0,
+      "seconds": 0.078
+    },
+    {
+      "test": "navytest",
+      "exit_code": 0,
+      "seconds": 0.11
+    },
+    {
+      "test": "forttest",
+      "exit_code": 0,
+      "seconds": 0.018
+    },
+    {
+      "test": "movetest",
+      "exit_code": 0,
+      "seconds": 0.012
+    },
+    {
+      "test": "civictest",
+      "exit_code": 0,
+      "seconds": 6.756
+    },
+    {
+      "test": "autotest",
+      "exit_code": 0,
+      "seconds": 0.101
+    },
+    {
+      "test": "recoverytest",
+      "exit_code": 0,
+      "seconds": 1.203
+    },
+    {
+      "test": "radtest",
+      "exit_code": 0,
+      "seconds": 0.1
+    },
+    {
+      "test": "walltest",
+      "exit_code": 0,
+      "seconds": 0.084
+    },
+    {
+      "test": "scenario",
+      "exit_code": 0,
+      "seconds": 0.207
+    },
+    {
+      "test": "econtest",
+      "exit_code": 0,
+      "seconds": 0.126
+    },
+    {
+      "test": "hqtest",
+      "exit_code": 0,
+      "seconds": 0.258
+    },
+    {
+      "test": "droptest",
+      "exit_code": 0,
+      "seconds": 0.104
+    },
+    {
+      "test": "striketest",
+      "exit_code": 0,
+      "seconds": 0.249
+    },
+    {
+      "test": "haultest",
+      "exit_code": 0,
+      "seconds": 0.035
+    },
+    {
+      "test": "allytest",
+      "exit_code": 0,
+      "seconds": 0.243
+    },
+    {
+      "test": "aidtest",
+      "exit_code": 0,
+      "seconds": 0.161
+    },
+    {
+      "test": "supporttest",
+      "exit_code": 0,
+      "seconds": 0.067
+    },
+    {
+      "test": "turrettest",
+      "exit_code": 0,
+      "seconds": 1.146
+    },
+    {
+      "test": "upgradetest",
+      "exit_code": 0,
+      "seconds": 0.084
+    },
+    {
+      "test": "helitest",
+      "exit_code": 0,
+      "seconds": 1.63
+    },
+    {
+      "test": "rulestest",
+      "exit_code": 0,
+      "seconds": 0.259
+    },
+    {
+      "test": "stealthtest",
+      "exit_code": 0,
+      "seconds": 1.597
+    },
+    {
+      "test": "jeeptest",
+      "exit_code": 0,
+      "seconds": 0.049
+    },
+    {
+      "test": "dronetest",
+      "exit_code": 0,
+      "seconds": 0.088
+    },
+    {
+      "test": "strikejettest",
+      "exit_code": 0,
+      "seconds": 0.06
+    },
+    {
+      "test": "antinuketest",
+      "exit_code": 0,
+      "seconds": 1.106
+    },
+    {
+      "test": "dozertest",
+      "exit_code": 0,
+      "seconds": 0.187
+    },
+    {
+      "test": "supersonictest",
+      "exit_code": 0,
+      "seconds": 0.438
+    },
+    {
+      "test": "jettest",
+      "exit_code": 0,
+      "seconds": 0.098
+    },
+    {
+      "test": "nuketest",
+      "exit_code": 0,
+      "seconds": 0.033
+    },
+    {
+      "test": "bombtest",
+      "exit_code": 0,
+      "seconds": 0.471
+    },
+    {
+      "test": "areatest",
+      "exit_code": 0,
+      "seconds": 0.03
+    },
+    {
+      "test": "airmatrix",
+      "exit_code": 0,
+      "seconds": 2.621
+    },
+    {
+      "test": "groundmatrix",
+      "exit_code": 0,
+      "seconds": 3.279
+    },
+    {
+      "test": "uitest",
+      "exit_code": 0,
+      "seconds": 24.325
+    }
+  ]
+}
