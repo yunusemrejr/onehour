@@ -1,7 +1,8 @@
 // One Hour - the commander's use of the October update (FEAT_FRONTIER): the Island Nuke Launchers out on the lake, the Nuclear Bomber call-in
 // and the plain fighters.
 //  * a launcher it does not hold (neutral, or the enemy's) is a prize: a cargo lifter flies an infiltrator out to the island, sets down beside the
-//    launcher and the infiltrator takes it; a launcher it holds fires its small nuke at the best target it knows
+//    launcher and the infiltrator takes it (with no lifter yet, one infiltrator swims out on its raft); a launcher it holds fires its small nuke at
+//    the best target it knows
 //  * a tech structure's Nuclear Bomber is called on a target worth a mid-sized warhead, not into a wall of anti-air
 #include "ai.h"
 
@@ -148,7 +149,10 @@ void AiPlayer::frontier() {
         for (auto& b : S.ents) if (b.alive && b.isBuilding() && b.owner == player && b.constructed && b.bt().role == BR_BARRACKS && b.queue.empty()) { if (S.cmdTrain(S.refOf(b), spyT)) break; }
         return;
     }
-    if (!lifter) {
+    if (!lifter) {   // no lifter yet: one infiltrator paddles out on its raft (slower and exposed on the water, but it needs no airframe)
+        bool going = false;
+        for (Entity* s : spies) if (s->order == O_CAPTURE && s->targetEnt == prizeRef) going = true;
+        if (!going) for (Entity* s : spies) if (!s->carrier.valid() && s->order != O_CAPTURE) { S.cmdCapture({S.refOf(*s)}, prizeRef); break; }
         if (pl.money < 4200) return;
         for (auto& a : S.ents) if (a.alive && a.isBuilding() && a.owner == player && a.constructed && a.bt().role == BR_AIRFIELD && a.queue.empty()) { if (S.cmdTrain(S.refOf(a), liftT)) break; }
         return;

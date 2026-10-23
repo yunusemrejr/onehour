@@ -50,21 +50,44 @@ struct Map {
     }
     bool vegetation(int x, int y) const { return inMap(x, y) && clearable[y * MAP_W + x] != 0 && (tiles[y * MAP_W + x] == T_TREE || tiles[y * MAP_W + x] == T_ROCK); }   // would be cleared by a structure
     void clearForStructure(int x, int y, int w, int h);   // trees / small rocks under a new structure's footprint turn into open ground
+    // Waymaker ground: any land tile away from the map's border cliffs with no water, bridge deck, structure or supply pile on it. Trees, rock and
+    // the ridges are all fair game: clearWay turns the whole footprint into a graded earth track (walkable, buildable) and logs it for the renderer.
+    bool wayTile(int x, int y) const {
+        if (x < 1 || y < 1 || x > MAP_W - 2 || y > MAP_H - 2) return false;
+        int i = y * MAP_W + x;
+        return tiles[i] != T_WATER && bridge[i] == 0 && (blocked[i] & ~1) == 0;
+    }
+    int clearWay(int x, int y, int w, int h);   // returns how many tiles were blocked before
     // Would a w x h structure at (x, y) cut the ground around it in two (a corridor between rock and water, a gap between two other structures)? Counts the
     // 4-connected regions of free ground in the window of a few tiles round the footprint before and after: more of them after means it would plug something.
     bool wouldPlug(int x, int y, int w, int h) const;
     void setStructure(int x, int y, int w, int h, bool on);
     void setResource(int x, int y, bool on);
+    // Connected ground: every passable tile carries the id of the 4-connected region it belongs to (0 = blocked). A* moves diagonally only between two
+    // open orthogonal neighbours, so these are exactly the places a ground route can reach from each other. A search for a spot in another region is
+    // bound to fail after flooding everything it can reach (most failed searches in a battle: units re-planning toward a target behind walls), so
+    // findPath goes straight for the closest point of its own region instead. Rebuilt lazily after the map's own setters change 'blocked';
+    // code that writes 'blocked' directly (tests) must call touch().
+    mutable std::vector<u16> region;
+    mutable bool regionDirty = true;
+    mutable u32 cacheGen = 0;           // generation of closestInRegion's memo (0 after a rebuild: it starts afresh)
+    void touch() { regionDirty = true; }
+    void buildRegions() const;
+    bool closestInRegion(u16 rg, int gx, int gy, int& bx, int& by) const;   // the tile of region rg nearest to (gx, gy) (octile distance)
     float moveCost(int x, int y) const { return tiles[y * MAP_W + x] == T_ROAD ? 0.8f : 1.0f; }
 
     // Pathfinding: fills out with tile centers (excluding start tile), returns false if unreachable.
     // If the goal is blocked, the nearest reachable tile is used.
-    bool findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H) const;
+    // swim: an infiltrator may also cross open water (see swimTile); it costs more than walking, so land is still preferred where it goes.
+    bool findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H, bool swim = false) const;
     // Path to the nearest reachable tile beside a w x h footprint at (x, y) (any of its sides, by real path length): dozers and spies walk up to
     // the face of a structure that is on their side instead of a fixed doorstep that may be round the back. False if no side can be reached.
-    bool findPathToRect(Vec2 from, int x, int y, int w, int h, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H) const;
-    bool lineClear(Vec2 a, Vec2 b) const;   // straight ground line free of blocked tiles
-    void pullString(Vec2 from, const std::vector<Vec2>& tiles, std::vector<Vec2>& out) const;   // a tile route into straight-line waypoints
+    bool findPathToRect(Vec2 from, int x, int y, int w, int h, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H, bool swim = false) const;
+    bool lineClear(Vec2 a, Vec2 b, bool swim = false) const;   // straight ground line free of blocked tiles (swim: water is free too)
+    void pullString(Vec2 from, const std::vector<Vec2>& tiles, std::vector<Vec2>& out, bool swim = false) const;   // a tile route into straight-line waypoints
+    // Water an infiltrator can swim through: any water tile (lake, river, pond) with nothing standing in it
+    bool swimTile(int x, int y) const { return inMap(x, y) && tiles[y * MAP_W + x] == T_WATER && (blocked[y * MAP_W + x] & ~1) == 0; }
+    bool swimPassable(int x, int y) const { return passable(x, y) || swimTile(x, y); }
     Vec2 nearestFree(Vec2 p, int maxR = 6) const;
 
     // ---- the lake: ships sail on water only. A tile is sailable if it is water with no structure on it (bridges are road, so they close a

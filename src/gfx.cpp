@@ -388,6 +388,26 @@ static Sprite cropToSprite(Gfx& g, Canvas& c, float cx, float cy, float dscale);
 // ------------------------------------------------------------ units
 // Unit art lives in art.cpp: 2x supersampled sprites (drawn at 0.5 scale, bilinear filtered), with two extra
 // animation frames for anything that walks or rolls, turrets per player, and a spinning rotor for helicopters.
+// The realism grade every unit and structure sprite gets once it is painted: colour pulled a little toward grey (field paint, not toy plastic) and a
+// fine grime of darker and lighter flecks (dust, wear, chipped paint) that follows the sprite's own pixels, so it costs nothing after startup.
+// The pattern is seeded by the art, not the animation frame, so walk / track frames never flicker. Bright emitter pixels keep their colour.
+static void gradeArt(Canvas& c, u32 seed, float desat, float grime) {
+    for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
+        u32& px = c.px[y * c.w + x];
+        Color o = Canvas::unpack(px);
+        if (o.a == 0) continue;
+        float r = o.r, g = o.g, b = o.b, lum = 0.299f * r + 0.587f * g + 0.114f * b;
+        float mx = std::max(r, std::max(g, b)), mn = std::min(r, std::min(g, b)), sat = mx > 0 ? (mx - mn) / mx : 0;
+        float d = desat * (mx > 225 && sat > 0.35f ? 0.25f : 1.0f);   // (lights and emitters stay vivid)
+        r += (lum - r) * d; g += (lum - g) * d; b += (lum - b) * d;
+        u32 h = (u32)((x >> 1) * 73856093u) ^ (u32)((y >> 1) * 19349663u) ^ (seed * 83492791u);
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        float n = ((h & 1023) / 1023.0f - 0.5f) * 2.0f, k = 1.0f + grime * n * (0.6f + 0.4f * (lum / 255.0f));
+        o.r = (u8)clampf(r * k, 0, 255); o.g = (u8)clampf(g * k, 0, 255); o.b = (u8)clampf(b * k, 0, 255);
+        px = Canvas::pack(o);
+    }
+}
+
 void Gfx::buildUnits() {
     for (int p = 0; p < MAX_PLAYERS; p++) {
         Color team = PLAYER_COLOR[p];
@@ -397,12 +417,13 @@ void Gfx::buildUnits() {
                 if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
                 Canvas c(ART_SIZE, ART_SIZE);
                 artUnitBody(c, t, team, f);
+                gradeArt(c, 977u + (u32)t, 0.10f, 0.07f);
                 Sprite s = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t));
                 if (f == 0) unitBody[t][p] = s; else unitAnim[t][p][f - 1] = s;
             }
             if (u.kind == UK_AIR) { unitAnim[t][p][0] = unitBody[t][p]; unitAnim[t][p][1] = unitBody[t][p]; }
             Canvas tc(ART_SIZE, ART_SIZE);
-            if (artUnitTurret(tc, t, team)) unitTurret[t][p] = cropToSprite(*this, tc, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t));
+            if (artUnitTurret(tc, t, team)) { gradeArt(tc, 1913u + (u32)t, 0.10f, 0.07f); unitTurret[t][p] = cropToSprite(*this, tc, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t)); }
         }
     }
     for (int p = 0; p < MAX_PLAYERS; p++) {
@@ -440,6 +461,7 @@ void Gfx::buildBuildings() {
         BArtSize sz = artBuildingSize(t);
         Canvas c(sz.w, sz.h), m(sz.w, sz.h);
         artBuilding(c, m, t);
+        gradeArt(c, 3301u + (u32)t, BUILDS[t].role == BR_CIVIC ? 0.04f : 0.08f, 0.05f);
         // cropped to the painted area like the team masks: the padding round a footprint is mostly empty sky, and the
         // saved texture memory (a third or more of every structure sprite) pays for the bigger world texture
         building[t] = cropToSprite(*this, c, sz.cx, sz.cy, 1.0f / BART_K);

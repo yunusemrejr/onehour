@@ -97,6 +97,28 @@ struct Game {
     void spawnFromFx();
     void updateParticles(float dt);
     friend bool uiNewTest(Faction, Faction, u64);   // tests2.cpp drives the real input code
+    // ---- weather.cpp: the day and the weather (cosmetic only: nothing in the simulation sees them) and the lake's wildlife
+    struct Weather {
+        float phase0 = 0;                    // seconds into the day cycle when the match started (a random start: dawn, morning, day, sunset or night)
+        float rain = 0, rainTo = 0;          // rain now and where it is heading (0 dry .. 1 downpour)
+        float nextRoll = 0;                  // sim time when the sky next decides whether to start or stop raining
+        float bolt = 0, nextBolt = 0;        // lightning: flash level, and the sim time of the next strike in a downpour
+        float lastT = -1;                    // sim time of the last update
+        bool forced = false;                 // ONEHOUR_WEATHER fixed the sky (screenshots): it never changes
+        Rng rng{ 0x5EA5 };
+    } weather;
+    struct SeaBeast { int kind; Vec2 pos, goal; float ang, speed, timer, upFor; bool up; };   // kind 0 whale, 1 dolphin, 2 shark
+    std::vector<SeaBeast> sea;
+    void commandBarCheck(bool& onScreen, bool& fwall, bool& way);   // (tests) lays the command bar out for the selection: every button inside the screen? a Bastion Wall / Waymaker button?
+    void initWeather();                       // a new match: a random point in the day, maybe rain, and the lake's wildlife
+    void updateWeather();                     // once a frame (follows the simulation clock: pausing stops the sky too)
+    float dayPhase() const;                   // 0..1 through the day cycle (0 dawn, ~0.55 sunset, ~0.8 deep night)
+    Color ambientTint() const;                // what the world's colours are multiplied by (white at noon on a dry day)
+    float nightLevel() const;                 // 0 by day .. 1 in the dead of night (lights come on)
+    const char* weatherLabel() const;         // "Dawn", "Day", "Sunset", "Night" ... with ", rain" / ", storm"
+    void drawSeaLife();                       // fins, backs and spouts in the open lake (under the ships)
+    void drawWeatherTint();                   // the light of the hour and the weather over the ground world, then the lights of the night
+    void drawRain();                          // streaks, splashes and lightning over everything on the battlefield
 private:
     float accumulator = 0;
     void processEvents();

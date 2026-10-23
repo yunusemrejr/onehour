@@ -14,6 +14,9 @@ const Color CY_HULL = rgb(46, 62, 92), CY_DECK = rgb(36, 48, 72), CY_PALE = rgb(
 const Color CY_FOAM = rgb(236, 246, 252);
 const Color CK_HULL = rgb(88, 96, 64), CK_IRON = rgb(120, 122, 116), CK_DARK = rgb(38, 40, 32), CK_STEEL = rgb(134, 136, 132);
 const Color CK_RUST = rgb(156, 90, 48), CK_HAZ = rgb(226, 182, 62), CK_FOAM = rgb(232, 238, 236), CK_RAFT = rgb(204, 128, 70);
+// patrol boat: graphite-blue composite hull with a cobalt deck (Cyber); grey-olive hull with a light grey deck (Clanker)
+const Color PB_CY_HULL = rgb(66, 78, 96), PB_CY_DECK = rgb(58, 90, 142), PB_CK_HULL = rgb(104, 106, 90), PB_CK_DECK = rgb(150, 150, 136);
+const Color PB_GLASS = rgb(26, 58, 80);
 
 // The player's mark on a ship: a jewel-like dot (as teamDot in art.cpp)
 void teamDot(Art& A, float cx, float cy, float r) {
@@ -196,6 +199,65 @@ void cruiserBody(Art& A, bool cy) {
     }
 }
 
+// ---------------------------------------------------------------- patrol boat: about 39 px long (x 13.6..52.6), 12 wide
+void patrolBody(Art& A, bool cy) {
+    Color H = cy ? PB_CY_HULL : PB_CK_HULL, D = cy ? PB_CY_DECK : PB_CK_DECK, Dk = cy ? CY_DARK : CK_DARK;
+    Color fender = cy ? CY_DARK : CK_HAZ;
+    // bow wave and a thin wash at the transom, painted under the hull
+    A.poly({ {12.5f, 25.0f}, {17, 24.8f}, {40, 24.8f}, {44.4f, 25.2f}, {48.2f, 26.9f}, {51.6f, 29.6f}, {54, 32}, {51.6f, 34.4f}, {48.2f, 37.1f}, {44.4f, 38.8f}, {40, 39.2f}, {17, 39.2f}, {12.5f, 39.0f} }, cy ? CY_FOAM : CK_FOAM, 1, 0, 0.5f);
+    // planing hull: a slim, flat-transomed shape with a sharp bow
+    A.poly({ {14, 26.4f}, {17, 25.9f}, {40, 25.9f}, {44, 26.3f}, {47.2f, 27.5f}, {50.4f, 29.9f}, {52.6f, 32}, {50.4f, 34.1f}, {47.2f, 36.5f}, {44, 37.7f}, {40, 38.1f}, {17, 38.1f}, {14, 37.6f} }, H, 2.4f, 0.6f);
+    // light non-slip deck with a stipple of grip dots
+    A.poly({ {15.6f, 27.4f}, {18, 27.0f}, {40, 27.0f}, {43.5f, 27.6f}, {46.2f, 28.8f}, {49, 30.6f}, {50.8f, 32}, {49, 33.4f}, {46.2f, 35.2f}, {43.5f, 36.4f}, {40, 37.0f}, {18, 37.0f}, {15.6f, 36.6f} }, shade(D, 1.12f), 1.6f, 0.45f);
+    for (float x = 17.0f; x <= 44.0f; x += 2.2f)
+        for (float y = 28.0f; y <= 36.0f; y += 2.2f) A.dot(x + (int)(y / 2.2f) % 2 * 1.1f, y, 0.28f, rgba(shade(D, 0.6f), 90));
+    polyline(A, { {15.6f, 26.9f}, {40, 26.9f}, {44.6f, 27.8f}, {48.2f, 29.6f}, {50.4f, 32} }, 0.7f, rgba(Dk, 200));   // rails
+    polyline(A, { {15.6f, 37.1f}, {40, 37.1f}, {44.6f, 36.2f}, {48.2f, 34.4f}, {50.4f, 32} }, 0.7f, rgba(Dk, 200));
+    if (cy) {
+        A.line(18, 27.8f, 42, 27.8f, 0.6f, rgba(CY_GLOW, 210)); A.line(18, 36.2f, 42, 36.2f, 0.6f, rgba(CY_GLOW, 210));   // cyan accent seams
+    } else {
+        rivets(A, 18, 28.4f, 40, 28.4f, 6, shade(H, 1.35f)); rivets(A, 18, 35.6f, 40, 35.6f, 6, shade(H, 1.35f));
+        dashes(A, 42.5f, 27.4f, 50.2f, 30.6f, 5, 1.0f, CK_HAZ, Dk);   // hazard-trimmed bow shoulders
+        dashes(A, 42.5f, 36.6f, 50.2f, 33.4f, 5, 1.0f, CK_HAZ, Dk);
+    }
+    // rubber fenders bulging out past the sheer, every 9 px along both sides
+    for (float x = 22.0f; x <= 40.0f; x += 9.0f) {
+        A.cap(x - 1.2f, 25.4f, x + 1.2f, 25.4f, 0.8f, fender, 0.6f, 0.5f);
+        A.cap(x - 1.2f, 38.6f, x + 1.2f, 38.6f, 0.8f, fender, 0.6f, 0.5f);
+    }
+    // twin outboard engines on the transom, with pale cowl tops
+    for (int s = -1; s <= 1; s += 2) {
+        float y = 32 + s * 3.1f;
+        A.box(12.2f, y, 2.2f, 1.6f, 0.7f, cy ? rgb(30, 36, 48) : rgb(54, 56, 50), 1.4f, 0.5f);
+        A.dot(11.2f, y - s * 0.2f, 0.45f, cy ? CY_PALE : rgb(120, 122, 110));
+    }
+    // aft deck: a life-raft canister with its strap, a bitt on each side and a small hatch
+    A.rect(16.2f, 35.0f, 3.6f, 2.0f, 0.6f, cy ? CY_PALE : CK_RAFT, 1.2f, 0.5f);
+    A.line(18.0f, 35.0f, 18.0f, 37.0f, 0.4f, rgba(Dk, 170));
+    A.dot(16.0f, 28.4f, 0.5f, Dk); A.dot(16.0f, 35.6f, 0.5f, Dk);
+    hatch(A, 19.4f, 30.6f, 1.2f, shade(D, 1.2f));
+    // low angular wheelhouse a little aft of the middle, glazed across the forward face, with the team band across its roof
+    Color roof = cy ? shade(CY_PALE, 0.9f) : shade(CK_IRON, 0.72f);
+    A.poly({ {21.8f, 28.2f}, {28.6f, 28.2f}, {30.6f, 30.0f}, {30.6f, 34.0f}, {28.6f, 35.8f}, {21.8f, 35.8f} }, roof, 2.2f, 0.55f);
+    A.poly({ {28.4f, 29.4f}, {29.8f, 30.2f}, {30.2f, 32}, {29.8f, 33.8f}, {28.4f, 34.6f} }, PB_GLASS, 0.8f, 0.3f);
+    A.line(28.8f, 30.4f, 29.6f, 31.2f, 0.4f, rgba(rgb(255, 255, 255), 120));
+    A.rect(24.4f, 28.2f, 1.8f, 7.6f, 0.2f, A.team, 1.0f, 0.3f);
+    // a short mast with a radar bar across the beam, on the roof's aft half
+    A.dot(23.0f, 32, 0.9f, Dk);
+    A.line(23.0f, 29.0f, 23.0f, 35.0f, 0.9f, cy ? CY_DARK : CK_DARK);
+    A.dot(23.0f, 29.0f, 0.55f, cy ? CY_PALE : CK_STEEL); A.dot(23.0f, 35.0f, 0.55f, cy ? CY_PALE : CK_STEEL);
+    // the empty pedestal of the mount on the foredeck, drawn last so the rim shows
+    ShipMounts m = patrolMounts();
+    for (int i = 0; i < m.n; i++) pedestal(A, 32 + m.x[i], 32 + m.y[i], 4.9f, H);
+    if (cy) {
+        A.grain(14, 25, 52, 39, 0.05f, 71);
+    } else {   // weathering: grain over the plating and rust run-downs from the rails
+        A.grain(14, 25, 52, 39, 0.14f, 72);
+        streaks(A, 18, 27.0f, 40, 28.0f, 5, 95);
+        streaks(A, 18, 36.0f, 40, 37.0f, 5, 96);
+    }
+}
+
 // ---------------------------------------------------------------- mounts (one sprite, centred at (32,32), pointing +x)
 
 // Pulse Destroyer: a faceted shield with twin pulse-cannon barrels and cyan lens tips at the muzzles
@@ -242,6 +304,26 @@ void rackClanker(Art& A) {
         A.circle(38.6f, y, 1.6f, CK_RUST, 1.0f, 0.6f);
     }
 }
+// Patrol boat: a compact turret with a twin-barrel autocannon pointing +x (barrels to about +10 px) and a pod of two rocket tubes on the
+// port side, their mouths at the front; the dome sits on a dark hatch ring
+void patrolGun(Art& A, bool cy) {
+    Color T = cy ? rgb(92, 106, 128) : shade(CK_HULL, 1.15f), Bar = cy ? CY_DARK : CK_DARK, Tube = cy ? CY_PALE : CK_STEEL, Warhead = cy ? CY_DARK : CK_RUST;
+    A.box(33.2f, 26.6f, 4.6f, 1.9f, 0.6f, shade(T, 0.85f), 1.4f, 0.5f);   // rocket pod on the port side
+    for (float y : { 25.6f, 27.6f }) {
+        A.circle(37.6f, y, 0.8f, Tube, 0.7f, 0.4f);
+        A.dot(37.6f, y, 0.4f, Warhead);
+    }
+    A.circle(32, 32, 4.2f, T, 1.8f, 0.6f);                 // turret dome
+    A.ring(32, 32, 3.1f, 0.6f, shade(T, 0.8f), 0.7f, 0.3f);
+    hatch(A, 29.4f, 32, 1.1f, shade(T, 1.25f));            // gunner's hatch
+    A.box(35.0f, 32, 1.8f, 2.4f, 0.6f, shade(T, 0.9f), 1.2f, 0.5f);   // breech housing
+    for (int s = -1; s <= 1; s += 2) {                     // twin barrels with muzzle tips
+        float y = 32 + s * 1.6f;
+        A.line(35.0f, y, 41.6f, y, 1.2f, Bar);
+        A.box(41.8f, y, 0.4f, 0.7f, 0.2f, cy ? shade(Bar, 1.4f) : CK_HAZ, 0.5f, 0.4f);
+    }
+    if (cy) A.line(36.0f, 32.0f, 40.5f, 32.0f, 0.3f, rgba(CY_GLOW, 170));   // thin cyan seam between the barrels
+}
 
 }  // namespace
 
@@ -263,6 +345,22 @@ bool artShipMount(Canvas& c, Color team, bool cyber, bool cruiser) {
     Art A(c, team);
     if (cruiser) { if (cyber) launcherCyber(A); else rackClanker(A); }
     else { if (cyber) gunCyber(A); else gunClanker(A); }
+    c.outline(rgb(8, 10, 14, 200));
+    return true;
+}
+
+// The patrol boat's one mount sits on the foredeck, 7 px forward of the hull centre (its pedestal is painted there).
+ShipMounts patrolMounts() { return ShipMounts{ 1, { 7.0f, 0, 0 }, { 0, 0, 0 } }; }
+
+void artPatrolBoatBody(Canvas& c, Color team, bool cyber) {
+    Art A(c, team);
+    patrolBody(A, cyber);
+    c.outline(rgb(8, 10, 14, 200));
+}
+
+bool artPatrolBoatMount(Canvas& c, Color team, bool cyber) {
+    Art A(c, team);
+    patrolGun(A, cyber);
     c.outline(rgb(8, 10, 14, 200));
     return true;
 }

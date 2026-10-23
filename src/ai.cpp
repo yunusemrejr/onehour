@@ -591,6 +591,7 @@ void AiPlayer::think() {
             case BR_STRONGHOLD: break;   // neutral map landmarks are not the army's production
             case BR_ISLANDNUKE: break;
             case BR_FWALL: walls++; break;
+            case BR_WAYMAKER: break;   // (gone again in a few seconds)
             case BR_NONE: break;
             }
         }
@@ -1002,14 +1003,16 @@ void AiPlayer::think() {
     for (auto* a : airfields) if (a->constructed && a->queue.empty() && pl.money - reserve > 2500 && (int)aircraft.size() < style.airCap) { int t = chooseUnit(BR_AIRFIELD, enemyInf, enemyVeh, enemyAir); if (t >= 0) S.cmdTrain(S.refOf(*a), t); }
     // ships: a yard keeps its slipway busy while there is money to spare - destroyers for the fight on the lake, a few missile cruisers for the shore
     if (on(FEAT_NAVY) && !yards.empty()) {
-        int cruiserT = pl.faction == F_CYBER ? U_C_CRUISER : U_K_CRUISER, destroyerT = pl.faction == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER;
-        int queuedShips = 0, destroyers = 0, cruisers = 0;
+        int cruiserT = pl.faction == F_CYBER ? U_C_CRUISER : U_K_CRUISER, destroyerT = pl.faction == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, patrolT = pl.faction == F_CYBER ? U_C_PATROL : U_K_PATROL;
+        int queuedShips = 0, destroyers = 0, cruisers = 0, patrols = 0;
         for (auto* y : yards) queuedShips += (int)y->queue.size();
-        for (auto r : fleet) if (Entity* e = S.get(r)) (e->type == cruiserT ? cruisers : destroyers)++;
-        int fleetCap = 3 + pl.difficulty + (enemyShips > 0 ? 2 : 0) + (pl.money > 9000 ? 1 : 0);
-        for (auto* y : yards) if (y->constructed && y->queue.empty() && (int)fleet.size() + queuedShips < fleetCap && pl.money - reserve > 2600) {
+        for (auto r : fleet) if (Entity* e = S.get(r)) (e->type == cruiserT ? cruisers : (e->type == patrolT ? patrols : destroyers))++;
+        int fleetCap = 3 + pl.difficulty + (enemyShips > 0 ? 2 : 0) + (pl.money > 9000 ? 1 : 0) + patrols / 2;   // (patrol boats are small: two take one berth)
+        for (auto* y : yards) if (y->constructed && y->queue.empty() && (int)fleet.size() + queuedShips < fleetCap && pl.money - reserve > 800) {
+            bool rich = pl.money - reserve > 2600;
             int want = (cruisers * 2 < destroyers && S.unitAvailable(player, cruiserT)) ? cruiserT : destroyerT;
             if (enemyShips > 0 && cruisers >= 1) want = destroyerT;   // an enemy navy first needs guns that answer it
+            if (!rich || patrols * 2 < destroyers + cruisers) want = patrolT;   // cheap patrol boats fill the gaps: one for every two warships, and all of it when money is short
             if (S.cmdTrain(S.refOf(*y), want)) queuedShips++;
         }
         for (auto* y : yards) if (y->constructed) S.cmdSetRally(S.refOf(*y), g_map.nearestWater(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) + (pl.basePos - Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f)).norm() * (6.0f * TILE), 12, true));

@@ -339,7 +339,8 @@ struct Sim {
     void cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius);
     void cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius);
     void cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius);   // guard for fighters, gather for haulers
-    bool cmdBuild(Ref dozer, int buildType, int tx, int ty);  // places a foundation and sends the dozer
+    bool cmdBuild(Ref dozer, int buildType, int tx, int ty);  // places a foundation and sends the dozer (a Waymaker needs no dozer: it clears its ground itself)
+    bool waymakerFits(int player, int tx, int ty, int w, int h) const;   // explored land a Waymaker may clear, with something on it to clear
     void cmdAssist(const std::vector<Ref>& sel, Ref building); // dozer: continue construction or repair
     bool cmdTrain(Ref building, int unitType);
     // ---- stealth, transports, bunkers, spies
@@ -375,6 +376,8 @@ struct Sim {
     static bool hardened(const Entity& b);    // a finished bunker or Underground Nuke silo: doors/hatch first, plating, and only troops can finish it with conventional fire - warheads ignore the floor and can destroy it
     static bool wall(const Entity& b) { return b.isBuilding() && b.bt().role == BR_WALL; }
     static bool invulnerable(const Entity& b) { return b.isBuilding() && invulnerableRole(b.bt().role); }   // island launchers and Bastion Walls: never damaged, they only burn
+    static bool swimmer(const Entity& e) { return e.isUnit() && !e.isAir() && e.ut().role == UR_SPY; }   // infiltrators paddle across water they cannot walk round (see SWIM_COST)
+    static bool walkable(const Entity& e, int tx, int ty) { return swimmer(e) ? g_map.swimPassable(tx, ty) : g_map.passable(tx, ty); }
     static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD); }   // nobody's: any army's spy may take it
     void heatUp(Entity& b, float amount);   // an indestructible structure takes a hit: it burns hotter (flames, smoke), nothing else changes
     // ---- the Island Nuke Launchers: neutral at the start, an infiltrator takes one, its army fires small nukes from it on a bunker's cooldown
@@ -535,6 +538,7 @@ private:
     void strikeJetRun(Entity& e);                        // Hotline Strike fighter: line up, salvo of rockets on the called spot, break away, come round again, then leave
     void nukeBomberRun(Entity& e);                       // Nuclear Bomber: hold the line to the target, release, fly on and leave the map
     void updateIslandNuke(Entity& b);                    // an island launcher: keeps its clock, cools down, flares its laser chamber
+    void updateWaymaker(Entity& b);                      // a Waymaker clears its ground by itself, then is gone (see WAYMAKER_TIME)
     void fireStrikeRocket(Entity& e);
     void deliverAid(AidDrop& a);
     void releaseUnit(Airlift& a);

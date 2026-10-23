@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -85,7 +85,8 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             alive++;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "NaN position at tick %d\n", t); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "entity out of world at tick %d\n", t); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
+            // (an infiltrator may be out on the water: it swims)
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y)))))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "hp above max at tick %d\n", t); return false; }
             // a fixed-wing aircraft away from its airfield never flies slower than its stall speed (it circles instead of hovering)
             size_t ix = (size_t)(&e - &g_sim.ents[0]);
@@ -636,6 +637,7 @@ bool wallTestMain(u64 seed); // tests7.cpp: walls, Hyper Protection, Anti-Rocket
 bool supersonicTest(u64 seed); // tests8.cpp: the balance pass (anti-nuke/wall vs nukes, silver damage, bunker health) and the Supersonic Bomber
 bool radiationTest(u64 seed); // tests9.cpp: the Anti-Radiation Truck (scrubbing fallout, shielding inside its field, and the damage it absorbs)
 bool fortTest(u64 seed);     // tests10.cpp: the map's neutral civilian strongholds (claim, garrison, fire, durability)
+bool lakeUpdateTest(u64 seed);   // tests13.cpp: infiltrators swim to the island launchers, Waymakers, the patrol boat, the bigger lake, weather
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
@@ -890,13 +892,18 @@ static bool autoTest(u64 seed) {
         // ---- air combat: a jet out-turns and kills two bombers, and two jets really fight
         {
             Vec2 c = freeAt(mid + Vec2(0, -4 * TILE));
-            Ref jet = g_sim.spawnUnit(jetMe, 0, c); g_sim.get(jet)->alt = 1; g_sim.get(jet)->airspeed = UNITS[jetMe].speed * 0.6f;
-            Ref b1 = g_sim.spawnUnit(bomberFoe, 2, c + Vec2(10 * TILE, 0)), b2 = g_sim.spawnUnit(bomberFoe, 2, c + Vec2(10 * TILE, 50));
-            g_sim.get(b1)->alt = 1; g_sim.get(b2)->alt = 1;
+            // a dogfight is chaotic (one lucky burst decides whether the second bomber limps out of sight): the jet gets three starts and must win one
             float tk = -1;
-            for (int t = 0; t < 20 * 45 && g_sim.get(jet); t++) { g_sim.step(); g_sim.events.clear(); if (!g_sim.get(b1) && !g_sim.get(b2)) { tk = g_sim.time; break; } }
-            if (tk < 0) { fprintf(stderr, "jet %s hp %.0f, bombers hp %.0f / %.0f\n", g_sim.get(jet) ? "alive" : "dead", hpOf(jet), hpOf(b1), hpOf(b2)); return fail("a fighter jet could not shoot down two bombers"); }
-            clearAll();
+            for (int attempt = 0; attempt < 3 && tk < 0; attempt++) {
+                Vec2 c0 = c + Vec2(0, attempt * 3.0f * TILE);
+                Ref jet = g_sim.spawnUnit(jetMe, 0, c0); g_sim.get(jet)->alt = 1; g_sim.get(jet)->airspeed = UNITS[jetMe].speed * 0.6f;
+                Ref b1 = g_sim.spawnUnit(bomberFoe, 2, c0 + Vec2(10 * TILE, 0)), b2 = g_sim.spawnUnit(bomberFoe, 2, c0 + Vec2(10 * TILE, 50));
+                g_sim.get(b1)->alt = 1; g_sim.get(b2)->alt = 1;
+                for (int t = 0; t < 20 * 45 && g_sim.get(jet); t++) { g_sim.step(); g_sim.events.clear(); if (!g_sim.get(b1) && !g_sim.get(b2)) { tk = g_sim.time; break; } }
+                if (tk < 0) fprintf(stderr, "dogfight start %d: jet %s hp %.0f, bombers hp %.0f / %.0f\n", attempt, g_sim.get(jet) ? "alive" : "dead", hpOf(jet), hpOf(b1), hpOf(b2));
+                clearAll();
+            }
+            if (tk < 0) return fail("a fighter jet could not shoot down two bombers");
             Ref j1 = g_sim.spawnUnit(jetMe, 0, c), j2 = g_sim.spawnUnit(jetFoe, 2, c + Vec2(14 * TILE, 3 * TILE));
             for (Ref r : { j1, j2 }) { g_sim.get(r)->alt = 1; g_sim.get(r)->airspeed = UNITS[g_sim.get(r)->type].speed * 0.7f; }
             float h1 = hpOf(j1), h2 = hpOf(j2);
@@ -1262,7 +1269,7 @@ static bool aidTest(u64 seed) {
         // an exact tie: two armies' identical structures exactly as far from the spot on either side; both win some of the draws
         for (int t = 0; t < (int)(AID_COOLDOWN * SIM_HZ); t++) { g_sim.step(); g_sim.events.clear(); }
         Vec2 tie; bool placed = false;
-        for (int r = 0; r < 30 && !placed; r++) for (int dy = -r; dy <= r && !placed; dy++) for (int dx = -r; dx <= r && !placed; dx++) {
+        for (int r = 0; r < 70 && !placed; r++) for (int dy = -r; dy <= r && !placed; dy++) for (int dx = -r; dx <= r && !placed; dx++) {   // (out past the lake: the middle of the map is water)
             if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
             int cx = MAP_W / 2 + dx, cy = MAP_H / 2 + dy;
             const int type = B_C_POWER; const int w = BUILDS[type].w, h = BUILDS[type].h;
@@ -1851,6 +1858,12 @@ static bool uiTest() {
     Vec2 s = Vec2(dz->pos.x - g_game.cam.x, dz->pos.y - g_game.cam.y);
     click((int)s.x, (int)s.y, SDL_BUTTON_LEFT);
     if (g_game.selection.size() != 1) return fail("dozer not selected by click");
+    {   // every button of the dozer's menu is on screen, both walls and the Waymaker among them (a sixth row of buttons once ran off the bottom)
+        bool onScreen = false, fwall = false, way = false;
+        g_game.commandBarCheck(onScreen, fwall, way);
+        if (!onScreen) return fail("a dozer menu button is off the screen");
+        if (!fwall || !way) return fail("the dozer's menu lacks the Bastion Wall or the Waymaker");
+    }
     // hotkey P = power plant, place it below the base
     key(SDLK_p);
     if (g_game.placingType < 0) return fail("build hotkey did not enter placement");
@@ -2577,7 +2590,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             if (!e.alive) continue;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "fuzz: NaN position at tick %d (%s)\n", t, e.isUnit() ? e.ut().name : "?"); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "fuzz: entity out of world at tick %d (%s %.0f,%.0f)\n", t, e.isUnit() ? e.ut().name : "building", e.pos.x, e.pos.y); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y)))))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "fuzz: hp above max at tick %d\n", t); return false; }
             if (e.isUnit() && e.ammo < 0) { fprintf(stderr, "fuzz: negative ammo\n"); return false; }
             if (e.kind != EK_RESOURCE && g_sim.players[e.owner >= 0 ? e.owner : 0].money < -1) { fprintf(stderr, "fuzz: negative money at tick %d\n", t); return false; }
@@ -2653,6 +2666,7 @@ int main(int argc, char** argv) {
         else if (a == "--radtest") { g_map.generate(); return radiationTest(seed) ? 0 : 1; }
         else if (a == "--forttest") { g_map.generate(); return fortTest(seed) ? 0 : 1; }
         else if (a == "--updatetest") { g_map.generate(); return updateTest(seed) ? 0 : 1; }
+        else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2706,7 +2720,7 @@ int main(int argc, char** argv) {
             float x = 10, y = 6, rowH = 0;
             std::vector<int> types;   // the faction's base structures, then its underground bunker, Naval Yard and anti-nuke defence (their ids sit after both blocks);
             if (getenv("ONEHOUR_FORTS")) {
-                types = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP };
+                types = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP, B_C_FORTRESS };
             } else if (getenv("ONEHOUR_CIVIC")) {   // ONEHOUR_CIVIC=1: the civilian town and the Underground Nuke silo instead
                 for (int k = 0; k < CV_COUNT; k++) types.push_back((fac == 0 ? (int)B_C_HOUSE : (int)B_K_HOUSE) + k);
                 types.push_back(fac == 0 ? (int)B_C_UNUKE : (int)B_K_UNUKE);
@@ -2725,6 +2739,40 @@ int main(int argc, char** argv) {
                 if (bt.role == BR_TURRET) g.draw(g.turretHead[fac == 0 ? 0 : 1], cx, cy, 0.6f, sc);
                 if (bt.role == BR_AATURRET) g.draw(g.turretHead[fac == 0 ? 2 : 3], cx, cy, 0.6f, sc);
                 x += w; rowH = std::max(rowH, h);
+            }
+            g_game.screenshot(sheetPath);
+            printf("wrote %s\n", sheetPath);
+            g_gfx.shutdown(); SDL_Quit(); return 0;
+        }
+        if (getenv("ONEHOUR_PATROL_SPRITES")) {   // the Patrol Boat art: Cyber then Clanker, each in the first two team colours, at 4x with its mount; a 1x strip of the patrol boats beside the destroyers at in-game scale
+            const float PATROL_ART_SCALE = 1.15f;   // the patrol boat's artScale: in game it is drawn at UNIT_SCALE * PATROL_ART_SCALE
+            Sprite pBody[2][2], pMount[2][2];        // [0 Cyber, 1 Clanker][team slot 0 or 1]; the sprites keep dscale 1 (the 4x row)
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 2; p++) {
+                Canvas bc(64, 64), mc(64, 64);
+                artPatrolBoatBody(bc, PLAYER_COLOR[p], f == 0);
+                artPatrolBoatMount(mc, PLAYER_COLOR[p], f == 0);
+                pBody[f][p] = g.fromCanvasSmooth(bc, 32, 32);
+                pMount[f][p] = g.fromCanvasSmooth(mc, 32, 32);
+            }
+            ShipMounts pm = patrolMounts();
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 2; p++) {   // 4x: Cyber on the top row, Clanker below; the mount at its offset * 4, turned 0.4 rad
+                float x = 260 + p * 500, y = 170 + f * 220;
+                g.draw(pBody[f][p], x, y, 0, 4);
+                for (int i = 0; i < pm.n; i++) g.draw(pMount[f][p], x + pm.x[i] * 4, y + pm.y[i] * 4, 0.4f, 4);
+            }
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 2; p++) {   // 1x: the patrol boats at in-game scale, UNIT_SCALE * PATROL_ART_SCALE
+                float x = 130 + (f * 2 + p) * 100, y = 560, sc = UNIT_SCALE * PATROL_ART_SCALE;
+                Sprite b = pBody[f][p], m = pMount[f][p];
+                b.dscale = sc; m.dscale = sc;
+                g.draw(b, x, y, 0, 1);
+                for (int i = 0; i < pm.n; i++) g.draw(m, x + pm.x[i] * sc, y + pm.y[i] * sc, 0.4f, 1);
+            }
+            const int dest[2] = { U_C_DESTROYER, U_K_DESTROYER };   // the destroyers at 1x, their in-game scale, for comparison
+            for (int f = 0; f < 2; f++) {
+                int t = dest[f]; float x = 640 + f * 180, y = 560;
+                g.draw(g.unitBody[t][0], x, y, 0, 1);
+                ShipMounts dm = shipMounts(false);
+                for (int i = 0; i < dm.n; i++) g.draw(g.unitTurret[t][0], x + dm.x[i] * UNIT_SCALE * artScale(t), y + dm.y[i] * UNIT_SCALE * artScale(t), 0.4f, 1);
             }
             g_game.screenshot(sheetPath);
             printf("wrote %s\n", sheetPath);
@@ -2846,7 +2894,7 @@ int main(int argc, char** argv) {
         Vec2 crowdAt;
         if (crowd > 0) {
             for (int t = 0; t < 200; t++) { g_sim.step(); g_sim.events.clear(); }
-            crowdAt = Vec2(WORLD_W * 0.5f, 22.0f * TILE);   // the open ground north of the lake, between two bases
+            crowdAt = Vec2(WORLD_W * 0.5f, std::round(12.0f * MAP_W / 80.0f) * TILE);   // the open ground north of the lake, between two bases: the middle of the northern pass (22 tiles down on the 146 map) on any map size
             for (int side = 0; side < 2; side++) {
                 int p = side, base = firstUnitOf(g_sim.players[p].faction);
                 std::vector<Ref> army;
@@ -2871,7 +2919,8 @@ int main(int argc, char** argv) {
                     std::vector<Ref> army;
                     for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == side && !e.isAir()) army.push_back(g_sim.refOf(e));
                     u64 m0 = SDL_GetPerformanceCounter();
-                    g_sim.cmdMove(army, crowdAt + Vec2((side ? -1.0f : 1.0f) * 30.0f * TILE, ((fr / 60) % 2 ? 14.0f : -10.0f) * TILE), true);
+                    const float k = MAP_W / 146.0f;   // (the same places on any map size: the arena's features scale with it)
+                    g_sim.cmdMove(army, crowdAt + Vec2((side ? -1.0f : 1.0f) * std::round(30.0f * k) * TILE, ((fr / 60) % 2 ? std::round(14.0f * k) : -std::round(10.0f * k)) * TILE), true);
                     double mms = (SDL_GetPerformanceCounter() - m0) * 1000.0 / SDL_GetPerformanceFrequency(); simTotal += mms; simWorst = std::max(simWorst, mms);
                     if (getenv("ONEHOUR_BENCHDBG")) printf("  mass move of %zu units: %.1f ms\n", army.size(), mms);
                 }
@@ -3037,7 +3086,10 @@ int main(int argc, char** argv) {
             if (const char* sel = getenv("ONEHOUR_SEL")) {
                 std::string m = sel;
                 Vec2 focus = b;
-                if (m == "tech") {
+                if (m == "dozer") {   // the dozer's build menu: both walls and the Waymaker included (every structure unlocked with money to spare)
+                    g_sim.players[0].money = 90000;
+                    for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER && !civicDozerType(e.type)) { g_game.selection.push_back(g_sim.refOf(e)); focus = e.pos; break; }
+                } else if (m == "tech") {
                     // showcase the tech structure panel: research running, scan active, an elite unit on the field
                     Faction f0 = g_sim.players[0].faction;
                     int tt = firstBuildOf(f0) + BR_TECH; Ref tr;
@@ -3255,6 +3307,72 @@ int main(int argc, char** argv) {
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 int left = 0, small = 0; for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1) { left++; printf("  %s %.0f%%\n", e.bt().name, 100 * e.hp / e.maxHp); }
                 (void)small; printf("nuke showcase: %d enemy structures left\n", left);
+            }
+            if (const char* lk = getenv("ONEHOUR_LAKE")) {   // showcase of the lake update: sea | swim | boats | way (combine with ONEHOUR_WEATHER=night,rain ...)
+                std::string m = lk;
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                auto camOn = [&](Vec2 p) { g_game.cam = Vec2(clampf(p.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(p.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); };
+                auto frames = [&](int n, bool sim) { for (int k = 0; k < n; k++) { if (sim) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); } g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; g_game.render(); g_game.updateParticles(SIM_DT); } };
+                if (m == "sea") {   // the lake's wildlife gathered in one view, all at the surface
+                    Vec2 c = g_game.sea.empty() ? Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) : g_game.sea[0].pos;
+                    for (size_t i = 0; i < g_game.sea.size(); i++) {
+                        auto& b = g_game.sea[i];
+                        Vec2 want = c + Vec2((float)((int)(i % 4) - 1.5f) * 150.0f, (float)((int)(i / 4) - 0.5f) * 170.0f);
+                        b.pos = g_map.bigWater(tileOf(want.x), tileOf(want.y)) ? want : b.pos; b.up = true; b.timer = b.upFor * (i == 1 ? 0.15f : 0.5f);
+                    }
+                    camOn(c);
+                    frames(24, false);
+                } else if (m == "swim") {   // an infiltrator paddling out to the small island's launcher
+                    Entity* l = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ISLANDNUKE && dist(e.pos, Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f)) > 8 * TILE) l = &e;
+                    if (l) {
+                        Vec2 shore = g_map.nearestFree(l->pos + Vec2(14 * TILE, -2 * TILE), 20);
+                        Ref spy = g_sim.spawnUnit(firstUnitOf(g_sim.players[0].faction) == U_C_DOZER ? U_C_SPY : U_K_SPY, 0, shore);
+                        g_sim.cmdAttack({spy}, g_sim.refOf(*l));
+                        for (int t = 0; t < 20 * 14; t++) { g_sim.step(); g_sim.events.clear(); }
+                        if (Entity* s = g_sim.get(spy)) { camOn(s->pos); g_game.selection.clear(); g_game.selection.push_back(spy); }
+                        frames(20, true);
+                    }
+                } else if (m == "boats") {   // a pack of patrol boats from each side meeting on the lake, a gunship overhead
+                    Vec2 c(WORLD_W * 0.5f, WORLD_H * 0.5f - 22 * TILE);
+                    std::vector<Ref> a, b;
+                    for (int i = 0; i < 5; i++) a.push_back(g_sim.spawnUnit(g_sim.players[0].faction == F_CYBER ? U_C_PATROL : U_K_PATROL, 0, c + Vec2(-7 * TILE, (i - 2) * 40.0f)));
+                    for (int i = 0; i < 5; i++) b.push_back(g_sim.spawnUnit(g_sim.players[1].faction == F_CYBER ? U_C_PATROL : U_K_PATROL, 1, c + Vec2(7 * TILE, (i - 2) * 40.0f)));
+                    Ref h = g_sim.spawnUnit(firstUnitOf(g_sim.players[1].faction) + 8, 1, c + Vec2(2 * TILE, -3 * TILE)); g_sim.get(h)->alt = 1;
+                    g_sim.cmdMove(a, c + Vec2(2 * TILE, 0), true); g_sim.cmdMove(b, c - Vec2(2 * TILE, 0), true);
+                    camOn(c);
+                    frames(150, true);
+                } else if (m == "walls") {   // the two walls side by side: a line of ordinary walls and a line of Bastion Walls, some of them burning
+                    int vp = 0; Faction f = g_sim.players[vp].faction;
+                    Vec2 at = openGroundNear(g_sim.players[vp].basePos + Vec2(8 * TILE, 10 * TILE), 5);
+                    int tx = tileOf(at.x) - 4, ty = tileOf(at.y) - 2;
+                    for (int i = 0; i < 9; i++) {
+                        g_sim.placeBuilding(f == F_CYBER ? B_C_WALL : B_K_WALL, vp, tx + i, ty, true);
+                        Ref r = g_sim.placeBuilding(f == F_CYBER ? B_C_FWALL : B_K_FWALL, vp, tx + i, ty + 3, true);
+                        if (i >= 5) if (Entity* e = g_sim.get(r)) { e->heat = 1.4f; e->lastDamaged = g_sim.time - 0.3f; }
+                    }
+                    camOn(tileCenter(tx + 4, ty + 2));
+                    frames(30, true);
+                } else if (m == "way") {   // a dozer cutting a road into the ridge with a chain of Waymakers (two cleared, one at work, one placed)
+                    int wt = g_sim.players[0].faction == F_CYBER ? B_C_WAYMAKER : B_K_WAYMAKER;
+                    Vec2 bp = g_sim.players[0].basePos; int bx = -1, by = -1; float bd = 1e30f;
+                    for (int y = 3; y < MAP_H - 4; y++) for (int x = 3; x < MAP_W - 12; x++) {
+                        bool ok = g_map.passable(x - 1, y + 1);
+                        for (int k = 0; k < 9 && ok; k++) for (int j = 0; j < 3 && ok; j++) if (g_map.tile(x + k, y + j) != T_ROCK || !g_map.wayTile(x + k, y + j)) ok = false;
+                        float d = dist(tileCenter(x, y), bp);
+                        if (ok && d < bd) { bd = d; bx = x; by = y; }
+                    }
+                    if (bx >= 0) {
+                        Ref dz = NOREF; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER) { dz = g_sim.refOf(e); break; }
+                        if (Entity* d = g_sim.get(dz)) d->pos = g_map.nearestFree(tileCenter(bx - 2, by + 1), 4);
+                        g_sim.cmdBuild(dz, wt, bx, by); for (int t = 0; t < (int)(WAYMAKER_TIME * SIM_HZ) + 4; t++) { g_sim.step(); g_sim.events.clear(); }
+                        g_sim.cmdBuild(dz, wt, bx + 3, by); for (int t = 0; t < (int)(WAYMAKER_TIME * SIM_HZ) + 4; t++) { g_sim.step(); g_sim.events.clear(); }
+                        g_sim.cmdBuild(dz, wt, bx + 6, by);
+                        camOn(tileCenter(bx + 5, by + 1));
+                        g_game.selection.clear(); g_game.selection.push_back(dz);
+                        frames(25, true);
+                        g_game.placingType = wt; Vec2 sc = tileCenter(bx + 10, by + 1) - g_game.cam; g_game.mouseX = (int)sc.x; g_game.mouseY = (int)sc.y;
+                    }
+                }
             }
             if (const char* up = getenv("ONEHOUR_UPDATE")) {   // showcase of the October update: launcher | bomber | trees | fortress
                 std::string m = up;

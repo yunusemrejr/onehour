@@ -24,4 +24,5 @@ inline void flattenArena(Vec2 c, int hx, int hy) {
         int i = y * MAP_W + x;
         g_map.tiles[i] = T_GRASS; g_map.blocked[i] &= ~1; g_map.bridge[i] = 0;
     }
+    g_map.touch();
 }

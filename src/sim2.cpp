@@ -597,3 +597,33 @@ void Sim::updateStrikeMarks() {
         i++;
     }
 }
+
+// ------------------------------------------------------------ Waymakers
+// Explored land, none of it water, a bridge deck, a structure or a supply pile, and something on it worth clearing (a tree, rock, a ridge)
+bool Sim::waymakerFits(int player, int tx, int ty, int w, int h) const {
+    int rough = 0;
+    for (int j = ty; j < ty + h; j++) for (int i = tx; i < tx + w; i++) {
+        if (!g_map.wayTile(i, j) || !exploredRaw(player, i, j)) return false;
+        if (g_map.blocked[j * MAP_W + i] & 1) rough++;
+    }
+    return rough > 0;
+}
+
+// The machine grinds its patch flat (dust and grit fly while the bar fills), then the ground is open earth and the Waymaker is gone
+void Sim::updateWaymaker(Entity& b) {
+    b.progress = std::min(1.0f, b.progress + SIM_DT / WAYMAKER_TIME);
+    b.hp = std::max(b.hp, b.maxHp * (0.1f + 0.9f * b.progress));
+    const BuildType& bt = b.bt();
+    if (tick % 4 == 0) {
+        Vec2 at = b.pos + Vec2(rng.f(-1, 1) * bt.w * TILE * 0.45f, rng.f(-1, 1) * bt.h * TILE * 0.45f);
+        fx.push_back({FX_SMOKE, at, at, 0, 1.6f, rgb(156, 138, 110), rng.f(8, 13), Vec2(rng.f(-10, 10), -rng.f(6, 18))});
+        if (tick % 8 == 0) fx.push_back({FX_SPARK, at, Vec2(), 0, 0.3f, rgb(255, 214, 140), 3});
+    }
+    if (b.progress < 1.0f) return;
+    int tx = b.tx, ty = b.ty, owner = b.owner;
+    Vec2 at = b.pos;
+    destroy(b, false);   // (lifts its structure mark off the ground first)
+    int opened = g_map.clearWay(tx, ty, bt.w, bt.h);
+    for (int k = 0; k < 8; k++) { Vec2 q = at + Vec2(rng.f(-40, 40), rng.f(-34, 34)); fx.push_back({FX_SMOKE, q, q, -rng.f(0, 0.3f), 2.2f, rgb(170, 152, 124), rng.f(12, 20), Vec2(rng.f(-12, 12), -rng.f(4, 14))}); }
+    if (owner >= 0) emit(EV_MSG, owner, SND_BUILD_DONE, at, opened > 0 ? "Waymaker: the way is clear" : "Waymaker: nothing left to clear");
+}

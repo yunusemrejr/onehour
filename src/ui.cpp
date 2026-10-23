@@ -81,7 +81,7 @@ static std::string armyName(int p) {
 
 // HUD layout: minimap left, command grid anchored right, the info panel takes whatever is between
 static const int MINIMAP_X = 8, MINIMAP_SIZE = 116, BTN_W = 156, BTN_H = 28, BTN_GAP = 3;   // (wide enough for an icon and "Anti-Radiation Truck")
-static const int BTN_MAX = 18, BTN_H_COMPACT = 22;   // up to six rows of three; past four rows (12 buttons) every button shrinks to fit
+static const int BTN_MAX = 18, BTN_H_COMPACT = 22, BTN_H_DENSE = 19;   // up to six rows of three; past four rows (12 buttons) every button shrinks to fit, past five (15) a little more
 static const int INFO_X = 134;
 static inline int MINIMAP_Y_() { return SCREEN_H - HUD_H + 8; }
 static inline int GRID_X_() { return SCREEN_W - (3 * BTN_W + 2 * BTN_GAP) - 10; }
@@ -137,6 +137,7 @@ void Game::startGame() {
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
     state = GS_PLAYING;
+    initWeather();
     addMessage("Skirmish started. Build a Supply Hub and power first.", hudText());
     if (menu.hasAlly()) addMessage("Your ally (green) fights on your side, shares its vision and defends your base.", rgb(150, 235, 165));
 }
@@ -339,6 +340,15 @@ void Game::issueRightClick(Vec2 w) {
         g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
+    if (t && t->isBuilding() && t->constructed && Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD && selectionHasRole(UR_SPY)) {
+        // nobody's island launcher or Bastion Wall: the infiltrators go and take it (swimming out to an island), everybody else goes along
+        std::vector<Ref> spies, rest;
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && o->ut().role == UR_SPY ? spies : rest).push_back(r); }
+        g_sim.cmdCapture(spies, g_sim.refOf(*t));
+        if (!rest.empty()) g_sim.cmdMove(rest, t->pos, false);
+        g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+        return;
+    }
     if (t && t->owner >= 0 && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE && !selectedBuilding()) {   // an ally: go to it (Ctrl or Force Fire to attack it)
         g_sim.cmdMove(selection, t->pos, false); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
@@ -419,7 +429,20 @@ static std::vector<std::string> wrapTip(Gfx& g, const std::string& s, int maxW) 
 // ------------------------------------------------------------ command buttons
 void Game::buildButtons() {
     buildButtonsRaw();
-    if ((int)buttons.size() > 12) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_COMPACT + BTN_GAP); buttons[i].h = BTN_H_COMPACT; }   // five rows do not fit at full height
+    // five rows do not fit at full height, and six (a dozer's 18 structures: the Bastion Wall, the Waymaker and the Command structure are the sixth row)
+    // only fit as dense buttons with a 2 px gap: the bar is 124 px tall. (Six compact rows ran off the bottom of the screen and hid that last row.)
+    if ((int)buttons.size() > 15) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_DENSE + 2); buttons[i].h = BTN_H_DENSE; }
+    else if ((int)buttons.size() > 12) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_COMPACT + BTN_GAP); buttons[i].h = BTN_H_COMPACT; }
+}
+
+void Game::commandBarCheck(bool& onScreen, bool& fwall, bool& way) {
+    buildButtons();
+    onScreen = true; fwall = way = false;
+    for (auto& b : buttons) {
+        if (b.y < SCREEN_H - HUD_H || b.y + b.h > SCREEN_H || b.x < 0 || b.x + b.w > SCREEN_W) onScreen = false;
+        if (b.kind == BK_BUILD && BUILDS[b.id].role == BR_FWALL) fwall = true;
+        if (b.kind == BK_BUILD && BUILDS[b.id].role == BR_WAYMAKER) way = true;
+    }
 }
 
 void Game::buildButtonsRaw() {
@@ -838,8 +861,9 @@ void Game::gameEvent(const SDL_Event& e) {
             if (placingType >= 0) {
                 int tx = tileOf(w.x) - BUILDS[placingType].w / 2, ty = tileOf(w.y) - BUILDS[placingType].h / 2;
                 Ref dozer;
-                for (auto r : selection) { Entity* d = g_sim.get(r); if (d && d->isUnit() && d->ut().role == UR_DOZER && Sim::canRaise(*d, placingType)) { dozer = r; break; } }
-                if (dozer.valid() && g_sim.cmdBuild(dozer, placingType, tx, ty)) { if (!(SDL_GetModState() & KMOD_SHIFT)) placingType = -1; }
+                bool way = BUILDS[placingType].role == BR_WAYMAKER;   // (any military dozer places one: it clears its ground by itself)
+                for (auto r : selection) { Entity* d = g_sim.get(r); if (d && d->isUnit() && d->ut().role == UR_DOZER && (way ? !civicDozerType(d->type) : Sim::canRaise(*d, placingType))) { dozer = r; break; } }
+                if (dozer.valid() && g_sim.cmdBuild(dozer, placingType, tx, ty)) { if (!(SDL_GetModState() & KMOD_SHIFT) && !way) placingType = -1; }   // (Waymakers are laid in chains: the mode stays on until Esc)
                 else g_audio.play(SND_CANT, Vec2(), true);
                 return;
             }
@@ -1366,6 +1390,14 @@ void Game::drawEntity(Entity& e) {
         float fx = p.x - fw * 0.5f, fy = p.y - fh * 0.5f;
         Color tint = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
         if (bt.role == BR_NAVAL) drawDock(e, p);   // the pier reaches into the lake under the structure
+        if (bt.role == BR_WAYMAKER) {   // the grinder at work on its patch: it shudders, and a bar fills as the ground is cleared
+            float sh = std::sin(wallTime * 60.0f + e.gen) * 0.8f;
+            g.draw(s, p.x + sh, p.y, 0, 1, tint);
+            if (g.buildingTeam[e.type].tex) g.draw(g.buildingTeam[e.type], p.x + sh, p.y, 0, 1, playerColor(owner));
+            float prog = clampf(e.progress, 0, 1);
+            hpBar(g, p.x - 24, fy - 8, 48, prog);
+            return;
+        }
         if (!e.constructed) {
             g.draw(g.site[e.type], p.x, p.y);
             // the finished structure rises out of the site from the ground up as construction progresses, with a work light along the cut
@@ -1488,6 +1520,7 @@ void Game::drawEntity(Entity& e) {
         g.draw(g.shadowLarge, p.x + 5, p.y + 5, 0, 0.9f * cs * (0.6f + 0.4f * fallK), rgb(255, 255, 255), 110);
     }
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
+    if (air || fallK > 0) { Color t = ambientTint(); mod = rgb(mod.r * t.r / 255, mod.g * t.g / 255, mod.b * t.b / 255); }   // (aircraft are drawn after the world's light pass: they take the hour's light themselves)
     const u8 ghost = Sim::stealthOf(e) ? (u8)150 : (u8)255;   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near)
     if (air) {
         // shadow: the aircraft's own silhouette, thrown to the south-east and sliding closer as it settles onto the pad
@@ -1497,6 +1530,13 @@ void Game::drawEntity(Entity& e) {
         if (ut.naval) {   // a hull on the water: the wake round it and a soft dark patch under it
             drawShipWake(e, p);
             g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), 64);
+        } else if (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) {   // an infiltrator paddling its inflatable raft
+            float ca = std::cos(e.angle), sa = std::sin(e.angle);
+            if (spd > 5) for (int k = 1; k <= 2; k++) g.drawSized(g.fxs.ring, p.x - ca * 9 * k, p.y - sa * 9 * k, 10.0f + 7 * k, 7.0f + 5 * k, e.angle, rgb(220, 240, 255), (u8)(90 / k));
+            g.drawSized(g.disc, p.x + 1, p.y + 2, 22, 13, e.angle, rgb(0, 20, 30), 90);        // its shadow on the water
+            g.drawSized(g.disc, p.x, p.y, 21, 12, e.angle, rgb(48, 50, 54));                   // the rubber tube
+            g.drawSized(g.disc, p.x + ca * 0.5f, p.y + sa * 0.5f, 15, 7, e.angle, rgb(26, 28, 32));   // the floor
+            g.drawSized(g.disc, p.x + ca * 9, p.y + sa * 9, 4, 4, 0, rgb(232, 120, 40));          // the orange bow cap
         } else {
             g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
             if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
@@ -1679,6 +1719,7 @@ void Game::drawEntity(Entity& e) {
 void Game::renderWorld() {
     Gfx& g = g_gfx;
     g.refreshTerrain();   // trees and rocks cleared for new structures since the last frame
+    updateWeather();
     g.beginFrame(rgb(6, 8, 12));
     SDL_Rect clip = { 0, 0, SCREEN_W, VIEW_H };
     SDL_RenderSetClipRect(g.ren, &clip);
@@ -1708,23 +1749,26 @@ void Game::renderWorld() {
         int fr = ((int)(wallTime * 3.0f)) & 3;
         const Sprite& w = g.waterFx[fr];
         SDL_SetTextureColorMod(w.tex, 255, 255, 255);
-        SDL_SetTextureAlphaMod(w.tex, (u8)(238 + 17 * std::sin(wallTime * 0.6f)));   // the light on the water breathes a little
+        SDL_SetTextureAlphaMod(w.tex, (u8)(176 + 22 * std::sin(wallTime * 0.6f)));   // the light on the water breathes a little
+        // the pattern is laid at twice its size (it repeats every 8 tiles, not 4): each 4x4 block shows one quarter of the texture, scaled up
         for (int idx : g_map.waterBlocks) {
             int tx = idx % MAP_W, ty = idx / MAP_W;
             if (tx + 3 < tx0 || tx > tx1 || ty + 3 < ty0 || ty > ty1) continue;
             if (!rev && !ex[(ty + 1) * MAP_W + tx + 1] && !ex[(ty + 2) * MAP_W + tx + 2]) continue;
+            SDL_Rect src = { (tx & 4) * 16, (ty & 4) * 16, 64, 64 };
             SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), 4 * TILE, 4 * TILE };
-            SDL_RenderCopy(g.ren, w.tex, nullptr, &dst);
+            SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
         for (int idx : g_map.waterTiles) {
             int tx = idx % MAP_W, ty = idx / MAP_W;
             if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) continue;
             if (!rev && !ex[idx]) continue;
-            SDL_Rect src = { (tx & 3) * TILE, (ty & 3) * TILE, TILE, TILE };
+            SDL_Rect src = { (tx & 7) * 16, (ty & 7) * 16, 16, 16 };
             SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE };
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
     }
+    drawSeaLife();
     drawGroundFx();
     // placement ghost
     if (placingType >= 0) {
@@ -1745,6 +1789,18 @@ void Game::renderWorld() {
         }
         { Color gt = ok ? rgb(160, 255, 160) : rgb(255, 120, 120); g.draw(g.building[placingType], c.x, c.y, 0, 1, gt, 150); if (g.buildingTeam[placingType].tex) g.draw(g.buildingTeam[placingType], c.x, c.y, 0, 1, gt, 150); }
         bool tilesOk = true;
+        if (bt.role == BR_WAYMAKER) {   // what it will clear (orange), open ground it only grades (green), and what it cannot touch (red)
+            int rough = 0;
+            for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
+                bool t = g_map.wayTile(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
+                bool r = t && (g_map.blocked[(ty + j) * MAP_W + tx + i] & 1);
+                tilesOk = tilesOk && t; rough += r;
+                g.fill((int)((tx + i) * TILE - cam.x), (int)((ty + j) * TILE - cam.y), TILE, TILE, !t ? rgb(255, 60, 60, 90) : (r ? rgb(255, 176, 70, 92) : rgb(80, 255, 80, 50)));
+            }
+            const char* why = !tilesOk ? "Waymaker: not on water, bridges, structures or supply piles" : (rough == 0 ? "Waymaker: nothing to clear here" : nullptr);
+            if (why) g.text((int)c.x - g.textW(why) / 2, (int)c.y - bt.h * TILE / 2 - 16, why, rgb(255, 180, 140));
+            else { const char* hint = "Clears trees and rock into open ground  (Esc to stop)"; g.text((int)c.x - g.textW(hint) / 2, (int)c.y - bt.h * TILE / 2 - 16, hint, rgb(230, 240, 210)); }
+        } else
         for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
             bool t = g_map.buildable(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
             tilesOk = tilesOk && t;
@@ -1753,7 +1809,7 @@ void Game::renderWorld() {
             g.fill(sx, sy, TILE, TILE, !t ? rgb(255, 60, 60, 90) : (veg ? rgb(150, 255, 90, 78) : rgb(80, 255, 80, 60)));
             if (veg) { g.line((float)sx + 9, (float)sy + 9, (float)sx + TILE - 9, (float)sy + TILE - 9, rgb(220, 255, 190, 170)); g.line((float)sx + TILE - 9, (float)sy + 9, (float)sx + 9, (float)sy + TILE - 9, rgb(220, 255, 190, 170)); }
         }
-        if (!ok && tilesOk && bt.role != BR_NAVAL) {   // the ground is fine but the site is not: say why, and outline the supply-pile margin it touches
+        if (!ok && tilesOk && bt.role != BR_NAVAL && bt.role != BR_WAYMAKER) {   // the ground is fine but the site is not: say why, and outline the supply-pile margin it touches
             const char* why = "Would close a passage: leave units a way through";
             if (!wallRole(bt.role)) for (int j = ty - 1; j <= ty + bt.h; j++) for (int i = tx - 1; i <= tx + bt.w; i++) {
                 if (!inMap(i, j) || !(g_map.blocked[j * MAP_W + i] & 4)) continue;
@@ -1864,6 +1920,7 @@ void Game::renderWorld() {
     // flags: every finished structure flies its owner's flag from a mast on the roof edge (over units, under aircraft)
     for (auto& e : g_sim.ents) {
         if (!e.alive || !e.isBuilding() || !e.constructed || e.owner < 0 || e.bt().role == BR_BUNKER) continue;   // (a bunker flies no flag: it is underground)
+        if (wallRole(e.bt().role) && (e.tx * 7 + e.ty * 3) % 4 != 0) continue;   // (a wall line flies a flag on every fourth segment, not a forest of them)
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
         if (!rev && e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
         const BuildType& bt = e.bt();
@@ -1875,6 +1932,7 @@ void Game::renderWorld() {
         g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
     }
     drawClouds();
+    drawWeatherTint();   // the light of the hour over the ground world; what follows (fire, tracers, aircraft) is lit on its own
     // projectiles: hot streaks for bullets and rockets, a lobbed shell with a ground shadow
     for (auto& p : g_sim.projs) {
         const Weapon& w = WEAPONS[p.weapon];
@@ -1925,6 +1983,7 @@ void Game::renderWorld() {
     drawAirlifts();
     drawShroud();
     drawAidDrops();
+    drawRain();
     if (!g.softwareRenderer && g.vignette.tex) g.drawRect(g.vignette, 0, 0, SCREEN_W, VIEW_H);   // soft dark corners frame the battlefield (one draw, GPU only)
     // drag box
     if (dragging) {
@@ -2060,6 +2119,7 @@ void Game::renderHud() {
     snprintf(buf, sizeof buf, "%d/%d", used, made); g.text(px + 150, 6, buf, pl.lowPower() ? rgb(255, 140, 120) : hudText());
     int secs = (int)g_sim.time;
     snprintf(buf, sizeof buf, "%02d:%02d", secs / 60, secs % 60); g.text(SCREEN_W / 2 - 15, 6, buf, hudText());
+    { const char* wl = weatherLabel(); g.text(SCREEN_W / 2 - 26 - g.textW(wl), 6, wl, hudDim()); }   // the hour and the weather
     snprintf(buf, sizeof buf, "%s%s  speed x%.2g%s", FACTION_NAME[pl.faction], g_audio.isMuted() ? "  [muted]" : "", speed, paused ? "  PAUSED" : "");
     g.text(SCREEN_W - 8 - g.textW(buf), 6, buf, hudDim());
     // alive players
@@ -2125,7 +2185,7 @@ void Game::renderHud() {
                     g.text(INFO_X + 86, hy + 70, buf, zones ? rgb(150, 240, 180) : hudDim());
                 }
                 if (ut.cargoCap > 0) { snprintf(buf, sizeof buf, "Cargo %d / %d places   %d aboard   (right-click it with units selected to load)", g_sim.cargoUsed(*e), ut.cargoCap, (int)e->passengers.size()); g.text(INFO_X + 86, hy + 70, buf, rgb(240, 205, 90)); }
-                if (ut.role == UR_SPY) g.text(INFO_X + 86, hy + 70, "Right-click an enemy structure to capture it", rgb(240, 205, 90));
+                if (ut.role == UR_SPY) g.text(INFO_X + 86, hy + 70, "Right-click an enemy or neutral structure to take it (swims to islands)", rgb(240, 205, 90));
                 if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
                 else if (ut.kind == UK_INF && ut.weapon >= 0) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
                 if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : "STEALTH: only enemy spy drones see it", rgb(150, 220, 255));
@@ -2282,7 +2342,7 @@ void Game::renderHud() {
         else if (b.kind == BK_TRAIN) iconDrawUnit(g, b.id, slotOf(g_sim.humanPlayer), icx, icy, is, b.enabled);
         else iconDraw(g, buttonIcon(b.kind, b.id, b.label, pl.faction), icx, icy, is, b.enabled);
         Color tc = b.enabled ? rgb(255, 255, 255) : hudDim();
-        const int ly = b.h >= BTN_H ? 4 : 3, sy = b.h >= BTN_H ? 15 : 12;   // label and second-line offsets (a compact button is tighter)
+        const int ly = b.h >= BTN_H ? 4 : (b.h > BTN_H_DENSE ? 3 : 1), sy = b.h >= BTN_H ? 15 : (b.h > BTN_H_DENSE ? 12 : 10);   // label and second-line offsets (a compact button is tighter, a dense one tighter still)
         g.text(tx, b.y + ly, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
         if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(tx, b.y + sy, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
@@ -2337,7 +2397,7 @@ void Game::renderHud() {
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
             "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop, U/G/E/N/H/A upgrades",
             "Wall (pasture/defense)    W: unlimited thick wall segments; H: Hyper Protection, A: Anti-Rocket wall lasers (rockets, nukes, aircraft)",
-            "Spy selected              right-click an enemy structure to capture it (the spy survives)",
+            "Spy selected              right-click an enemy structure, an island launcher or a Bastion Wall to take it (swims across water)",
             "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",
             "Bunker / lifter selected  U unloads; D (lifter) flies to a spot you click and drops everybody off",
             "Stealth                    snipers show only to an enemy spy drone; underground bunkers are plainly visible",

@@ -276,6 +276,7 @@ int Sim::countRole(int player, BuildRole role, bool onlyConstructed) const {
 
 bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
     const BuildType& b = BUILDS[buildType];
+    if (b.role == BR_WAYMAKER) return waymakerFits(player, tx, ty, b.w, b.h);   // (trees, rock and ridges are its job; it never plugs anything, it opens)
     for (int j = ty; j < ty + b.h; j++) for (int i = tx; i < tx + b.w; i++) {
         if (!g_map.buildable(i, j)) return false;
         if (!exploredRaw(player, i, j)) return false;
@@ -349,7 +350,9 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     // A big group shares routes: a unit standing near one that has just been routed to a slot near its own follows that route (straight on to
     // its first waypoint, off to its own slot at the end) instead of planning the same long path again. A mass order of hundreds of units used
     // to plan every path in one tick.
-    struct Shared { Vec2 from, to; std::vector<Vec2> path; };
+    // A route that could not reach its spot is shared too (the spot is walled off, an enemy base or a pocket behind rock): the units round it head for
+    // the same closest point instead of each flooding the whole reachable map again in a search that is bound to fail.
+    struct Shared { Vec2 from, to; std::vector<Vec2> path; bool reached; };
     std::vector<Shared> shared;
     for (size_t i = 0; i < ground.size(); i++) {
         Entity& e = *ground[i];
@@ -361,15 +364,21 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         e.postOrder = O_IDLE;
         e.target = d; e.targetEnt = NOREF; e.engaged = NOREF; e.actionTimer = 0;
         bool reused = false;
-        if (!e.ut().naval) for (auto& sh : shared) {
-            if (sh.path.size() < 3 || dist(sh.from, e.pos) > 2.5f * TILE || dist(sh.to, d) > 4.0f * TILE) continue;
+        if (!e.ut().naval && !swimmer(e)) for (auto& sh : shared) {
+            if (dist(sh.from, e.pos) > 2.5f * TILE || dist(sh.to, d) > 4.0f * TILE) continue;
+            if (!sh.reached) {   // the spot cannot be reached from here: the same closest point
+                if (sh.path.empty() || !g_map.lineClear(e.pos, sh.path[0])) continue;
+                e.path = sh.path; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
+                reused = true; break;
+            }
+            if (sh.path.size() < 3) continue;
             if (!g_map.lineClear(e.pos, sh.path[0]) || !g_map.lineClear(sh.path[sh.path.size() - 2], d)) continue;
             e.path = sh.path; e.path.back() = d; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
             reused = true; break;
         }
         if (!reused) {
-            requestPath(e, d);
-            if (!e.ut().naval && shared.size() < 64) shared.push_back({e.pos, d, e.path});
+            bool reached = requestPath(e, d);
+            if (!e.ut().naval && !swimmer(e) && shared.size() < 64) shared.push_back({e.pos, d, e.path, reached});   // (an infiltrator's route may cross water)
         }
     }
     for (auto* a : air) {
@@ -390,7 +399,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         Entity* e = get(r);
         if (!e || e == t || e->carrier.valid() || (e->isUnit() && e->ut().temp)) continue;
         if (e->isUnit() && e->ut().role == UR_SPY) {   // a spy takes an enemy structure; against anything else it just walks over
-            if (t->isBuilding() && t->constructed && enemies(e->owner, t->owner)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
+            if (t->isBuilding() && t->constructed && (enemies(e->owner, t->owner) || neutralTakeable(*t))) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
         }
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
@@ -494,6 +503,14 @@ bool Sim::cmdBuild(Ref dozer, int buildType, int tx, int ty) {
     Entity* d = get(dozer);
     if (!d || !d->isUnit() || d->ut().role != UR_DOZER || d->carrier.valid()) return false;   // (a dozer aboard a bunker cannot drive to a site)
     int p = d->owner;
+    if (buildType >= 0 && buildType < B_COUNT && BUILDS[buildType].role == BR_WAYMAKER) {   // the Waymaker clears its ground by itself: the dozer stays on its job
+        if (civicDozerType(d->type) || !buildAvailable(p, buildType) || !canPlace(p, buildType, tx, ty)) return false;
+        if (!canAfford(p, BUILDS[buildType].cost)) { emit(EV_NOFUNDS, p, SND_NOFUNDS, d->pos, "Insufficient funds"); return false; }
+        players[p].money -= BUILDS[buildType].cost;
+        placeBuilding(buildType, p, tx, ty, false);
+        emit(EV_SOUND, p, SND_PLACE, tileCenter(tx + 1, ty + 1));
+        return true;
+    }
     if (!canRaise(*d, buildType)) return false;   // a civilian dozer raises the town, a dozer the base
     if (!buildAvailable(p, buildType) || !canPlace(p, buildType, tx, ty)) return false;
     const BuildType& b = BUILDS[buildType];
@@ -1455,7 +1472,8 @@ bool Sim::requestSidePath(Entity& e, const Entity& b) {
     if (e.isAir() || e.ut().naval || !b.isBuilding()) return requestPath(e, b.pos);
     e.path.clear(); e.pathIdx = 0;
     e.repathTimer = PATH_INTERVAL;
-    bool ok = g_map.findPathToRect(e.pos, b.tx, b.ty, b.bt().w, b.bt().h, e.path);
+    // (an infiltrator plans with the water open to it: one search, which still keeps to land wherever that is nearly as short)
+    bool ok = g_map.findPathToRect(e.pos, b.tx, b.ty, b.bt().w, b.bt().h, e.path, MAP_W * MAP_H, swimmer(e));
     if (e.path.empty()) return requestPath(e, g_map.nearestFree(b.pos + Vec2(0, b.bt().h * TILE * 0.5f + 12), 6));   // (already beside it, or boxed in: the old doorstep)
     return ok;
 }
@@ -1472,7 +1490,7 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
         if (e.path.empty()) e.path.push_back(g_map.nearestWater(e.pos, 20, true));   // (no way there: it only moves to the open water beside it, never along a straight line across the land)
         return ok;
     }
-    bool ok = g_map.findPath(e.pos, dest, e.path);
+    bool ok = g_map.findPath(e.pos, dest, e.path, MAP_W * MAP_H, swimmer(e));   // (an infiltrator may cross water: see SWIM_COST)
     if (e.path.empty()) {   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
         Vec2 fb = g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4);
         if (!g_map.passable(tileOf(fb.x), tileOf(fb.y))) { fb = g_map.nearestFree(dest, 18); ok = g_map.findPath(e.pos, fb, e.path); }   // (a spot out in the lake: walk to the shore)
@@ -1500,9 +1518,10 @@ void Sim::moveAlong(Entity& e, float speed) {
         e.airspeed = e.airspeed < vt ? std::min(vt, e.airspeed + a) : std::max(vt, e.airspeed - a * 1.6f);
         v = e.airspeed;
     }
+    if (swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) v *= SWIM_SPEED;   // paddling a raft is slow
     float step = v * SIM_DT;
     if (len <= stepMax + 0.5f) {
-        if (!e.isAir() && !g_map.passable(tileOf(wp.x), tileOf(wp.y))) { requestPath(e, e.path.back()); return; }
+        if (!e.isAir() && !walkable(e, tileOf(wp.x), tileOf(wp.y))) { requestPath(e, e.path.back()); return; }
         e.pos = wp; e.pathIdx++;
         return;
     }
@@ -1510,11 +1529,11 @@ void Sim::moveAlong(Entity& e, float speed) {
     Vec2 np = e.pos + dir * step;
     if (!e.isAir()) {
         int nx = tileOf(np.x), ny = tileOf(np.y);
-        if (!g_map.passable(nx, ny)) {
+        if (!walkable(e, nx, ny)) {
             // slide along axes if possible
             Vec2 alt1(e.pos.x + dir.x * step, e.pos.y), alt2(e.pos.x, e.pos.y + dir.y * step);
-            if (std::abs(dir.x) > 0.01f && g_map.passable(tileOf(alt1.x), tileOf(alt1.y))) np = alt1;
-            else if (std::abs(dir.y) > 0.01f && g_map.passable(tileOf(alt2.x), tileOf(alt2.y))) np = alt2;
+            if (std::abs(dir.x) > 0.01f && walkable(e, tileOf(alt1.x), tileOf(alt1.y))) np = alt1;
+            else if (std::abs(dir.y) > 0.01f && walkable(e, tileOf(alt2.x), tileOf(alt2.y))) np = alt2;
             else { e.airspeed = 0; requestPath(e, e.path.back()); return; }
         }
     }
@@ -2607,7 +2626,7 @@ void Sim::updateUnit(Entity& e) {
     if (e.isAir() && ut.ammo > 0 && e.ammo <= 0 && e.order != O_REARM && !ut.temp && !(ut.nukeBomb && time < e.slowAt)) { e.order = O_REARM; }
 
     // Ground units standing on a blocked tile (new structure) get nudged off
-    if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && (ut.naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !g_map.passable(tileOf(e.pos.x), tileOf(e.pos.y))))
+    if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && (ut.naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !walkable(e, tileOf(e.pos.x), tileOf(e.pos.y))))
         e.pos = ut.naval ? g_map.nearestWater(e.pos, 14) : g_map.nearestFree(e.pos, 14);
 
     // jammed: it has somewhere to go but hardly moved in the last second (two units head-on in a one-tile lane between structures,
@@ -3221,6 +3240,7 @@ void Sim::updateBuilding(Entity& b) {
     if (b.cooldown2 > 0) b.cooldown2 -= SIM_DT;
     if (b.dmgLoad > 0) b.dmgLoad *= 0.975f;   // (a time constant of two seconds)
     if (b.heat > 0) b.heat = std::max(0.0f, b.heat - HEAT_COOL * SIM_DT);   // an indestructible structure's fire dies down
+    if (b.bt().role == BR_WAYMAKER) { updateWaymaker(b); return; }
     if (!b.constructed) return;
     if (invulnerable(b)) { b.disabledUntil = -1; if (b.bt().role == BR_ISLANDNUKE) updateIslandNuke(b); return; }   // (burning or not, nothing switches it off; no upgrades, no guns)
     if (b.disabledUntil > time) return;
@@ -3911,8 +3931,8 @@ void Sim::updateSilo(Entity& b) {
 bool Sim::hardened(const Entity& b) {
     return b.isBuilding() && b.constructed && (BUILDS[b.type].role == BR_BUNKER || BUILDS[b.type].role == BR_UNUKE);
 }
-bool Sim::canRaise(const Entity& d, int buildType) {
-    return d.isUnit() && buildType >= 0 && buildType < B_COUNT && !neutralRole(BUILDS[buildType].role) && civicDozerType(d.type) == (BUILDS[buildType].role == BR_CIVIC);
+bool Sim::canRaise(const Entity& d, int buildType) {   // (no dozer works on a Waymaker: it clears its ground by itself)
+    return d.isUnit() && buildType >= 0 && buildType < B_COUNT && !neutralRole(BUILDS[buildType].role) && BUILDS[buildType].role != BR_WAYMAKER && civicDozerType(d.type) == (BUILDS[buildType].role == BR_CIVIC);
 }
 bool Sim::canMend(const Entity& d, int buildType) {   // (the town's free civilian dozers mending the whole base made bases nearly impossible to grind down)
     return d.isUnit() && buildType >= 0 && buildType < B_COUNT && (!civicDozerType(d.type) || BUILDS[buildType].role == BR_CIVIC);

@@ -60,6 +60,7 @@ static int unitLocal(int type) {
     if (type == U_C_RADTRUCK || type == U_K_RADTRUCK) return 24;
     if (type == U_C_FIGHTER || type == U_K_FIGHTER) return 25;          // the plain fighters (art_jet.cpp)
     if (type == U_C_NUKEBOMBER || type == U_K_NUKEBOMBER) return 26;    // the call-in strategic bombers (art_jet.cpp)
+    if (type == U_C_PATROL || type == U_K_PATROL) return 27;            // the patrol boats (art_ship.cpp)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -80,12 +81,13 @@ void setTone(int type) {
     }
 }
 
-// The player's mark on a unit: a small jewel-like dot. Dark seat ring for contrast on any hull tone, the team colour lit from
-// the north-west like every other surface, a pinpoint highlight, and a faint halo so it still reads at half size.
+// The player's mark on a unit: a painted roundel, the way real armies mark their vehicles (no glass bead): a thin dark rim for contrast on any hull
+// tone, the team colour as flat paint with only the faint relief of the plate under it, and a paler inner ring so it still reads at half size.
 void teamDot(Art& A, float cx, float cy, float r) {
-    A.circle(cx, cy, r + 1.3f, rgba(shade(CYD0, 0.6f), 235), 1.0f, 0.2f);
-    A.circle(cx, cy, r, A.team, r, 0.75f);
-    A.dot(cx - r * 0.32f, cy - r * 0.36f, r * 0.24f, rgba(mix(A.team, rgb(255, 255, 255), 0.75f), 235));
+    A.circle(cx, cy, r + 0.9f, rgba(rgb(18, 20, 24), 225), 0.6f, 0.15f);
+    A.circle(cx, cy, r, shade(A.team, 0.94f), 0.8f, 0.22f);
+    A.ring(cx, cy, r * 0.66f, r * 0.24f, rgba(mix(A.team, rgb(255, 255, 255), 0.42f), 210), 0.4f, 0);
+    A.dot(cx, cy, r * 0.28f, rgba(shade(A.team, 0.7f), 220));
 }
 
 // crawler track run: rubber band with grousers, idler wheels at both ends. phase (0..1) slides the grousers.
@@ -302,30 +304,41 @@ void sniperBody(Art& A, bool cy, int frame) {
     teamDot(A, 31.0f, 32, 2.4f);
 }
 
-void tankCyber(Art& A, int frame) {   // Photon Tank body
-    float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 30, 17, 21, 5.2f, ph, CYD); trackRun(A, 30, 47, 21, 5.2f, ph, CYD);
-    A.poly({ {10, 21}, {38, 21}, {52, 27.5f}, {52, 36.5f}, {38, 43}, {10, 43} }, CYH, 2.8f, 0.6f);
-    A.box(21, 32, 7.5f, 9, 1.5f, shade(CYM, 1.15f), 2, 0.5f);                              // engine deck
-    for (int i = 0; i < 5; i++) A.line(15.8f + i * 2.5f, 25.5f, 15.8f + i * 2.5f, 38.5f, 0.8f, rgba(CYD, 200));
-    A.line(36, 22.5f, 48, 28.2f, 0.9f, rgba(CYD, 170)); A.line(36, 41.5f, 48, 35.8f, 0.9f, rgba(CYD, 170));    // glacis seams
-    A.line(11, 22.2f, 37, 22.2f, 1.2f, rgba(CYG, 210)); A.line(11, 41.8f, 37, 41.8f, 1.2f, rgba(CYG, 210));   // side light strips
-    A.glow(24, 22.2f, 7, rgba(CYG, 60)); A.glow(24, 41.8f, 7, rgba(CYG, 60));
-    A.dot(50, 29.8f, 1.1f, CYW); A.dot(50, 34.2f, 1.1f, CYW);                                // headlamps
-    A.grain(9, 18, 54, 46, 0.06f, 5);
+// Tank track (both armies): a rubber band with cross-bar grousers that slide with the phase, road-wheel hubs in its outer half
+// (the skirts cover the inner half, as on the real vehicles), a toothed sprocket at the rear and an idler at the front.
+// s is -1 for the top run and +1 for the bottom run.
+void tankTrack(Art& A, float cx, float cy, float hl, float hh, float phase, Color rubber, float s) {
+    Color steel = shade(rubber, 1.6f);
+    A.box(cx, cy, hl, hh, hh * 0.85f, rubber, 1.0f, 0.35f);
+    for (float x = cx - hl + 1.6f + phase * 2.4f; x < cx + hl - 1.6f; x += 2.4f) A.line(x, cy - hh + 0.6f, x, cy + hh - 0.6f, 0.6f, rgba(shade(rubber, 2.4f), 120));
+    float sx = cx - hl + hh * 0.9f, ix = cx + hl - hh * 0.9f;   // sprocket (rear) and idler (front)
+    A.circle(sx, cy, hh * 0.85f, steel, 1.0f, 0.45f); A.circle(ix, cy, hh * 0.85f, steel, 1.0f, 0.45f);
+    for (int i = 0; i < 6; i++) { float a = i * 1.0472f + phase * 1.0472f; A.dot(sx + std::cos(a) * hh * 0.55f, cy + std::sin(a) * hh * 0.55f, 0.5f, rgba(shade(rubber, 0.7f), 220)); }   // sprocket teeth
+    A.dot(ix, cy, hh * 0.3f, shade(rubber, 0.8f));
+    for (int i = 0; i < 7; i++) A.circle(cx + (i - 3) * 4.4f, cy + s * hh * 0.5f, 1.25f, steel, 0.6f, 0.45f);   // road-wheel hubs
 }
-void tankClanker(Art& A, int frame) {   // Brute Tank body
+
+void tankCyber(Art& A, int frame) {   // Photon Tank body: blue-grey composite hull, armoured skirts, sloped glacis and an engine deck
     float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 30, 16.5f, 22, 5.6f, ph, CKD); trackRun(A, 30, 47.5f, 22, 5.6f, ph, CKD);
-    A.poly({ {9, 20.5f}, {40, 20.5f}, {53, 26}, {53, 38}, {40, 43.5f}, {9, 43.5f} }, CKH, 2.8f, 0.6f);
-    A.box(30, 21.6f, 20, 2.6f, 0.8f, shade(CKH, 0.86f), 1.4f, 0.5f); A.box(30, 42.4f, 20, 2.6f, 0.8f, shade(CKH, 0.86f), 1.4f, 0.5f);   // skirts
-    rivets(A, 12, 22.2f, 46, 22.2f, 11, shade(CKH, 1.3f)); rivets(A, 12, 41.8f, 46, 41.8f, 11, shade(CKH, 1.3f));
-    A.box(18, 32, 8, 9.4f, 1.4f, shade(CKD, 1.25f), 2, 0.5f);                                // engine grille
-    for (int i = 0; i < 5; i++) A.line(12.5f + i * 2.6f, 24.4f, 12.5f + i * 2.6f, 39.6f, 0.9f, rgba(CKD, 210));
-    A.circle(12.5f, 26.5f, 2.6f, CKR, 1.6f, 0.6f); A.circle(12.5f, 37.5f, 2.6f, CKR, 1.6f, 0.6f);                // fuel drums
-    A.line(10.4f, 26.5f, 14.6f, 26.5f, 0.7f, rgba(CKD, 140)); A.line(10.4f, 37.5f, 14.6f, 37.5f, 0.7f, rgba(CKD, 140));
-    A.line(42, 22, 50, 27, 0.9f, rgba(CKD, 160)); A.line(42, 42, 50, 37, 0.9f, rgba(CKD, 160));
-    A.dot(51, 28.5f, 1.1f, rgb(255, 240, 190)); A.dot(51, 35.5f, 1.1f, rgb(255, 240, 190));
+    Color comp = mix(CYH, rgb(92, 104, 120), 0.7f), panel = shade(comp, 1.14f);   // the cobalt tone greyed down into composite
+    tankTrack(A, 30, 15.4f, 21, 4.0f, ph, CYD, -1); tankTrack(A, 30, 48.6f, 21, 4.0f, ph, CYD, 1);
+    A.poly({ {11, 20.5f}, {40, 20.5f}, {49.5f, 25.2f}, {52.5f, 28.4f}, {52.5f, 35.6f}, {49.5f, 38.8f}, {40, 43.5f}, {11, 43.5f} }, comp, 2.6f, 0.6f);   // chassis
+    A.poly({ {40.5f, 22.4f}, {48.6f, 25.6f}, {51.3f, 28.5f}, {51.3f, 35.5f}, {48.6f, 38.4f}, {40.5f, 41.6f} }, panel, 1.4f, 0.5f);   // glacis plate
+    A.line(40.5f, 22.4f, 48.6f, 25.6f, 0.6f, rgba(CYD, 170)); A.line(40.5f, 41.6f, 48.6f, 38.4f, 0.6f, rgba(CYD, 170));   // glacis seams
+    A.box(28.5f, 18.7f, 16.5f, 2.1f, 0.6f, panel, 1.0f, 0.35f);   // upper side skirt, covering the inner half of the track
+    A.box(28.5f, 45.3f, 16.5f, 2.1f, 0.6f, panel, 1.0f, 0.35f);   // lower side skirt
+    A.box(16.6f, 32, 5.2f, 9.6f, 1.2f, shade(CYM, 1.15f), 1.8f, 0.5f);   // engine deck
+    A.ring(32, 32, 10.6f, 1.2f, shade(CYD, 1.3f), 0.6f, 0.3f);   // turret ring: the bearing the turret sits on
+}
+void tankClanker(Art& A, int frame) {   // Brute Tank body: olive hull, bolted skirts, sloped glacis and a louvred rear deck
+    float ph = frame == 2 ? 0.5f : 0;
+    tankTrack(A, 30, 15.8f, 22, 4.2f, ph, CKD, -1); tankTrack(A, 30, 48.2f, 22, 4.2f, ph, CKD, 1);
+    A.poly({ {11, 20.5f}, {40, 20.5f}, {49.5f, 25.0f}, {52.5f, 28.0f}, {52.5f, 36.0f}, {49.5f, 39.0f}, {40, 43.5f}, {11, 43.5f} }, CKH, 2.8f, 0.6f);   // hull
+    A.poly({ {40.5f, 22.0f}, {48.4f, 25.0f}, {51.0f, 28.0f}, {51.0f, 36.0f}, {48.4f, 39.0f}, {40.5f, 42.0f} }, shade(CKH, 1.08f), 1.4f, 0.5f);   // glacis plate
+    A.box(28.5f, 18.5f, 16.5f, 2.1f, 0.5f, shade(CKH, 0.9f), 1.4f, 0.5f);   // upper side skirt
+    A.box(28.5f, 45.5f, 16.5f, 2.1f, 0.5f, shade(CKH, 0.9f), 1.4f, 0.5f);   // lower side skirt
+    A.box(16.0f, 32, 4.6f, 9.0f, 1.2f, shade(CKD, 1.25f), 2, 0.5f);   // rear deck
+    A.ring(32, 32, 10.6f, 1.2f, shade(CKD, 1.3f), 0.6f, 0.3f);   // turret ring
     weatherClanker(A, 33, 8, 14, 56, 50);
 }
 
@@ -949,17 +962,28 @@ void vehicleDetail(Art& A, bool cy, int local) {
         }
         mud(A, 8, 18, 40, 24, 5, 41); mud(A, 8, 40, 40, 46, 5, 42);
         break;
-    case 5:   // main battle tank hull
+    case 5:   // main battle tank hull: skirt bolts and joints, driver's hatch and periscopes, rear deck vents and stowage
         if (cy) {
-            for (int s = -1; s <= 1; s += 2) { A.box(30, 32 + s * 11.3f, 15, 1.2f, 0.5f, shade(CYP, 0.95f), 1.2f, 0.55f); for (int i = 0; i < 4; i++) A.line(18 + i * 8.0f, 32 + s * 10.1f, 18 + i * 8.0f, 32 + s * 12.5f, 0.5f, rgba(CYD, 180)); }
-            A.dot(9.8f, 25.6f, 0.9f, rgb(255, 80, 70)); A.dot(9.8f, 38.4f, 0.9f, rgb(255, 80, 70)); A.glow(9.8f, 25.6f, 3, rgba(rgb(255, 80, 70), 110)); A.glow(9.8f, 38.4f, 3, rgba(rgb(255, 80, 70), 110));
-            A.line(46, 29, 49, 29, 0.6f, rgba(CYG, 200)); A.line(46, 35, 49, 35, 0.6f, rgba(CYG, 200));
+            A.line(12, 16.7f, 45, 16.7f, 0.5f, rgba(CYD, 230)); A.line(12, 47.3f, 45, 47.3f, 0.5f, rgba(CYD, 230));   // dark gap between the skirts and the track band
+            rivets(A, 14, 17.2f, 44, 17.2f, 9, shade(CYP, 1.1f)); rivets(A, 14, 46.8f, 44, 46.8f, 9, shade(CYP, 1.1f));   // skirt bolts
+            for (int i = 0; i < 6; i++) { float x = 16 + i * 5.0f; A.line(x, 16.8f, x, 20.2f, 0.5f, rgba(CYD, 170)); A.line(x, 43.8f, x, 47.2f, 0.5f, rgba(CYD, 170)); }   // skirt panel joints
+            for (int i = 0; i < 5; i++) A.line(12.4f + i * 1.8f, 22.6f, 12.4f + i * 1.8f, 41.4f, 0.6f, rgba(CYD, 190));   // engine deck louvres
+            for (int s = -1; s <= 1; s += 2) { A.ell(12.2f, 32 + s * 9.6f, 1.6f, 1.1f, shade(CYD, 1.4f), 1, 0.3f); A.box(14.8f, 32 + s * 13.2f, 2.2f, 1.5f, 0.4f, shade(CYM, 1.3f), 1.0f, 0.5f); }   // exhaust outlets and rear stowage boxes
+            hatch(A, 50.2f, 32, 2.2f, shade(CYH, 1.2f));   // driver's hatch
+            for (int s = -1; s <= 1; s += 2) { A.box(48.4f, 32 + s * 5.8f, 0.9f, 0.9f, 0.3f, CYD, 0.6f, 0.3f); A.dot(48.4f, 32 + s * 5.8f, 0.4f, rgba(CYW, 230)); }   // periscopes
         } else {
-            for (int s = -1; s <= 1; s += 2) { A.line(18, 32 + s * 10.4f, 40, 32 + s * 10.4f, 0.7f, rgba(CKD, 190)); A.dot(40, 32 + s * 10.4f, 0.9f, shade(CKS, 1.1f)); }   // tow cables
-            for (int i = 0; i < 3; i++) A.box(46.5f, 27.6f + i * 4.4f, 1.0f, 1.4f, 0.3f, shade(CKS, 0.9f), 0.8f, 0.5f);                        // spare track links on the glacis
-            A.ell(13, 32, 2.6f, 3.4f, rgba(CKR, 90), 1, 0);
+            A.line(12, 16.7f, 45, 16.7f, 0.5f, rgba(CKD, 230)); A.line(12, 47.3f, 45, 47.3f, 0.5f, rgba(CKD, 230));   // dark gap between the skirts and the track band
+            rivets(A, 12, 17.2f, 46, 17.2f, 11, shade(CKH, 1.3f)); rivets(A, 12, 46.8f, 46, 46.8f, 11, shade(CKH, 1.3f));   // skirt bolts
+            for (int i = 0; i < 4; i++) A.line(12.6f + i * 2.0f, 24.2f, 12.6f + i * 2.0f, 39.8f, 0.9f, rgba(CKD, 210));   // rear deck louvres
+            hatch(A, 49.8f, 32, 2.2f, shade(CKH, 1.1f));   // driver's hatch
+            for (int s = -1; s <= 1; s += 2) { A.box(47.4f, 32 + s * 5.0f, 0.9f, 0.9f, 0.3f, CKD, 0.6f, 0.3f); A.dot(47.4f, 32 + s * 5.0f, 0.4f, rgba(CKY, 200)); }   // periscopes
+            for (int s = -1; s <= 1; s += 2) for (int i = 0; i < 3; i++) A.box(44.5f + i * 2.2f, 32 + s * 9.2f, 1.0f, 1.0f, 0.3f, shade(CKS, 0.95f), 0.8f, 0.5f);   // spare track links on the glacis
+            A.circle(12.6f, 26.5f, 2.4f, shade(CKR, 0.65f), 1.6f, 0.6f); A.circle(12.6f, 37.5f, 2.4f, shade(CKR, 0.65f), 1.6f, 0.6f);   // fuel drums, sun-faded rust
+            A.line(10.4f, 26.5f, 14.6f, 26.5f, 0.7f, rgba(CKD, 140)); A.line(10.4f, 37.5f, 14.6f, 37.5f, 0.7f, rgba(CKD, 140));
+            A.ell(17.0f, 23.4f, 2.2f, 1.1f, shade(CKD, 0.9f), 1, 0.5f); A.ell(17.0f, 40.6f, 2.2f, 1.1f, shade(CKD, 0.9f), 1, 0.5f);   // exhaust outlets
+            A.ell(36, 36, 3.6f, 1.1f, rgba(CKR, 80), 1, 0); A.ell(22, 46.2f, 3.2f, 0.8f, rgba(CKR, 70), 1, 0);   // rust on the cab and skirt
+            mud(A, 12, 14, 50, 20, 6, 51); mud(A, 12, 44, 50, 50, 6, 52);   // road dust on the tracks and skirts
         }
-        mud(A, 12, 14, 50, 20, 6, 51); mud(A, 12, 44, 50, 50, 6, 52);
         break;
     case 7:   // railgun tank / rocket launcher carrier
         if (cy) { for (int i = 0; i < 4; i++) A.line(28 + i * 4.2f, 26, 28 + i * 4.2f, 38, 0.5f, rgba(CYD, 160)); A.dot(53, 28.4f, 0.9f, CYW); A.dot(53, 35.6f, 0.9f, CYW); A.glow(53, 28.4f, 3, rgba(CYW, 100)); A.glow(53, 35.6f, 3, rgba(CYW, 100)); }
@@ -1035,6 +1059,7 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 23: artSupersonicBomberBody(c, team, cy); break;   // Supersonic Bomber (art_jet.cpp)
     case 25: artFighterBody(c, team, cy); break;            // plain fighter (art_jet.cpp)
     case 26: artNukeBomberBody(c, team, cy); break;         // call-in strategic bomber (art_jet.cpp)
+    case 27: artPatrolBoatBody(c, team, cy); break;         // patrol boat (art_ship.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
         enhance(c, 0.7f);
@@ -1185,32 +1210,52 @@ bool artUnitTurret(Canvas& c, int type, Color team) {
     int local = unitLocal(type);
     switch (local) {
     case 19: case 20: return artShipMount(c, team, cy, local == 20);   // (the warship mounts; the jeeps and fighters have no rotating part)
+    case 27: return artPatrolBoatMount(c, team, cy);                  // (the patrol boat's gun and rocket mount)
     case 5:
-        if (cy) {   // photon cannon turret
-            A.circle(32, 32, 10.5f, rgba(CYD, 110), 1, 0);   // ring shadow
-            A.cap(42, 29.6f, 63, 29.6f, 1.7f, shade(CYM, 1.4f), 1.4f, 0.55f); A.cap(42, 34.4f, 63, 34.4f, 1.7f, shade(CYM, 1.4f), 1.4f, 0.55f);
-            A.line(44, 32, 62, 32, 1.5f, rgba(CYG, 230)); A.glow(60, 32, 7, rgba(CYG, 120));
-            A.box(60.5f, 32, 2.2f, 6, 0.8f, shade(CYP, 0.9f), 1.4f, 0.5f);
-            A.poly({ {21, 23.5f}, {37, 23}, {46, 28.5f}, {46, 35.5f}, {37, 41}, {21, 40.5f}, {17.5f, 36}, {17.5f, 28} }, CYP, 2.8f, 0.65f);
-            A.poly({ {23, 26}, {35, 25.5f}, {41, 29.5f}, {41, 34.5f}, {35, 38.5f}, {23, 38}, {21, 35}, {21, 29} }, shade(CYP, 1.12f), 2, 0.5f);
-            hatch(A, 27.5f, 32, 3.6f, shade(CYH, 1.1f));
-            A.box(41.5f, 32, 1.6f, 2.6f, 0.6f, CYD, 1, 0.3f); A.dot(42.5f, 32, 1.1f, CYG);
-            teamDot(A, 34.5f, 32, 2.5f);
-            A.line(18, 40, 12, 47, 0.8f, rgba(CYW, 220));       // antenna
-        } else {    // 120mm turret
-            A.circle(32, 32, 11, rgba(CKD, 110), 1, 0);
-            A.cap(42, 32, 63, 32, 1.9f, shade(CKD, 1.5f), 1.6f, 0.6f);                     // barrel
-            A.cap(48, 32, 52, 32, 2.6f, shade(CKD, 1.7f), 1.4f, 0.5f);                     // bore evacuator
-            A.box(61.5f, 32, 2.2f, 3.2f, 0.7f, shade(CKD, 1.3f), 1.2f, 0.5f);              // muzzle brake
-            A.poly({ {19, 23}, {36, 22.5f}, {46, 27.5f}, {46, 36.5f}, {36, 41.5f}, {19, 41}, {15.5f, 36.5f}, {15.5f, 27.5f} }, shade(CKH, 1.08f), 3.0f, 0.65f);
-            A.box(43.5f, 32, 3.6f, 6.6f, 1.4f, shade(CKH, 0.8f), 1.6f, 0.5f);               // mantlet
-            rivets(A, 20, 24.6f, 34, 24.6f, 6, shade(CKH, 1.4f)); rivets(A, 20, 39.4f, 34, 39.4f, 6, shade(CKH, 1.4f));
-            hatch(A, 25, 27.5f, 3.2f, shade(CKH, 1.05f));                                  // commander cupola
-            A.cap(25, 27.5f, 30, 27.5f, 0.9f, CKD, 1, 0.3f);                               // pintle MG
-            A.box(19, 35.5f, 3.4f, 3.0f, 0.6f, shade(CKT, 0.85f), 1.4f, 0.5f);              // stowage
-            teamDot(A, 31.5f, 33.5f, 2.6f);
+        if (cy) {   // Photon Tank turret: a low, faceted composite wedge with slab sides, roof hatches and a slim energy gun
+            Color comp = mix(CYH, rgb(92, 104, 120), 0.7f), panel = shade(comp, 1.14f);
+            A.shadowCircle(32, 32, 11.5f, 1.0f, 1.2f, 1.8f, 90);   // the turret's cast shadow on the hull
+            A.box(14.4f, 32, 3.0f, 6.0f, 0.8f, shade(CYM, 1.2f), 1.4f, 0.5f);   // bustle rack at the rear
+            for (int i = 0; i < 3; i++) A.line(12.6f + i * 1.8f, 26.6f, 12.6f + i * 1.8f, 37.4f, 0.5f, rgba(CYD, 170));   // stowage netting
+            A.poly({ {17.5f, 22.8f}, {37.5f, 21.6f}, {43.5f, 23.2f}, {46.8f, 27.2f}, {47.4f, 32}, {46.8f, 36.8f}, {43.5f, 40.8f}, {37.5f, 42.4f}, {17.5f, 41.2f} }, shade(comp, 0.9f), 2.6f, 0.7f);   // slab-sided body
+            A.poly({ {20, 24.2f}, {36.5f, 23.2f}, {39.6f, 24.0f}, {39.6f, 40.0f}, {36.5f, 40.8f}, {20, 39.8f} }, shade(comp, 1.3f), 1.6f, 0.6f);   // lit roof plate
+            A.poly({ {39.2f, 24.0f}, {43.5f, 23.2f}, {46.8f, 27.2f}, {47.4f, 32}, {46.8f, 36.8f}, {43.5f, 40.8f}, {39.2f, 40.0f} }, shade(comp, 0.78f), 1.6f, 0.8f);   // sloped front wedge, turned away from the light
+            A.line(22, 29.6f, 36.5f, 29.1f, 0.5f, rgba(CYD, 170)); A.line(22, 34.4f, 36.5f, 34.9f, 0.5f, rgba(CYD, 170));   // composite panel seams
+            A.line(18, 23.4f, 37, 22.4f, 0.6f, rgba(CYD, 200)); A.line(18, 40.6f, 37, 41.6f, 0.6f, rgba(CYD, 200));   // side bevel lines
+            for (int s = -1; s <= 1; s += 2) for (int i = 0; i < 3; i++) A.cap(40.6f, 32 + s * (8.4f + i * 0.9f), 43.4f, 32 + s * (8.4f + i * 0.9f), 0.6f, shade(CYD, 1.8f), 0.6f, 0.4f);   // smoke grenade launchers
+            A.box(45.0f, 32, 2.0f, 4.0f, 1.2f, shade(comp, 0.85f), 1.4f, 0.5f);   // gun mantlet
+            A.line(44.5f, 29.8f, 58, 29.8f, 0.9f, rgba(CYM, 230)); A.line(44.5f, 34.2f, 58, 34.2f, 0.9f, rgba(CYM, 230));   // coolant and power conduits
+            A.cap(46, 32, 60.6f, 32, 1.2f, shade(CYM, 1.25f), 1.0f, 0.5f);   // slim barrel
+            A.line(47.5f, 31.0f, 59.5f, 31.0f, 0.4f, rgba(CYP, 200));   // barrel highlight
+            A.line(47.5f, 32.6f, 59.5f, 32.6f, 0.4f, rgba(CYG, 120));   // energy channel
+            A.box(52.6f, 32, 1.4f, 2.0f, 0.5f, shade(CYM, 1.3f), 1.1f, 0.5f);   // fume extractor
+            A.box(61.6f, 32, 1.3f, 2.0f, 0.5f, shade(CYP, 0.9f), 1.1f, 0.5f);   // emitter housing
+            A.dot(63.1f, 32, 0.6f, CYG); A.glow(62.6f, 32, 2.4f, rgba(CYG, 110));   // tiny emitter tip
+            hatch(A, 24.5f, 27.0f, 2.9f, panel);   // commander's cupola
+            hatch(A, 24.5f, 38.0f, 2.2f, panel);   // loader's hatch
+            A.box(37.4f, 27.6f, 1.6f, 1.4f, 0.5f, shade(CYM, 1.4f), 1.0f, 0.5f); A.dot(37.4f, 27.6f, 0.5f, rgba(CYW, 230));   // gunner's sight
+            teamDot(A, 31.0f, 32, 2.5f);   // the owner's marking
+            A.line(20.5f, 23.2f, 15.6f, 18.8f, 0.6f, rgba(CYW, 220));   // antenna
+        } else {    // Brute Tank turret: a rounded cast turret with reactive armour bricks on the front flanks and a long 125mm gun
+            A.shadowCircle(32, 32, 11.5f, 1.0f, 1.2f, 1.8f, 90);   // the turret's cast shadow on the hull
+            A.box(16.8f, 32, 2.6f, 5.4f, 1.4f, shade(CKT, 0.82f), 1.4f, 0.5f);   // rear stowage bag
+            A.poly({ {16.2f, 32}, {18.0f, 26.6f}, {23.5f, 22.6f}, {31.0f, 21.6f}, {38.0f, 22.8f}, {42.2f, 26.0f}, {43.0f, 32}, {42.2f, 38.0f}, {38.0f, 41.2f}, {31.0f, 42.4f}, {23.5f, 41.4f}, {18.0f, 37.4f} }, shade(CKH, 0.92f), 3.0f, 0.7f);   // rounded cast turret
+            A.ell(29.8f, 32, 10.2f, 7.8f, shade(CKH, 1.12f), 3.0f, 0.55f);   // raised dome over the turret roof
+            for (int s = -1; s <= 1; s += 2) { A.box(33.0f, 32 + s * 9.7f, 2.9f, 1.5f, 0.3f, shade(CKD, 1.5f), 1.0f, 0.5f); A.box(39.2f, 32 + s * 7.5f, 2.4f, 1.5f, 0.3f, shade(CKD, 1.5f), 1.0f, 0.5f); }   // reactive armour bricks
+            A.box(44.0f, 32, 2.4f, 5.0f, 1.6f, shade(CKH, 0.9f), 1.6f, 0.5f);   // mantlet
+            A.cap(44.0f, 32, 61.6f, 32, 1.35f, shade(CKD, 1.6f), 1.2f, 0.5f);   // barrel
+            A.cap(46.0f, 32, 50.0f, 32, 1.9f, shade(CKD, 1.25f), 1.4f, 0.5f);   // thermal sleeve
+            A.line(46, 30.9f, 61, 30.9f, 0.4f, rgba(CKS, 200));   // barrel highlight
+            A.box(55.0f, 32, 1.4f, 2.0f, 0.5f, shade(CKD, 1.4f), 1.0f, 0.5f);   // fume extractor
+            A.box(60.8f, 32, 1.9f, 2.8f, 0.6f, shade(CKD, 1.5f), 1.2f, 0.5f);   // muzzle brake
+            hatch(A, 24.0f, 26.0f, 2.9f, shade(CKH, 0.82f));   // commander's cupola
+            A.cap(24.0f, 26.0f, 31.5f, 26.0f, 0.8f, CKD, 1, 0.3f);   // pintle machine gun
+            hatch(A, 24.5f, 38.5f, 2.2f, shade(CKH, 1.05f));   // loader's hatch
+            A.box(40.5f, 27.5f, 1.8f, 1.4f, 0.5f, shade(CKD, 1.4f), 1, 0.5f);   // gunner's sight
+            A.ell(28, 40.5f, 4.0f, 1.2f, rgba(CKR, 70), 1, 0);   // rust streak
+            teamDot(A, 30.0f, 33.5f, 2.5f);   // the owner's marking
+            A.line(18.5f, 25.0f, 14.6f, 19.2f, 0.7f, rgba(CKD, 230));   // antenna
             A.grain(14, 20, 48, 44, 0.16f, 12);
-            A.line(17, 24, 11, 15, 0.8f, rgba(CKD, 230));
         }
         break;
     case 6:
@@ -1368,6 +1413,7 @@ float artScale(int type) {
     if (local == 24) return 1.06f;   // Anti-Radiation Trucks: a medium truck, a touch smaller than the jeeps
     if (local == 25) return 1.22f;   // plain fighters
     if (local == 26) return 2.1f;    // the call-in strategic bombers: the biggest thing in the sky
+    if (local == 27) return 1.2f;    // patrol boats: well under half a destroyer's length
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

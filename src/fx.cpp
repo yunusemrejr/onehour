@@ -185,8 +185,8 @@ void Gfx::buildEffects() {
             for (int k = 0; k < 5; k++) w += std::sin(6.2831853f * (A[k] * x + B[k] * y) / 128.0f + 1.3f * k + f * 1.5707963f * M[k]);
             for (int k = 0; k < 4; k++) w2 += std::sin(6.2831853f * (A2[k] * x + B2[k] * y) / 128.0f + 0.7f * k + f * 1.5707963f * M2[k]);
             float r = clampf(1.0f - std::abs(w) * 0.5f, 0, 1), r2 = clampf(1.0f - std::abs(w2) * 0.62f, 0, 1);
-            float a = std::pow(r, 7.0f) * 0.75f + std::pow(r * r2, 4.0f) * 0.85f;
-            c.px[y * 128 + x] = Canvas::pack(Color{196, 238, 250, (u8)(clampf(a, 0, 1) * 96)});
+            float a = std::pow(r, 9.0f) * 0.45f + std::pow(r * r2, 5.0f) * 0.8f;   // (fine filaments carry it; the broad swell only hints)
+            c.px[y * 128 + x] = Canvas::pack(Color{196, 236, 248, (u8)(clampf(a, 0, 1) * 80)});
         }
         waterFx[f] = fromCanvasAdd(c, 0, 0);
     }
@@ -531,6 +531,7 @@ void Game::drawFx() {
 
 void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under the fire); pass 1: sparks, flames, rings and glows (over it)
     Gfx& g = g_gfx;
+    const Color amb = ambientTint();
     {
         for (auto& p : parts) {
             bool additive = p.kind == PK_SPARK || p.kind == PK_FLAME || p.kind == PK_RING || p.kind == PK_GLOW;
@@ -543,12 +544,12 @@ void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under 
                 float sz = lerpf(p.s0, p.s1, std::sqrt(k));
                 float al = clampf(p.age * (p.kind == PK_SMOKE ? 3.2f : 7.0f), 0, 1) * std::pow(1 - k, p.kind == PK_CONTRAIL ? 1.0f : 1.3f) * (p.col.a / 255.0f);
                 const Sprite& sp = p.kind == PK_DUST ? g.fxs.dust[p.var % 3] : g.fxs.smoke[p.var & 3];
-                g.drawSized(sp, s.x, s.y, sz * 2, sz * 2, p.rot, Color{p.col.r, p.col.g, p.col.b, 255}, (u8)(255 * al * 0.7f));
+                g.drawSized(sp, s.x, s.y, sz * 2, sz * 2, p.rot, Color{(u8)(p.col.r * amb.r / 255), (u8)(p.col.g * amb.g / 255), (u8)(p.col.b * amb.b / 255), 255}, (u8)(255 * al * 0.7f));   // (smoke takes the hour's light)
                 break;
             }
             case PK_DEBRIS: {
                 float al = clampf((1 - k) * 3.0f, 0, 1);
-                g.drawSized(g.fxs.debris[p.var & 3], s.x, s.y, p.s0 * 7, p.s0 * 7, p.rot, p.col, (u8)(255 * al));
+                g.drawSized(g.fxs.debris[p.var & 3], s.x, s.y, p.s0 * 7, p.s0 * 7, p.rot, Color{(u8)(p.col.r * amb.r / 255), (u8)(p.col.g * amb.g / 255), (u8)(p.col.b * amb.b / 255), p.col.a}, (u8)(255 * al));
                 break;
             }
             case PK_SPARK: {

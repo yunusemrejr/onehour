@@ -14,7 +14,8 @@ static float hash01(u32 a) { a ^= a >> 16; a *= 0x7feb352du; a ^= a >> 15; a *= 
 void Game::drawShipWake(const Entity& e, Vec2 p) {
     Gfx& g = g_gfx;
     const float sc = UNIT_SCALE * artScale(e.type);
-    const float HL = 30.0f * sc, HB = 8.8f * sc;                      // half length and half beam on screen
+    const bool patrol = e.type == U_C_PATROL || e.type == U_K_PATROL;   // (a patrol boat's hull is about two thirds of a warship's)
+    const float HL = (patrol ? 19.5f : 30.0f) * sc, HB = (patrol ? 6.0f : 8.8f) * sc;   // half length and half beam on screen
     Vec2 f(std::cos(e.angle), std::sin(e.angle)), s(-f.y, f.x);
     float spd = (e.pos - e.prevPos).len() / SIM_DT;
     float k = clampf(spd / std::max(1.0f, e.ut().speed), 0.0f, 1.0f);
@@ -44,8 +45,8 @@ void Game::drawShipMounts(const Entity& e, Vec2 p, Color mod) {
     Gfx& g = g_gfx;
     const Sprite& tur = g.unitTurret[e.type][slotOf(e.owner < 0 ? 0 : e.owner)];
     if (!tur.tex) return;
-    bool cruiser = e.type == U_C_CRUISER || e.type == U_K_CRUISER;
-    ShipMounts m = shipMounts(cruiser);
+    bool cruiser = e.type == U_C_CRUISER || e.type == U_K_CRUISER, patrol = e.type == U_C_PATROL || e.type == U_K_PATROL;
+    ShipMounts m = patrol ? patrolMounts() : shipMounts(cruiser);
     const float sc = UNIT_SCALE * artScale(e.type);
     float ca = std::cos(e.angle), sa = std::sin(e.angle);
     for (int i = 0; i < m.n; i++) {

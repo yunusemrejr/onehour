@@ -114,7 +114,7 @@ static void scene11(u64 seed, bool commander = true) {
 
 bool frontierMapTest(u64 seed) {
     scene11(seed,false);
-    VERIFY11(MAP_W==146 && MAP_H==146,"unexpected map scale");
+    VERIFY11(MAP_W==176 && MAP_H==176,"unexpected map scale");
     VERIFY11(g_map.supplies.size()==20,"supply count changed");
     VERIFY11(g_map.landmarks.size()==27,"a quadrant lost a settlement building");
     int kinds[7]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<7,"invalid landmark kind");kinds[l.kind]++; }
@@ -170,15 +170,17 @@ bool frontierMapTest(u64 seed) {
     Ref r=g_sim.spawnUnit(U_C_TANK,0,c);VERIFY11(r.valid(),"cannot spawn escape vehicle");
     int cx=tileOf(c.x),cy=tileOf(c.y);Vec2 dest;
     for(int y=cy-4;y<=cy+4;y++) g_map.blocked[y*MAP_W+cx+2]|=2;
+    g_map.touch();
     VERIFY11(g_sim.escapeDestination(*g_sim.get(r),c-Vec2(2*TILE,0),4,dest),"vehicle found no lateral escape from a wall");
     VERIFY11(dist(dest,c-Vec2(2*TILE,0))>2.4f*TILE,"escape did not increase threat distance");
     VERIFY11(g_map.findPath(c,dest,path),"escape selected an unreachable destination");
     for(int y=cy-1;y<=cy+1;y++) for(int x=cx-1;x<=cx+1;x++) if(x!=cx || y!=cy) g_map.blocked[y*MAP_W+x]=2;
+    g_map.touch();
     VERIFY11(!g_sim.escapeDestination(*g_sim.get(r),c-Vec2(2*TILE,0),4,dest),"boxed vehicle selected an unreachable escape");
     Map m;memset(m.blocked,1,sizeof m.blocked);memset(m.tiles,T_ROCK,sizeof m.tiles);
     VERIFY11(!m.findPath(Vec2(-999,-999),Vec2(WORLD_W+999,WORLD_H+999),path) && path.empty(),"blocked out-of-world path was accepted");
     VERIFY11(!m.findPath(Vec2(std::numeric_limits<float>::quiet_NaN(),0),c,path),"NaN path input was accepted");
-    printf("frontiermaptest: 146x146, 20 supplies, 27 landmarks (4 ridge fortresses, 2 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
+    printf("frontiermaptest: 176x176, 20 supplies, 27 landmarks (4 ridge fortresses, 2 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
     return true;
 }
 

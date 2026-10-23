@@ -168,7 +168,7 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
         col = add3(col, mul3(f3(56, 84, 76), (1.0f - d * 0.8f) * clampf(caus * 2.0f, 0, 1)));
         // sun glitter: a broken diagonal path of sparkles running away from the north-west light, denser in open water
         float glit = clampf(1.0f - std::abs((x - y) * 0.7071f - 140.0f * std::sin(x * 0.0009f)) / 1000.0f, 0, 1);
-        float th = 0.986f - 0.02f * glit;
+        float th = 0.994f - 0.012f * glit;   // (sparse: a big lake sprinkled evenly read as noise)
         if (nz.v(x * 1.3f + 13, y * 1.3f + 7) > th) col = add3(col, mul3(f3(90, 110, 104), 0.35f + 0.65f * glit));
         return col;
     }
@@ -370,12 +370,14 @@ struct Tree { float x, y, r; int kind; u32 seed; int tile = -1; };   // tile: th
 // What the bake leaves behind for local repaints (see terrainRepaint): the world as it was before the trees were drawn, every tree and bush,
 // and the tree sprites. A structure placed over trees then only has to recompose a small rectangle.
 struct Kept {
-    std::vector<u32> preTree;
+    std::vector<u16> preTree;   // RGB565: half the memory of the 32-bit world (the GPU world texture is 565 anyway)
     std::vector<Tree> trees;
     std::vector<Canvas> sprites[T_KINDS];
     bool ok = false;
 };
 Kept& kept() { static Kept k; return k; }
+inline u16 to565(Color c) { return (u16)((std::min(255, c.r + 4) >> 3) << 11 | (std::min(255, c.g + 2) >> 2) << 5 | (std::min(255, c.b + 4) >> 3)); }
+inline Color from565(u16 v) { int r = v >> 11, g = (v >> 5) & 63, b = v & 31; return Color{ (u8)(r << 3 | r >> 2), (u8)(g << 2 | g >> 4), (u8)(b << 3 | b >> 2), 255 }; }
 
 float spriteBase(int kind) { return kind == T_BUSH ? 8.5f : (kind == T_CONIFER ? 15.0f : 16.5f); }
 // One tree into 'dst', whose pixel (0,0) is world pixel (ox, oy)
@@ -827,7 +829,14 @@ void terrainBake(Canvas& world) {
         for (int i = 0; i < 4200; i++) {
             float x = pr.f(8, W - 8.0f), y = pr.f(8, H - 8.0f);
             if (tileAt(x, y) != T_WATER || tileAt(x + 12, y) != T_WATER || tileAt(x - 12, y) != T_WATER || tileAt(x, y + 12) != T_WATER || tileAt(x, y - 12) != T_WATER) continue;
-            if (hyp(x - WORLD_W * 0.5f, y - WORLD_H * 0.5f) < 13.0f * TILE) continue;   // not in the deep middle of the lake (its shallows and bays are fine)
+            {   // not out on the open lake: only its shallows next to the shore (rivers and pools anywhere)
+                int ptx = clampi(tileOf(x), 0, MAP_W - 1), pty = clampi(tileOf(y), 0, MAP_H - 1);
+                if (g_map.waterComp[pty * MAP_W + ptx] == g_map.lakeComp) {
+                    bool shore = false;
+                    for (int j = -2; j <= 2 && !shore; j++) for (int i = -2; i <= 2; i++) if (inMap(ptx + i, pty + j) && g_map.tile(ptx + i, pty + j) != T_WATER) { shore = true; break; }
+                    if (!shore) continue;
+                }
+            }
             if (nz.v(x * 0.012f + 31, y * 0.012f + 5) < 0.45f) continue;
             if (g_map.bridge[clampi(tileOf(y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(x), 0, MAP_W - 1)]) continue;
             put(pads[pr.range(0, 5)], x, y);
@@ -891,7 +900,8 @@ void terrainBake(Canvas& world) {
     {
         Kept& K = kept();
         if (K.sprites[0].empty()) for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) K.sprites[k].push_back(makeTree(k, spriteBase(k) + v * 0.6f, 5000u + k * 97u + v * 13u));
-        K.preTree = world.px;
+        K.preTree.resize(world.px.size());
+        for (size_t i = 0; i < world.px.size(); i++) K.preTree[i] = to565(Canvas::unpack(world.px[i]));
         K.trees = trees;
         K.ok = true;
         for (auto& t : trees) drawTree(world, t, 0, 0);
@@ -937,9 +947,9 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
             F3 dirt = groundColor(K_DIRT, (float)x, (float)y, nz, macro, 0);
             dirt = lerp3(dirt, SCREE, 0.25f * nz.v(x * 0.2f + 4, y * 0.2f + 9));   // rubble left by the quarrying
             dirt = gradeGround(dirt, (float)x, (float)y, nz);
-            u32& d = K.preTree[(size_t)y * WORLD_W + x];
-            Color o = Canvas::unpack(d);
-            d = Canvas::pack(Color{ (u8)clampf(o.r + (dirt.r - o.r) * w, 0, 255), (u8)clampf(o.g + (dirt.g - o.g) * w, 0, 255), (u8)clampf(o.b + (dirt.b - o.b) * w, 0, 255), 255 });
+            u16& d = K.preTree[(size_t)y * WORLD_W + x];
+            Color o = from565(d);
+            d = to565(Color{ (u8)clampf(o.r + (dirt.r - o.r) * w, 0, 255), (u8)clampf(o.g + (dirt.g - o.g) * w, 0, 255), (u8)clampf(o.b + (dirt.b - o.b) * w, 0, 255), 255 });
         }
     }
     if (!felled && !rock) return false;
@@ -948,7 +958,7 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     rx = x0; ry = y0; rw = x1 - x0; rh = y1 - y0;
     // recompose: the ground before the trees, then every tree that reaches into the rectangle, back to front
     Canvas patch(rw, rh);
-    for (int y = 0; y < rh; y++) memcpy(&patch.px[(size_t)y * rw], &K.preTree[(size_t)(ry + y) * WORLD_W + rx], (size_t)rw * 4);
+    for (int y = 0; y < rh; y++) for (int x = 0; x < rw; x++) patch.px[(size_t)y * rw + x] = Canvas::pack(from565(K.preTree[(size_t)(ry + y) * WORLD_W + rx + x]));
     for (auto& t : K.trees) {
         int a, b, c, d; treeRect(t, a, b, c, d);
         if (c < rx || a > rx + rw || d < ry || b > ry + rh) continue;

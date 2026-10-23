@@ -196,8 +196,8 @@ static bool antiNukeNerfTest(Faction me, u64 seed) {
 static float warheadLoss(bool deep, u64 seed, Faction me) {
     Faction foe = me == F_CYBER ? F_CLANKER : F_CYBER;
     scene8(me, foe, seed);
-    Vec2 gz = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 12);
-    flattenArena(gz, 34, 34);   // open ground all round for the target at 0.93 of either warhead's radius
+    Vec2 gz(WORLD_W * 0.5f, WORLD_H * 0.5f - 4 * TILE);   // (out over the lake, which is drained for the scene: no base, road or supply pile within reach)
+    flattenArena(gz, 36, 36);   // open ground all round for the target at 0.93 of either warhead's radius
     int facB = firstBuildOf(foe) + BR_FACTORY;
     float R = NUKE_RADIUS * TILE * (deep ? 3.0f : 1.0f);
     // a factory at about 0.93 R from ground zero (the falloff there is a gentle slope, and neither warhead's damage is clamped)
@@ -212,6 +212,7 @@ static float warheadLoss(bool deep, u64 seed, Faction me) {
     Entity* tg = g_sim.get(target);
     float hp0 = tg->hp, d = dist(tg->pos, gz);
     float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
+    if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "warheadLoss deep %d: gz %.0f,%.0f target at %.2f R\n", (int)deep, gz.x / TILE, gz.y / TILE, d / R);
     Sim::Nuke n; n.from = g_sim.players[0].basePos; n.pos = gz; n.owner = 0; n.t = Sim::NUKE_FLIGHT - 0.05f; n.scale = deep ? UNUKE_SCALE : 1.0f; n.deep = deep;
     g_sim.nukes.push_back(n);
     run8(0.3f);

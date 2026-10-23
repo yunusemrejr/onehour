@@ -46,6 +46,10 @@ enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone
                                                      // infiltrators and the light defence turrets (Laser Turret / Gun Nest) find them
 static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4;
 static const float INFIL_DETECT = 5.0f;   // tiles: how close an ordinary infiltrator-spotter (infantry, jeep, aircraft) has to be to find one
+// Infiltrators swim: one sent somewhere it cannot walk to (an island launcher out in the lake, the far bank of a river with no crossing near)
+// paddles across on a small inflatable raft. Land is preferred: a water tile costs SWIM_COST in the route search, and the raft is slow.
+static const float SWIM_COST = 1.6f;
+static const float SWIM_SPEED = 0.6f;     // share of its walking speed an infiltrator keeps on the water
 
 enum UnitTypeId {
     U_C_DOZER = 0, U_C_HARV, U_C_INF1, U_C_INF2, U_C_INF3, U_C_TANK, U_C_VOLT, U_C_RAIL, U_C_AIR, U_C_ELITE, U_C_TITAN, U_C_JET,
@@ -65,6 +69,7 @@ enum UnitTypeId {
     U_C_RADTRUCK, U_K_RADTRUCK,     // Anti-Radiation Truck: an unarmed support vehicle whose decontamination field scrubs nuclear fallout
     U_C_FIGHTER, U_K_FIGHTER,       // the plain fighter jet (Raptor / Saber): air superiority first, strafes ground targets too; no tech needed
     U_C_NUKEBOMBER, U_K_NUKEBOMBER, // the strategic bomber of a Nuclear Bomber call-in: never built, it crosses the map once, drops a mid-sized nuke and leaves
+    U_C_PATROL, U_K_PATROL,         // the cheap patrol boat of the Naval Yard: small, fast and fragile, its gun and rockets hit aircraft, ships, troops and shore structures
     U_COUNT
 };
 
@@ -77,6 +82,7 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_STRONGHOLD,  // neutral civilian castle / bunker / watchtower: empty at the start, any army's infantry may garrison it and fire from it
                  BR_ISLANDNUKE,  // neutral Island Nuke Launcher on a lake island: indestructible, taken only by an infiltrator, fires small nukes
                  BR_FWALL,       // Bastion Wall: indestructible wall segment (spies can take it), no guns and no point defence of its own
+                 BR_WAYMAKER,    // Waymaker: placed like a structure, it clears the trees and rock under it into open ground and is gone (see WAYMAKER_*)
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -95,6 +101,7 @@ enum BuildTypeId {
     B_C_FORTRESS,             // the Mountain Fortress: a huge neutral stronghold in the hills (100 infantry)
     B_C_ISLANDNUKE,           // the Island Nuke Launcher (two of them, one on each lake island)
     B_C_FWALL, B_K_FWALL,     // Bastion Walls (see BR_FWALL)
+    B_C_WAYMAKER, B_K_WAYMAKER,   // Waymakers (see BR_WAYMAKER)
     B_COUNT
 };
 
@@ -213,7 +220,11 @@ inline bool strongholdRole(BuildRole r) { return r == BR_STRONGHOLD; }
 inline bool wallRole(BuildRole r) { return r == BR_WALL || r == BR_FWALL; }   // 1x1 segments meant to be chained into a line (no gap rules)
 inline bool neutralRole(BuildRole r) { return r == BR_STRONGHOLD || r == BR_ISLANDNUKE; }   // placed by the map generator: never raised by a dozer, never sold
 inline bool invulnerableRole(BuildRole r) { return r == BR_ISLANDNUKE || r == BR_FWALL; }   // nothing damages them: they burn (see Entity.heat) and only a spy takes them
-inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_FWALL; }   // no Rugged / Hyper / roof-gun upgrades
+inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_FWALL || r == BR_WAYMAKER; }   // no Rugged / Hyper / roof-gun upgrades
+// Waymaker: a dozer places it like a structure on trees, rocks or a ridge (never on water, a bridge, a structure or a supply pile) and it clears the
+// whole footprint into open, walkable ground by itself in WAYMAKER_TIME seconds: no dozer has to reach it, so a dozer can cut its own way into
+// rocky ground one Waymaker at a time and lay a road with a chain of them. It is gone once the ground is clear (nothing stays to defend or sell).
+static const float WAYMAKER_TIME = 2.5f;
 // The Mountain Fortress: the biggest neutral stronghold, dug into the hills. 100 infantry fire from it at once (ground and air, each with its own
 // weapon), its masonry shrugs off most conventional fire and no warhead takes more than FORTRESS_NUKE of its full health: it takes several nukes.
 static const float FORTRESS_ARMOR = 0.30f;    // fraction of conventional damage it takes
@@ -247,6 +258,7 @@ static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns o
 static const int   W_SBOMBER_GUN = 43;   // the Supersonic Bomber's defensive tail cannon (WEAPONS index)
 static const int   W_NUKE_BOMB = 44;     // the compact nuclear bomb it drops (PJ_BOMB: handled by Sim::bombImpact, never fired like a gun)
 static const int   W_FIGHTER_C = 45, W_FIGHTER_K = 46;   // the plain fighters' missiles and cannon
+static const int   W_PATROL_C = 47, W_PATROL_K = 48;     // the patrol boats' autocannon and rocket pod (one mount that hits everything)
 // Supersonic Bomber: a small fixed-wing nuclear bomber of both armies, built at the airfield with a tech structure. It is the fastest
 // aircraft in the game while its one bomb is aboard; after the drop it holds the dash just long enough to clear its own fireball, then
 // slows right down and is easy prey for anti-air. Its bomb is a compact casing (drawn small) holding a silver warhead: the damage is an

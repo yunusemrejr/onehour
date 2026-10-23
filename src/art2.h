@@ -24,6 +24,12 @@ ShipMounts shipMounts(bool cruiser);
 void artShipBody(Canvas& c, Color team, bool cyber, bool cruiser);
 bool artShipMount(Canvas& c, Color team, bool cyber, bool cruiser);
 
+// The Patrol Boat (one per army): a cheap, fast, fragile gunboat about 39 px long and 12 wide, bow at +x, with ONE rotating mount (a twin-barrel
+// autocannon and two rocket tubes) at the single patrolMounts() offset. The hull paints an empty pedestal under that mount, as the warships do.
+ShipMounts patrolMounts();
+void artPatrolBoatBody(Canvas& c, Color team, bool cyber);
+bool artPatrolBoatMount(Canvas& c, Color team, bool cyber);
+
 // The special fighter of a Hotline Strike (Valkyrie / Warhawk): long, slender, swept, twin-tailed, weapon pylons under the wings. 64x64 canvas
 // with a wingspan up to about 52 px and a length up to about 62 px. Afterburner flame and contrails are added live by the renderer.
 void artStrikeJetBody(Canvas& c, Color team, bool cyber);
