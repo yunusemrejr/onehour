@@ -4,189 +4,384 @@
 namespace {
 
 // ================================================================= CYBER
-void hqCyber(Bld& b) {
-    int W = b.W, H = b.H; (void)H;
-    b.pad(C_PAD, C_SEAM);
-    // chamfered inner plinth with an emitter line round it
-    b.a.rect(5, 5, W - 10.0f, H - 10.0f, 6, C_PAD2, 2.2f, 0.45f);
-    b.stripe(8, 8, W - 8.0f, 8, 0.9f, C_CYAN); b.stripe(8, H - 8.0f, W - 8.0f, H - 8.0f, 0.9f, C_CYAN);
-    b.stripe(8, 8, 8, H - 8.0f, 0.9f, C_CYAN); b.stripe(W - 8.0f, 8, W - 8.0f, H - 8.0f, 0.9f, C_CYAN);
-    b.a.ngon(64, 112, 9, 6, 0.5236f, rgba(C_CYAN, 160), 1, 0); b.a.ngon(64, 112, 6.5f, 6, 0.5236f, C_PAD2, 1, 0.2f);   // landing hex in the forecourt
-    // rear spine
-    Roof sp = b.block(14, 16, 100, 26, 12, C_ROOF2, C_HULL_D);
-    b.skylights(sp, 6, C_GLASS, C_STEEL);
-    b.windows(sp, 12, 9, C_CYAN);
-    // side wings
-    Roof wl = b.block(10, 52, 34, 52, 10, C_ROOF, C_HULL);
-    Roof wr = b.block(84, 52, 34, 52, 10, C_ROOF, C_HULL);
-    for (Roof* r : { &wl, &wr }) {
-        for (int i = 0; i < 3; i++) b.vent(r->x + 4 + i * 10, r->y + 6, 7, 5, rgba(C_CYAN, 160));
-        b.fan(r->x + r->w * 0.5f, r->y + r->h - 14, 7, rgb(112, 126, 152), C_CYAN);
-        b.stripe(r->x + 3, r->y + r->h - 4, r->x + r->w - 3, r->y + r->h - 4, 0.7f, C_CYAN, 70);
+// Real-materials palette for the four Cyber base structures: pale concrete, blue-grey steel, tinted glass and white ceramic panels.
+// Cyan stays in a few functional lights; the cobalt family is kept off the big surfaces.
+const Color R_PAVE = rgb(124, 130, 136), R_PAVE_SEAM = rgb(84, 90, 98);
+const Color R_CONC = rgb(152, 156, 158), R_CONC_TOP = rgb(180, 184, 186), R_CONC_DK = rgb(110, 116, 122);
+const Color R_PANEL = rgb(210, 216, 222), R_STEEL = rgb(96, 110, 128), R_STEEL_L = rgb(150, 162, 178), R_STEEL_D = rgb(56, 66, 82);
+const Color R_GLASS = rgb(34, 54, 68), R_GLASS_T = rgb(96, 128, 142), R_DARK = rgb(24, 28, 36);
+
+// a row of n tinted windows across [x0, x0+w] with its top at y0 (design px)
+void winRow(Bld& b, float x0, float y0, float w, int n, float hh) {
+    float pitch = w / n;
+    for (int i = 0; i < n; i++) {
+        float cx = x0 + pitch * (i + 0.5f), ww = pitch * 0.55f;
+        b.a.rect(cx - ww * 0.5f - 0.6f, y0 - 0.6f, ww + 1.2f, hh + 1.2f, 0.5f, rgba(BLACK, 150), 0.5f, 0);
+        b.a.rect(cx - ww * 0.5f, y0, ww, hh, 0.4f, R_GLASS, 0.7f, 0.25f);
     }
-    b.windows(wl, 10, 4, C_CYAN); b.windows(wr, 10, 4, C_CYAN);
-    // command tower
-    Roof tw = b.block(44, 46, 40, 52, 22, C_ROOF, C_HULL);
-    b.wallSeams(tw, 22, 8);
-    b.windows(tw, 22, 5, C_CYAN, 0.6f);
-    b.door(64, tw.y + tw.h + 22, 12, 12, C_STEEL, rgb(14, 26, 36));
-    b.stripe(58, tw.y + tw.h + 22 - 13.5f, 70, tw.y + tw.h + 22 - 13.5f, 0.8f, C_CYAN, 120);
-    float cx = tw.x + tw.w * 0.5f, cy = tw.y + tw.h * 0.44f;
-    b.a.circle(cx, cy, 15.5f, C_ROOF2, 2.4f, 0.55f);
-    b.a.ring(cx, cy, 12.5f, 2.2f, C_CYAN, 1, 0.3f); b.a.glow(cx, cy, 24, rgba(C_CYAN, 100));
-    b.a.circle(cx, cy, 9.5f, C_GLASS, 3.0f, 0.75f);
-    b.a.circle(cx, cy, 4.6f, C_WHITE, 2.4f, 0.6f); b.a.glow(cx, cy, 10, rgba(C_WHITE, 130));
-    for (int i = 0; i < 8; i++) { float an = i * 0.7854f; b.a.dot(cx + std::cos(an) * 14, cy + std::sin(an) * 14, 0.7f, C_CYAN); }
-    b.mark(tw.x + 3, tw.y + 2.5f, tw.w - 6, 4.2f);          // owner's colour: a broad band across the tower roof
-    b.mark(sp.x + 4, sp.y + sp.h - 5.2f, 18, 3.4f); b.mark(sp.x + sp.w - 22, sp.y + sp.h - 5.2f, 18, 3.4f);
-    b.antenna(tw.x + 4, tw.y + tw.h - 5, 18, C_RED); b.antenna(tw.x + tw.w - 4, tw.y + tw.h - 5, 12, C_CYAN);
+}
+// ribs and a crown hatch over a containment dome already drawn with cyl()
+void ribbedDome(Bld& b, float cx, float cy, float r) {
+    for (int i = 0; i < 12; i++) {
+        float an = i * 0.5236f;
+        b.a.line(cx + std::cos(an) * r * 0.22f, cy + std::sin(an) * r * 0.22f, cx + std::cos(an) * r * 0.94f, cy + std::sin(an) * r * 0.94f, 0.8f, rgba(R_CONC_DK, 170));
+    }
+    b.a.ring(cx, cy, r * 0.62f, 0.5f, rgba(R_CONC_DK, 150), 0.5f, 0);
+    b.a.circle(cx, cy, r * 0.2f, R_STEEL_D, 1.0f, 0.3f);   // crown hatch
+}
+// rooftop air cooler: a louvred steel box with a large fan on its lid
+void coolUnit(Bld& b, float x, float y, float w, float h, float ht, float fr) {
+    Roof u = b.block(x, y, w, h, ht, R_PANEL, R_STEEL);
+    for (float yy = u.y + u.h + 2.0f; yy < u.y + u.h + ht - 1.0f; yy += 2.0f) b.a.line(u.x + 1.2f, yy, u.x + u.w - 1.2f, yy, 0.5f, rgba(BLACK, 70));   // louvres
+    b.fan(u.x + u.w * 0.5f, u.y + u.h * 0.5f, fr, R_STEEL_D, R_STEEL_L);
+}
+// pad transformer: a finned tank with three bushings on its lid
+void transformer(Bld& b, float x, float y, float w, float h) {
+    Roof t = b.block(x, y, w, h, 5, R_STEEL_L, R_STEEL);
+    b.wallSeams(t, 5, 2.2f, 80);   // cooling fins
+    for (int i = 0; i < 3; i++) {
+        float bx = t.x + 2.5f + i * (t.w - 5) * 0.5f;
+        b.a.cap(bx, t.y + 2, bx, t.y - 2.2f, 0.9f, R_PANEL, 0.6f, 0.4f);
+        b.a.dot(bx, t.y - 2.2f, 1.1f, R_PANEL);
+    }
+}
+// lattice transmission pylon: two legs with diagonal bracing and a cross-arm carrying insulators
+void pylon(Bld& b, float x, float base, float h) {
+    float top = base - h, ay = top + h * 0.22f;
+    b.a.line(x - 4.5f, base, x - 0.8f, top, 1.2f, R_STEEL_L); b.a.line(x + 4.5f, base, x + 0.8f, top, 1.2f, R_STEEL_L);
+    for (int k = 1; k < 4; k++) {
+        float yy = base - h * k * 0.25f, hw = 4.5f - 3.7f * k * 0.25f;
+        b.a.line(x - hw, yy, x + hw, yy, 0.7f, R_STEEL_L);
+    }
+    b.a.line(x - 7, ay, x + 7, ay, 1.0f, R_STEEL_L);
+    for (int s = -1; s <= 1; s += 2) {
+        b.a.cap(x + s * 7.0f, ay, x + s * 7.0f, ay + 2.5f, 0.8f, R_PANEL, 0.5f, 0.4f);
+        b.a.dot(x + s * 7.0f, ay + 2.5f, 0.9f, R_PANEL);
+    }
+}
+
+// ---------------------------------------------------------------- Command Core
+// a blast-hardened concrete bunker with a steel upper floor of tinted glass, a radome, dishes and a comms mast
+void hqCyber(Bld& b) {
+    int W = b.W, H = b.H;
+    b.pad(R_PAVE, R_PAVE_SEAM, 0.08f, 4);
+    // lower floor: thick reinforced concrete, a parapet on the roof and narrow blast slits
+    Roof lo = b.block(8, 56, 112, 62, 16, R_CONC_TOP, R_CONC);
+    b.a.rect(lo.x + 3, lo.y + 3, lo.w - 6, lo.h - 6, 2, R_CONC, 1.6f, 0.5f);
+    b.wallSeams(lo, 16, 14);
+    b.windows(lo, 16, 14, R_GLASS, 0.22f);
+    for (int i = 0; i < 6; i++) { float x = b.rng.f(12, W - 12.0f); b.a.line(x, lo.y + lo.h + 9, x, lo.y + lo.h + 15, 0.8f, rgba(BLACK, 22)); }   // weathering streaks
+    b.door(64, 118, 16, 12, R_STEEL_D, rgb(20, 28, 36));
+    b.light(64, 104.5f, 0.8f, C_CYAN, 70);
+    // jersey barriers on the apron either side of the door
+    b.block(42, 123, 14, 4, 3, R_CONC_TOP, R_CONC); b.block(72, 123, 14, 4, 3, R_CONC_TOP, R_CONC);
+    // upper floor: steel cladding with tinted glass, its own roof with a helipad marking
+    Roof up = b.block(30, 60, 68, 30, 12, R_PANEL, R_STEEL);
+    b.wallSeams(up, 12, 8.5f);
+    b.windows(up, 12, 8, R_GLASS, 0.6f);
+    b.a.ring(64, 63, 9, 0.8f, rgba(R_STEEL, 220), 0.6f, 0);
+    b.a.line(60.6f, 58.5f, 60.6f, 67.5f, 1.2f, rgba(R_STEEL, 220)); b.a.line(67.4f, 58.5f, 67.4f, 67.5f, 1.2f, rgba(R_STEEL, 220)); b.a.line(60.6f, 63, 67.4f, 63, 1.2f, rgba(R_STEEL, 220));
+    b.antenna(up.x + 6, up.y + 9, 12, C_RED);
+    b.mark(up.x + 4, up.y + 1.6f, up.w - 8, 3.2f);     // owner's colour band on the upper roof's north edge
+    // radome on a drum, west of the upper floor
+    P rd = b.cyl(19, 80, 8, 12, R_PANEL, R_CONC_TOP);
+    b.domeTop(rd.x, rd.y, 7, R_PANEL);
+    coolUnit(b, 10, 88, 16, 10, 5, 4.2f);
+    // satellite dishes, cooling and a lattice comms mast on the lower roof
+    b.dishTop(108, 57, 6.5f, R_STEEL_L, rgb(190, 200, 208));
+    b.dishTop(111, 88, 4.5f, R_STEEL_L, rgb(190, 200, 208));
+    coolUnit(b, 100, 70, 17, 11, 5, 4.4f);
+    for (int s = -1; s <= 1; s += 2) b.a.line(103, 46, 103 + s * 5.0f, 17, 1.2f, R_STEEL_L);
+    for (int k = 1; k < 4; k++) { float yy = 46 - k * 9.0f, hw = 5.0f * (46 - yy) / 29.0f; b.a.line(103 - hw, yy, 103 + hw, yy, 0.7f, R_STEEL_L); }
+    b.antenna(103, 17, 8, C_RED);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 7);
 }
 
+// ---------------------------------------------------------------- Fusion Reactor
+// containment dome and a cylindrical vessel, cooling units on the back row, and a transformer yard with a lattice pylon
 void powerCyber(Bld& b) {
     int W = b.W, H = b.H;
-    b.pad(C_PAD, C_SEAM);
-    Roof ctl = b.block(6, 6, W - 12.0f, 14, 9, C_ROOF2, C_HULL_D);
-    b.windows(ctl, 9, 8, C_CYAN); b.skylights(ctl, 5, C_GLASS, C_STEEL);
-    b.mark(ctl.x + ctl.w - 20, ctl.y + 2, 16, 3.2f);
-    for (int i = 0; i < 2; i++) {
-        float cx = 26 + i * 44;
-        b.pipe(cx, 30, cx, 50, 3.6f, rgb(60, 78, 110));
-        P top = b.cyl(cx, 54, 15, 15, C_ROOF2, C_HULL);
-        b.a.ring(top.x, top.y, 11.5f, 1.8f, C_CYAN, 1, 0.3f); b.a.glow(top.x, top.y, 22, rgba(C_CYAN, 140));
-        b.a.circle(top.x, top.y, 7.8f, C_STEEL, 1.6f, 0.5f);
-        b.a.circle(top.x, top.y, 4.6f, C_WHITE, 2.4f, 0.65f); b.a.glow(top.x, top.y, 9, rgba(C_WHITE, 160));
-        for (int k = 0; k < 6; k++) { float an = k * 1.0472f; b.a.dot(top.x + std::cos(an) * 13.6f, top.y + std::sin(an) * 13.6f, 0.8f, C_CYAN); }
-    }
-    b.pipe(26, 33, 70, 33, 2.4f, C_ROOF2);
-    for (int i = 0; i < 5; i++) { b.a.rect(8 + i * 5.2f, 56, 3.6f, 5, 0.5f, C_STEEL, 0.8f, 0.4f); b.light(9.8f + i * 5.2f, 58.4f, 0.8f, i % 2 ? C_CYAN : rgb(120, 255, 190), 80); }
-    b.mark(W - 22.0f, H - 10.0f, 14, 3.4f);
+    b.pad(R_PAVE, R_PAVE_SEAM, 0.08f, 4);
+    coolUnit(b, 4, 6, 28, 12, 7, 5.2f);
+    coolUnit(b, 38, 6, 22, 12, 7, 5.2f);
+    b.mark(6, 13.2f, 9, 3.2f);     // owner's colour band on the first cooler's wall
+    // ribbed containment dome, with a small cyan viewing port on its face
+    P dome = b.cyl(28, 42, 12, 10, R_CONC_TOP, R_CONC);
+    ribbedDome(b, dome.x, dome.y, 12);
+    b.a.rect(25.5f, 38.5f, 5, 3.6f, 0.8f, R_GLASS, 0.8f, 0.3f);
+    b.a.dot(28, 40.3f, 1.0f, C_CYAN); b.a.glow(28, 40.3f, 5, rgba(C_CYAN, 70));
+    // steel containment vessel with banding
+    P vs = b.cyl(70, 42, 10, 18, R_STEEL_L, R_CONC);
+    b.a.line(vs.x - 9.4f, 34, vs.x + 9.4f, 34, 0.7f, rgba(BLACK, 60)); b.a.line(vs.x - 9.4f, 40, vs.x + 9.4f, 40, 0.7f, rgba(BLACK, 60));
+    b.a.circle(vs.x, vs.y, 3.5f, R_STEEL, 1.2f, 0.4f);   // manway on the lid
+    b.pipe(40, 36, 60, 36, 1.6f, R_STEEL_L); b.pipe(40, 40, 60, 40, 1.2f, R_STEEL);   // coolant lines between the vessels
+    // transformer yard in front, with a pylon behind the cable run
+    transformer(b, 6, 55, 13, 6); transformer(b, 23, 55, 13, 6); transformer(b, 40, 55, 13, 6);
+    b.a.line(6, 63.5f, 84, 63.5f, 0.8f, rgba(BLACK, 130));   // trench cable
+    pylon(b, 88, 62, 40);
+    b.hazard(56, 62.2f, 22, 2.2f);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 11);
 }
 
+// ---------------------------------------------------------------- Supply Hub
+// steel-clad warehouse on a loading dock, roll-up doors, a control office, stacked containers, pallets and a forklift
 void supplyCyber(Bld& b) {
     int W = b.W, H = b.H;
-    b.pad(C_PAD, C_SEAM);
-    Roof wh = b.block(8, 8, W - 16.0f, 42, 16, C_ROOF2, C_HULL);
-    for (int i = 1; i < 6; i++) b.a.line(wh.x + i * (wh.w / 6), wh.y + 1, wh.x + i * (wh.w / 6), wh.y + wh.h - 1, 0.7f, rgba(C_STEEL, 150));   // roof ribs
-    b.skylights(wh, 3, C_GLASS, C_STEEL);
-    b.wallSeams(wh, 16, 10);
-    b.door(30, wh.y + wh.h + 16, 26, 13, C_STEEL, rgb(10, 20, 30));
-    b.stripe(18, wh.y + wh.h + 16 - 14.5f, 42, wh.y + wh.h + 16 - 14.5f, 0.8f, C_CYAN, 100);
-    b.door(64, wh.y + wh.h + 16, 18, 11, C_STEEL, rgb(10, 20, 30));
-    b.mark(wh.x + wh.w - 26, wh.y + 3, 22, 4);
-    b.vent(wh.x + 6, wh.y + 8, 9, 6, rgba(C_CYAN, 150));
-    // containers in the yard
-    Color cs[4] = { rgb(46, 112, 120), rgb(70, 92, 130), rgb(60, 70, 90), rgb(40, 100, 96) };
-    for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) b.container(52 + i * 17.0f, 62 + j * 11.0f, 15.5f, 9, cs[(i + j * 2) & 3]);
-    // gantry crane over the bay forecourt
-    b.a.rect(8, 62, 3, 3, 0.5f, C_ROOF2, 1, 0.5f); b.a.rect(8, 84, 3, 3, 0.5f, C_ROOF2, 1, 0.5f);
-    b.pipe(9.5f, 63.5f, 9.5f, 85.5f, 1.5f, C_ROOF);
-    b.pipe(9.5f, 74, 44, 74, 1.5f, C_ROOF);
-    b.a.rect(26, 71.5f, 6, 5, 0.6f, C_STEEL, 1, 0.4f); b.light(29, 74, 1.0f, C_AMBER, 100);
-    b.hazard(14, 52, 36, 3.2f);
-    // hologram beacon marking the dropoff
-    b.a.ring(24, 84, 6, 1.1f, rgba(C_CYAN, 210), 0.8f, 0); b.a.glow(24, 84, 14, rgba(C_CYAN, 90)); b.a.dot(24, 84, 1.6f, C_WHITE);
+    b.pad(R_PAVE, R_PAVE_SEAM, 0.08f, 4);
+    // loading dock apron in front of the warehouse, edged in warning stripes
+    b.a.rect(4, 53, 70, 10, 1.5f, R_CONC_TOP, 1.4f, 0.4f);
+    b.hazard(4, 62.2f, 70, 2.2f);
+    // warehouse: corrugated steel roof with skylights, wall cladding and three roll-up doors
+    Roof wh = b.block(6, 6, 64, 46, 16, R_STEEL_L, R_STEEL);
+    b.corrugated(wh, 4, R_STEEL_D, 80);
+    b.skylights(wh, 4, R_GLASS_T, R_STEEL_D);
+    b.wallSeams(wh, 16, 16);
+    for (int i = 0; i < 3; i++) {
+        float cx = 18 + i * 18.0f;
+        b.door(cx, 52.6f, 12, 11, R_STEEL_D, rgb(24, 30, 38));
+        for (float yy = 42; yy < 52; yy += 1.6f) b.a.line(cx - 5.4f, yy, cx + 5.4f, yy, 0.5f, rgba(R_STEEL_L, 120));   // roll-up slats
+    }
+    b.mark(wh.x + 4, wh.y + wh.h - 9.6f, 18, 3.2f);
+    // control office on the east side
+    Roof of = b.block(76, 10, 14, 34, 12, R_PANEL, R_STEEL);
+    b.windows(of, 12, 2, R_GLASS, 0.6f);
+    b.fan(83, 22, 3.6f, R_STEEL_D, R_STEEL_L);
+    b.antenna(88, 2, 10, C_RED); b.light(90, 27, 0.8f, C_CYAN, 70);
+    // stacked containers (blocks with ribbed lids) and loose containers in the yard
+    Color cA = rgb(78, 100, 118), cB = rgb(96, 110, 124), cC = rgb(118, 126, 134);
+    Roof s1 = b.block(8, 80, 24, 10, 9, cA, shade(cA, 0.72f)); b.corrugated(s1, 3, R_DARK, 60);
+    Roof s2 = b.block(36, 80, 24, 10, 9, cB, shade(cB, 0.72f)); b.corrugated(s2, 3, R_DARK, 60);
+    b.container(8, 90, 24, 6, cC); b.container(36, 90, 24, 6, cA);
+    // pallets stacked by the dock
+    Color tim = rgb(150, 132, 102);
+    for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) b.crate(64 + i * 10.0f, 66 + j * 9.0f, 8, 7, shade(tim, 0.92f + 0.08f * (i + j)));
+    // forklift parked on the dock
+    b.a.rect(40, 66, 10, 6, 1.2f, rgb(214, 172, 74), 1.4f, 0.5f);
+    b.a.line(41, 66.5f, 49, 66.5f, 0.6f, rgba(R_DARK, 150));
+    b.a.line(50, 67, 56, 67, 0.8f, R_STEEL_D);
+    b.a.dot(42, 72.5f, 1.0f, R_DARK); b.a.dot(48, 72.5f, 1.0f, R_DARK);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 13);
 }
 
+// ---------------------------------------------------------------- Barracks
+// two-storey barracks with flat roof plant, a water tank, an entrance canopy, a flagpole and a training yard
 void barracksCyber(Bld& b) {
     int W = b.W, H = b.H;
-    b.pad(C_PAD, C_SEAM);
-    Roof d1 = b.block(6, 7, 38, 34, 10, C_ROOF, C_HULL);
-    Roof d2 = b.block(52, 7, 38, 34, 10, C_ROOF, C_HULL);
-    Roof cor = b.block(40, 18, 16, 14, 7, C_ROOF2, C_HULL_D);
-    for (Roof* r : { &d1, &d2 }) {
-        for (int i = 0; i < 4; i++) b.a.rect(r->x + 4 + i * 8.5f, r->y + 5, 5.5f, 11, 0.8f, C_ROOF2, 1.2f, 0.5f);   // sleeping pods on the roof
-        b.vent(r->x + 4, r->y + r->h - 9, 12, 5, rgba(C_CYAN, 150));
-        b.a.dot(r->x + r->w - 7, r->y + r->h - 7, 2.5f, C_STEEL); b.light(r->x + r->w - 7, r->y + r->h - 7, 1.1f, C_CYAN, 100);
-        b.stripe(r->x + 2, r->y + r->h - 2.2f, r->x + r->w - 2, r->y + r->h - 2.2f, 0.7f, C_CYAN, 70);
-    }
-    b.windows(d1, 10, 5, C_CYAN); b.windows(d2, 10, 5, C_CYAN);
-    b.door(48, cor.y + cor.h + 7, 9, 8, C_STEEL, rgb(12, 24, 34));
-    b.mark(d1.x + d1.w - 12, d1.y + 1.8f, 9, 3); b.mark(d2.x + 3, d2.y + 1.8f, 9, 3);
-    b.a.rect(6, 48, W - 12.0f, 10, 3, C_PAD2, 1.4f, 0.4f);   // parade strip
-    for (int i = 0; i < 8; i++) b.a.line(10 + i * 10.0f, 53, 14 + i * 10.0f, 53, 0.9f, rgba(C_CYAN, 110));
-    b.antenna(cor.x + 8, cor.y + 5, 14, C_RED);
+    b.pad(R_PAVE, R_PAVE_SEAM, 0.08f, 4);
+    // training yard: gravel with tyres, a hurdle and a balance beam
+    b.a.rect(4, 46, 40, 15, 1.5f, rgb(136, 130, 116), 1.2f, 0.4f);
+    for (int i = 0; i < 3; i++) b.a.ring(10 + i * 9.0f, 56, 2.2f, 1.0f, rgb(40, 44, 50), 0.8f, 0.3f);   // tyres
+    b.block(12, 47, 10, 3, 3, R_CONC_TOP, R_CONC);   // concrete hurdle
+    b.a.line(30, 49.5f, 42, 49.5f, 1.6f, rgb(120, 98, 72));   // balance beam
+    // two-storey block: pale walls with a floor band and two rows of windows, white ceramic roof
+    Roof bk = b.block(4, 8, 88, 30, 20, R_PANEL, R_CONC);
+    b.a.line(bk.x, 28, bk.x + bk.w, 28, 0.8f, rgba(BLACK, 70));
+    winRow(b, bk.x + 4, 21, bk.w - 8, 10, 4);
+    winRow(b, bk.x + 4, 31, bk.w - 8, 10, 4);
+    b.door(48, 38.6f, 12, 10, R_STEEL_D, rgb(22, 30, 38));
+    // canopy over the entrance on two posts
+    b.a.shadowRect(40, 38.6f, 16, 4, 2, 2, 1.5f, 80);
+    b.a.rect(40, 38.6f, 16, 3.2f, 0.8f, R_STEEL_L, 1.2f, 0.4f);
+    b.a.rect(41, 41.8f, 1.6f, 2.4f, 0.4f, R_STEEL_D, 0.6f, 0.2f); b.a.rect(53.4f, 41.8f, 1.6f, 2.4f, 0.4f, R_STEEL_D, 0.6f, 0.2f);
+    b.light(48, 40.2f, 0.7f, C_CYAN, 60);
+    // concrete path from the entrance and a parade strip with lane lines
+    b.a.rect(44, 44, 8, 18, 0.5f, R_CONC_TOP, 1.0f, 0.3f);
+    b.a.rect(56, 48, 28, 12, 0.8f, R_CONC_TOP, 1.2f, 0.3f);
+    for (int i = 0; i < 4; i++) b.a.line(58, 50.5f + i * 2.8f, 82, 50.5f + i * 2.8f, 0.5f, rgba(R_STEEL, 150));
+    // roof plant: two louvred units with fans and a water tank on a steel stand
+    coolUnit(b, 12, 4, 14, 9, 5, 3.2f);
+    coolUnit(b, 60, 4, 14, 9, 5, 3.2f);
+    P wt = b.cyl(38, 10, 6, 9, R_STEEL, R_STEEL_L);
+    b.a.line(wt.x - 5.5f, wt.y - 1.5f, wt.x + 5.5f, wt.y - 1.5f, 0.6f, rgba(BLACK, 60));
+    b.mark(bk.x + 4, bk.y + 1.4f, 20, 3.2f);     // owner's colour band on the roof's north edge
+    b.antenna(bk.x + bk.w - 6, bk.y + 4, 12, C_RED);
+    // flagpole in the front yard
+    b.a.line(88, 60, 88, 30, 0.9f, R_STEEL_L); b.a.dot(88, 29.5f, 1.1f, R_PANEL);
+    b.a.rect(88.5f, 31, 7, 4.6f, 0.3f, rgb(206, 214, 222), 0.6f, 0.2f);
+    b.a.line(88.5f, 33.3f, 95.5f, 33.3f, 0.6f, rgba(R_STEEL, 160));
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 17);
+}
+
+// ---- CYBER realistic base structures (Assembly Plant, Drone Pad, Data Center, Bitcoin Datacenter). The palette and the f2 helpers are
+// private to these painters: concrete slabs, white ceramic cladding, tinted glass and steel plant, with only a few small cyan lights.
+const Color f2Conc = rgb(104, 112, 124), f2ConcSeam = rgb(62, 68, 78), f2ConcDk = rgb(84, 91, 102);   // slabs, joints, dark concrete
+const Color f2Wall = rgb(182, 191, 200), f2WallDk = rgb(136, 146, 158), f2Roof = rgb(132, 144, 158), f2Unit = rgb(198, 206, 214);   // ceramic cladding, roof sheet, casings
+const Color f2Steel = rgb(72, 80, 94), f2Dark = rgb(34, 40, 50), f2Glass = rgb(40, 60, 76), f2GlassHi = rgb(98, 124, 140), f2Paint = rgb(232, 236, 240);
+
+// a white and charcoal striped frame round a rectangle (hazard tape in the Cyber palette)
+void f2Frame(Bld& b, float x0, float y0, float x1, float y1) {
+    b.hazard(x0, y0, x1 - x0, 2.4f, 4, f2Paint, f2Dark); b.hazard(x0, y1 - 2.4f, x1 - x0, 2.4f, 4, f2Paint, f2Dark);
+    b.hazard(x0, y0, 2.4f, y1 - y0, 4, f2Paint, f2Dark); b.hazard(x1 - 2.4f, y0, 2.4f, y1 - y0, 4, f2Paint, f2Dark);
+}
+// horizontal louvre slats (plant screens, container sides, roller doors)
+void f2Louvres(Bld& b, float x0, float y0, float x1, float y1, float pitch) {
+    for (float y = y0; y < y1; y += pitch) { b.a.line(x0, y, x1, y, 0.6f, rgba(f2Dark, 150)); b.a.line(x0, y + 0.8f, x1, y + 0.8f, 0.4f, rgba(WHITE, 45)); }
+}
+// a tinted window with a dark reveal and a sky reflection along its top edge
+void f2Win(Bld& b, float x, float y, float w, float h) {
+    b.a.rect(x - 0.6f, y - 0.6f, w + 1.2f, h + 1.2f, 0.5f, rgba(BLACK, 120), 0.6f, 0);
+    b.a.rect(x, y, w, h, 0.4f, f2Glass, 0.6f, 0.2f);
+    b.a.line(x + 0.5f, y + 0.6f, x + w - 0.5f, y + 0.6f, 0.4f, rgba(f2GlassHi, 170));
+}
+// rooftop unit: a white casing with a fan grille or louvres
+void f2Hvac(Bld& b, float x, float y, float w, float h, bool fan) {
+    b.a.shadowRect(x, y, w, h, 1.2f, 1.0f, 1.2f, 80);
+    b.a.rect(x, y, w, h, 0.8f, f2Unit, 1.6f, 0.5f);
+    if (fan) b.fan(x + w * 0.5f, y + h * 0.5f, std::min(w, h) * 0.36f, f2Steel, f2Wall);
+    else f2Louvres(b, x + 1.5f, y + 1.5f, x + w - 1.5f, y + h - 1.5f, 1.8f);
+}
+// two dark ruts a heavy tyre leaves on concrete, from (x0, y0) to (x1, y1)
+void f2Ruts(Bld& b, float x0, float y0, float x1, float y1) {
+    for (float dx : { -3.0f, 3.0f }) b.a.line(x0 + dx, y0, x1 + dx, y1, 1.2f, rgba(f2Dark, 75));
+}
+// chain-link compound fence: faint mesh, steel rails and posts
+void f2Fence(Bld& b, float x0, float y0, float x1, float y1) {
+    for (float x = x0; x <= x1; x += 3.0f) b.a.line(x, y0, x, y1, 0.35f, rgba(f2Steel, 90));
+    for (float y = y0; y <= y1; y += 3.0f) b.a.line(x0, y, x1, y, 0.35f, rgba(f2Steel, 90));
+    b.a.line(x0, y0, x1, y0, 0.9f, rgba(f2Steel, 230)); b.a.line(x0, y1, x1, y1, 0.9f, rgba(f2Steel, 230));
+    b.a.line(x0, y0, x0, y1, 0.9f, rgba(f2Steel, 230)); b.a.line(x1, y0, x1, y1, 0.9f, rgba(f2Steel, 230));
+    for (float x = x0; x <= x1; x += 8.0f) { b.a.dot(x, y0, 0.9f, f2Steel); b.a.dot(x, y1, 0.9f, f2Steel); }
+    for (float y = y0; y <= y1; y += 8.0f) { b.a.dot(x0, y, 0.9f, f2Steel); b.a.dot(x1, y, 0.9f, f2Steel); }
 }
 
 void factoryCyber(Bld& b) {
     int W = b.W, H = b.H;
-    b.pad(C_PAD, C_SEAM);
-    Roof hall = b.block(8, 6, W - 16.0f, 52, 18, C_ROOF2, C_HULL);
-    b.skylights(hall, 7, C_GLASS, C_STEEL);
-    b.wallSeams(hall, 18, 12);
-    b.door(64, hall.y + hall.h + 18, 36, 17, C_STEEL, rgb(8, 16, 24));
-    for (int i = 0; i < 4; i++) b.a.line(46, hall.y + hall.h + 18 - 4 * (i + 0.5f) - 0.2f, 82, hall.y + hall.h + 18 - 4 * (i + 0.5f) - 0.2f, 0.5f, rgba(C_CYAN, 120));
-    b.windows(hall, 18, 3, C_CYAN, 0.5f);
-    b.mark(hall.x + hall.w - 30, hall.y + 2.2f, 26, 3.6f);
-    Roof an = b.block(8, 66, 32, 24, 9, C_ROOF, C_HULL_D);
-    b.fan(an.x + 9, an.y + 9, 6, rgb(112, 126, 152), C_CYAN); b.vent(an.x + 18, an.y + 5, 10, 7, rgba(C_CYAN, 150));
-    b.windows(an, 9, 4, C_CYAN);
-    P cool = b.cyl(106, 84, 11, 13, C_ROOF2, C_HULL);
-    b.a.ring(cool.x, cool.y, 7.5f, 1.4f, C_CYAN, 1, 0.3f); b.a.glow(cool.x, cool.y, 14, rgba(C_CYAN, 90));
-    // assembly arm and a chassis on the forecourt
-    b.pipe(46, 66, 46, 90, 1.4f, C_ROOF); b.pipe(46, 69, 82, 69, 1.4f, C_ROOF); b.a.rect(70, 69, 5, 6, 0.6f, C_STEEL, 1, 0.4f); b.light(72.5f, 71, 1.0f, C_AMBER, 100);
-    b.a.rect(52, 76, 28, 11, 3, C_STEEL, 1.6f, 0.5f); b.a.rect(54, 78, 24, 7, 2, C_HULL_D, 1.4f, 0.5f); b.a.dot(58, 81.5f, 1.2f, C_CYAN);
-    b.hazard(86, 94 - 4.0f, 30, 3.2f);
+    b.pad(f2Conc, f2ConcSeam, 0.08f, 4);
+    // apron: truck ruts from the bay to the south edge, an oil drip and a striped kerb along the south edge
+    f2Ruts(b, 56, 60, 52, 92); f2Ruts(b, 72, 60, 78, 92);
+    b.oilStain(96, 78, 8, 3);
+    b.hazard(86, H - 6.0f, 30, 3.0f, 4, f2Paint, f2Dark);
+    // gantry crane over the apron: two legs, a girder, and a trolley with its hook down to the chassis
+    b.a.rect(44, 66, 4, 22, 1, f2Steel, 1.4f, 0.5f); b.a.rect(118, 66, 4, 22, 1, f2Steel, 1.4f, 0.5f);
+    b.a.rect(44, 65.5f, 78, 3.2f, 0.8f, f2Steel, 1.6f, 0.5f);
+    b.a.rect(58, 64.4f, 12, 6, 1, f2Unit, 1.4f, 0.5f);
+    b.a.line(64, 70.5f, 64, 79.0f, 0.6f, f2Dark); b.a.dot(64, 79.5f, 1.4f, f2Steel);
+    // a heavy vehicle chassis under the hook: wheels, frame and a cab
+    b.a.ell(56, 88.5f, 3.2f, 2.0f, f2Dark, 1, 0.3f); b.a.ell(72, 88.5f, 3.2f, 2.0f, f2Dark, 1, 0.3f);
+    b.a.rect(52, 76, 28, 11, 2.5f, f2Steel, 1.6f, 0.5f); b.a.rect(54, 78, 24, 6.5f, 2, f2Wall, 1.4f, 0.4f);
+    // assembly hall: a sawtooth roof of three teeth, each a glazed north slope over a solid south slope with lapped sheets
+    Roof hall = b.block(8, 6, W - 16.0f, 52, 18, f2Roof, f2Wall);   // roof (8,-12,112,52), south wall 40..58
+    for (int k = 0; k < 3; k++) {
+        float th = hall.h / 3.0f, y0 = hall.y + k * th;
+        b.a.rect(hall.x + 2, y0 + 1.5f, hall.w - 4, th * 0.42f, 0.6f, f2Glass, 0.8f, 0.2f);
+        b.a.line(hall.x + 2, y0 + 1.5f, hall.x + hall.w - 2, y0 + 1.5f, 0.8f, rgba(f2GlassHi, 220));
+        for (float x = hall.x + 9.0f; x < hall.x + hall.w - 4; x += 9.0f) b.a.line(x, y0 + 1.5f, x, y0 + 1.5f + th * 0.42f, 0.5f, rgba(f2Steel, 210));   // glazing bars
+        for (float y = y0 + th * 0.42f + 3.0f; y < y0 + th - 0.5f; y += 2.5f) b.a.line(hall.x + 2, y, hall.x + hall.w - 2, y, 0.5f, rgba(f2Dark, 70));   // sheet laps
+    }
+    // roof ventilators and two exhaust stacks (one with a red aviation light)
+    P s1 = b.cyl(30, 2, 3.6f, 22, f2Unit, f2Steel);
+    b.a.ring(s1.x, s1.y, 2.6f, 0.6f, f2Dark, 0.5f, 0.2f); b.light(s1.x, s1.y, 0.7f, C_RED, 60);
+    P s2 = b.cyl(46, 4, 3.2f, 16, f2Unit, f2Steel);
+    b.a.ring(s2.x, s2.y, 2.2f, 0.6f, f2Dark, 0.5f, 0.2f);
+    for (float x : { 70.0f, 88.0f, 106.0f }) { P v = b.cyl(x, 36, 4.0f, 4, f2Unit, f2Steel); b.a.dot(v.x, v.y, 2.0f, f2Dark); }
+    // walls: seams, a dark plinth at the foot, clerestory windows either side of the bay
+    b.wallSeams(hall, 18, 12, 90);
+    b.a.rect(hall.x, 52, hall.w, 6, 0.3f, f2WallDk, 1.0f, 0.3f);
+    for (float x = 14.0f; x < 40.0f; x += 6.0f) f2Win(b, x, 43.6f, 4.0f, 5.8f);
+    for (float x = 90.0f; x < 114.0f; x += 6.0f) f2Win(b, x, 43.6f, 4.0f, 5.8f);
+    // vehicle bay door: a roller shutter in a white and charcoal striped frame, with one cyan light above
+    f2Frame(b, 41.5f, 41.5f, 86.5f, 58.0f);
+    b.a.rect(43.8f, 43.8f, 40.4f, 14.2f, 0.5f, rgb(22, 28, 36), 1.0f, 0.2f);
+    for (float y = 45.5f; y < 58.0f; y += 2.2f) b.a.line(44.0f, y, 84.0f, y, 0.6f, rgba(f2Steel, 200));
+    b.light(64, 38.6f, 0.9f, C_CYAN, 60);
+    b.mark(hall.x + hall.w - 26, hall.y + 2.2f, 22, 3.6f);   // owner's colour band on the top of the glazing
+    // paint and ventilation annex to the west: louvred intake, exhaust fan and a rooftop unit
+    Roof an = b.block(8, 66, 32, 24, 9, f2Roof, f2WallDk);   // roof (8,57,32,24), wall 81..90
+    b.fan(an.x + 9, an.y + 9, 6, f2Steel, f2Wall); f2Hvac(b, an.x + 18, an.y + 4, 11, 8, false);
+    f2Louvres(b, an.x + 4, 82.5f, an.x + an.w - 4, 88.5f, 2.2f);   // intake louvres on the annex wall
+    // cooling water tank on the south-east of the apron
+    P tank = b.cyl(106, 86, 9, 14, f2Unit, f2Steel);
+    b.a.ring(tank.x, tank.y, 6.5f, 0.8f, f2Steel, 0.6f, 0.2f);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 19);
 }
 
 void airfieldCyber(Bld& b) {
     int W = b.W, H = b.H;
+    // concrete apron: slab joints both ways, tyre scuffs and oil drips in the gaps between the pads
     b.a.shadowRect(0, 0, (float)W, (float)H, 3, 3, 4, 85);
-    b.a.rect(0, 0, (float)W, (float)H, 4, rgb(46, 54, 70), 2.6f, 0.5f);
-    for (int x = 48; x < W; x += 48) b.a.line((float)x, 2, (float)x, H - 2.0f, 0.7f, rgba(C_SEAM, 110));
+    b.a.rect(0, 0, (float)W, (float)H, 4, f2Conc, 2.6f, 0.5f);
+    for (int i = 0; i < 60; i++) { float x = b.rng.f(4, W - 4.0f), y = b.rng.f(4, H - 4.0f); b.a.ell(x, y, b.rng.f(3, 9), b.rng.f(1.5f, 3.5f), rgba(f2ConcDk, 70), 1, 0); }
+    for (int x = 48; x < W; x += 48) b.a.line((float)x, 2, (float)x, H - 2.0f, 0.7f, rgba(f2ConcSeam, 110));
+    for (int y = 56; y < H; y += 56) b.a.line(2, (float)y, W - 2.0f, (float)y, 0.7f, rgba(f2ConcSeam, 110));
+    b.oilStain(97, 61, 8, 3); b.oilStain(139, 95, 8, 3); b.oilStain(181, 129, 8, 3); b.oilStain(223, 163, 8, 3); b.oilStain(265, 61, 8, 3); b.oilStain(265, 129, 8, 3);
     b.a.grain(0, 0, (float)W, (float)H, 0.10f, 23);
-    // two long runways, then 25 landing pads in the same 5x5 grid the aircraft use (Sim::padSlot)
+    // two runways with white centre dashes
     for (int r = 0; r < 2; r++) {
         float y = H * (0.36f + 0.28f * r);
-        for (int i = 0; i < W / 14; i++) b.a.rect(8 + i * 14.0f, y - 0.9f, 8, 1.8f, 0.3f, rgba(C_WHITE, 120), 0.5f, 0);
+        for (int i = 0; i < W / 14; i++) b.a.rect(8 + i * 14.0f, y - 0.9f, 8, 1.8f, 0.3f, rgba(f2Paint, 150), 0.5f, 0);
     }
+    // 25 landing pads in the same 5x5 grid the aircraft use (Sim::padSlot): painted rings on dark concrete, an H in each
     for (int row = 0; row < 5; row++) for (int col = 0; col < 5; col++) {
         float cx = W * 0.5f + (col - 2) * 42, cy = H * 0.5f + (row - 2) * 34;
-        b.a.circle(cx, cy, 12.5f, rgb(36, 44, 58), 1.8f, 0.4f);
-        b.a.ngon(cx, cy, 12, 6, 0.5236f, rgba(C_CYAN, 70), 1, 0);
-        b.a.ring(cx, cy, 10.5f, 0.9f, rgba(C_CYAN, 200), 0.8f, 0);
-        b.a.line(cx - 4, cy - 4.5f, cx - 4, cy + 4.5f, 1.2f, rgba(C_WHITE, 200)); b.a.line(cx + 4, cy - 4.5f, cx + 4, cy + 4.5f, 1.2f, rgba(C_WHITE, 200)); b.a.line(cx - 4, cy, cx + 4, cy, 1.2f, rgba(C_WHITE, 200));
+        b.a.circle(cx, cy, 12.5f, rgb(82, 88, 98), 1.6f, 0.35f);
+        b.a.ring(cx, cy, 10.8f, 0.8f, rgba(f2Paint, 150), 0.6f, 0);
+        b.a.line(cx - 4, cy - 4.5f, cx - 4, cy + 4.5f, 1.3f, rgba(f2Paint, 185)); b.a.line(cx + 4, cy - 4.5f, cx + 4, cy + 4.5f, 1.3f, rgba(f2Paint, 185)); b.a.line(cx - 4, cy, cx + 4, cy, 1.3f, rgba(f2Paint, 185));
     }
-    for (int i = 0; i < 18; i++) { float x = 8 + i * (W - 16.0f) / 17; b.light(x, 4.5f, 0.8f, C_CYAN, 80); b.light(x, H - 4.5f, 0.8f, C_CYAN, 80); }
-    // control tower with a sensor mast
-    Roof tw = b.block(10, 10, 30, 22, 24, C_ROOF, C_HULL);
-    b.windows(tw, 24, 3, C_CYAN, 0.7f); b.wallSeams(tw, 24, 9);
-    b.a.rect(tw.x + 3, tw.y + 3, tw.w - 6, tw.h - 6, 2, C_GLASS, 2, 0.6f); b.a.line(tw.x + 5, tw.y + 5, tw.x + tw.w - 7, tw.y + 5, 0.8f, rgba(C_WHITE, 150));
-    b.mark(tw.x + 3, tw.y + tw.h - 5, tw.w - 6, 2.8f);
-    b.dishTop(tw.x + 7, tw.y - 2, 5, C_ROOF2, rgb(30, 40, 56)); b.antenna(tw.x + tw.w - 4, tw.y + 4, 16, C_RED);
-    // wide hangar on the far side
-    Roof hg = b.block(W - 126, 10, 96, 34, 16, C_ROOF2, C_HULL_D);
-    for (int i = 0; i < 12; i++) b.a.line(hg.x + 4 + i * 7.4f, hg.y + 1, hg.x + 4 + i * 7.4f, hg.y + hg.h - 1, 0.7f, rgba(C_STEEL, 150));
-    b.door(hg.x + hg.w * 0.5f, hg.y + hg.h + 18, 58, 14, C_STEEL, rgb(8, 16, 24));
-    b.stripe(hg.x + 8, hg.y + hg.h + 18 - 15.4f, hg.x + hg.w - 8, hg.y + hg.h + 18 - 15.4f, 0.8f, C_CYAN, 100);
+    for (int i = 0; i < 18; i++) { float x = 8 + i * (W - 16.0f) / 17; b.light(x, 4.5f, 0.8f, C_CYAN, 60); b.light(x, H - 4.5f, 0.8f, C_CYAN, 60); }
+    // control tower: a concrete shaft with a glazed cab, a mast and a team band on the cab roof
+    Roof tw = b.block(10, 12, 26, 18, 24, f2Roof, f2Wall);   // roof (10,-12,26,18), shaft wall 6..30
+    b.wallSeams(tw, 24, 9, 90);
+    b.windows(tw, 24, 2, f2Glass, 0.5f);
+    b.door(23, 30, 8, 9, f2Steel, rgb(22, 28, 36));
+    Roof cab = b.block(tw.x + 3, tw.y + 3, tw.w - 6, tw.h - 6, 9, f2Steel, f2Glass);   // the cab: its walls are tinted glass
+    for (float x = cab.x + 5.0f; x < cab.x + cab.w - 2; x += 5.0f) b.a.line(x, cab.y + cab.h - 9.0f, x, cab.y + cab.h, 0.5f, rgba(f2Steel, 200));
+    b.mark(cab.x + 2, cab.y - 7.5f, cab.w - 4, 2.6f);
+    b.antenna(tw.x + tw.w - 2, tw.y + 1, 12, C_RED);
+    // hangar with a curved roof (light on the crown, falling off to the south) and a roller door in a striped frame
+    Roof hg = b.block(W - 126.0f, 6, 96, 20, 15, f2Unit, f2WallDk, 6);   // roof (194,-9,96,20), wall 11..26
+    b.a.ramp(hg.x, hg.y, hg.x + hg.w, hg.y + hg.h, 1.10f, 0.84f);
+    for (int i = 0; i < 13; i++) { float x = hg.x + 5 + i * 7.2f; b.a.line(x, hg.y + 1, x, hg.y + hg.h - 1, 0.6f, rgba(f2Steel, 130)); b.a.line(x + 0.8f, hg.y + 1, x + 0.8f, hg.y + hg.h - 1, 0.4f, rgba(WHITE, 60)); }
+    f2Frame(b, 207.5f, 12.5f, 276.5f, 26.0f);
+    b.a.rect(210, 15, 64, 11, 0.5f, rgb(22, 28, 36), 1.0f, 0.2f);
+    for (float y = 16.5f; y < 26.0f; y += 2.0f) b.a.line(211, y, 273, y, 0.5f, rgba(f2Steel, 200));
     b.mark(hg.x + hg.w - 16, hg.y + 2, 12, 3);
-    // charging bays along the south edge
-    Roof sv = b.block(10, H - 42, 62, 26, 9, C_ROOF, C_HULL_D);
-    for (int i = 0; i < 6; i++) { b.a.rect(sv.x + 4 + i * 9.2f, sv.y + 4, 6, 12, 0.6f, C_STEEL, 1, 0.4f); b.light(sv.x + 7.0f + i * 9.2f, sv.y + 6, 0.9f, rgb(120, 255, 190), 80); }
-    b.windows(sv, 9, 4, C_CYAN);
-    b.hazard(W - 70.0f, H - 12.0f, 58, 3.0f);
+    // munitions shelters on the south-west: a low block with four roller doors and two rooftop units
+    Roof sv = b.block(10, H - 42.0f, 62, 26, 9, f2Roof, f2WallDk);   // roof (10,173,62,26), wall 199..208
+    f2Hvac(b, 14, 178, 14, 8, true); f2Hvac(b, 34, 178, 14, 8, false);
+    b.mark(sv.x + 3, sv.y + sv.h - 5.2f, 20, 3.4f);
+    for (int i = 0; i < 4; i++) { float x = sv.x + 6 + i * 14.0f; b.a.rect(x, 200.5f, 9, 7, 0.4f, f2Dark, 1, 0.2f); f2Louvres(b, x + 0.6f, 201.2f, x + 8.4f, 206.8f, 1.7f); }
+    // fuel farm on the south-east: two white tanks in a raised concrete bund, a bowser with a red band
+    b.a.rect(264, 190, 42, 22, 1.5f, f2ConcDk, 2.0f, 0.4f);
+    P t1 = b.cyl(276, 206, 6, 10, f2Unit, f2Wall); b.a.ring(t1.x, t1.y, 4.2f, 0.7f, f2Steel, 0.5f, 0.2f);
+    P t2 = b.cyl(294, 206, 6, 10, f2Unit, f2Wall); b.a.ring(t2.x, t2.y, 4.2f, 0.7f, f2Steel, 0.5f, 0.2f);
+    b.block(262, 174, 16, 9, 5, f2Unit, f2WallDk);   // bowser: a box with a cab
+    b.stripe(264, 172.6f, 276, 172.6f, 1.2f, C_RED, 0);
+    b.pipe(278, 182, 282, 196, 0.8f, f2Dark);
+    b.hazard(W - 70.0f, H - 12.0f, 58, 3.0f, 5, f2Paint, f2Dark);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 29);
 }
 
 void techCyber(Bld& b) {
     int W = b.W, H = b.H;
-    b.pad(C_PAD, C_SEAM);
-    Roof hall = b.block(10, 16, 76, 52, 18, C_ROOF2, C_HULL);
-    for (int j = 0; j < 3; j++) for (int i = 0; i < 6; i++) { float x = hall.x + 4 + i * 11.8f, y = hall.y + 4 + j * 15; b.a.rect(x, y, 9.5f, 12, 0.7f, C_STEEL, 1.1f, 0.45f); for (int k = 0; k < 4; k++) b.a.line(x + 1.2f, y + 2.4f + k * 2.4f, x + 8.3f, y + 2.4f + k * 2.4f, 0.55f, rgba(((i + j + k) % 3) ? C_CYAN : rgb(255, 130, 90), 190)); }
-    b.fan(hall.x + hall.w - 11, hall.y + hall.h - 9, 6.5f, rgb(112, 126, 152), C_CYAN);
-    b.wallSeams(hall, 18, 11); b.windows(hall, 18, 4, C_CYAN, 0.5f);
-    b.door(hall.x + 16, hall.y + hall.h + 18, 12, 12, C_STEEL, rgb(10, 20, 30));
-    b.mark(hall.x + 3, hall.y + hall.h - 5.2f, 20, 3.4f);
-    b.a.glow(hall.x + hall.w * 0.5f, hall.y + hall.h * 0.5f, 34, rgba(C_CYAN, 38));
-    // cooling coils with a cyan wash
-    for (int i = 0; i < 4; i++) { float x = 14 + i * 19; b.a.rect(x, 76, 15, 10, 1.4f, C_ROOF, 1.4f, 0.5f); b.a.rect(x + 1.5f, 77.5f, 12, 7, 1, C_GLASS, 1, 0.3f); b.a.line(x + 2, 81, x + 13, 81, 0.8f, rgba(C_WHITE, 150)); }
-    // fixed mount for the live-rotating dish and a lightning mast
-    b.a.circle(70, hall.y + 14, 9.2f, C_STEEL, 1.6f, 0.5f); b.a.circle(70, hall.y + 14, 6, C_ROOF2, 1.6f, 0.5f);
-    b.antenna(14, hall.y + 4, 28, C_RED); b.antenna(hall.x + hall.w - 4, hall.y + hall.h - 3, 16, C_CYAN);
+    b.pad(f2Conc, f2ConcSeam, 0.08f, 4);
+    // fenced compound on the south side: three backup generators, each with an exhaust stack, and a day tank
+    f2Fence(b, 4, 66, 92, 92);
+    for (int i = 0; i < 3; i++) {
+        float x = 10 + i * 26.0f, y = 74;
+        b.a.shadowRect(x, y, 18, 12, 1.4f, 1.2f, 1.4f, 90);
+        b.a.rect(x, y, 18, 12, 1.0f, f2Steel, 1.8f, 0.5f);   // generator canopy
+        f2Louvres(b, x + 2, y + 2, x + 16, y + 10, 1.8f);
+        b.pipe(x + 14, y + 1, x + 14, y - 5, 1.0f, f2Unit);
+    }
+    P dt = b.cyl(84, 84, 4, 8, f2Unit, f2Steel); b.a.dot(dt.x, dt.y, 1.2f, f2Dark);
+    // secure research block: tinted glass bands on the south wall, a reinforced plinth and a card-reader door
+    Roof hall = b.block(8, 14, 80, 48, 14, f2Roof, f2Wall);   // roof (8,0,80,48), south wall 48..62
+    // rooftop HVAC in two rows, cooling fans on some of them; the north-east corner is kept clear for the live dish
+    for (float x : { 12.0f, 24.0f, 36.0f }) f2Hvac(b, x, 28, 10, 7, x == 24.0f);
+    for (float x : { 12.0f, 24.0f, 36.0f, 48.0f, 60.0f, 72.0f }) f2Hvac(b, x, 38, 10, 7, x == 24.0f || x == 60.0f);
+    // antenna farm and two satellite dishes on the north-west roof
+    b.dishTop(22, 9, 5.0f, f2Unit, rgb(86, 96, 110)); b.dishTop(34, 14, 3.8f, f2Unit, rgb(86, 96, 110));
+    b.antenna(12, 10, 22, C_RED); b.antenna(44, 8, 16, C_CYAN);
+    // mount under the live-rotating dish (its pivot sits at (70,12) on the roof)
+    b.a.circle(70, 12, 9.2f, f2Steel, 1.6f, 0.5f); b.a.circle(70, 12, 6, f2Roof, 1.6f, 0.5f);
+    b.wallSeams(hall, 14, 16, 90);
+    b.a.rect(hall.x, 58, hall.w, 4, 0.3f, f2WallDk, 1.0f, 0.3f);
+    f2Win(b, 12, 50, 22, 5); f2Win(b, 48, 50, 36, 5);
+    for (float x = 17.0f; x < 34.0f; x += 5.5f) b.a.line(x, 50.6f, x, 54.4f, 0.5f, rgba(f2Steel, 200));
+    for (float x = 53.0f; x < 84.0f; x += 5.5f) b.a.line(x, 50.6f, x, 54.4f, 0.5f, rgba(f2Steel, 200));
+    b.door(40, 62, 12, 11, f2Steel, rgb(16, 22, 30));
+    b.a.rect(29.5f, 54.5f, 2.4f, 4, 0.3f, f2Dark, 0.6f, 0.2f); b.a.dot(30.7f, 55.6f, 0.5f, C_CYAN);   // card reader
+    b.mark(56, 59, 22, 2.8f);
     b.a.grain(0, 0, (float)W, (float)H, 0.05f, 31);
 }
 
@@ -213,31 +408,46 @@ void patriotCyber(Bld& b) {   // 2x2: armoured plinth with generator and radar m
     b.mark(W - 22.0f, 54, 14, 3.2f);
 }
 
-void minerCyber(Bld& b) {   // bitcoin datacenter: three server containers, gold coin on the roof, heat exchangers
-    int W = b.W, H = b.H;
-    b.pad(C_PAD, C_SEAM);
+void minerCyber(Bld& b) {   // containerised server farm: three louvred containers with chillers and big fans, a painted coin, a transformer
+    int W = b.W;
+    b.pad(f2Conc, f2ConcSeam, 0.08f, 4);
     for (int i = 0; i < 3; i++) {
-        float x = 4 + i * 30;
-        Roof r = b.block(x, 8, 28, 36, 10, C_ROOF2, C_HULL_D);
-        for (int j = 0; j < 3; j++) b.fan(r.x + 8 + (j % 2) * 12, r.y + 8 + j * 9.5f, 4.6f, rgb(112, 126, 152), C_GOLD);
-        b.a.rect(r.x + 2, r.y + r.h - 5, r.w - 4, 3, 0.6f, C_STEEL, 0.9f, 0.3f);
-        for (int k = 0; k < 8; k++) b.light(r.x + 4 + k * 3.0f, r.y + r.h - 3.5f, 0.55f, (k + i) % 3 ? rgb(120, 255, 190) : C_GOLD, 60);
-        b.windows(r, 10, 3, rgb(255, 214, 120), 0.45f);
-        b.stripe(r.x + 2, r.y + 1.8f, r.x + r.w - 2, r.y + 1.8f, 0.7f, C_GOLD, 80);
+        float x = 3 + i * 31.0f;
+        b.block(x, 6, 30, 34, 12, f2Roof, f2Wall);   // roof (x,-6,30,34), louvred south wall 28..40
+        f2Louvres(b, x + 2.5f, 30.5f, x + 27.5f, 38.5f, 2.2f);
+        b.a.line(x + 1.2f, 28.6f, x + 1.2f, 39.5f, 0.6f, rgba(f2Dark, 120)); b.a.line(x + 28.8f, 28.6f, x + 28.8f, 39.5f, 0.6f, rgba(f2Dark, 120));   // corner posts
+        // rooftop chiller with two big fans, a roof vent and a small cyan status light on the wall
+        b.a.rect(x + 3, 16, 24, 11, 1.2f, f2Unit, 1.6f, 0.5f);
+        b.fan(x + 9, 21.5f, 4.4f, f2Steel, f2Wall); b.fan(x + 21, 21.5f, 4.4f, f2Steel, f2Wall);
+        b.vent(x + 16, -3.5f, 11, 3, rgba(WHITE, 70));
+        b.light(x + 26.0f, 33.0f, 0.7f, C_CYAN, 40);
+        if (i == 0) b.mark(x + 3, -4.2f, 11, 2.6f);   // owner's colour band on the first container's roof
     }
-    // the coin: a gold disc with the double-barred B-stroke, on the middle container
-    float cx = 4 + 30 + 14, cy = 8 - 10 + 12;
-    b.a.glow(cx, cy, 20, rgba(C_GOLD, 120));
-    b.a.circle(cx, cy, 8.4f, rgb(212, 150, 40), 2.2f, 0.6f); b.a.circle(cx, cy, 7, C_GOLD, 2.2f, 0.6f);
-    b.a.line(cx - 2, cy - 4.2f, cx - 2, cy + 4.2f, 1.3f, rgb(120, 78, 20)); b.a.line(cx - 2, cy - 3.2f, cx + 2.2f, cy - 3.2f, 1.2f, rgb(120, 78, 20)); b.a.line(cx - 2, cy, cx + 2.6f, cy, 1.2f, rgb(120, 78, 20)); b.a.line(cx - 2, cy + 3.2f, cx + 2.4f, cy + 3.2f, 1.2f, rgb(120, 78, 20));
-    b.a.line(cx - 0.4f, cy - 5.6f, cx - 0.4f, cy - 4, 0.8f, rgb(120, 78, 20)); b.a.line(cx + 1.2f, cy - 5.6f, cx + 1.2f, cy - 4, 0.8f, rgb(120, 78, 20));
-    // coolant lines and exchangers along the south edge
-    b.pipe(6, 54, W - 6.0f, 54, 1.6f, rgb(80, 100, 140)); b.pipe(6, 58, W - 6.0f, 58, 1.1f, C_GOLD);
-    for (int i = 0; i < 3; i++) { b.a.rect(10 + i * 30.0f, 47, 12, 5, 0.8f, C_ROOF, 1.2f, 0.5f); }
-    b.mark(W - 22.0f, H - 8.0f, 16, 3.2f);
-    b.a.grain(0, 0, (float)W, (float)H, 0.05f, 37);
+    // the coin: a small painted gold disc with a B-stroke on the middle container's roof (its centre is the live glow anchor)
+    float cx = 48.0f, cy = 10.0f;
+    b.a.circle(cx, cy, 5.6f, rgb(170, 124, 40), 0.7f, 0.12f);
+    b.a.circle(cx, cy, 4.7f, rgb(214, 170, 82), 0.6f, 0.08f);
+    b.a.line(cx - 1.4f, cy - 3.0f, cx - 1.4f, cy + 3.0f, 0.9f, rgb(118, 80, 24));
+    b.a.line(cx - 1.4f, cy - 2.2f, cx + 1.6f, cy - 2.2f, 0.8f, rgb(118, 80, 24)); b.a.line(cx - 1.4f, cy + 0.4f, cx + 1.9f, cy + 0.4f, 0.8f, rgb(118, 80, 24)); b.a.line(cx - 1.4f, cy + 2.4f, cx + 1.4f, cy + 2.4f, 0.8f, rgb(118, 80, 24));
+    b.a.line(cx - 0.4f, cy - 4.8f, cx - 0.4f, cy - 3.2f, 0.7f, rgb(118, 80, 24)); b.a.line(cx + 0.9f, cy - 4.8f, cx + 0.9f, cy - 3.2f, 0.7f, rgb(118, 80, 24));
+    b.a.line(cx - 0.4f, cy + 3.2f, cx - 0.4f, cy + 4.8f, 0.7f, rgb(118, 80, 24)); b.a.line(cx + 0.9f, cy + 3.2f, cx + 0.9f, cy + 4.8f, 0.7f, rgb(118, 80, 24));
+    // cable tray and coolant loop along the front of the containers
+    b.a.rect(3, 41.4f, W - 6.0f, 2.2f, 0.4f, f2Steel, 0.8f, 0.3f);
+    for (float x = 6.0f; x < W - 4.0f; x += 4.0f) b.a.line(x, 41.8f, x, 43.2f, 0.4f, rgba(f2Dark, 150));
+    b.pipe(3, 46.0f, W - 3.0f, 46.0f, 1.3f, f2Steel); b.pipe(3, 49.0f, W - 3.0f, 49.0f, 1.0f, rgb(150, 178, 196));
+    // two dry coolers with fans on the south-west
+    for (int i = 0; i < 2; i++) {
+        float x = 6 + i * 16.0f;
+        b.block(x, 52, 13, 9, 7, f2Roof, f2WallDk);
+        b.fan(x + 6.5f, 56.5f, 3.4f, f2Steel, f2Wall);
+    }
+    // transformer on the south-east: radiator fins on the tank, bushings on the lid, a team band on the lid
+    b.block(64, 52, 26, 12, 8, f2Roof, f2Wall);   // lid 44..56, tank 56..64
+    for (float x = 67.0f; x < 89.0f; x += 2.2f) b.a.line(x, 56.6f, x, 63.4f, 0.5f, rgba(f2Dark, 120));
+    for (float dx : { 69.0f, 75.0f, 81.0f }) b.a.cap(dx, 44.0f, dx, 40.5f, 0.9f, f2Unit, 0.8f, 0.5f);
+    b.mark(66, 46.5f, 12, 2.6f);
+    b.a.grain(0, 0, (float)W, 64.0f, 0.05f, 37);
 }
-
 void nukeCyber(Bld& b) {
     int W = b.W, H = b.H;
     b.pad(C_PAD, C_SEAM);

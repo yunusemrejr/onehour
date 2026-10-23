@@ -237,7 +237,8 @@ static const float ISLAND_NUKE_SCALE = 0.4f;         // share of a full warhead'
 static const float ISLAND_NUKE_COOLDOWN = 65.0f;     // seconds between launches (MINI_NUKE_COOLDOWN)
 static const float ISLAND_NUKE_ARM = 30.0f;          // seconds after the match starts (or after a capture) before it can fire
 // Indestructible structures catch fire instead of losing health: heat rises with every hit (a warhead sets it ablaze at once) and bleeds away.
-static const float HEAT_PER_DAMAGE = 1.0f / 2500.0f; // heat added per point of damage that would have landed
+static const float HEAT_PER_DAMAGE = 1.0f / 700.0f;  // heat added per point of weapon damage that hits it (two tanks firing set a segment ablaze within seconds;
+                                                     // a lone rifleman's fire barely outpaces the cooling)
 static const float HEAT_COOL = 1.0f / 45.0f;         // heat lost per second (a full blaze dies down in about 45 s)
 static const float HEAT_MAX = 1.6f;
 static const float ANTINUKE_PD_AA = 230.0f;   // damage a Q defence does to an aircraft

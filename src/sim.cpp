@@ -403,6 +403,9 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
             continue;
         }
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
+        // a player may pour fire on an indestructible structure (an enemy Bastion Wall, an island launcher): it only burns, it never breaks. Nothing
+        // ever does that on its own initiative, and the computer armies never order it (see canTarget)
+        if (invulnerable(*t) && t->constructed && !players[e->owner].isAI && (force || enemies(e->owner, t->owner))) ff = true;
         if (e->isBuilding()) {   // a turret or battery takes the target the player points at (a friendly one too, with force fire)
             if (!e->constructed || e->bt().weapon < 0) continue;
             e->forceTarget = ff ? target : NOREF;
@@ -1550,13 +1553,15 @@ void Sim::moveAlong(Entity& e, float speed) {
 bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
     if (t.fall > 0) return false;   // still under the parachute
-    if (invulnerable(t) && t.constructed) return false;   // an island launcher or a Bastion Wall: shooting it does nothing (only a spy takes it)
+    // an island launcher or a Bastion Wall: shooting it does nothing but set it burning (only a spy takes it), so only a player's own order aims at it
+    const bool burnOrder = invulnerable(t) && t.constructed && e.forceTarget.valid() && !players[e.owner].isAI && get(e.forceTarget) == &t;
+    if (invulnerable(t) && t.constructed && !burnOrder) return false;
     if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, spy drones)
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
     if (hardened(t) && t.hatch <= 0 && t.hp <= t.maxHp * BUNKER_FLOOR + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;
     if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper
-    if (!enemies(e.owner, t.owner)) {   // a friendly is only a legal target for the one the human ordered it to hit
+    if (!enemies(e.owner, t.owner) && !burnOrder) {   // a friendly is only a legal target for the one the human ordered it to hit
         if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
         if (get(e.forceTarget) != &t) return false;
     }
@@ -1748,7 +1753,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     float m = w ? w->mult[tgt.armor()] : 1.0f;
     float real = dmg * m;
     if (invulnerable(tgt) && tgt.constructed) {   // an island launcher or a Bastion Wall: nothing breaks it, it only burns (and keeps working)
-        heatUp(tgt, real * HEAT_PER_DAMAGE * (nuke ? 3.0f : 1.0f));
+        heatUp(tgt, std::max(real, dmg) * HEAT_PER_DAMAGE * (nuke ? 3.0f : 1.0f));   // (the firepower that hits it, before any armour: a tank gun sets it burning)
         tgt.lastDamaged = time;
         if (attacker.valid()) tgt.attacker = attacker;
         return;

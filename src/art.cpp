@@ -359,38 +359,45 @@ void walkerCyber(Art& A, int frame) {   // Volt Walker: four articulated legs
     for (int i = 0; i < 6; i++) { float a = i * 1.0472f; A.line(32 + std::cos(a) * 8.2f, 32 + std::sin(a) * 8.2f, 32 + std::cos(a) * 11.6f, 32 + std::sin(a) * 11.6f, 1.1f, rgba(CYD, 200)); }
     for (int i = 0; i < 16; i++) { float a = i * 0.3927f; A.dot(32 + std::cos(a) * 12.6f, 32 + std::sin(a) * 12.6f, 0.8f, rgba(CYG, 190)); }
 }
-void tankCyberRail(Art& A, int frame) {   // Railgun Tank body: long, heavy
+// Composite blue-grey of the railgun tank: the graphite Cyber tone pushed toward steel blue (shared by its hull, turret and detail)
+Color railComp() { return mix(CYH, rgb(92, 110, 134), 0.6f); }
+
+void tankCyberRail(Art& A, int frame) {   // Railgun Tank body: a long, low tank destroyer on wide tracks, blue-grey composite hull with armoured skirts and a sloped glacis
     float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 30, 16.5f, 24, 5.4f, ph, CYD); trackRun(A, 30, 47.5f, 24, 5.4f, ph, CYD);
-    A.poly({ {7, 20.5f}, {42, 20.5f}, {55, 26.5f}, {55, 37.5f}, {42, 43.5f}, {7, 43.5f} }, shade(CYH, 1.05f), 2.8f, 0.6f);
-    A.line(8, 21.8f, 41, 21.8f, 1.2f, rgba(CYG, 220)); A.line(8, 42.2f, 41, 42.2f, 1.2f, rgba(CYG, 220));
-    A.glow(24, 21.8f, 8, rgba(CYG, 55)); A.glow(24, 42.2f, 8, rgba(CYG, 55));
-    for (int i = 0; i < 3; i++) {                                                             // capacitor bank
-        float y = 25.5f + i * 6.5f;
-        A.circle(13.5f, y, 2.6f, shade(CYM, 1.3f), 1.6f, 0.6f); A.circle(13.5f, y, 1.4f, CYG, 1, 0.2f); A.glow(13.5f, y, 5, rgba(CYG, 90));
-    }
-    A.box(24, 32, 1.4f, 9, 0.5f, rgba(CYD, 255), 1, 0.1f);
-    A.line(44, 23, 52, 27, 0.9f, rgba(CYD, 170)); A.line(44, 41, 52, 37, 0.9f, rgba(CYD, 170));
+    const Color comp = railComp(), panel = shade(comp, 1.16f), seam = shade(comp, 0.6f);
+    tankTrack(A, 30, 16.5f, 24, 5.0f, ph, CYD, -1); tankTrack(A, 30, 47.5f, 24, 5.0f, ph, CYD, 1);
+    A.poly({ {7, 20.5f}, {42, 20.5f}, {55, 26.5f}, {55, 37.5f}, {42, 43.5f}, {7, 43.5f} }, comp, 2.6f, 0.6f);   // hull
+    A.poly({ {42.5f, 22.2f}, {52.4f, 26.6f}, {53.8f, 32}, {52.4f, 37.4f}, {42.5f, 41.8f} }, panel, 1.4f, 0.5f);   // glacis plate
+    A.line(42.5f, 22.2f, 52.4f, 26.6f, 0.6f, rgba(seam, 200)); A.line(42.5f, 41.8f, 52.4f, 37.4f, 0.6f, rgba(seam, 200));   // glacis seams
+    A.box(28.5f, 18.2f, 17.5f, 2.0f, 0.5f, panel, 1.1f, 0.4f); A.box(28.5f, 45.8f, 17.5f, 2.0f, 0.5f, panel, 1.1f, 0.4f);   // armoured skirts over the inner half of the tracks
+    A.box(12.0f, 32, 5.0f, 9.0f, 1.0f, shade(comp, 0.86f), 1.4f, 0.4f);   // rear engine deck
+    A.ring(32, 32, 10.6f, 1.2f, shade(CYD, 1.3f), 0.6f, 0.3f);   // turret ring
 }
-void gatlingBody(Art& A, int frame) {   // Gatling Tank body: lighter, wider tracks
+void gatlingBody(Art& A, int frame) {   // Gatling Tank body (2S6 / ZSU-23-4 family): olive-drab tracked hull, skirts over the tracks, a sloped glacis and a slatted engine deck
     float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 31, 17, 20, 5.0f, ph, CKD); trackRun(A, 31, 47, 20, 5.0f, ph, CKD);
-    A.poly({ {11, 21.5f}, {40, 21.5f}, {51, 27}, {51, 37}, {40, 42.5f}, {11, 42.5f} }, shade(CKH, 1.05f), 2.6f, 0.6f);
-    A.box(17.5f, 32, 6.5f, 8.4f, 1.2f, shade(CKD, 1.3f), 2, 0.5f);
-    for (int i = 0; i < 4; i++) A.line(13.5f + i * 2.6f, 25, 13.5f + i * 2.6f, 39, 0.8f, rgba(CKD, 210));
-    A.box(43, 32, 4, 8, 1, CKT, 1.6f, 0.5f);
-    A.dot(49, 29, 1.0f, rgb(255, 240, 190)); A.dot(49, 35, 1.0f, rgb(255, 240, 190));
+    const Color olive = rgb(92, 100, 64), olD = rgb(44, 48, 32), skirt = rgb(74, 80, 52);
+    tankTrack(A, 31, 17, 20, 4.9f, ph, CKD, -1); tankTrack(A, 31, 47, 20, 4.9f, ph, CKD, 1);
+    A.poly({ {11, 21.5f}, {40, 21.5f}, {51, 27}, {51, 37}, {40, 42.5f}, {11, 42.5f} }, olive, 2.6f, 0.62f);   // hull
+    A.poly({ {40.5f, 23.2f}, {48.4f, 27.0f}, {49.8f, 32}, {48.4f, 37.0f}, {40.5f, 40.8f} }, shade(olive, 1.08f), 1.4f, 0.5f);   // glacis plate
+    A.line(40.5f, 23.2f, 48.4f, 27.0f, 0.6f, rgba(olD, 170)); A.line(40.5f, 40.8f, 48.4f, 37.0f, 0.6f, rgba(olD, 170));   // glacis seams
+    A.box(29, 18.4f, 17.6f, 2.0f, 0.5f, skirt, 1.3f, 0.5f); A.box(29, 45.6f, 17.6f, 2.0f, 0.5f, skirt, 1.3f, 0.5f);   // side skirts
+    A.box(16.0f, 32, 5.4f, 8.6f, 1.2f, shade(olD, 1.5f), 2.0f, 0.5f);   // engine deck
+    for (int i = 0; i < 5; i++) A.line(12.4f + i * 1.8f, 25.0f, 12.4f + i * 1.8f, 39.0f, 0.7f, rgba(olD, 200));   // grille slats
+    A.ring(32, 32, 10.6f, 1.2f, shade(olD, 1.3f), 0.6f, 0.3f);   // turret ring
     weatherClanker(A, 71, 9, 14, 56, 50);
 }
-void launcherBody(Art& A, int frame) {   // Rocket Launcher body: truck-style carrier
+void launcherBody(Art& A, int frame) {   // Rocket Launcher carrier (M270 MLRS style): tracked olive chassis, an armoured cab forward with a hazard-yellow bumper, the sand-decked turntable under the pod
     float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 29, 17, 23, 5.2f, ph, CKD); trackRun(A, 29, 47, 23, 5.2f, ph, CKD);
-    A.box(27, 32, 21, 10.6f, 2.2f, shade(CKH, 1.0f), 2.6f, 0.55f);
-    A.box(51, 32, 7, 9.6f, 2, CKT, 2.4f, 0.55f);                                      // cab
-    A.box(54, 32, 2.4f, 7, 0.8f, rgb(74, 98, 110), 1.2f, 0.5f);
-    A.box(27, 32, 16, 8, 1.2f, shade(CKD, 1.4f), 2, 0.4f);                              // turntable deck
-    for (int i = -1; i <= 1; i += 2) { A.box(12, 32 + i * 10.6f, 3.6f, 1.6f, 0.5f, CKS, 1.4f, 0.5f); }   // outrigger pads
-    A.dot(57, 28.6f, 1.0f, rgb(255, 240, 190)); A.dot(57, 35.4f, 1.0f, rgb(255, 240, 190));
+    const Color olive = rgb(96, 104, 68), olD = rgb(44, 48, 32), sand = rgb(170, 150, 106);
+    tankTrack(A, 29, 17, 23, 5.2f, ph, CKD, -1); tankTrack(A, 29, 47, 23, 5.2f, ph, CKD, 1);
+    A.box(28.5f, 18.4f, 20.5f, 2.0f, 0.5f, shade(olive, 0.88f), 1.3f, 0.5f); A.box(28.5f, 45.6f, 20.5f, 2.0f, 0.5f, shade(olive, 0.88f), 1.3f, 0.5f);   // skirts
+    A.poly({ {8, 21.4f}, {42, 21.4f}, {47, 22.6f}, {47, 41.4f}, {42, 42.6f}, {8, 42.6f} }, olive, 2.6f, 0.62f);   // chassis
+    A.box(49.6f, 32, 6.0f, 8.8f, 2.0f, shade(olive, 1.06f), 2.4f, 0.6f);   // cab, forward of the pod
+    A.box(48.6f, 32, 3.8f, 6.2f, 1.2f, sand, 1.4f, 0.45f);                 // sand cab roof
+    A.box(54.6f, 32, 0.9f, 6.4f, 0.5f, rgb(44, 62, 68), 0.9f, 0.5f);       // windscreen
+    A.box(56.3f, 32, 0.6f, 9.6f, 0.3f, rgb(226, 182, 62), 0.6f, 0.3f);     // hazard-yellow bumper
+    A.dot(56.3f, 27.2f, 0.7f, rgb(255, 240, 190)); A.dot(56.3f, 36.8f, 0.7f, rgb(255, 240, 190));
+    for (int i = 0; i < 4; i++) A.line(9.4f + i * 1.2f, 25.0f, 9.4f + i * 1.2f, 39.0f, 0.6f, rgba(olD, 200));   // rear deck louvres
     weatherClanker(A, 5, 6, 12, 60, 52);
 }
 
@@ -986,11 +993,31 @@ void vehicleDetail(Art& A, bool cy, int local) {
         }
         break;
     case 7:   // railgun tank / rocket launcher carrier
-        if (cy) { for (int i = 0; i < 4; i++) A.line(28 + i * 4.2f, 26, 28 + i * 4.2f, 38, 0.5f, rgba(CYD, 160)); A.dot(53, 28.4f, 0.9f, CYW); A.dot(53, 35.6f, 0.9f, CYW); A.glow(53, 28.4f, 3, rgba(CYW, 100)); A.glow(53, 35.6f, 3, rgba(CYW, 100)); }
-        else { for (int s = -1; s <= 1; s += 2) A.line(14, 32 + s * 9.0f, 40, 32 + s * 9.0f, 0.6f, rgba(CKD, 150)); A.box(46, 32 - 3.6f, 1.2f, 1.2f, 0.3f, rgb(214, 54, 44), 0.7f, 0.3f); A.box(46, 32 + 3.6f, 1.2f, 1.2f, 0.3f, rgb(214, 54, 44), 0.7f, 0.3f); A.line(38, 28, 38, 36, 0.6f, rgba(CKD, 150)); }
+        if (cy) {   // railgun: skirt joints and bolts, rear deck vents, a driver's hatch with periscopes on the glacis
+            for (int i = 0; i < 6; i++) { float x = 13 + i * 5.6f; A.line(x, 16.7f, x, 19.8f, 0.5f, rgba(CYD, 190)); A.line(x, 43.8f, x, 46.9f, 0.5f, rgba(CYD, 190)); }
+            rivets(A, 12, 17.0f, 42, 17.0f, 8, shade(CYP, 1.15f)); rivets(A, 12, 47.0f, 42, 47.0f, 8, shade(CYP, 1.15f));
+            for (int i = 0; i < 4; i++) A.line(8.2f + i * 1.5f, 25.0f, 8.2f + i * 1.5f, 39.0f, 0.5f, rgba(CYD, 200));   // rear deck vents
+            hatch(A, 47.6f, 26.8f, 1.9f, shade(railComp(), 1.2f));   // driver's hatch
+            for (int s = -1; s <= 1; s += 2) A.box(50.4f, 32 + s * 5.2f, 0.8f, 0.8f, 0.3f, CYD, 0.5f, 0.2f);   // periscopes
+        } else {    // launcher: skirt bolts, cab mirrors and a commander's hatch on the sand roof, yellow tow points, a rust streak and road dust
+            rivets(A, 12, 17.0f, 44, 17.0f, 9, rgb(118, 124, 88)); rivets(A, 12, 47.0f, 44, 47.0f, 9, rgb(118, 124, 88));
+            for (int s = -1; s <= 1; s += 2) { A.line(48.8f, 32 + s * 7.6f, 51.4f, 32 + s * 10.4f, 0.6f, rgba(CKD, 230)); A.box(51.6f, 32 + s * 10.9f, 1.2f, 0.9f, 0.3f, rgb(30, 32, 24), 0.7f, 0.3f); }   // cab mirrors
+            hatch(A, 49.2f, 28.0f, 1.7f, rgb(150, 134, 96));   // commander's hatch
+            A.dot(7.4f, 25.6f, 0.8f, rgb(226, 182, 62)); A.dot(7.4f, 38.4f, 0.8f, rgb(226, 182, 62));   // tow points
+            A.ell(46.0f, 22.2f, 2.6f, 0.9f, rgba(rgb(158, 86, 44), 85), 1, 0);   // rust streak on the chassis
+            mud(A, 8, 14, 52, 20, 6, 91); mud(A, 8, 44, 52, 50, 6, 92);
+        }
         break;
     case 6:   // gatling tank (walker keeps its own detail)
-        if (!cy) { for (int s = -1; s <= 1; s += 2) A.line(14, 32 + s * 9.4f, 38, 32 + s * 9.4f, 0.6f, rgba(CKD, 150)); A.ell(14, 26.4f, 2.4f, 1.4f, rgba(CKR, 90), 1, 0); mud(A, 12, 14, 50, 20, 5, 61); mud(A, 12, 44, 50, 50, 5, 62); }
+        if (!cy) {   // gatling: skirt joints and bolts, driver's hatch and periscopes, exhaust outlets, rust and road dust
+            for (int i = 0; i < 6; i++) { float x = 16 + i * 5.4f; A.line(x, 16.7f, x, 19.8f, 0.5f, rgba(CKD, 190)); A.line(x, 44.2f, x, 47.3f, 0.5f, rgba(CKD, 190)); }
+            rivets(A, 13, 17.0f, 44, 17.0f, 9, rgb(120, 126, 90)); rivets(A, 13, 47.0f, 44, 47.0f, 9, rgb(120, 126, 90));
+            A.ell(12.8f, 24.4f, 1.6f, 1.0f, rgb(40, 40, 34), 1, 0.3f); A.ell(12.8f, 39.6f, 1.6f, 1.0f, rgb(40, 40, 34), 1, 0.3f);   // exhaust outlets
+            hatch(A, 44.2f, 26.4f, 1.9f, rgb(104, 112, 76));   // driver's hatch
+            for (int s = -1; s <= 1; s += 2) { A.box(47.2f, 32 + s * 3.4f, 0.7f, 0.7f, 0.2f, CKD, 0.5f, 0.2f); A.dot(47.2f, 32 + s * 3.4f, 0.35f, rgba(CKY, 200)); }   // periscopes
+            A.ell(36, 37.4f, 3.6f, 1.1f, rgba(rgb(158, 86, 44), 85), 1, 0); A.ell(22, 24.8f, 3.0f, 1.0f, rgba(rgb(158, 86, 44), 70), 1, 0);   // rust streaks
+            mud(A, 12, 14, 50, 20, 6, 61); mud(A, 12, 44, 50, 50, 6, 62);
+        }
         else { for (int i = 0; i < 6; i++) { float an = i * 1.0472f + 0.5f; A.dot(32 + std::cos(an) * 6.0f, 32 + std::sin(an) * 6.0f, 0.5f, rgba(CYW, 180)); } }
         break;
     case 10:  // super-heavy
@@ -1269,42 +1296,64 @@ bool artUnitTurret(Canvas& c, int type, Color team) {
             A.circle(32, 32, 3.2f, CYW, 1.6f, 0.55f); A.glow(32, 32, 7, rgba(CYG, 160));
             for (int i = 0; i < 8; i++) { float a = i * 0.7854f; A.dot(32 + std::cos(a) * 7.0f, 32 + std::sin(a) * 7.0f, 0.9f, CYG); }
             teamDot(A, 25.5f, 32, 2.3f);
-        } else {    // gatling
-            A.circle(32, 32, 10, rgba(CKD, 110), 1, 0);
-            for (int i = -1; i <= 1; i++) A.cap(40, 32 + i * 2.8f, 58, 32 + i * 2.8f, 1.35f, i == 0 ? CKS : shade(CKD, 1.7f), 1.2f, 0.55f);
-            for (int i = 0; i < 3; i++) A.box(46 + i * 4.6f, 32, 0.9f, 5.0f, 0.4f, shade(CKS, 0.8f), 1, 0.3f);   // barrel clamps
-            A.box(58, 32, 1.2f, 5.6f, 0.4f, shade(CKD, 1.4f), 1, 0.3f);
-            A.poly({ {20, 24}, {38, 24}, {42, 28.5f}, {42, 35.5f}, {38, 40}, {20, 40}, {16.5f, 36}, {16.5f, 28} }, shade(CKH, 1.1f), 2.8f, 0.65f);
-            A.box(27, 43.4f, 4.6f, 3.6f, 1, shade(CKD, 1.3f), 1.6f, 0.5f);                     // ammo drum
-            A.cap(30, 41, 37, 37, 0.8f, CKY, 1, 0.3f);                                        // feed belt
-            hatch(A, 25, 32, 3.4f, shade(CKH, 1.05f));
-            teamDot(A, 31.5f, 32, 2.6f);
+        } else {    // gatling: a boxy olive turret with a radar dish on the rear roof and a six-barrel rotary cannon in a shroud (ZSU-23-4 / 2S6 style)
+            const Color olive = rgb(96, 104, 68), olD = rgb(44, 48, 32), steel = rgb(118, 120, 114);
+            A.shadowCircle(32, 32, 11.5f, 1.0f, 1.2f, 1.8f, 90);   // the turret's cast shadow on the hull
+            A.poly({ {21, 24.2f}, {37.4f, 23.4f}, {40.2f, 25.4f}, {40.2f, 38.6f}, {37.4f, 40.6f}, {21, 39.8f} }, olive, 2.6f, 0.7f);   // boxy turret
+            A.poly({ {23.5f, 26.4f}, {36.2f, 25.8f}, {37.6f, 27.4f}, {37.6f, 36.6f}, {36.2f, 38.2f}, {23.5f, 37.6f} }, shade(olive, 1.18f), 1.6f, 0.6f);   // roof plate
+            A.line(23.8f, 32, 36.0f, 32, 0.5f, rgba(olD, 160));   // roof seam
+            A.box(29.5f, 43.4f, 4.4f, 2.2f, 0.6f, shade(olD, 1.4f), 1.2f, 0.5f);   // ammunition box on the turret side
+            A.cap(33.4f, 41.4f, 38.4f, 38.4f, 0.6f, rgb(190, 152, 70), 0.8f, 0.3f);   // brass belt to the gun
+            A.circle(18.8f, 32, 4.4f, shade(olive, 1.25f), 1.6f, 0.6f);   // radar dish on the rear roof
+            A.ring(18.8f, 32, 3.0f, 0.8f, rgba(steel, 230), 0.6f, 0.4f);   // dish rim
+            A.dot(18.8f, 32, 0.9f, olD);   // feed horn
+            A.cap(41, 32, 54, 32, 2.8f, rgb(74, 78, 60), 1.4f, 0.55f);   // rotary cannon shroud
+            A.line(42, 30.6f, 53, 30.6f, 0.5f, rgba(rgb(128, 134, 112), 170));   // shroud highlight
+            A.circle(56, 32, 3.0f, steel, 1.2f, 0.5f);   // muzzle carrier
+            for (int i = 0; i < 6; i++) { float a = i * 1.0472f; A.dot(56 + std::cos(a) * 1.5f, 32 + std::sin(a) * 1.5f, 0.55f, olD); }   // six barrels
+            A.dot(56, 32, 0.7f, rgb(70, 72, 68));
+            A.box(40.5f, 32, 2.0f, 4.8f, 1.0f, shade(olD, 1.5f), 1.4f, 0.5f);   // gun mount
+            hatch(A, 26.0f, 26.0f, 2.2f, shade(olive, 1.1f));   // commander's hatch
+            hatch(A, 26.0f, 38.2f, 1.8f, shade(olive, 1.05f));   // loader's hatch
+            A.box(37.0f, 27.4f, 1.4f, 1.2f, 0.4f, shade(olD, 1.6f), 0.8f, 0.4f);   // gunner's sight
+            teamDot(A, 30.4f, 32, 2.5f);   // the owner's marking
             A.grain(16, 22, 44, 42, 0.14f, 21);
         }
         break;
     case 7:
-        if (cy) {   // railgun
-            A.circle(32, 32, 11, rgba(CYD, 110), 1, 0);
-            A.cap(38, 28.6f, 63.5f, 28.6f, 1.6f, CYW, 1.4f, 0.6f); A.cap(38, 35.4f, 63.5f, 35.4f, 1.6f, CYW, 1.4f, 0.6f);
-            A.line(40, 32, 63, 32, 1.4f, rgba(CYG, 220)); A.glow(50, 32, 16, rgba(CYG, 70));
-            for (int i = 0; i < 6; i++) A.box(42 + i * 3.8f, 32, 0.9f, 5.6f, 0.3f, shade(CYP, 1.1f), 1, 0.2f);   // accelerator coils
-            A.dot(63, 32, 2.2f, CYW); A.glow(63, 32, 6, rgba(CYW, 140));
-            A.poly({ {17, 24}, {40, 25}, {43, 29}, {43, 35}, {40, 39}, {17, 40}, {14, 36}, {14, 28} }, shade(CYP, 1.0f), 2.8f, 0.65f);
-            A.box(24, 32, 6.5f, 5.6f, 1.4f, shade(CYM, 1.3f), 2, 0.5f); A.circle(23.5f, 32, 2.6f, CYG, 1.4f, 0.3f); A.glow(23.5f, 32, 8, rgba(CYG, 100));
-            A.box(37, 32, 2, 5, 0.7f, CYD, 1.2f, 0.3f);
-            teamDot(A, 32.5f, 32, 2.3f);
-        } else {    // rocket pod (raised, 6 tubes)
-            A.box(31, 32, 20, 13, 1.6f, rgba(CKD, 90), 1, 0);       // pod shadow
-            A.box(30, 32, 19.5f, 11.6f, 1.8f, shade(CKS, 0.95f), 2.4f, 0.6f);
-            for (int j = 0; j < 4; j++) {
-                float y = 25.3f + j * 4.5f;
-                A.cap(14, y, 46, y, 1.9f, shade(CKD, 1.15f), 1.4f, 0.5f);
-                A.dot(46.6f, y, 1.6f, CKR); A.dot(46.6f, y, 0.7f, CKY);       // warhead in the muzzle
+        if (cy) {   // railgun: a low composite turret with a sloped front and a long rail gun, two parallel conductor rails with coil rings across them and a slim muzzle
+            const Color comp = railComp(), panel = shade(comp, 1.16f), rail = rgb(196, 206, 218);
+            A.shadowCircle(32, 32, 11.5f, 1.0f, 1.2f, 1.8f, 90);   // the turret's cast shadow on the hull
+            A.box(15.6f, 32, 2.4f, 5.8f, 0.8f, shade(CYM, 1.2f), 1.2f, 0.5f);   // power bus at the rear
+            A.poly({ {17, 24}, {38, 24.5f}, {43, 28.5f}, {43, 35.5f}, {38, 39.5f}, {17, 40}, {14, 36}, {14, 28} }, comp, 2.6f, 0.6f);   // turret body
+            A.poly({ {19.5f, 26.6f}, {36, 26.2f}, {39.4f, 28.6f}, {39.4f, 35.4f}, {36, 37.8f}, {19.5f, 37.4f} }, panel, 1.6f, 0.5f);   // roof plate
+            A.line(20, 29.6f, 36, 29.4f, 0.5f, rgba(CYD, 170)); A.line(20, 34.4f, 36, 34.6f, 0.5f, rgba(CYD, 170));   // composite panel seams
+            hatch(A, 22.5f, 27.8f, 2.2f, panel);   // commander's cupola
+            hatch(A, 22.5f, 36.6f, 1.8f, panel);   // loader's hatch
+            A.box(35.8f, 27.6f, 1.6f, 1.2f, 0.5f, shade(CYM, 1.4f), 0.8f, 0.4f); A.dot(35.8f, 27.6f, 0.45f, CYG);   // sensor pod with a tiny status light
+            A.line(16.5f, 25.0f, 13.0f, 19.0f, 0.6f, rgba(CYW, 220));   // antenna
+            A.box(41.6f, 32, 2.0f, 4.8f, 1.0f, shade(comp, 0.8f), 1.4f, 0.5f);   // breech housing
+            A.cap(41, 28.7f, 61.5f, 28.7f, 1.2f, rail, 1.0f, 0.6f); A.cap(41, 35.3f, 61.5f, 35.3f, 1.2f, rail, 1.0f, 0.6f);   // conductor rails
+            A.line(42, 32, 60, 32, 1.0f, rgba(CYD, 230));   // insulated spine between the rails
+            for (float x : { 45.5f, 50.0f, 54.5f, 58.5f }) A.box(x, 32, 0.9f, 4.5f, 0.3f, shade(comp, 1.7f), 0.9f, 0.4f);   // coil rings across the rails
+            A.dot(54.5f, 27.6f, 0.45f, CYG); A.dot(54.5f, 36.4f, 0.45f, CYG);   // the coil light, small
+            A.box(62.0f, 32, 0.9f, 2.5f, 0.4f, shade(CYM, 1.4f), 0.8f, 0.4f);   // slim muzzle
+            A.dot(62.9f, 32, 0.5f, CYG); A.glow(62.6f, 32, 2.6f, rgba(CYG, 80));
+            teamDot(A, 32.5f, 32, 2.3f);   // the owner's marking
+        } else {    // rocket pod: a sand-coloured launcher box with a 4x5 grid of tube mouths on a turntable (M270 / BM-21 style), yellow side rails
+            const Color sand = rgb(170, 150, 106), olD = rgb(44, 48, 32), steel = rgb(126, 128, 122), hazard = rgb(214, 170, 52);
+            A.shadowRect(11.0f, 19.4f, 33.0f, 25.2f, 1.0f, 1.2f, 1.8f, 90);   // the pod's cast shadow on the chassis
+            A.box(28.0f, 32, 15.6f, 12.9f, 1.8f, shade(olD, 1.6f), 2.0f, 0.5f);   // dark pod shell
+            A.box(28.0f, 32, 14.9f, 12.2f, 1.6f, sand, 2.0f, 0.55f);               // sand pod frame
+            A.box(28.0f, 20.4f, 14.4f, 0.9f, 0.3f, hazard, 1.0f, 0.4f); A.box(28.0f, 43.6f, 14.4f, 0.9f, 0.3f, hazard, 1.0f, 0.4f);   // hazard-yellow side rails
+            for (int r = 0; r < 4; r++) for (int c = 0; c < 5; c++) {
+                float x = 28.0f + (c - 2) * 4.8f, y = 23.6f + r * 5.7f;
+                A.circle(x, y, 2.0f, shade(steel, 1.2f), 1.0f, 0.6f);   // tube lip
+                A.circle(x, y, 1.4f, olD, 1.0f, 0.3f);                   // bore
+                A.dot(x, y, 0.7f, rgb(150, 150, 96));                     // rocket nose
             }
-            A.box(30, 32, 0.9f, 12.5f, 0.3f, rgba(CKD, 190), 1, 0); A.box(20, 32, 0.9f, 12.5f, 0.3f, rgba(CKD, 190), 1, 0); A.box(40, 32, 0.9f, 12.5f, 0.3f, rgba(CKD, 190), 1, 0);
-            A.box(13, 32, 3, 8, 1, shade(CKS, 0.8f), 1.6f, 0.5f);
-            teamDot(A, 31.0f, 32, 2.6f);
-            A.grain(11, 20, 50, 44, 0.16f, 60);
+            A.grain(11, 19, 45, 45, 0.16f, 60);
+            teamDot(A, 14.2f, 32, 2.3f);   // the owner's marking, on the rear of the pod beside the tube grid
         }
         break;
     case 10:

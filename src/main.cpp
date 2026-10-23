@@ -2047,6 +2047,22 @@ static bool uiTest() {
     // run a while with rendering to shake out draw paths
     frames(120);
     // pause menu: Esc opens it and freezes the sim, speed is adjustable in it, Esc resumes
+    {   // the reported bug: an infiltrator right-clicked onto a nobody's island launcher must set out to take it (it used to walk to the shore and stop)
+        Entity* L = nullptr;
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ISLANDNUKE && e.owner < 0) { L = &e; break; }
+        if (!L) return fail("no neutral island launcher");
+        std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
+        Vec2 shore = g_map.nearestFree(L->pos + Vec2(0, -(L->bt().h * 0.5f + 14.0f) * TILE), 24);
+        Ref spy = g_sim.spawnUnit(g_sim.players[0].faction == F_CYBER ? U_C_SPY : U_K_SPY, 0, shore);
+        g_game.selection.clear(); g_game.selection.push_back(spy);
+        g_game.cam = Vec2(clampf(L->pos.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(L->pos.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
+        Vec2 ls = L->pos - g_game.cam;
+        click((int)ls.x, (int)ls.y, SDL_BUTTON_RIGHT);
+        Entity* sp = g_sim.get(spy);
+        if (!sp || sp->order != O_CAPTURE || sp->targetEnt != g_sim.refOf(*L)) return fail("right-clicking a neutral island launcher with an infiltrator did not order a capture");
+        g_sim.destroy(*sp, false);
+        g_game.selection.clear();
+    }
     {
         float speed0 = g_game.speed; u32 tick0 = g_sim.tick;
         key(SDLK_ESCAPE);
@@ -3345,12 +3361,17 @@ int main(int argc, char** argv) {
                     int vp = 0; Faction f = g_sim.players[vp].faction;
                     Vec2 at = openGroundNear(g_sim.players[vp].basePos + Vec2(8 * TILE, 10 * TILE), 5);
                     int tx = tileOf(at.x) - 4, ty = tileOf(at.y) - 2;
+                    std::vector<Ref> bastion;
                     for (int i = 0; i < 9; i++) {
                         g_sim.placeBuilding(f == F_CYBER ? B_C_WALL : B_K_WALL, vp, tx + i, ty, true);
-                        Ref r = g_sim.placeBuilding(f == F_CYBER ? B_C_FWALL : B_K_FWALL, vp, tx + i, ty + 3, true);
-                        if (i >= 5) if (Entity* e = g_sim.get(r)) { e->heat = 1.4f; e->lastDamaged = g_sim.time - 0.3f; }
+                        bastion.push_back(g_sim.placeBuilding(g_sim.players[1].faction == F_CYBER ? B_C_FWALL : B_K_FWALL, 1, tx + i, ty + 3, true));   // (an enemy's Bastion Wall)
                     }
-                    camOn(tileCenter(tx + 4, ty + 2));
+                    // our tanks pour fire on the enemy's Bastion Wall: it burns, it never breaks
+                    std::vector<Ref> tanks;
+                    for (int i = 0; i < 4; i++) tanks.push_back(g_sim.spawnUnit(f == F_CYBER ? U_C_TANK : U_K_TANK, vp, g_map.nearestFree(tileCenter(tx + 2 + i * 2, ty + 7), 4)));
+                    g_sim.cmdAttack({ tanks[0], tanks[1] }, bastion[6]); g_sim.cmdAttack({ tanks[2], tanks[3] }, bastion[7]);
+                    for (int t = 0; t < 20 * 8; t++) { g_sim.step(); g_sim.events.clear(); }
+                    camOn(tileCenter(tx + 4, ty + 3));
                     frames(30, true);
                 } else if (m == "way") {   // a dozer cutting a road into the ridge with a chain of Waymakers (two cleared, one at work, one placed)
                     int wt = g_sim.players[0].faction == F_CYBER ? B_C_WAYMAKER : B_K_WAYMAKER;

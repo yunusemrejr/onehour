@@ -4,6 +4,8 @@
 //  * the Waymaker: $100, placed by a dozer on trees, rock or a ridge, it clears its 3x3 patch into walkable ground by itself (never on water)
 //  * the patrol boat: cheap, fast and fragile, built at the Naval Yard, its one mount hits aircraft, ships, infantry and structures
 //  * the bigger map: a lake with about twice the water of the 146 map, two islands, both launchers out in the water
+//  * the Bastion Wall: a player may pour fire on it and it burns at full health; idle units and the computer never shoot it; an infiltrator
+//    steals it and its new owner may sell it
 #include "sim.h"
 #include "map.h"
 #include "testutil.h"
@@ -197,13 +199,64 @@ static bool patrolTest() {
     return true;
 }
 
+// ---- the indestructible Bastion Wall
+static bool bastionTest() {
+    Vec2 site = openGroundNear(g_sim.players[1].basePos + (g_sim.players[0].basePos - g_sim.players[1].basePos).norm() * (16.0f * TILE), 5);
+    Ref w = g_sim.placeBuilding(B_K_FWALL, 1, tileOf(site.x), tileOf(site.y), true);
+    Entity* we = g_sim.get(w);
+    CHECK13(we, "could not place a Bastion Wall");
+    float hp0 = we->hp;
+    // idle tanks beside it leave it alone (nothing aims at it on its own initiative)
+    std::vector<Ref> tanks;
+    for (int i = 0; i < 4; i++) tanks.push_back(g_sim.spawnUnit(U_C_TANK, 0, g_map.nearestFree(we->pos + Vec2(-3.0f * TILE, (i - 1.5f) * 30.0f), 6)));
+    run13(4.0f);
+    we = g_sim.get(w);
+    CHECK13(we && we->heat < 0.01f, "idle units opened fire on a Bastion Wall by themselves");
+    // the computer never orders it either
+    g_sim.players[0].isAI = true;
+    g_sim.cmdAttack(tanks, w);
+    run13(3.0f);
+    we = g_sim.get(w);
+    CHECK13(we && we->heat < 0.01f, "a computer army fired on an indestructible wall");
+    g_sim.players[0].isAI = false;
+    // a player's order: the tanks pour fire on it, it catches fire and loses nothing
+    g_sim.cmdAttack(tanks, w);
+    float hottest = 0;
+    for (int k = 0; k < 40; k++) { run13(0.5f); we = g_sim.get(w); if (we) hottest = std::max(hottest, we->heat); }
+    we = g_sim.get(w);
+    CHECK13(we && we->alive, "a Bastion Wall was destroyed by gunfire");
+    CHECK13(we->hp == hp0, "a Bastion Wall lost health to gunfire");
+    CHECK13(hottest > 0.15f, "a Bastion Wall under heavy fire did not catch fire");
+    // a warhead: still standing, still at full health, ablaze
+    Sim::Nuke n; n.from = we->pos; n.pos = we->pos; n.owner = 0; n.scale = 1.0f;
+    g_sim.nukeBlastPublic(n);
+    g_sim.fallouts.clear();
+    we = g_sim.get(w);
+    CHECK13(we && we->hp == hp0 && we->heat >= 1.0f, "a warhead did more than set a Bastion Wall ablaze");
+    clearUnits13();
+    // an infiltrator steals it, and its new owner sells it to get rid of it
+    Ref spy = g_sim.spawnUnit(U_C_SPY, 0, g_map.nearestFree(we->pos + Vec2(-1.5f * TILE, 0), 4));
+    g_sim.cmdAttack({spy}, w);
+    run13(g_sim.captureTime(*we) + 6.0f);
+    we = g_sim.get(w);
+    CHECK13(we && we->owner == 0, "an infiltrator could not steal a Bastion Wall");
+    int money = g_sim.players[0].money;
+    g_sim.cmdSell(w);
+    CHECK13(!g_sim.get(w), "the new owner could not sell a stolen Bastion Wall");
+    CHECK13(g_sim.players[0].money > money, "selling a Bastion Wall paid nothing");
+    clearUnits13();
+    return true;
+}
+
 bool lakeUpdateTest(u64 seed) {
     init13(seed);
     if (!lakeTest()) return false;
     if (!swimCaptureTest()) return false;
     if (!waymakerTest()) return false;
     init13(seed);
+    if (!bastionTest()) return false;
+    init13(seed);
     if (!patrolTest()) return false;
-    printf("lakeupdatetest seed %llu: ok (bigger lake, infiltrators swim to the island launchers, Waymakers, patrol boats)\n", (unsigned long long)seed);
+    printf("lakeupdatetest seed %llu: ok (bigger lake, infiltrators swim to the island launchers, Waymakers, Bastion Wall rules, patrol boats)\n", (unsigned long long)seed);
     return g_ok13;
 }

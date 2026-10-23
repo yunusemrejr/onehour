@@ -330,7 +330,7 @@ static bool forceFireKey() { return (SDL_GetModState() & KMOD_CTRL) != 0 || (g_g
 void Game::issueRightClick(Vec2 w) {
     if (selection.empty()) return;
     Entity* t = pickEntity(w, false);
-    if (t && t->kind != EK_RESOURCE && t->owner >= 0 && forceFireKey()) {
+    if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t)) && forceFireKey()) {
         std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
         for (auto r : selection) if (r != tr) sel.push_back(r);
         if (!sel.empty()) { g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); }
@@ -371,7 +371,7 @@ void Game::issueRightClick(Vec2 w) {
 // Force Fire button: attack whatever unit or structure is under the click on purpose, your own and your allies' included
 bool Game::issueForceFire(Vec2 w) {
     Entity* t = pickEntity(w, false);
-    if (!t || t->kind == EK_RESOURCE || t->owner < 0) return false;
+    if (!t || t->kind == EK_RESOURCE || (t->owner < 0 && !Sim::invulnerable(*t))) return false;   // (nobody's island launcher or Bastion Wall may be fired on: it only burns)
     std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
     for (auto r : selection) if (r != tr) sel.push_back(r);
     if (sel.empty()) return false;
@@ -382,7 +382,7 @@ bool Game::issueForceFire(Vec2 w) {
 
 void Game::issueAttackMove(Vec2 w) {
     Entity* t = pickEntity(w, false);
-    if (t && t->kind != EK_RESOURCE && t->owner >= 0 && forceFireKey()) {
+    if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t)) && forceFireKey()) {
         std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
         for (auto r : selection) if (r != tr) sel.push_back(r);
         g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner));
@@ -1351,12 +1351,12 @@ void Game::drawIndestructible(const Entity& e, Vec2 p) {
     if (e.heat <= 0.02f) return;
     float h = clampf(e.heat / HEAT_MAX, 0, 1);
     Rng r((u64)e.gen * 6151 + (u64)e.type * 37 + 3);
-    int n = std::max(1, (int)(h * (1.5f + bt.w * bt.h * 0.6f)));
+    int n = std::max(1, (int)(h * (2.6f + bt.w * bt.h * 0.6f) + 0.5f));   // (a burning wall segment carries up to three flames)
     for (int i = 0; i < n; i++) {
         float x = p.x + r.f(-0.38f, 0.38f) * fw, y = p.y + r.f(-0.42f, 0.28f) * fh;
         float fl = 0.7f + 0.3f * std::sin(wallTime * 13.0f + i * 2.1f + e.gen);
         int fr = ((int)(wallTime * 13) + i * 2 + (int)e.gen) % 6;
-        float sc = (0.45f + 0.75f * h) * (0.8f + 0.2f * fl) * (bt.w * bt.h <= 1 ? 0.75f : 1.0f);
+        float sc = (0.5f + 0.8f * h) * (0.8f + 0.2f * fl) * (bt.w * bt.h <= 1 ? 0.95f : 1.0f);
         g.glowAdd(x, y - 6 * sc, 18 * sc, Color{255, 120, 40, (u8)(110 * fl)});
         g.draw(g.fxs.flame[fr], x, y + 4, 0, sc, rgb(255, 255, 255), (u8)(200 + 50 * h));
         if (frameDt > 0 && fxRng.f() < (1.0f + 3.0f * h) * frameDt)
