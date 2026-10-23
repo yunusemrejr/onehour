@@ -207,71 +207,190 @@ void soldier(Art& A, bool cy, int local, int frame) {
 }
 
 // ---------------------------------------------------------------- vehicles
+// Undercarriage of the two dozers: a steel track band whose shoe bars and sprocket teeth turn with the phase, four road wheels in its
+// outer half (the hull and the track guard cover the inner half, as on the real machines), a toothed sprocket at the rear and a big
+// idler at the front. s is -1 for the top track and +1 for the bottom one.
+void dozerTrack(Art& A, float cx, float cy, float hl, float hh, float phase, Color shoe, float s) {
+    Color steel = shade(shoe, 1.7f);
+    A.box(cx, cy, hl, hh, hh * 0.7f, shoe, 1.2f, 0.4f);
+    for (float x = cx - hl + 1.6f + phase * 3.0f; x < cx + hl - 1.6f; x += 3.0f) A.line(x, cy - hh + 0.7f, x, cy + hh - 0.7f, 0.7f, rgba(shade(shoe, 2.4f), 150));   // shoe bars
+    float sx = cx - hl + hh * 0.85f, ix = cx + hl - hh * 0.85f;   // sprocket (rear) and idler (front)
+    A.circle(sx, cy, hh * 0.8f, steel, 1.0f, 0.45f); A.circle(ix, cy, hh * 0.8f, steel, 1.0f, 0.45f);
+    for (int i = 0; i < 6; i++) { float a = i * 1.0472f + phase * 1.0472f; A.dot(sx + std::cos(a) * hh * 0.45f, cy + std::sin(a) * hh * 0.45f, 0.5f, shade(shoe, 0.7f)); }   // sprocket teeth
+    A.dot(ix, cy, hh * 0.3f, shade(shoe, 0.8f));   // idler hub
+    for (int i = 0; i < 4; i++) { float x = cx - 6.6f + i * 4.4f, y = cy + s * hh * 0.5f; A.circle(x, y, 1.9f, steel, 0.9f, 0.5f); A.dot(x, y, 0.6f, shade(shoe, 0.8f)); }   // road wheels and hubs
+}
+
+// A bowed band as an exact distance field: the annulus between the cutting-face arc (radius ro) and the inner arc (ri) about (bx, 32),
+// cut square at the two ends (angles -th..th). poly() fills the convex hull of its corners, which is wrong for a curved strip.
+void bowBand(Art& A, float bx, float ro, float ri, float th, Color base, float bevel, float kk) {
+    float cx = A.X(bx), cy = A.Y(32), k = A.k, R = ro * k, r0 = ri * k, mid = 0.5f * (R + r0);
+    auto sdf = [=](float x, float y) {
+        float dx = x - cx, dy = y - cy, r = std::sqrt(dx * dx + dy * dy), ang = std::atan2(dy, dx);
+        return std::max(std::max(r - R, r0 - r), (std::fabs(ang) - th) * mid);
+    };
+    A.shape((int)(cx - R - 3), (int)(cy - R - 3), (int)(cx + R + 3), (int)(cy + R + 3), sdf, base, bevel * k, kk, 1.0f);
+}
+// One slanted hazard stripe across that band: outer arc from a to a+w, inner arc skewed forward by sk
+std::vector<P> hazardStripe(float cx, float cy, float ro, float ri, float a, float w, float sk) {
+    return { {cx + std::cos(a) * ro, cy + std::sin(a) * ro}, {cx + std::cos(a + w) * ro, cy + std::sin(a + w) * ro},
+             {cx + std::cos(a + w + sk) * ri, cy + std::sin(a + w + sk) * ri}, {cx + std::cos(a + sk) * ri, cy + std::sin(a + sk) * ri} };
+}
+
+// The dozer blade and its push arms (both armies): a bowed moldboard on two push arms, lift rams to the hood, a mount bracket behind the
+// hood nose, panel seams and bolts on the steel cutting edge. Clanker blades carry hazard stripes on the band, under the cutting edge.
+void dozerBlade(Art& A, float bx, Color arm, Color band, Color edge, Color ram, bool hazard, Color stripe) {
+    const float RO = 24.4f, RI = 19.6f, TH = 0.66f;
+    A.cap(40.5f, 23.0f, 48.2f, 25.2f, 1.5f, arm, 1.2f, 0.5f); A.cap(40.5f, 41.0f, 48.2f, 38.8f, 1.5f, arm, 1.2f, 0.5f);   // push arms
+    A.cap(43.0f, 26.6f, 49.2f, 27.4f, 0.9f, ram, 0.9f, 0.5f); A.cap(43.0f, 37.4f, 49.2f, 36.6f, 0.9f, ram, 0.9f, 0.5f);   // lift rams
+    A.cap(47.0f, 32, bx + RI - 0.4f, 32, 1.0f, ram, 0.8f, 0.4f);   // mount bracket
+    bowBand(A, bx, RO, RI, TH, band, 1.6f, 0.55f);   // moldboard
+    if (hazard) for (int k = 0; k < 5; k++) A.poly(hazardStripe(bx, 32, RO - 0.2f, RI + 0.2f, -0.55f + k * 0.28f, 0.14f, 0.1f), stripe, 0.6f, 0.3f);
+    for (int s = -1; s <= 1; s += 2) A.line(bx + std::cos(0.3f * s) * RI, 32 + std::sin(0.3f * s) * RI, bx + std::cos(0.3f * s) * (RO - 1.4f), 32 + std::sin(0.3f * s) * (RO - 1.4f), 0.5f, rgba(shade(band, 0.55f), 170));   // panel seams
+    bowBand(A, bx, RO, RO - 1.4f, TH, edge, 0.8f, 0.6f);   // steel cutting edge
+    for (int i = 0; i < 5; i++) { float a = -0.5f + i * 0.25f; A.dot(bx + std::cos(a) * (RO - 0.7f), 32 + std::sin(a) * (RO - 0.7f), 0.5f, shade(edge, 1.4f)); }   // edge bolts
+}
+
+// A sealed supply container seen from above: roof ribs, a rear door seam with two handles, corner castings
+void supplyContainer(Art& A, float x0, float y0, float x1, float y1, Color body) {
+    float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f, hw = (x1 - x0) * 0.5f, hh = (y1 - y0) * 0.5f;
+    A.box(cx, cy, hw, hh, 0.8f, body, 1.6f, 0.55f);
+    for (int i = 1; i < 4; i++) { float y = y0 + (y1 - y0) * i / 4.0f; A.line(x0 + 3.0f, y, x1 - 1.4f, y, 0.5f, rgba(shade(body, 0.6f), 130)); }   // roof ribs
+    A.line(x0 + 2.2f, y0 + 0.9f, x0 + 2.2f, y1 - 0.9f, 0.6f, rgba(shade(body, 0.55f), 200));   // rear door seam
+    for (int s = -1; s <= 1; s += 2) A.box(x0 + 1.2f, cy + s * 2.4f, 0.9f, 0.8f, 0.3f, shade(body, 0.45f), 0.6f, 0.3f);   // door handles
+    for (int s = -1; s <= 1; s += 2) for (int t = -1; t <= 1; t += 2) A.dot(cx + t * (hw - 0.9f), cy + s * (hh - 0.9f), 0.5f, shade(body, 0.5f));   // corner castings
+}
+
+// Six wheels in three axles (one per side) of the 6x6 haulers: the tyres stick out past the deck, a mudguard plate covers the inner
+// half of each, and the tread bars slide with the phase so the wheels turn in the animation. reach = the tyre's outer edge from the centre line.
+void truckWheels(Art& A, float ph, Color tyre, Color guard, Color tread, float reach) {
+    const float axle[3] = { 19.0f, 33.5f, 48.5f };
+    for (int i = 0; i < 3; i++) for (int s = -1; s <= 1; s += 2) {
+        float x = axle[i], y = 32 + s * (reach - 2.2f);
+        A.box(x, y, 3.4f, 2.2f, 1.0f, tyre, 1.2f, 0.4f);
+        for (float t = x - 3.4f + ph * 2.0f; t < x + 3.4f; t += 2.0f) A.line(t, y - 2.0f, t, y + 2.0f, 0.5f, rgba(tread, 170));   // tread bars
+        A.box(x, 32 + s * (reach - 3.6f), 3.9f, 1.4f, 0.6f, guard, 1.0f, 0.5f);   // mudguard over the inner half
+    }
+}
+
 void dozerCyber(Art& A, int frame) {
     float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 30, 21, 17, 5.0f, ph, CYD); trackRun(A, 30, 43, 17, 5.0f, ph, CYD);
-    A.box(30, 32, 16, 10.5f, 3, CYH, 2.6f, 0.55f);
-    A.box(21, 32, 7, 7.5f, 2, CYM, 2, 0.5f);                                    // rear power unit
-    for (int i = 0; i < 4; i++) A.line(17.5f + i * 2.6f, 27.5f, 17.5f + i * 2.6f, 36.5f, 0.9f, rgba(CYD, 190));
-    A.box(34, 32, 6.5f, 7.0f, 2, shade(CYP, 0.9f), 2.2f, 0.55f);                   // cab roof
-    A.box(37.2f, 32, 2.6f, 5.4f, 1.2f, rgba(shade(CYG, 0.5f), 255), 1.4f, 0.5f);      // windshield glass
-    A.line(35.5f, 28.2f, 38.5f, 28.8f, 0.8f, rgba(CYW, 200));
-    A.dot(32.5f, 32, 1.6f, rgb(255, 170, 60)); A.glow(32.5f, 32, 4, rgba(rgb(255, 170, 60), 120));    // beacon
-    // blade on articulated arms with emitter edge
-    A.cap(42, 26, 48, 24, 1.8f, CYM, 1.2f, 0.5f); A.cap(42, 38, 48, 40, 1.8f, CYM, 1.2f, 0.5f);
-    A.box(51.5f, 32, 3.4f, 14.5f, 1.4f, shade(CYP, 1.05f), 2, 0.55f);
-    A.line(54.6f, 19, 54.6f, 45, 1.0f, rgba(CYG, 230)); A.glow(54.5f, 32, 10, rgba(CYG, 70));
+    dozerTrack(A, 30, 21.2f, 17, 5.2f, ph, CYD, -1); dozerTrack(A, 30, 42.8f, 17, 5.2f, ph, CYD, 1);
+    // ripper: a crossbeam across the back with one steel tooth
+    A.cap(15.6f, 21.5f, 15.6f, 42.5f, 0.9f, CYM, 1.0f, 0.5f);
+    A.cap(15.6f, 26.0f, 14.0f, 28.0f, 0.9f, CYM, 1.0f, 0.5f); A.cap(15.6f, 38.0f, 14.0f, 36.0f, 0.9f, CYM, 1.0f, 0.5f);
+    A.poly({ {14.6f, 28.0f}, {13.4f, 31.6f}, {13.4f, 32.4f}, {14.6f, 36.0f} }, shade(CYP, 0.85f), 0.8f, 0.5f);
+    // hull: blue-grey composite chassis between the tracks, bolt rows along both skirts
+    A.box(29.5f, 32, 13.8f, 9.6f, 2.4f, CYH, 2.6f, 0.55f);
+    rivets(A, 17.5f, 24.2f, 39.5f, 24.2f, 8, shade(CYP, 1.2f)); rivets(A, 17.5f, 39.8f, 39.5f, 39.8f, 8, shade(CYP, 1.2f));
+    // rear housing: hydraulic and fuel block with louvres (the team roundel sits on it)
+    A.box(21.5f, 32, 5.4f, 7.6f, 1.6f, CYM, 2.0f, 0.5f);
+    for (int i = 0; i < 3; i++) A.line(23.2f + i * 1.2f, 25.6f, 23.2f + i * 1.2f, 38.4f, 0.6f, rgba(CYD, 170));
+    // engine hood at the front: radiator grille on the nose, exhaust stack on the rear corner
+    A.box(44.0f, 32, 3.4f, 3.8f, 1.6f, shade(CYP, 0.95f), 1.8f, 0.55f);
+    for (int i = 0; i < 4; i++) A.line(45.4f, 29.4f + i * 1.8f, 46.6f, 29.4f + i * 1.8f, 0.5f, rgba(CYD, 200));
+    A.circle(41.2f, 29.4f, 1.2f, shade(CYM, 1.3f), 1.0f, 0.5f); A.dot(41.2f, 29.4f, 0.5f, CYD);
+    // operator's cab: composite roof, armoured glass windscreen, roll-over cage behind it, amber warning lights on the front corners
+    A.box(34.0f, 32, 6.6f, 7.2f, 2.0f, shade(CYP, 1.0f), 2.2f, 0.55f);
+    A.box(38.6f, 32, 1.5f, 5.2f, 0.8f, shade(CYG, 0.5f), 1.2f, 0.5f);
+    A.line(37.8f, 27.6f, 39.4f, 28.4f, 0.6f, rgba(CYW, 200));
+    A.line(28.6f, 25.7f, 36.4f, 25.7f, 0.7f, rgba(CYD, 220)); A.line(28.6f, 38.3f, 36.4f, 38.3f, 0.7f, rgba(CYD, 220)); A.line(28.6f, 25.7f, 28.6f, 38.3f, 0.7f, rgba(CYD, 220));
+    for (int s = -1; s <= 1; s += 2) {
+        A.dot(28.6f, 32 + s * 6.3f, 0.8f, shade(CYD, 1.3f));
+        A.dot(39.2f, 32 + s * 6.4f, 0.8f, rgb(255, 170, 60)); A.glow(39.2f, 32 + s * 6.4f, 2.4f, rgba(rgb(255, 170, 60), 70));
+    }
+    A.line(28.2f, 24.6f, 39.4f, 24.6f, 0.5f, rgba(CYG, 170));   // subtle cyan running light along the cab
+    dozerBlade(A, 31.9f, CYM, CYP, shade(CYM, 1.2f), shade(CYD, 1.6f), false, CYD);
+    A.grain(10, 12, 58, 52, 0.06f, 93);   // faint tone shift on the composite
     teamDot(A, 19.5f, 32, 3.0f);
 }
 void dozerClanker(Art& A, int frame) {
     float ph = frame == 2 ? 0.5f : 0;
-    trackRun(A, 29, 20.5f, 18, 5.5f, ph, CKD); trackRun(A, 29, 43.5f, 18, 5.5f, ph, CKD);
-    A.box(29, 32, 17, 11, 2, CKY, 2.4f, 0.5f);
-    A.box(21, 32, 8, 8, 1.5f, shade(CKY, 0.82f), 2, 0.45f);
-    for (int i = 0; i < 3; i++) A.line(16.5f + i * 3.2f, 27, 16.5f + i * 3.2f, 37, 1.0f, rgba(CKD, 150));
-    A.circle(19, 40.5f, 2.2f, CKS, 1.4f, 0.5f); A.dot(19, 40.5f, 1.0f, CKD);        // exhaust stack
-    A.box(35, 32, 6, 7.2f, 1.6f, shade(CKH, 1.0f), 2, 0.5f);                           // cab
-    A.box(38, 32, 2.6f, 5.6f, 1, rgb(72, 96, 108), 1.2f, 0.5f);
-    for (int i = 0; i < 3; i++) A.line(30.5f + i * 2.4f, 25.6f, 30.5f + i * 2.4f, 38.4f, 0.7f, rgba(CKD, 120));   // roll cage
-    A.dot(33, 28.5f, 1.3f, rgb(255, 150, 40));
-    A.cap(42, 24.5f, 48, 22.5f, 2.0f, CKS, 1.2f, 0.5f); A.cap(42, 39.5f, 48, 41.5f, 2.0f, CKS, 1.2f, 0.5f);
-    A.box(51.5f, 32, 3.8f, 15, 1.2f, CKS, 2.2f, 0.6f);
-    for (int i = 0; i < 6; i++) A.box(51.5f, 20.5f + i * 4.6f, 3.6f, 1.6f, 0.5f, i % 2 ? CKY : CKD, 1, 0.2f);   // hazard blade teeth
+    dozerTrack(A, 29, 20.5f, 18, 5.5f, ph, CKD, -1); dozerTrack(A, 29, 43.5f, 18, 5.5f, ph, CKD, 1);
+    // ripper: a crossbeam across the back with one steel tooth
+    A.cap(14.4f, 21.5f, 14.4f, 42.5f, 0.9f, CKS, 1.0f, 0.5f);
+    A.cap(14.4f, 26.0f, 12.6f, 28.0f, 0.9f, CKS, 1.0f, 0.5f); A.cap(14.4f, 38.0f, 12.6f, 36.0f, 0.9f, CKS, 1.0f, 0.5f);
+    A.poly({ {12.6f, 28.0f}, {10.6f, 31.4f}, {10.6f, 32.6f}, {12.6f, 36.0f} }, shade(CKS, 0.9f), 0.8f, 0.5f);
+    // hull: welded yellow chassis between the tracks, bolt rows along both skirts
+    A.box(28.5f, 32, 13.5f, 9.8f, 2.2f, CKY, 2.4f, 0.5f);
+    rivets(A, 17.0f, 23.2f, 39.0f, 23.2f, 8, shade(CKY, 1.25f)); rivets(A, 17.0f, 40.8f, 39.0f, 40.8f, 8, shade(CKY, 1.25f));
+    // rear housing: fuel and hydraulic block with louvres (the team roundel sits on it)
+    A.box(20.5f, 32, 5.2f, 7.6f, 1.2f, shade(CKY, 0.8f), 2.0f, 0.45f);
+    for (int i = 0; i < 3; i++) A.line(23.0f + i * 1.2f, 25.4f, 23.0f + i * 1.2f, 38.6f, 0.6f, rgba(CKD, 170));
+    // engine hood at the front: radiator grille on the nose, exhaust stack on the rear corner
+    A.box(43.4f, 32, 3.2f, 3.8f, 1.2f, shade(CKY, 0.95f), 1.8f, 0.5f);
+    for (int i = 0; i < 4; i++) A.line(45.4f, 29.4f + i * 1.8f, 46.4f, 29.4f + i * 1.8f, 0.5f, rgba(CKD, 200));
+    A.circle(41.2f, 29.4f, 1.2f, CKS, 1.0f, 0.5f); A.dot(41.2f, 29.4f, 0.5f, CKD);
+    // operator's cab: olive steel roof, dark glass windscreen, roll-over cage behind it, amber warning lights on the front corners
+    A.box(33.8f, 32, 6.4f, 7.2f, 1.8f, CKH, 2.2f, 0.5f);
+    A.box(38.4f, 32, 1.5f, 5.4f, 0.7f, rgb(64, 88, 100), 1.2f, 0.5f);
+    A.line(37.6f, 27.4f, 39.4f, 28.2f, 0.6f, rgba(rgb(200, 220, 230), 170));
+    hatch(A, 30.4f, 30.4f, 2.0f, shade(CKH, 1.12f));
+    A.line(28.4f, 25.6f, 36.4f, 25.6f, 0.8f, rgba(CKD, 220)); A.line(28.4f, 38.4f, 36.4f, 38.4f, 0.8f, rgba(CKD, 220)); A.line(28.4f, 25.6f, 28.4f, 38.4f, 0.8f, rgba(CKD, 220));
+    for (int s = -1; s <= 1; s += 2) {
+        A.dot(28.4f, 32 + s * 6.4f, 0.8f, shade(CKD, 1.3f));
+        A.dot(39.2f, 32 + s * 6.4f, 0.8f, rgb(255, 170, 40)); A.glow(39.2f, 32 + s * 6.4f, 2.4f, rgba(rgb(255, 170, 40), 70));
+    }
+    dozerBlade(A, 31.0f, CKS, CKY, shade(CKS, 1.1f), shade(CKD, 1.5f), true, CKD);
     weatherClanker(A, 91, 10, 12, 58, 52);
     teamDot(A, 17.5f, 32, 3.0f);
 }
 
 void harvCyber(Art& A, int frame) {
     float ph = frame == 2 ? 0.5f : 0;
-    for (int s = -1; s <= 1; s += 2) for (int i = 0; i < 3; i++) A.box(19 + i * 9.5f, 32 + s * 13.2f, 3.6f, 2.6f, 1.2f, shade(CYD, 1.1f), 1.4f, 0.4f);   // wheel pods
-    (void)ph;
-    A.box(25, 32, 19, 11.5f, 2.6f, shade(CYH, 0.95f), 2.4f, 0.5f);                  // cargo container
-    for (int i = 0; i < 6; i++) A.line(11 + i * 5.6f, 23, 11 + i * 5.6f, 41, 0.9f, rgba(CYD, 170));
-    A.box(25, 32, 15, 5.2f, 1.6f, shade(CYM, 1.3f), 1.6f, 0.45f);                    // fill hatch
-    A.line(12, 32, 38, 32, 1.4f, rgba(CYG, 180)); A.glow(25, 32, 14, rgba(CYG, 40));
-    A.box(48, 32, 9, 9, 2.4f, shade(CYP, 0.85f), 2.4f, 0.55f);                        // cab
-    A.box(51.5f, 32, 3.4f, 7, 1.2f, shade(CYG, 0.45f), 1.4f, 0.5f);
-    A.line(49, 27, 52.5f, 27.4f, 0.8f, rgba(CYW, 190));
+    truckWheels(A, ph, shade(CYD, 1.2f), shade(CYH, 1.12f), shade(CYD, 0.6f), 15.8f);
+    A.box(24.5f, 32, 17.5f, 11.0f, 1.6f, shade(CYH, 0.92f), 2.4f, 0.5f);   // flatbed deck
+    A.line(7.5f, 21.6f, 41.5f, 21.6f, 0.7f, rgba(shade(CYH, 0.6f), 180)); A.line(7.5f, 42.4f, 41.5f, 42.4f, 0.7f, rgba(shade(CYH, 0.6f), 180));   // side rails
+    Color grey = mix(CYP, rgb(134, 152, 170), 0.45f);   // sealed grey-blue supply containers
+    supplyContainer(A, 12.6f, 22.2f, 39.6f, 30.6f, grey);
+    supplyContainer(A, 12.6f, 33.4f, 39.6f, 41.8f, grey);
+    // folding crane: pedestal, boom laid across the gap between the containers, hook at its end
+    A.circle(35.6f, 32, 2.0f, shade(CYM, 1.3f), 1.2f, 0.55f);
+    A.cap(35.6f, 32, 15.0f, 32, 0.8f, shade(CYP, 1.3f), 0.9f, 0.5f);
+    A.ring(15.0f, 32, 1.0f, 0.5f, shade(CYD, 1.6f), 0.5f, 0.3f);
+    // spare wheel behind the cab
+    A.ring(41.2f, 32, 2.0f, 1.2f, shade(CYD, 1.3f), 1.0f, 0.4f); A.dot(41.2f, 32, 0.8f, shade(CYP, 1.0f));
+    // cab: composite roof, armoured glass windscreen, roof hatch, mirrors, cyan running light and amber marker lights
+    A.box(50.2f, 32, 6.8f, 9.2f, 2.6f, shade(CYP, 0.95f), 2.4f, 0.55f);
+    A.box(54.6f, 32, 1.5f, 6.8f, 0.8f, shade(CYG, 0.5f), 1.2f, 0.5f);
+    A.line(53.4f, 26.2f, 55.4f, 27.4f, 0.6f, rgba(CYW, 200));
+    A.line(44.6f, 23.6f, 55.0f, 23.6f, 0.5f, rgba(CYG, 170));
+    hatch(A, 46.8f, 32, 2.0f, shade(CYP, 1.1f));
+    for (int s = -1; s <= 1; s += 2) { A.cap(55.0f, 32 + s * 9.4f, 55.0f, 32 + s * 11.8f, 0.5f, CYD, 0.6f, 0.3f); A.box(55.0f, 32 + s * 12.8f, 1.3f, 0.9f, 0.4f, CYD, 0.6f, 0.3f); }
+    A.dot(56.2f, 25.2f, 0.8f, rgb(255, 170, 60)); A.dot(56.2f, 38.8f, 0.8f, rgb(255, 170, 60));
+    A.dot(6.9f, 25.4f, 0.8f, rgb(214, 54, 44)); A.dot(6.9f, 38.6f, 0.8f, rgb(214, 54, 44));   // rear lamps
     teamDot(A, 10.5f, 32, 2.8f);
 }
 void harvClanker(Art& A, int frame) {
-    for (int s = -1; s <= 1; s += 2) for (int i = 0; i < 3; i++) A.box(19 + i * 9.5f, 32 + s * 13.6f, 3.9f, 2.8f, 1.2f, CKD, 1.4f, 0.4f);
-    A.box(25, 32, 19, 12, 1.8f, shade(CKH, 0.9f), 2.2f, 0.5f);                          // bed
-    // load of crates under a strapped tarp edge
-    for (int j = 0; j < 2; j++) for (int i = 0; i < 4; i++) {
-        float x = 12 + i * 8.6f, y = 26.4f + j * 8.4f;
-        A.box(x, y, 3.9f, 3.7f, 0.6f, shade(rgb(154, 122, 72), 0.9f + ((i + j * 3) % 3) * 0.08f), 1.6f, 0.6f);
-        A.line(x - 3, y, x + 3, y, 0.6f, rgba(CKD, 110));
+    float ph = frame == 2 ? 0.5f : 0;
+    truckWheels(A, ph, CKD, shade(CKH, 1.1f), shade(CKD, 0.6f), 16.2f);
+    A.box(24.5f, 32, 17.5f, 11.2f, 1.2f, shade(CKH, 0.92f), 2.2f, 0.5f);   // flatbed in earth brown
+    A.line(7.5f, 21.2f, 41.5f, 21.2f, 0.7f, rgba(CKD, 170)); A.line(7.5f, 42.8f, 41.5f, 42.8f, 0.7f, rgba(CKD, 170));   // sideboards
+    for (int i = 0; i < 6; i++) A.line(8.0f, 23.0f + i * 3.2f, 42.0f, 23.0f + i * 3.2f, 0.4f, rgba(CKD, 80));   // deck planks
+    // wooden crates, two rows of three, at the rear of the deck
+    for (int j = 0; j < 2; j++) for (int i = 0; i < 3; i++) {
+        float x = 15.6f + i * 5.4f, y = 26.4f + j * 11.2f;
+        A.box(x, y, 2.6f, 4.0f, 0.5f, shade(rgb(154, 118, 70), 0.9f + ((i + j * 3) % 3) * 0.07f), 1.4f, 0.6f);
+        A.line(x - 2.2f, y - 1.6f, x + 2.2f, y - 1.6f, 0.4f, rgba(CKD, 150)); A.line(x - 2.2f, y + 1.6f, x + 2.2f, y + 1.6f, 0.4f, rgba(CKD, 150));
     }
-    A.line(9, 32, 40, 32, 1.0f, rgba(CKD, 110));
-    A.box(48.5f, 32, 8.5f, 9.6f, 2, CKR, 2.4f, 0.55f);                                 // cab
-    A.box(52, 32, 3.2f, 7.4f, 1, rgb(74, 98, 110), 1.2f, 0.5f);
-    A.box(46, 32, 1.5f, 8, 0.6f, shade(CKR, 0.75f), 1, 0.3f);
-    A.dot(55.5f, 27, 1.0f, rgb(255, 240, 190)); A.dot(55.5f, 37, 1.0f, rgb(255, 240, 190));
-    weatherClanker(A, 17, 8, 12, 60, 52);
+    // tarp tied down over the middle load, with a rope lashing to the sideboards
+    A.box(32.6f, 32, 3.0f, 10.4f, 0.8f, rgb(104, 108, 86), 1.6f, 0.45f);
+    A.line(29.6f, 22.4f, 35.6f, 41.6f, 0.6f, rgba(CKD, 130)); A.line(35.6f, 22.4f, 29.6f, 41.6f, 0.6f, rgba(CKD, 130));
+    for (int i = 0; i < 3; i++) { A.dot(30.6f + i * 2.5f, 21.9f, 0.5f, CKS); A.dot(30.6f + i * 2.5f, 42.1f, 0.5f, CKS); }   // tie-down points
+    // oil drums at the front of the deck
+    Color drum = rgb(70, 92, 110);
+    for (int i = 0; i < 3; i++) { float y = 25.0f + i * 7.0f; A.circle(36.9f, y, 2.3f, drum, 1.6f, 0.6f); A.ring(36.9f, y, 1.2f, 0.5f, shade(drum, 1.5f), 0.5f, 0.3f); }
+    // cab: rust-brown armoured cab, dark glass, roof hatch, mirrors, headlamps
+    A.box(50.4f, 32, 6.6f, 9.4f, 2.2f, CKR, 2.2f, 0.55f);
+    A.box(49.4f, 32, 4.6f, 7.4f, 1.4f, shade(CKR, 1.06f), 1.4f, 0.5f);
+    A.box(54.6f, 32, 1.5f, 6.4f, 0.6f, rgb(72, 96, 108), 1.2f, 0.5f);
+    hatch(A, 46.0f, 32, 2.0f, shade(CKR, 0.8f));
+    for (int s = -1; s <= 1; s += 2) { A.cap(55.0f, 32 + s * 9.4f, 55.0f, 32 + s * 11.8f, 0.5f, CKS, 0.6f, 0.3f); A.box(55.0f, 32 + s * 12.8f, 1.3f, 0.9f, 0.4f, CKS, 0.6f, 0.3f); }
+    A.dot(56.2f, 25.4f, 0.8f, rgb(255, 240, 190)); A.dot(56.2f, 38.6f, 0.8f, rgb(255, 240, 190));
+    A.dot(6.9f, 25.4f, 0.8f, rgb(214, 54, 44)); A.dot(6.9f, 38.6f, 0.8f, rgb(214, 54, 44));   // rear lamps
+    weatherClanker(A, 17, 8, 12, 60, 52);   // dirt and rust over the deck and cab
     teamDot(A, 10.0f, 32, 2.8f);
 }
-
 
 void medicBody(Art& A, bool cy, int frame) {
     Color hull = cy ? rgb(226, 236, 240) : rgb(222, 218, 196), trim = cy ? rgb(70, 190, 210) : rgb(150, 150, 96), cross = cy ? rgb(40, 220, 170) : rgb(220, 60, 52);
@@ -946,28 +1065,25 @@ void soldierDetail(Art& A, bool cy, int local) {
 
 void vehicleDetail(Art& A, bool cy, int local) {
     switch (local) {
-    case 0:   // dozer
+    case 0:   // dozer: the sensors, lamps and field dirt the body does not carry
         if (cy) {
-            for (int s = -1; s <= 1; s += 2) { A.line(43.5f, 32 + s * 6.4f, 46.8f, 32 + s * 7.6f, 0.8f, rgba(CYW, 235)); A.box(31, 32 + s * 4.4f, 1.0f, 1.0f, 0.3f, rgb(255, 170, 60), 0.6f, 0.2f); A.glow(31, 32 + s * 4.4f, 3.4f, rgba(rgb(255, 170, 60), 130)); }
-            A.circle(15.4f, 37.5f, 2.1f, shade(CYM, 1.4f), 1.4f, 0.55f); A.ring(15.4f, 37.5f, 1.2f, 0.5f, rgba(CYG, 200), 0.5f, 0);
-            for (int i = 0; i < 3; i++) A.dot(23.6f + i * 2.6f, 25.6f, 0.45f, rgba(CYG, 200));
+            A.dot(29.6f, 36.2f, 0.8f, rgba(CYD, 230)); A.dot(29.6f, 36.2f, 0.4f, rgba(CYG, 220));   // comms dome on the cab's rear corner
         } else {
-            for (int s = -1; s <= 1; s += 2) { A.line(43.5f, 32 + s * 7.0f, 47.2f, 32 + s * 8.4f, 1.0f, rgba(CKS, 240)); A.dot(38.4f, 32 + s * 4.4f, 0.8f, rgb(255, 240, 190)); }
-            A.box(16.5f, 27.5f, 1.7f, 2.0f, 0.4f, shade(CKR, 0.85f), 1.2f, 0.6f); A.line(15.2f, 27.5f, 17.8f, 27.5f, 0.5f, rgba(CKD, 150));   // jerry can
-            A.ell(36, 36, 3.6f, 1.1f, rgba(CKR, 80), 1, 0);   // rust on the cab
+            mud(A, 16, 17, 44, 23, 6, 51); mud(A, 16, 41, 44, 47, 6, 52);   // dirt on the track bands
+            A.ell(30, 37.6f, 4.0f, 1.1f, rgba(CKR, 80), 1, 0);   // rust on the hull
+            A.ell(44.0f, 31.4f, 1.6f, 1.0f, rgba(CKR, 90), 1, 0);   // rust on the hood
+            A.grain(47, 18, 55, 46, 0.22f, 61);   // dirt mottling on the blade
         }
-        mud(A, 14, 17, 46, 26, 5, 31); mud(A, 14, 38, 46, 47, 5, 32);
         break;
-    case 1:   // hauler
+    case 1:   // hauler: the placard, road dirt and rust the body does not carry
         if (cy) {
-            for (int i = 0; i < 4; i++) A.poly({ {11.0f + i * 2.4f, 40.6f}, {12.3f + i * 2.4f, 40.6f}, {13.4f + i * 2.4f, 43}, {12.1f + i * 2.4f, 43} }, i % 2 ? CYD : CYG, 1, 0.2f);   // rear reflectors
-            A.circle(46, 27.4f, 1.3f, shade(CYW, 0.9f), 1.0f, 0.5f);
+            A.box(36.0f, 26.4f, 1.8f, 1.2f, 0.3f, rgb(236, 232, 210), 0.6f, 0.2f);   // ID placard on the front container
+            A.line(34.9f, 25.6f, 37.1f, 25.6f, 0.4f, rgba(CYD, 200)); A.line(34.9f, 27.2f, 36.6f, 27.2f, 0.4f, rgba(CYD, 200));
         } else {
-            A.ring(11.5f, 32, 3.2f, 1.5f, shade(CKD, 1.6f), 1.2f, 0.5f);       // spare tyre on the rear of the bed
-            A.line(14, 24, 36, 40, 0.6f, rgba(CKD, 120)); A.line(14, 40, 36, 24, 0.6f, rgba(CKD, 120));   // tarp ropes
-            A.ell(47, 27, 1.8f, 0.8f, rgba(CKY, 150), 1, 0);
+            A.grain(6, 15, 42, 49, 0.25f, 41);   // road dirt mottling on the wheels and mudguards
+            A.ell(46.0f, 37.4f, 2.6f, 1.0f, rgba(CKR, 90), 1, 0);   // rust on the cab roof
+            A.ell(24.0f, 22.0f, 3.2f, 0.7f, rgba(CKR, 80), 1, 0);   // rust on the sideboard
         }
-        mud(A, 8, 18, 40, 24, 5, 41); mud(A, 8, 40, 40, 46, 5, 42);
         break;
     case 5:   // main battle tank hull: skirt bolts and joints, driver's hatch and periscopes, rear deck vents and stowage
         if (cy) {
