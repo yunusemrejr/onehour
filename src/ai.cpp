@@ -298,6 +298,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
         cands.push_back({base + 8, smart ? 1.4f + (doctrine == DOC_AIR ? 0.9f : 0.0f) : 1.0f});   // bomber drone / gunship (a smart commander knows what they do to structures)
         cands.push_back({base + 11, 0.8f + fa * 2.2f + fv * 0.9f});       // supersonic jet (needs the tech structure): best against aircraft and vehicles
         { int sb = pl.faction == F_CYBER ? (int)U_C_SBOMBER : (int)U_K_SBOMBER; cands.push_back({sb, 0.45f + (doctrine == DOC_AIR ? 0.35f : 0.0f)}); }   // Supersonic Bomber: one nuclear bomb a sortie, and slow prey after the drop
+        if (on(FEAT_FRONTIER)) { int ft = pl.faction == F_CYBER ? (int)U_C_FIGHTER : (int)U_K_FIGHTER; cands.push_back({ft, 0.35f + fa * 2.6f + fv * 0.3f}); }   // plain fighter: air superiority first (no tech needed), it also spots infiltrators
         if (pl.faction == F_CYBER) cands.push_back({(int)U_C_HELI, 0.8f + fv * 1.2f + fa * 1.0f});   // attack helicopter: all-round, never rearms
     }
     // weight by how many we already have (diminishing returns), availability, and predicted efficiency:
@@ -385,6 +386,7 @@ Entity* AiPlayer::pickAttackTarget() {
     Vec2 base = g_sim.players[player].basePos;
     for (auto& e : g_sim.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner)) continue;
+        if (Sim::invulnerable(e)) continue;   // an island launcher or a Bastion Wall is taken by a spy, never by a wave
         if (!(g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) continue;
         float s = dist(e.pos, hasFront ? humanFront : base) / TILE;   // (with a teammate's push under way, near their front rather than near home)
         if (e.isBuilding()) {
@@ -587,6 +589,8 @@ void AiPlayer::think() {
             case BR_UNUKE: silos++; break;
             case BR_WALL: walls++; break;
             case BR_STRONGHOLD: break;   // neutral map landmarks are not the army's production
+            case BR_ISLANDNUKE: break;
+            case BR_FWALL: walls++; break;
             case BR_NONE: break;
             }
         }
@@ -1487,4 +1491,5 @@ void AiPlayer::think() {
         if (e->hp < e->maxHp * 0.22f && e->ut().kind == UK_VEH && !attacking && dist(e->pos, pl.basePos) > 12 * TILE && e->order != O_MOVE) S.cmdMove({r}, pl.basePos, false);
     }
     if (!threat && !attacking) garrisonStrongholds();
+    if (on(FEAT_FRONTIER)) frontier();
 }

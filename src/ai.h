@@ -11,8 +11,9 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
               FEAT_RECOVER = 256,   // an army that has lost most of its base rebuilds the core first, with every free dozer, and keeps its last units home
               FEAT_CIVIC = 512,     // a civilian dozer raises a town behind the base once the economy is running (income and free dozers)
               FEAT_DEEPNUKE = 1024, // a rich commander with a Nuke Ramp sinks an Underground Nuke silo and fires its silver warhead
+              FEAT_FRONTIER = 0x8000, // the island launchers (a lifter flies an infiltrator out to take one), their small nukes and the Nuclear Bomber call-in
               FEAT_ALL = 0xFFFF,
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE };   // what ships
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER };   // what ships
 
 struct AiPlayer {
     int player = -1;
@@ -64,6 +65,8 @@ struct AiPlayer {
     void learnOutcomes();
     void beginWaveLearning();
     void garrisonStrongholds();
+    void frontier();                    // FEAT_FRONTIER (ai_frontier.cpp): take the island launchers, fire them, call the Nuclear Bomber
+    float nextFrontier = 0;
     void think();
     void dodgeNukes();                  // cheap per-tick check: pull units out of the circle of an incoming enemy nuke
     bool findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty);

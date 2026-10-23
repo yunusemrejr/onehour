@@ -41,8 +41,11 @@ enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER, UR_HEALER,
 // Stealth classes: a stealthy unit or structure is invisible to an enemy (cannot be seen, selected or shot) unless one of the enemy's
 // own detectors is close enough. Detector masks say which classes a unit can see.
 enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone finds them (buildings are never stealthy)
-                    ST_DRONE = 2 };                  // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
-static const int DET_SPOTTER = 1, DET_DRONE = 2;
+                    ST_DRONE = 2,                    // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
+                    ST_INFIL = 3 };                  // infiltrators / spies (a class c is found by detector bit 1 << (c - 1)): only snipers, drones, aircraft (not the heavy bombers), jeeps, other
+                                                     // infiltrators and the light defence turrets (Laser Turret / Gun Nest) find them
+static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4;
+static const float INFIL_DETECT = 5.0f;   // tiles: how close an ordinary infiltrator-spotter (infantry, jeep, aircraft) has to be to find one
 
 enum UnitTypeId {
     U_C_DOZER = 0, U_C_HARV, U_C_INF1, U_C_INF2, U_C_INF3, U_C_TANK, U_C_VOLT, U_C_RAIL, U_C_AIR, U_C_ELITE, U_C_TITAN, U_C_JET,
@@ -60,6 +63,8 @@ enum UnitTypeId {
     U_C_CIVDOZER, U_K_CIVDOZER,     // civilian dozers: they raise the town (houses, shops, towers, the town hall), never military structures
     U_C_SBOMBER, U_K_SBOMBER,       // Supersonic Bomber: a very fast nuclear bomber with one compact nuclear bomb (see SBOMBER_* and nukeBomb)
     U_C_RADTRUCK, U_K_RADTRUCK,     // Anti-Radiation Truck: an unarmed support vehicle whose decontamination field scrubs nuclear fallout
+    U_C_FIGHTER, U_K_FIGHTER,       // the plain fighter jet (Raptor / Saber): air superiority first, strafes ground targets too; no tech needed
+    U_C_NUKEBOMBER, U_K_NUKEBOMBER, // the strategic bomber of a Nuclear Bomber call-in: never built, it crosses the map once, drops a mid-sized nuke and leaves
     U_COUNT
 };
 
@@ -70,6 +75,8 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_UNUKE,       // Underground Nuke silo: a buried launcher with blast doors and deep plating; its silver warhead has 3x a ramp's radius and radiation
                  BR_WALL,        // thick concrete/steel wall segment: unlimited, cheap, very hard to nuke through
                  BR_STRONGHOLD,  // neutral civilian castle / bunker / watchtower: empty at the start, any army's infantry may garrison it and fire from it
+                 BR_ISLANDNUKE,  // neutral Island Nuke Launcher on a lake island: indestructible, taken only by an infiltrator, fires small nukes
+                 BR_FWALL,       // Bastion Wall: indestructible wall segment (spies can take it), no guns and no point defence of its own
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -85,6 +92,9 @@ enum BuildTypeId {
     B_C_WALL, B_K_WALL,       // wall segments (unlimited; see BR_WALL)
     // neutral civilian strongholds placed by the map generator (never built; see BR_STRONGHOLD)
     B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP,
+    B_C_FORTRESS,             // the Mountain Fortress: a huge neutral stronghold in the hills (100 infantry)
+    B_C_ISLANDNUKE,           // the Island Nuke Launcher (two of them, one on each lake island)
+    B_C_FWALL, B_K_FWALL,     // Bastion Walls (see BR_FWALL)
     B_COUNT
 };
 
@@ -192,13 +202,33 @@ static const float WALL_PD_COVER = 10.0f;     // tiles around an Anti-Rocket wal
 static const float WALL_PD_CHANCE = 0.38f;    // chance to burn down one incoming rocket / shell / warhead
 static const float WALL_PD_RELOAD = 3.2f;     // seconds before the same wall can engage again
 static const float WALL_PD_AA = 190.0f;       // damage a wall laser does to an aircraft it catches
+// Bastion Walls: the same price as a wall but nothing breaks them, not even a warhead. They catch fire like the island launchers, an enemy spy can
+// take a segment (and its new owner may sell it), and they never mount a gun or a point-defence laser: only the ordinary wall does that.
 // Neutral civilian strongholds (Old Castle / Civilian Bunker / Watchtower): map landmarks that start empty and unowned. Any army's infantry
 // can walk in; the first one inside claims the place for their army and the garrison fires from its windows and loopholes. They are deliberately
 // tough: heavy masonry, a damage reduction and a per-warhead ceiling, but no army upgrade ever applies to them.
 static const float STRONGHOLD_ARMOR = 0.62f;  // fraction of conventional damage a stronghold takes
 static const float STRONGHOLD_NUKE = 0.58f;   // hard ceiling: one warhead takes at most this share of its max health
 inline bool strongholdRole(BuildRole r) { return r == BR_STRONGHOLD; }
-inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD; }   // no Rugged / Hyper / roof-gun upgrades
+inline bool wallRole(BuildRole r) { return r == BR_WALL || r == BR_FWALL; }   // 1x1 segments meant to be chained into a line (no gap rules)
+inline bool neutralRole(BuildRole r) { return r == BR_STRONGHOLD || r == BR_ISLANDNUKE; }   // placed by the map generator: never raised by a dozer, never sold
+inline bool invulnerableRole(BuildRole r) { return r == BR_ISLANDNUKE || r == BR_FWALL; }   // nothing damages them: they burn (see Entity.heat) and only a spy takes them
+inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_FWALL; }   // no Rugged / Hyper / roof-gun upgrades
+// The Mountain Fortress: the biggest neutral stronghold, dug into the hills. 100 infantry fire from it at once (ground and air, each with its own
+// weapon), its masonry shrugs off most conventional fire and no warhead takes more than FORTRESS_NUKE of its full health: it takes several nukes.
+static const float FORTRESS_ARMOR = 0.30f;    // fraction of conventional damage it takes
+static const float FORTRESS_NUKE = 0.24f;     // hard ceiling per warhead (five direct hits from full health)
+static const float FORTRESS_REACH = 1.5f;     // tiles of extra reach its garrison gets from the high firing galleries
+// Island Nuke Launchers: one on each lake island, neutral at the start. Indestructible (fire and fallout only make them burn), taken only by an
+// infiltrator, and the only way to silence one is to take it back. Each launch is one small warhead with the blast of a bunker's two missiles
+// (twice a missile's blast area), on a bunker's cooldown. Its laser chamber flares when something hits it.
+static const float ISLAND_NUKE_SCALE = 0.4f;         // share of a full warhead's blast area (2 x MINI_NUKE_SCALE)
+static const float ISLAND_NUKE_COOLDOWN = 65.0f;     // seconds between launches (MINI_NUKE_COOLDOWN)
+static const float ISLAND_NUKE_ARM = 30.0f;          // seconds after the match starts (or after a capture) before it can fire
+// Indestructible structures catch fire instead of losing health: heat rises with every hit (a warhead sets it ablaze at once) and bleeds away.
+static const float HEAT_PER_DAMAGE = 1.0f / 2500.0f; // heat added per point of damage that would have landed
+static const float HEAT_COOL = 1.0f / 45.0f;         // heat lost per second (a full blaze dies down in about 45 s)
+static const float HEAT_MAX = 1.6f;
 static const float ANTINUKE_PD_AA = 230.0f;   // damage a Q defence does to an aircraft
 // Nuclear-interception nerf: the Anti-Nuke Laser is 40% weaker against warheads, and an Anti-Rocket wall's laser is 70% weaker against them.
 // Only warheads are affected: burning down rockets, shells, bombs and aircraft is unchanged, and the Clanker missile silo keeps its chance.
@@ -216,6 +246,7 @@ static const int   W_STRIKE_C = 38, W_STRIKE_K = 39;      // the rockets of the 
 static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns of the Defense Guns upgrade (Cyber laser, Clanker machine gun)
 static const int   W_SBOMBER_GUN = 43;   // the Supersonic Bomber's defensive tail cannon (WEAPONS index)
 static const int   W_NUKE_BOMB = 44;     // the compact nuclear bomb it drops (PJ_BOMB: handled by Sim::bombImpact, never fired like a gun)
+static const int   W_FIGHTER_C = 45, W_FIGHTER_K = 46;   // the plain fighters' missiles and cannon
 // Supersonic Bomber: a small fixed-wing nuclear bomber of both armies, built at the airfield with a tech structure. It is the fastest
 // aircraft in the game while its one bomb is aboard; after the drop it holds the dash just long enough to clear its own fireball, then
 // slows right down and is easy prey for anti-air. Its bomb is a compact casing (drawn small) holding a silver warhead: the damage is an
@@ -225,6 +256,14 @@ static const float SBOMBER_SLOW = 340.0f;         // px/s: top speed once the bo
 static const float SBOMBER_CLEAR = 1.2f;          // seconds after the bomb leaves it that it keeps the dash to clear its own blast
 static const float SBOMBER_BOMB_SCALE = 1.0f;     // blast AREA as a share of a Nuke Ramp's: the compact fireball is a ramp's (not a silo's)
 static const float SBOMBER_BOMB_FALL = 0.9f;      // seconds the compact bomb takes to fall from altitude to the ground
+// Nuclear Bomber call-in (tech structure power): a strategic bomber enters from the map corner nearest its own base, flies straight over the
+// target at altitude, drops one mid-sized nuclear bomb and flies on off the map. It is not an army unit (nobody commands it); strong anti-air
+// (Patriots, Rocket Batteries, Anti-Nuke Lasers' point defence, Anti-Rocket walls, fighters) can bring it down before the drop.
+static const float NUKEBOMBER_SCALE = 0.55f;      // share of a full warhead's blast area: between a bunker missile and a Nuke Ramp
+static const float NUKEBOMBER_COOLDOWN = 150.0f;  // seconds, per tech structure
+static const float NUKEBOMBER_OPEN = 240.0f;      // seconds into the match before the first call can be made
+static const float NUKEBOMBER_FALL = 1.4f;        // seconds the bomb falls from the bomber to the ground
+static const float NUKEBOMBER_LIFE = 45.0f;       // seconds after which a bomber still on the map is withdrawn
 // Anti-Radiation Truck (both armies, built at the Assembly Plant / War Factory): an unarmed support vehicle with a decontamination field.
 // Any fallout zone the field touches is scrubbed: its strength and radius decay exponentially, units and structures inside the field are
 // shielded from fallout, and the truck itself takes damage from the radiation it absorbs (medics heal it). It cannot heal a zone the enemy

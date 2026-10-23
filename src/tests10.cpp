@@ -52,7 +52,8 @@ static bool placementTest() {
     }
     CHECK10(total >= 12, "the map has fewer than twelve neutral strongholds");
     CHECK10(kinds[0] >= 4 && kinds[1] >= 4 && kinds[2] >= 4, "the map does not have four of each stronghold kind");
-    CHECK10((int)g_map.landmarks.size() == total, "the placed strongholds do not match the map landmark list");
+    int strongholdSpots = 0; for (auto& L : g_map.landmarks) if (L.kind <= 5) strongholdSpots++;   // (kind 6: the island launchers, not strongholds)
+    CHECK10(strongholdSpots == total, "the placed strongholds do not match the map landmark list");
     for (int q = 0; q < 4; q++) CHECK10(quad[q] >= 3, "a map quadrant has fewer than three strongholds");
     CHECK10(!g_sim.buildAvailable(0, B_C_CASTLE), "a stronghold is offered in the build menu");
     Ref dz = g_sim.spawnUnit(U_C_DOZER, 0, g_map.nearestFree(g_sim.players[0].basePos + Vec2(180, 180), 12));

@@ -24,3 +24,6 @@ bool artNavalBuilding(Canvas& c, Canvas& mask, int type);
 bool artCivicBuilding(Canvas& c, Canvas& mask, int type);
 // The silo's armed overlay: the blast doors slid back and the silver warhead rising from the shaft (drawn live, same geometry as the structure).
 void artSiloArmed(Canvas& c, int type);
+// The map's special structures (artb_special.cpp): the Island Nuke Launcher in its laser chamber, the Mountain Fortress and the Bastion Wall.
+// Paints the structure and its team mask; false for any other type.
+bool artSpecialBuilding(Canvas& c, Canvas& mask, int type);

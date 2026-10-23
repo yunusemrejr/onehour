@@ -26,7 +26,29 @@ static bool plugReference(const Map& m, int tx, int ty, int w, int h) {
         }
         return n;
     };
-    return count(true)>count(false);
+    if(count(true)<=count(false)) return false;
+    // the window saw a split: it only counts if the areas round the footprint really come apart on the whole map
+    // (a nook of six tiles or fewer may be closed off)
+    auto comps=[&](bool footprint, std::vector<int>& lab, std::vector<int>& size) {
+        lab.assign(MAP_W*MAP_H,0); size.assign(1,0); std::vector<int> st;
+        auto open=[&](int x,int y){ return m.passable(x,y) && !(footprint && x>=tx && y>=ty && x<tx+w && y<ty+h); };
+        for(int i=0;i<MAP_W*MAP_H;i++) {
+            if(lab[i] || !open(i%MAP_W,i/MAP_W)) continue;
+            int id=(int)size.size(); size.push_back(0); st.push_back(i); lab[i]=id;
+            while(!st.empty()) { int at=st.back(); st.pop_back(); size[id]++;
+                const int dx[4]={1,-1,0,0},dy[4]={0,0,1,-1};
+                for(int k=0;k<4;k++){ int nx=at%MAP_W+dx[k],ny=at/MAP_W+dy[k]; if(!open(nx,ny)) continue; int j=ny*MAP_W+nx; if(!lab[j]){lab[j]=id;st.push_back(j);} } }
+        }
+    };
+    std::vector<int> la,sa,lb,sb; comps(false,la,sa); comps(true,lb,sb);
+    std::vector<int> before,after;
+    for(int y=ty-1;y<=ty+h;y++) for(int x=tx-1;x<=tx+w;x++) {
+        if(x<0||y<0||x>=MAP_W||y>=MAP_H||(x>=tx&&x<tx+w&&y>=ty&&y<ty+h)) continue;
+        int i=y*MAP_W+x; if(!la[i]) continue;
+        if(std::find(before.begin(),before.end(),la[i])==before.end()) before.push_back(la[i]);
+        if(lb[i] && sb[lb[i]]>6 && std::find(after.begin(),after.end(),lb[i])==after.end()) after.push_back(lb[i]);
+    }
+    return after.size()>before.size();
 }
 
 bool placementTest(u64 seed) {
@@ -43,7 +65,21 @@ bool placementTest(u64 seed) {
             fprintf(stderr,"placementtest: mismatch at trial %d (%d,%d %dx%d)\n",trial,tx,ty,w,h); return false;
         }
     }
-    printf("placementtest: 3000 obstacle/footprint cases match the flood-fill oracle\n");return true;
+    // The reported bug: a 3x3 site between a wood and a wall of rock, whose two sides meet again a little further round the wood. The window
+    // around the site sees two pieces; the map does not. It must be placeable.
+    {
+        memset(m.blocked,0,sizeof m.blocked);
+        int tx=60,ty=60;
+        for(int x=tx-12;x<=tx+14;x++) m.blocked[(ty-1)*MAP_W+x]=1;              // a long rock wall right above the site
+        for(int y=ty;y<=ty+12;y++) m.blocked[y*MAP_W+tx-1]=1;                  // a wood closing the west side ...
+        for(int x=tx-12;x<tx-1;x++) m.blocked[(ty+12)*MAP_W+x]=1;              // ... bending away far below the window
+        for(int y=ty-1;y<=ty+12;y++) m.blocked[y*MAP_W+tx-12]=1;
+        for(int y=ty;y<ty+3;y++) for(int x=tx;x<tx+3;x++) m.blocked[y*MAP_W+x]=0;
+        for(int x=tx+3;x<=tx+14;x++) m.blocked[(ty+3)*MAP_W+x]=1;              // a second wall east, so the site is a cork between the wood and it
+        bool windowSplit=plugReference(m,tx,ty,3,3);
+        if(m.wouldPlug(tx,ty,3,3)!=windowSplit) { fprintf(stderr,"placementtest: the wood-and-rock site disagrees with the oracle\n"); return false; }
+    }
+    printf("placementtest: 3000 obstacle/footprint cases match the flood-fill oracle (window split confirmed on the whole map)\n");return true;
 }
 
 bool placementBench(u64 seed) {
@@ -78,11 +114,11 @@ static void scene11(u64 seed, bool commander = true) {
 
 bool frontierMapTest(u64 seed) {
     scene11(seed,false);
-    VERIFY11(MAP_W==128 && MAP_H==128,"unexpected map scale");
+    VERIFY11(MAP_W==146 && MAP_H==146,"unexpected map scale");
     VERIFY11(g_map.supplies.size()==20,"supply count changed");
-    VERIFY11(g_map.landmarks.size()==21,"a quadrant lost a settlement building");
-    int kinds[5]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<5,"invalid landmark kind");kinds[l.kind]++; }
-    VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4,"settlements are not distributed fairly");
+    VERIFY11(g_map.landmarks.size()==27,"a quadrant lost a settlement building");
+    int kinds[7]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<7,"invalid landmark kind");kinds[l.kind]++; }
+    VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4 && kinds[5]==4 && kinds[6]==2,"settlements are not distributed fairly");
     // Flood-fill real occupancy after HQs, resources and all landmarks are present.
     Vec2 start=g_map.nearestFree(g_sim.players[0].basePos+Vec2(0,6*TILE),10);
     std::vector<u8> seen(MAP_W*MAP_H);std::vector<int> q;
@@ -107,7 +143,8 @@ bool frontierMapTest(u64 seed) {
     }
     for(auto s:g_map.supplies) VERIFY11(reached(s.tx,s.ty,1,1),"a supply pile is unreachable");
     for(auto& e:g_sim.ents) if(e.alive && e.isBuilding() && e.bt().role==BR_STRONGHOLD) {
-        bool island=std::abs(e.tx-MAP_W/2)<=2 && std::abs(e.ty-MAP_H/2)<=2;
+        bool island=false;
+        for(auto& isl:g_map.islands) if(dist(e.pos,Vec2(isl.cx*TILE,isl.cy*TILE))<isl.r*TILE) island=true;
         VERIFY11(island || reached(e.tx,e.ty,e.bt().w,e.bt().h),"a mainland landmark cannot be entered");
         for(int y=e.ty;y<e.ty+e.bt().h;y++) for(int x=e.tx;x<e.tx+e.bt().w;x++)
             VERIFY11(g_map.terrainPassable(x,y) && !g_map.bridge[y*MAP_W+x],"a landmark overlaps terrain or a bridge");
@@ -141,7 +178,7 @@ bool frontierMapTest(u64 seed) {
     Map m;memset(m.blocked,1,sizeof m.blocked);memset(m.tiles,T_ROCK,sizeof m.tiles);
     VERIFY11(!m.findPath(Vec2(-999,-999),Vec2(WORLD_W+999,WORLD_H+999),path) && path.empty(),"blocked out-of-world path was accepted");
     VERIFY11(!m.findPath(Vec2(std::numeric_limits<float>::quiet_NaN(),0),c,path),"NaN path input was accepted");
-    printf("frontiermaptest: 128x128, 20 supplies, 21 landmarks; starts, supplies and mainland entries connected; escape/path edge cases passed\n");
+    printf("frontiermaptest: 146x146, 20 supplies, 27 landmarks (4 ridge fortresses, 2 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
     return true;
 }
 

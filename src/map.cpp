@@ -74,21 +74,17 @@ void Map::generate() {
         bridge[y * MAP_W + x] = 0;
     }
     // The central lake: a big organic body of water, the arena of the warships. Its shore bulges into bays toward the four corners and pulls back
-    // toward the supply piles on the axes; a sandy beach rings it, two rocky islets and one buildable island break the open water, and the four
+    // toward the supply piles on the axes; a sandy beach rings it, two islands and two rocky islets break the open water, and the four
     // rivers leave it (they are cut off by the bridges of the ring road, so only the lake itself is a sea for ships).
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         float dx = x + 0.5f - C, dy = y + 0.5f - C, d = std::sqrt(dx * dx + dy * dy), th = std::atan2(dy, dx);
-        float R = (17.6f + 1.5f * std::cos(4.0f * th + 3.14159f) + 0.6f * std::sin(3.0f * th + 1.1f) + 0.5f * std::sin(8.0f * th + 0.7f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 2.0f) * G;
+        float R = (20.0f + 1.5f * std::cos(4.0f * th + 3.14159f) + 0.6f * std::sin(3.0f * th + 1.1f) + 0.5f * std::sin(8.0f * th + 0.7f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 2.0f) * G;
         if (d <= R + 2.2f) tiles[y * MAP_W + x] = T_SAND;
         if (d <= R) tiles[y * MAP_W + x] = T_WATER;
     }
-    // The island in the middle of the lake: a sandy shore round a grassy top big enough for a small structure or two. Nothing
-    // drives to it — a dozer has to be airlifted in — so it is a prize for whoever holds the water and the sky.
-    paintDisc(*this, C, C, 5.0f, T_SAND); paintDisc(*this, C, C, 4.0f, T_GRASS);
-    paintDisc(*this, C - 7.5f, C + 5.5f, 1.9f, T_ROCK); paintDisc(*this, C + 7.5f, C - 5.5f, 1.9f, T_ROCK);   // rocky islets (nothing can be built on them)
     // Pools inside the ring road's corners, on the diagonals between the lake and the road (decor + partial cover)
     for (int q = 0; q < 4; q++) {
-        float px = C + ((q & 1) ? 18.0f : -18.0f) * G, py = C + ((q & 2) ? 18.0f : -18.0f) * G;
+        float px = C + ((q & 1) ? 21.0f : -21.0f) * G, py = C + ((q & 2) ? 21.0f : -21.0f) * G;
         paintDisc(*this, px, py, 3.0f, T_SAND); paintDisc(*this, px, py, 1.9f, T_WATER);
     }
 
@@ -109,9 +105,28 @@ void Map::generate() {
     ridge(sc(38), sc(41), MAP_H - 1 - tip, sc(78), true, sc(65), sc(69));
     ridge(1, tip, sc(38), sc(41), false, sc(10), sc(14));
     ridge(MAP_W - 1 - tip, sc(78), sc(38), sc(41), false, sc(65), sc(69));
+    // A Mountain Fortress is set into each ridge, in the long stretch of mountain between the map edge and the pass: the ridge rock is cut back
+    // round the fortress so each of the two armies on either side of the ridge has a doorstep onto it, but the fortress itself still closes
+    // the ridge (it is no second pass).
+    std::vector<LandmarkSpot> forts;
+    {
+        const int FW = 5, FH = 4;   // BUILDS[B_C_FORTRESS] footprint
+        int axis = (sc(38) + sc(41)) / 2, segA = 2, segB = sc(10) - 1;   // the ridge stretch between the map edge and the pass
+        int along = (segA + segB) / 2;
+        struct F { int x, y; bool vertical; } F4[4] = {
+            { axis - FW / 2, along - FH / 2, true }, { axis - FW / 2, (MAP_H - 1) - along - FH / 2, true },
+            { along - FW / 2, axis - FH / 2, false }, { (MAP_W - 1) - along - FW / 2, axis - FH / 2, false } };
+        for (auto& f : F4) {
+            // the footprint and a doorstep two tiles deep on the two open faces become worn ground
+            int x0 = f.x - (f.vertical ? 2 : 0), x1 = f.x + FW - 1 + (f.vertical ? 2 : 0);
+            int y0 = f.y - (f.vertical ? 0 : 2), y1 = f.y + FH - 1 + (f.vertical ? 0 : 2);
+            for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) if (inMap(x, y)) tiles[y * MAP_W + x] = T_DIRT;
+            forts.push_back({ f.x, f.y, 5 });
+        }
+    }
     // Rock outcrops guarding the diagonal approaches to the center
-    paintDisc(*this, 27 * S, 33 * S, 2.4f * S, T_ROCK); paintDisc(*this, 53 * S, 33 * S, 2.4f * S, T_ROCK);
-    paintDisc(*this, 27 * S, 47 * S, 2.4f * S, T_ROCK); paintDisc(*this, 53 * S, 47 * S, 2.4f * S, T_ROCK);
+    paintDisc(*this, 25.7f * S, 32.3f * S, 2.4f * S, T_ROCK); paintDisc(*this, 54.3f * S, 32.3f * S, 2.4f * S, T_ROCK);   // (pushed out with the bigger lake: rocky headlands on its shore)
+    paintDisc(*this, 25.7f * S, 47.7f * S, 2.4f * S, T_ROCK); paintDisc(*this, 54.3f * S, 47.7f * S, 2.4f * S, T_ROCK);
     // Map border rocks
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++)
         if (x == 0 || y == 0 || x == MAP_W - 1 || y == MAP_H - 1) tiles[y * MAP_W + x] = T_ROCK;
@@ -196,6 +211,20 @@ void Map::generate() {
         }
     }
 
+    // Two islands (painted after the rivers, whose channels start out in the lake). The big one in the middle of the lake: a sandy shore round a grassy top with a stand of trees, an Island Nuke Launcher and an
+    // old watchtower. The small one lies off the east shore (well out in the water, not a wade away) with its own launcher and a few trees.
+    // Nothing drives to either: infantry and dozers are airlifted in, so they are prizes for whoever holds the water and the sky.
+    islands = { { C, C, 7.0f }, { C + 16.5f, C + 2.5f, 4.4f } };
+    paintDisc(*this, C, C, 7.0f, T_SAND); paintDisc(*this, C, C, 5.9f, T_GRASS);
+    paintDisc(*this, C - 2.6f, C + 3.2f, 4.4f, T_SAND, [](u8 t) { return t == T_WATER; }); paintDisc(*this, C - 2.4f, C + 2.6f, 3.4f, T_GRASS);   // a lobe to the south-west
+    paintDisc(*this, C + 16.5f, C + 2.5f, 4.4f, T_SAND); paintDisc(*this, C + 16.5f, C + 2.5f, 3.5f, T_GRASS2);
+    {   // a few trees on each island, kept off the launchers' footprints and the landing ground
+        static const int TREES[][2] = { {-5, -2}, {-4, -4}, {-5, -3}, {3, -5}, {4, -4}, {-5, 3}, {-4, 5}, {1, 5} };
+        for (auto& t : TREES) tiles[(int)(C + t[1]) * MAP_W + (int)(C + t[0])] = T_TREE;
+        static const int TREES2[][2] = { {-2, -3}, {2, 1}, {-3, 1} };
+        for (auto& t : TREES2) tiles[(int)(C + 2.5f + t[1]) * MAP_W + (int)(C + 16.5f + t[0])] = T_TREE;
+    }
+    paintDisc(*this, C - 13.0f, C - 10.0f, 1.9f, T_ROCK); paintDisc(*this, C - 9.0f, C + 15.5f, 1.9f, T_ROCK);   // rocky islets (nothing can be built on them)
     // Tree clusters from noise, kept off roads, bases, and the shore
     for (int y = 2; y < MAP_H - 2; y++) for (int x = 2; x < MAP_W - 2; x++) {
         u8& t = tiles[y * MAP_W + x];
@@ -241,7 +270,7 @@ void Map::generate() {
         {95, 21, 36000}, {82, 8, 36000},
         {8, 82, 36000}, {21, 95, 36000},
         {95, 82, 36000}, {82, 95, 36000},
-        {52, 31, 50000}, {73, 52, 50000}, {52, 73, 50000}, {31, 52, 50000},
+        {52, 29, 50000}, {75, 52, 50000}, {52, 75, 50000}, {29, 52, 50000},
         {46, 8, 36000}, {8, 57, 36000}, {57, 95, 36000}, {95, 46, 36000},
         {18, 33, 30000}, {70, 18, 30000}, {85, 70, 30000}, {33, 85, 30000},
     };
@@ -259,6 +288,33 @@ void Map::generate() {
         blocked[i] = (t == T_WATER || t == T_ROCK || t == T_TREE) ? 1 : 0;
     }
     for (auto& s : supplies) setResource(s.tx, s.ty, true);
+    // What a structure may be built over: every tree, and rock that belongs to a small outcrop or islet (a 4-connected patch of at most
+    // SMALL_ROCK tiles away from the map border). The ridges, the rocky headlands' cores and the border cliffs stay hard obstacles.
+    cleared.clear();
+    memset(clearable, 0, sizeof(clearable));
+    {
+        const int SMALL_ROCK = 70;
+        static u8 seenR[MAP_W * MAP_H];
+        memset(seenR, 0, sizeof(seenR));
+        std::vector<int> comp, stack;
+        for (int i = 0; i < MAP_W * MAP_H; i++) {
+            if (tiles[i] == T_TREE) clearable[i] = 1;
+            if (tiles[i] != T_ROCK || seenR[i]) continue;
+            comp.clear(); stack.assign(1, i); seenR[i] = 1; bool border = false;
+            while (!stack.empty()) {
+                int c = stack.back(); stack.pop_back(); comp.push_back(c);
+                int cx = c % MAP_W, cy = c / MAP_W;
+                if (cx <= 1 || cy <= 1 || cx >= MAP_W - 2 || cy >= MAP_H - 2) border = true;
+                static const int DX4[4] = {1, -1, 0, 0}, DY4[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++) {
+                    int nx = cx + DX4[k], ny = cy + DY4[k];
+                    if (!inMap(nx, ny) || tiles[ny * MAP_W + nx] != T_ROCK || seenR[ny * MAP_W + nx]) continue;
+                    seenR[ny * MAP_W + nx] = 1; stack.push_back(ny * MAP_W + nx);
+                }
+            }
+            if (!border && (int)comp.size() <= SMALL_ROCK) for (int c : comp) clearable[c] = 2;
+        }
+    }
     // bodies of water (4-connected): the lake is the one a Naval Yard may touch
     memset(waterComp, 0, sizeof(waterComp));
     waterSize.assign(1, 0);
@@ -340,19 +396,25 @@ void Map::generate() {
             paintDisc(*this, bx + w * 0.5f, by + h * 0.5f, std::max(w, h) * 0.5f + 2.3f, T_DIRT,
                       [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_SAND; });
         }
-        // One more watchtower on the lake island: a prize for whoever can airlift infantry in. It is not part of the four-corner symmetry.
+        // The Mountain Fortresses in the ridges (their ground was cut back above, before the trees and the blocked flags)
+        for (auto& f : forts) { landmarks.push_back(f); setStructure(f.tx, f.ty, 5, 4, true); }
+        // The lake islands: an Island Nuke Launcher in the middle of each, and an old watchtower beside the big island's launcher. They are not
+        // part of the four-corner symmetry.
+        for (size_t k = 0; k < islands.size(); k++) {
+            int tx = (int)islands[k].cx - 1, ty = (int)islands[k].cy - 1;
+            landmarks.push_back({ tx, ty, 6 });
+            setStructure(tx, ty, 3, 3, true);
+            paintDisc(*this, islands[k].cx + 0.5f, islands[k].cy + 0.5f, 2.6f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2; });
+        }
         {
-            int tx = (int)C - 1, ty = (int)C - 1;
-            if (landmarkFits(tx, ty, 2, 2)) {
-                landmarks.push_back({ tx, ty, 2 });
-                setStructure(tx, ty, 2, 2, true);
-                paintDisc(*this, tx + 1.0f, ty + 1.0f, 3.5f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_SAND; });
-            }
+            int tx = (int)C - 4, ty = (int)C + 1;
+            if (landmarkFits(tx, ty, 2, 2)) { landmarks.push_back({ tx, ty, 2 }); setStructure(tx, ty, 2, 2, true); }
         }
     }
     // Short worn access tracks tie the settlement to its road network. Paint only
     // traversable ground along a real path: no new bridge, obstacle or water fill.
     for (const auto& L : landmarks) {
+        if (L.kind >= 5) continue;   // (the fortresses sit in the ridges and the launchers on the islands: no track leads there)
         int w = L.kind == 0 ? 4 : (L.kind == 1 || L.kind == 4 ? 3 : 2);
         int h = L.kind == 0 ? 4 : (L.kind == 1 ? 3 : 2);
         Vec2 entry = nearestFree(tileCenter(L.tx + w / 2, L.ty + h), 4);
@@ -417,7 +479,64 @@ bool Map::wouldPlug(int tx, int ty, int w, int h) const {
         }
         return count;
     };
-    return regions(true) > regions(false);
+    if (regions(true) <= regions(false)) return false;
+    // The window saw a split, but two pieces of it may still meet beyond the window's edge (round a wood, a ridge or a lake): that is not a
+    // plug, and refusing it is why a site with plenty of room sometimes would not go down. Confirm on the whole map: label the free ground with
+    // and without the footprint, and count the separate areas the tiles round the footprint belong to. A plug splits one of them in two. A
+    // dead-end nook of a few tiles that gets closed off is harmless and does not count.
+    static int labA[MAP_W * MAP_H], labB[MAP_W * MAP_H], sizeB[MAP_W * MAP_H + 1];
+    static int stackG[MAP_W * MAP_H];
+    auto label = [&](int* lab, int* sizes, bool withFootprint) {
+        for (int i = 0; i < MAP_W * MAP_H; i++) lab[i] = 0;
+        int n = 0;
+        for (int i = 0; i < MAP_W * MAP_H; i++) {
+            int x = i % MAP_W, y = i / MAP_W;
+            bool inF = withFootprint && x >= tx && x < tx + w && y >= ty && y < ty + h;
+            if (lab[i] || blocked[i] != 0 || inF) continue;
+            n++; int sp = 0, cnt = 0; stackG[sp++] = i; lab[i] = n;
+            while (sp > 0) {
+                int c = stackG[--sp], cx = c % MAP_W, cy = c / MAP_W; cnt++;
+                static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++) {
+                    int nx = cx + DX[k], ny = cy + DY[k];
+                    if (!inMap(nx, ny)) continue;
+                    int ni = ny * MAP_W + nx;
+                    bool nF = withFootprint && nx >= tx && nx < tx + w && ny >= ty && ny < ty + h;
+                    if (lab[ni] || blocked[ni] != 0 || nF) continue;
+                    lab[ni] = n; stackG[sp++] = ni;
+                }
+            }
+            if (sizes) sizes[n] = cnt;
+        }
+    };
+    label(labA, nullptr, false);
+    label(labB, sizeB, true);
+    std::vector<int> before, after;
+    for (int y = ty - 1; y <= ty + h; y++) for (int x = tx - 1; x <= tx + w; x++) {
+        if (!inMap(x, y) || (x >= tx && x < tx + w && y >= ty && y < ty + h)) continue;
+        int i = y * MAP_W + x;
+        if (!labA[i]) continue;
+        before.push_back(labA[i]);
+        if (labB[i] && sizeB[labB[i]] > 6) after.push_back(labB[i]);   // (a nook of six tiles or fewer may be closed off)
+    }
+    std::sort(before.begin(), before.end()); before.erase(std::unique(before.begin(), before.end()), before.end());
+    std::sort(after.begin(), after.end()); after.erase(std::unique(after.begin(), after.end()), after.end());
+    return after.size() > before.size();
+}
+
+void Map::clearForStructure(int x, int y, int w, int h) {
+    for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
+        if (!inMap(i, j)) continue;
+        int k = j * MAP_W + i, kind = 1;   // (every footprint tile is logged: the renderer also lifts the decorative bushes off it)
+        if (vegetation(i, j)) {
+            if (tiles[k] == T_ROCK) kind = 2;
+            tiles[k] = tiles[k] == T_TREE ? T_GRASS : T_DIRT;   // (felled trees leave grass, a quarried outcrop bare earth)
+            blocked[k] &= ~1;
+            clearable[k] = 0;
+        }
+        if (cleared.size() < 200000) cleared.push_back(k | (kind << 24));
+    }
+    if (cleared.size() < 200000) cleared.push_back(-1);   // (end of this structure's footprint)
 }
 
 void Map::setStructure(int x, int y, int w, int h, bool on) {
@@ -463,6 +582,16 @@ bool Map::lineClear(Vec2 a, Vec2 b) const {
 // ---- A* ----
 namespace {
 struct Node { float f; int idx; bool operator<(const Node& o) const { return f > o.f; } };
+// A* open list over one reused buffer (a fresh priority_queue allocated and grew its storage on every search)
+struct OpenList {
+    std::vector<Node>& v;
+    OpenList() : v(buf()) { v.clear(); }
+    static std::vector<Node>& buf() { static std::vector<Node> b; return b; }
+    bool empty() const { return v.empty(); }
+    const Node& top() const { return v.front(); }
+    void push(Node n) { v.push_back(n); std::push_heap(v.begin(), v.end()); }
+    void pop() { std::pop_heap(v.begin(), v.end()); v.pop_back(); }
+};
 static float gScore[MAP_W * MAP_H];
 static i32 parentIdx[MAP_W * MAP_H];
 static u32 visitGen[MAP_W * MAP_H];
@@ -481,12 +610,14 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) con
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
     curGen++;
     if (curGen == 0) { memset(visitGen, 0, sizeof(visitGen)); memset(closedGen, 0, sizeof(closedGen)); curGen = 1; }
-    std::priority_queue<Node> open;
+    OpenList open;
     int start = sy * MAP_W + sx, goal = gy * MAP_W + gx;
     auto h = [&](int idx) {
         int x = idx % MAP_W, y = idx / MAP_W;
         int dx = std::abs(x - gx), dy = std::abs(y - gy);
-        return 0.8f * 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));   // octile distance scaled by the cheapest step (road) => admissible; epsilon breaks ties toward the goal
+        // octile distance at the off-road step cost: it can only overestimate where the way runs along a road (a step there costs 0.8), so the
+        // search goes straight for the goal instead of flooding the map, and still takes a road it meets on the way
+        return 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
     };
     gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen;
     open.push({h(start), start});
@@ -524,16 +655,72 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) con
     if (rev.empty()) return false;
     std::reverse(rev.begin(), rev.end());
     if (found) rev.back() = to;
-    // String pulling: skip waypoints reachable in a straight line
+    pullString(from, rev, out);
+    return found;
+}
+
+// String pulling: skip the waypoints reachable in a straight line, looking at most PULL_AHEAD tiles along the route at a time (testing every
+// later waypoint of a long route against the start made the pass quadratic in the path length: an eighth of a crowded tick)
+void Map::pullString(Vec2 from, const std::vector<Vec2>& rev, std::vector<Vec2>& out) const {
+    const size_t PULL_AHEAD = 14;
     Vec2 cur = from;
     size_t i = 0;
     while (i < rev.size()) {
-        size_t j = rev.size() - 1;
+        size_t j = std::min(rev.size() - 1, i + PULL_AHEAD);
         while (j > i && !lineClear(cur, rev[j])) j--;
         out.push_back(rev[j]);
         cur = rev[j];
         i = j + 1;
     }
+}
+
+bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<Vec2>& out, int maxNodes) const {
+    out.clear();
+    if (!std::isfinite(from.x) || !std::isfinite(from.y) || maxNodes <= 0 || rw <= 0 || rh <= 0) return false;
+    int sx = clampi(tileOf(from.x), 0, MAP_W - 1), sy = clampi(tileOf(from.y), 0, MAP_H - 1);
+    if (!passable(sx, sy)) { Vec2 nf = nearestFree(from); sx = tileOf(nf.x); sy = tileOf(nf.y); }
+    if (!passable(sx, sy)) return false;
+    // goal: a free tile in the ring round the footprint (its eight neighbours' band)
+    auto isGoal = [&](int x, int y) { return x >= rx - 1 && x <= rx + rw && y >= ry - 1 && y <= ry + rh && !(x >= rx && x < rx + rw && y >= ry && y < ry + rh); };
+    if (isGoal(sx, sy)) { out.push_back(tileCenter(sx, sy)); return true; }
+    curGen++;
+    if (curGen == 0) { memset(visitGen, 0, sizeof(visitGen)); memset(closedGen, 0, sizeof(closedGen)); curGen = 1; }
+    OpenList open;
+    int start = sy * MAP_W + sx;
+    auto h = [&](int idx) {   // octile distance to the ring (as findPath: at the off-road step cost)
+        int x = idx % MAP_W, y = idx / MAP_W;
+        int dx = std::max(0, std::max(rx - 1 - x, x - (rx + rw))), dy = std::max(0, std::max(ry - 1 - y, y - (ry + rh)));
+        return 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+    };
+    gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen;
+    open.push({h(start), start});
+    int best = start; float bestH = h(start); int expanded = 0; bool found = false;
+    static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+    static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    while (!open.empty()) {
+        Node n = open.top(); open.pop();
+        if (closedGen[n.idx] == curGen) continue;
+        closedGen[n.idx] = curGen;
+        int x = n.idx % MAP_W, y = n.idx / MAP_W;
+        if (isGoal(x, y)) { best = n.idx; found = true; break; }
+        float hh = h(n.idx);
+        if (hh < bestH) { bestH = hh; best = n.idx; }
+        if (++expanded > maxNodes) break;
+        for (int d = 0; d < 8; d++) {
+            int nx = x + DX[d], ny = y + DY[d];
+            if (!passable(nx, ny)) continue;
+            if (d >= 4 && (!passable(x + DX[d], y) || !passable(x, y + DY[d]))) continue; // no corner cutting
+            int ni = ny * MAP_W + nx;
+            if (closedGen[ni] == curGen) continue;
+            float ng = gScore[n.idx] + (d >= 4 ? 1.4142f : 1.0f) * moveCost(nx, ny);
+            if (visitGen[ni] != curGen || ng < gScore[ni]) { visitGen[ni] = curGen; gScore[ni] = ng; parentIdx[ni] = n.idx; open.push({ng + h(ni), ni}); }
+        }
+    }
+    std::vector<Vec2> rev;
+    for (int i = best; i != -1 && i != start; i = parentIdx[i]) rev.push_back(tileCenter(i % MAP_W, i / MAP_W));
+    if (rev.empty()) return false;
+    std::reverse(rev.begin(), rev.end());
+    pullString(from, rev, out);
     return found;
 }
 

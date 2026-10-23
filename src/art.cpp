@@ -58,6 +58,8 @@ static int unitLocal(int type) {
     if (type == U_C_HELI) return 14;
     if (type == U_C_SBOMBER || type == U_K_SBOMBER) return 23;
     if (type == U_C_RADTRUCK || type == U_K_RADTRUCK) return 24;
+    if (type == U_C_FIGHTER || type == U_K_FIGHTER) return 25;          // the plain fighters (art_jet.cpp)
+    if (type == U_C_NUKEBOMBER || type == U_K_NUKEBOMBER) return 26;    // the call-in strategic bombers (art_jet.cpp)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -578,62 +580,130 @@ void radTruckBody(Art& A, bool cyber, int frame) {
 // ---------------------------------------------------------------- aircraft
 
 
-void jetCyber(Art& A) {   // Specter Jet: slender stealth delta, canted twin fins, glowing twin exhausts
-    // planform: swept delta wings with a cut-back trailing edge
-    A.poly({ {62, 32}, {50, 28.5f}, {38, 25}, {21, 4.5f}, {13, 4.5f}, {15.5f, 23}, {10, 27.5f}, {10, 36.5f}, {15.5f, 41}, {13, 59.5f}, {21, 59.5f}, {38, 39}, {50, 35.5f} }, CYH, 2.6f, 0.62f);
-    A.poly({ {54, 32}, {42, 27.6f}, {28, 21}, {24, 22}, {32, 28.6f}, {18, 29.6f}, {16, 32}, {18, 34.4f}, {32, 35.4f}, {24, 42}, {28, 43}, {42, 36.4f} }, shade(CYP, 0.9f), 2.2f, 0.55f);   // raised centre section
-    // wing panel lines and leading-edge emitter strips
-    A.line(36, 25.6f, 21.5f, 7, 0.9f, rgba(CYG, 200)); A.line(36, 38.4f, 21.5f, 57, 0.9f, rgba(CYG, 200));
-    A.glow(28, 16, 12, rgba(CYG, 60)); A.glow(28, 48, 12, rgba(CYG, 60));
-    A.line(15, 22, 31, 24.4f, 0.7f, rgba(CYD, 170)); A.line(15, 42, 31, 39.6f, 0.7f, rgba(CYD, 170));
-    A.line(19, 12, 29, 13.4f, 0.6f, rgba(CYD, 140)); A.line(19, 52, 29, 50.6f, 0.6f, rgba(CYD, 140));
-    // fuselage spine, nose and canopy
-    A.cap(10, 32, 52, 32, 4.8f, shade(CYH, 1.12f), 2.6f, 0.62f);
-    A.cap(46, 32, 63, 32, 2.4f, CYP, 1.8f, 0.55f);
-    A.ell(43, 32, 7.2f, 2.9f, rgb(16, 46, 66), 1.8f, 0.6f);
-    A.ell(41.6f, 31, 3.4f, 1.0f, rgba(CYW, 200), 1, 0);
-    A.line(34, 32, 52, 32, 0.6f, rgba(CYG, 150));
-    // intakes
-    A.box(33.5f, 27, 3.4f, 1.5f, 0.6f, rgb(8, 12, 18), 1, 0.3f); A.box(33.5f, 37, 3.4f, 1.5f, 0.6f, rgb(8, 12, 18), 1, 0.3f);
-    // canted tail fins (seen edge-on from above: two slim blades leaning outward)
-    A.cap(21, 25.6f, 8.5f, 20.5f, 1.35f, shade(CYP, 1.1f), 1.2f, 0.6f); A.cap(21, 38.4f, 8.5f, 43.5f, 1.35f, shade(CYP, 1.1f), 1.2f, 0.6f);
-    A.dot(8.5f, 20.5f, 0.9f, CYG); A.dot(8.5f, 43.5f, 0.9f, CYG);
-    // twin exhaust nozzles
-    for (int s = -1; s <= 1; s += 2) { A.box(9.4f, 32 + s * 3.7f, 3.2f, 2.3f, 0.8f, shade(CYD, 1.4f), 1.2f, 0.5f); A.dot(6.4f, 32 + s * 3.7f, 2.0f, CYG); A.glow(5.6f, 32 + s * 3.7f, 7, rgba(CYG, 170)); }
-    teamDot(A, 27.0f, 15.5f, 2.4f); teamDot(A, 27.0f, 48.5f, 2.4f);
-    A.dot(14.2f, 5.6f, 0.9f, rgb(255, 80, 70)); A.dot(14.2f, 58.4f, 0.9f, rgb(80, 255, 120));
+void jetCyber(Art& A) {   // Specter Jet: single-seat strike fighter (F/A-18 and F-35 family): a cropped delta with a chined nose, a bubble canopy, broad twin fins canted outward with team-coloured tips, twin nozzles, and bombs and a wingtip missile on the pylons
+    auto mir = [](float y) { return 64 - y; };
+    auto sym = [&](std::vector<P> up, Color col, float bev, float kk) {
+        std::vector<P> lo;
+        for (const P& p : up) lo.push_back({p.x, mir(p.y)});
+        A.poly(up, col, bev, kk); A.poly(lo, col, bev, kk);
+    };
+    auto capS = [&](float ax, float ay, float bx, float by, float r, Color col, float bev, float kk) {
+        A.cap(ax, ay, bx, by, r, col, bev, kk); A.cap(ax, mir(ay), bx, mir(by), r, col, bev, kk);
+    };
+    auto stroke = [&](float ax, float ay, float bx, float by, float w, Color col) {
+        A.line(ax, ay, bx, by, w, col); A.line(ax, mir(ay), bx, mir(by), w, col);
+    };
+    // a bomb or a missile hung under the wing, seen from above, with a soft shadow to the south-east
+    auto store = [&](float x0, float x1, float y, float r, Color body, bool both) {
+        for (int m = 0; m < (both ? 2 : 1); m++) {
+            float yy = m ? mir(y) : y;
+            A.soft((int)x0 - 4, (int)(yy - r - 5), (int)x1 + 5, (int)(yy + r + 6), [=](float px, float py) { return sdCap(px, py, x0 + 1.0f, yy + 1.2f, x1 - r + 0.9f, yy + 1.2f, r); }, rgba(rgb(8, 10, 16), 130), 1.6f);
+            A.box(x0 + r * 1.5f, yy, r * 0.55f, r * 2.2f, 0.15f, shade(body, 0.72f), 0.5f, 0.3f);
+            A.cap(x0 + r * 1.2f, yy, x1 - r, yy, r, body, 0.7f, 0.55f);
+            A.circle(x1 - r * 0.6f, yy, r * 0.75f, shade(body, 0.45f), 0.6f, 0.4f);
+        }
+    };
+    const Color GLS = rgb(24, 62, 86), INK = rgb(8, 12, 18);
+    // cropped delta wing with a swept leading edge and a straight trailing edge
+    sym({{44, 28.2f}, {20, 9.0f}, {17.5f, 11.6f}, {14.5f, 28.5f}}, CYH, 2.4f, 0.6f);
+    stroke(44, 28.2f, 20, 9.2f, 2.6f, rgba(CYG, 45));
+    stroke(44, 28.2f, 20, 9.2f, 0.8f, rgba(CYG, 225));
+    stroke(16.5f, 26.8f, 41, 28.0f, 0.5f, rgba(INK, 140));
+    // chined nose and the fuselage spine
+    A.cap(8, 32, 49, 32, 4.1f, shade(CYH, 1.1f), 2.6f, 0.6f);
+    sym({{42, 27.8f}, {52, 29.2f}, {59, 30.8f}, {62, 32}, {42, 32}}, shade(CYP, 0.95f), 1.6f, 0.55f);
+    stroke(60, 31, 44, 28.2f, 0.7f, rgba(CYG, 220));
+    A.line(12, 32, 52, 32, 0.6f, rgba(CYG, 140));
+    // bubble canopy with a frame and a glint
+    A.ell(47.2f, 32, 4.6f, 2.3f, GLS, 1.5f, 0.65f);
+    A.ell(46.0f, 31.0f, 2.4f, 0.6f, rgba(CYW, 220), 1, 0);
+    A.line(43.5f, 32, 50.5f, 32, 0.35f, rgba(INK, 190));
+    // intake slots under the wing root
+    for (int m = 0; m < 2; m++) A.box(34.5f, m ? mir(28.3f) : 28.3f, 3.4f, 1.3f, 0.5f, INK, 1, 0.3f);
+    // stabilisers, then the broad canted twin fins with team-coloured tips
+    sym({{20, 29.8f}, {11.5f, 26.5f}, {12.6f, 28.4f}, {17, 30.8f}}, shade(CYH, 1.05f), 1.1f, 0.5f);
+    capS(15.5f, 26.8f, 9.6f, 14.8f, 1.5f, shade(CYP, 0.9f), 1.0f, 0.5f);
+    capS(11.2f, 19.4f, 9.4f, 14.8f, 1.05f, A.team, 0.8f, 0.5f);
+    // twin nozzles with glowing rings
+    for (int s = -1; s <= 1; s += 2) {
+        float y = 32 + s * 3.8f;
+        A.box(7.0f, y, 3.0f, 2.4f, 0.8f, shade(CYD, 1.5f), 1.2f, 0.5f);
+        A.dot(5.2f, y, 1.6f, CYG);
+        A.glow(4.4f, y, 6, rgba(CYG, 150));
+    }
+    // bombs under the wing (two a side) and an AIM-9 on each wingtip rail
+    store(21.0f, 33.5f, 18.5f, 1.7f, rgb(150, 158, 166), true);
+    store(18.5f, 29.0f, 25.5f, 1.7f, rgb(150, 158, 166), true);
+    store(15.8f, 27.5f, 10.2f, 0.85f, rgb(214, 218, 222), true);
+    // team roundel on the wing, and the position lights at the tips
+    teamDot(A, 21.4f, 13.6f, 1.8f); teamDot(A, 21.4f, mir(13.6f), 1.8f);
+    A.dot(14.3f, 5.6f, 0.9f, rgb(255, 80, 70)); A.dot(14.3f, 58.4f, 0.9f, rgb(80, 255, 120));
     A.grain(8, 4, 63, 60, 0.05f, 55);
 }
 
-void jetClanker(Art& A) {   // Talon Jet: swept-wing fighter-bomber, camouflage, underwing missiles, single afterburner
-    // tailplanes, then wings, then the fuselage over them
+void jetClanker(Art& A) {   // Talon Jet: Su-34 / Su-25 family ground-attack jet: a broad flat-sided fuselage with a blunt duck-bill nose and a wide cockpit, a swept wing carrying rocket pods, twin canted fins and twin nozzles
+    auto mir = [](float y) { return 64 - y; };
+    auto sym = [&](std::vector<P> up, Color col, float bev, float kk) {
+        std::vector<P> lo;
+        for (const P& p : up) lo.push_back({p.x, mir(p.y)});
+        A.poly(up, col, bev, kk); A.poly(lo, col, bev, kk);
+    };
+    auto capS = [&](float ax, float ay, float bx, float by, float r, Color col, float bev, float kk) {
+        A.cap(ax, ay, bx, by, r, col, bev, kk); A.cap(ax, mir(ay), bx, mir(by), r, col, bev, kk);
+    };
+    auto stroke = [&](float ax, float ay, float bx, float by, float w, Color col) {
+        A.line(ax, ay, bx, by, w, col); A.line(ax, mir(ay), bx, mir(by), w, col);
+    };
+    auto ellS = [&](float cx, float cy, float rx, float ry, Color col) {
+        A.ell(cx, cy, rx, ry, col, 1, 0); A.ell(cx, mir(cy), rx, ry, col, 1, 0);
+    };
+    // an unguided rocket pod seen from above: a steel tube, a rust warhead, a dark motor bell and a soft shadow to the south-east
+    auto pod = [&](float x0, float x1, float y, float r) {
+        for (int m = 0; m < 2; m++) {
+            float yy = m ? mir(y) : y;
+            A.soft((int)x0 - 3, (int)(yy - r - 4), (int)x1 + 5, (int)(yy + r + 5), [=](float px, float py) { return sdCap(px, py, x0 + 0.9f, yy + 1.0f, x1 - r * 0.5f + 0.9f, yy + 1.0f, r); }, rgba(rgb(8, 10, 16), 120), 1.8f);
+            A.cap(x0, yy, x1 - r * 0.5f, yy, r, shade(CKS, 1.05f), 0.8f, 0.6f);
+            A.circle(x1 - r * 0.1f, yy, r * 0.78f, CKR, 0.7f, 0.4f);
+            A.dot(x1 + 0.2f, yy - r * 0.2f, r * 0.22f, rgba(rgb(255, 255, 255), 200));
+            A.dot(x0 + 0.5f, yy, r * 0.55f, rgb(8, 10, 16));
+        }
+    };
+    const Color GLS = rgb(74, 110, 126);
+    // stabilisers, then the swept wing, then the fuselage over them
+    sym({{20, 30.2f}, {10, 25.2f}, {7.6f, 27.4f}, {15.8f, 32}}, shade(CKH, 0.92f), 1.6f, 0.58f);
+    sym({{42, 27.4f}, {19, 8.2f}, {15.5f, 10.4f}, {24, 28.2f}}, CKH, 2.4f, 0.6f);
+    // sand and dark-olive camouflage over the wing
+    ellS(23.0f, 15.8f, 3.6f, 1.6f, rgba(CKT, 200));
+    ellS(28.5f, 21.5f, 4.0f, 1.6f, rgba(CKD, 170));
+    ellS(30.5f, 24.2f, 3.0f, 1.2f, rgba(CKT, 180));
+    stroke(42, 27.4f, 19, 8.2f, 0.8f, rgba(CKD, 150));
+    stroke(24, 28.2f, 15.5f, 10.4f, 0.6f, rgba(CKD, 130));
+    // broad fuselage with a blunt duck-bill nose
+    A.cap(7.5f, 32, 48, 32, 4.7f, shade(CKH, 1.06f), 2.8f, 0.62f);
+    sym({{42, 27.4f}, {53, 27.8f}, {59.2f, 29.2f}, {61.8f, 31.4f}, {61.8f, 32}, {42, 32}}, shade(CKH, 0.92f), 1.8f, 0.55f);
+    // wide side-by-side cockpit canopy with its centre frame and a glint
+    A.ell(50.5f, 32, 5.0f, 3.2f, GLS, 2.0f, 0.75f);
+    A.ell(49.2f, 30.9f, 3.0f, 0.9f, rgba(rgb(210, 232, 246), 200), 1, 0);
+    A.line(46.5f, 32, 55.0f, 32, 0.5f, rgba(CKD, 190));
+    A.line(14, 32, 40, 32, 0.8f, rgba(CKD, 150));   // spine seam
+    // twin canted fins with team-coloured tips
+    capS(14.8f, 28.8f, 8.8f, 15.8f, 1.8f, shade(CKH, 0.95f), 1.2f, 0.55f);
+    capS(10.6f, 20.6f, 8.6f, 15.8f, 1.2f, A.team, 0.8f, 0.5f);
+    // twin nozzles, side by side, with an orange glow
     for (int s = -1; s <= 1; s += 2) {
-        float m = s < 0 ? 0 : 64;
-        auto Y = [&](float y) { return s < 0 ? y : 64 - y; };
-        (void)m;
-        A.poly({ {15, Y(28.5f)}, {7.5f, Y(17)}, {3.8f, Y(17.6f)}, {6, Y(28.6f)} }, shade(CKH, 0.92f), 1.6f, 0.58f);
-        A.poly({ {44, Y(29)}, {25.5f, Y(5)}, {18, Y(5.4f)}, {19.6f, Y(14)}, {27, Y(28)} }, CKH, 2.4f, 0.6f);
-        A.line(41, Y(27.6f), 26.5f, Y(8), 0.7f, rgba(CKD, 140)); A.line(21, Y(13), 29, Y(23.5f), 0.6f, rgba(CKD, 120));
-        A.line(18.4f, Y(6.4f), 20.4f, Y(13), 0.8f, rgba(CKS, 160));
+        float y = 32 + s * 3.4f;
+        A.circle(5.8f, y, 2.4f, shade(CKD, 1.5f), 1.6f, 0.5f);
+        A.circle(5.8f, y, 1.4f, rgb(36, 20, 14), 1.0f, 0.4f);
+        A.glow(4.6f, y, 6, rgba(rgb(255, 150, 50), 150));
     }
-    // camouflage splotches in sand and dark olive
-    A.ell(34, 14, 6, 2.6f, rgba(CKT, 190), 1, 0); A.ell(34, 50, 6, 2.6f, rgba(CKT, 190), 1, 0); A.ell(25, 20, 4.4f, 1.8f, rgba(CKD, 150), 1, 0); A.ell(25, 44, 4.4f, 1.8f, rgba(CKD, 150), 1, 0);
-    A.ell(50, 30.6f, 6, 1.7f, rgba(CKT, 190), 1, 0); A.ell(50, 33.4f, 6, 1.7f, rgba(CKT, 190), 1, 0);
-    // fuselage: tapered, with an air intake each side, a bubble canopy and a long nose probe
-    A.cap(8, 32, 52, 32, 5.0f, shade(CKH, 1.06f), 2.8f, 0.62f);
-    A.cap(46, 32, 62, 32, 2.8f, shade(CKH, 0.9f), 1.8f, 0.55f);
-    A.cap(60, 32, 64, 32, 0.8f, CKD, 1, 0.4f);
-    A.box(36.5f, 26.4f, 4.4f, 1.8f, 0.8f, rgb(10, 12, 12), 1.1f, 0.3f); A.box(36.5f, 37.6f, 4.4f, 1.8f, 0.8f, rgb(10, 12, 12), 1.1f, 0.3f);
-    A.ell(41.5f, 32, 7.6f, 3.2f, rgb(74, 110, 126), 2.0f, 0.75f); A.ell(40, 30.6f, 3.4f, 1.0f, rgba(rgb(210, 232, 246), 200), 1, 0);
-    A.line(41, 28.8f, 41, 35.2f, 0.5f, rgba(CKD, 190));
-    A.line(14, 32, 32, 32, 0.8f, rgba(CKD, 150));          // spine seam
-    A.box(18, 32, 5.5f, 1.2f, 0.5f, shade(CKH, 0.7f), 1, 0.4f);   // dorsal fin edge-on
-    // big single nozzle
-    A.circle(6.2f, 32, 4.4f, shade(CKD, 1.5f), 1.8f, 0.55f); A.circle(6.2f, 32, 2.8f, rgb(36, 20, 14), 1.4f, 0.4f); A.glow(5, 32, 9, rgba(rgb(255, 150, 50), 150));
-    // underwing sidewinders and wingtip rails
-    for (int s = -1; s <= 1; s += 2) { float y = 32 + s * 17.0f; A.cap(24, y, 38, y, 1.3f, rgb(226, 228, 226), 1, 0.6f); A.dot(38.8f, y, 1.2f, rgb(214, 54, 44)); A.line(25, y - s * 1.2f, 29, y - s * 2.0f, 0.5f, rgba(CKD, 150)); }
-    teamDot(A, 30.0f, 19.0f, 2.4f); teamDot(A, 30.0f, 45.0f, 2.4f);
-    A.dot(19.6f, 6.0f, 0.9f, rgb(255, 80, 70)); A.dot(19.6f, 58.0f, 0.9f, rgb(80, 255, 120));
+    // three rocket pods a side on the wing pylons
+    pod(16.5f, 26.5f, 12.0f, 1.5f);
+    pod(17.5f, 28.5f, 17.0f, 1.5f);
+    pod(19.0f, 30.0f, 22.0f, 1.5f);
+    // team roundel on the wing root, hazard stripes at the wingtips, rust and scratches
+    teamDot(A, 31.0f, 25.5f, 1.9f); teamDot(A, 31.0f, mir(25.5f), 1.9f);
+    A.dot(19.2f, 6.9f, 0.9f, rgb(255, 80, 70)); A.dot(19.2f, 57.1f, 0.9f, rgb(80, 255, 120));
+    stroke(33, 29.6f, 18, 26, 0.5f, rgba(CKR, 130));
     A.grain(4, 4, 64, 60, 0.12f, 77);
 }
 void droneBody(Art& A) {   // Wraith Drone: stealth flying wing
@@ -963,6 +1033,8 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 20: artShipBody(c, team, cy, true); break;
     case 21: artStrikeJetBody(c, team, cy); break;
     case 23: artSupersonicBomberBody(c, team, cy); break;   // Supersonic Bomber (art_jet.cpp)
+    case 25: artFighterBody(c, team, cy); break;            // plain fighter (art_jet.cpp)
+    case 26: artNukeBomberBody(c, team, cy); break;         // call-in strategic bomber (art_jet.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
         enhance(c, 0.7f);
@@ -1294,6 +1366,8 @@ float artScale(int type) {
     if (local == 21) return 1.4f;    // Hotline Strike fighters
     if (local == 23) return 1.16f;   // Supersonic Bombers: small and fast, a notch smaller than the strike jets
     if (local == 24) return 1.06f;   // Anti-Radiation Trucks: a medium truck, a touch smaller than the jeeps
+    if (local == 25) return 1.22f;   // plain fighters
+    if (local == 26) return 2.1f;    // the call-in strategic bombers: the biggest thing in the sky
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

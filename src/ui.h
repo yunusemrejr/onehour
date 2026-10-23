@@ -43,6 +43,8 @@ struct Game {
     bool powerMode = false;
     bool nukeMode = false;          // picking a nuke target
     bool nukeMini = false;          // ... for a bunker's small missile
+    bool nukeIsland = false;        // ... for an island launcher's small nuke
+    bool bomberMode = false;        // picking the spot a Nuclear Bomber flies to
     bool nukeDeep = false;          // ... for an Underground Nuke silo's silver warhead
     bool launchNuke(Vec2 at);       // fires the missile (a selected ready bunker's, else any ready one); false if none could go
     bool dropMode = false;          // picking a paradrop zone
@@ -147,6 +149,7 @@ private:
     void drawBuildingAnim(const Entity& e, Vec2 p, bool disabled);
     void drawTownsfolk(const Entity& e, Vec2 p);   // the townsfolk walking about a civilian structure (decoration)
     void drawBuildingDamage(const Entity& e, Vec2 p);
+    void drawIndestructible(const Entity& e, Vec2 p);   // island launcher / Bastion Wall: its flames (Entity.heat) and the launcher's live laser cage
     void drawFx();
     void drawClouds();
     void drawGroundFx();            // scorch marks, ruins and wrecks: on the ground, under everything that stands or drives

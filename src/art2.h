@@ -32,3 +32,12 @@ void artStrikeJetBody(Canvas& c, Color team, bool cyber);
 // carrying ONE compact silver bomb (with the silver warhead's gold band, much smaller than a silo's) under an inboard wing; the bomb
 // is painted into the sprite. Afterburner flame and contrails are added live by the renderer.
 void artSupersonicBomberBody(Canvas& c, Color team, bool cyber);
+
+// The plain fighter jet (Raptor Fighter / Saber Fighter): a twin-engine air-superiority fighter in the Zero Hour mould (Cyber: a stealthy F-22
+// style planform in cobalt-grey; Clanker: a MiG-29 / Su-27 style twin-fin fighter in camouflage). 64x64 canvas, nose +x, about 54 px long,
+// wingspan about 40 px; missiles on the wing pylons. Afterburner flame and contrails are added live by the renderer.
+void artFighterBody(Canvas& c, Color team, bool cyber);
+
+// The strategic bomber of the Nuclear Bomber call-in (Nightfall / Thunderhead): a big heavy bomber (Cyber: a B-2 style flying wing; Clanker:
+// a Tu-160 style swing-wing with four engines). 64x64 canvas, nose +x, it fills most of the canvas; shown at about twice a jet's size.
+void artNukeBomberBody(Canvas& c, Color team, bool cyber);

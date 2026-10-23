@@ -1,8 +1,10 @@
 #include "gfx.h"
+#include "map.h"
 #include "art.h"
 #include "art2.h"
 #include "artb.h"
 #include "terrain.h"
+#include "icons.h"
 
 Gfx g_gfx;
 
@@ -73,6 +75,7 @@ bool Gfx::init(int scale, bool software, int reqW, int reqH) {
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     { Canvas c(2, 2); c.fillRect(0, 0, 2, 2, rgb(255, 255, 255)); white = fromCanvas(c, 0, 0).tex; }
     buildFont(); bakeTerrain(); buildUnits(); buildBuildings(); buildMisc(); buildEffects(); buildMinimap();
+    iconsInit(*this);
     return true;
 }
 
@@ -188,8 +191,20 @@ void Gfx::drawSized(const Sprite& s, float cx, float cy, float w, float h, float
     SDL_FRect dst = { cx - w * 0.5f, cy - h * 0.5f, w, h };
     SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b);
     SDL_SetTextureAlphaMod(s.tex, alpha);
-    if (angle == 0) SDL_RenderCopyF(ren, s.tex, nullptr, &dst);
-    else SDL_RenderCopyExF(ren, s.tex, nullptr, &dst, angle * 57.29578f, nullptr, SDL_FLIP_NONE);
+    if (angle == 0) { SDL_RenderCopyF(ren, s.tex, nullptr, &dst); return; }
+    if (softwareRenderer && (w < 2.2f * h || w <= 96)) {
+        // The CPU renderer rotates a texture by building a rotated copy for every call: with a battle's smoke, sparks and tracers that was most of
+        // the frame. Small effects do not need it: a thin streak becomes a line along its heading, anything rounder (smoke, dust, debris) is drawn
+        // upright, which reads the same at that size.
+        if (w >= 2.2f * h) {
+            Vec2 d(std::cos(angle) * w * 0.5f, std::sin(angle) * w * 0.5f);
+            Color c{ mod.r, mod.g, mod.b, alpha };
+            line(cx - d.x, cy - d.y, cx + d.x, cy + d.y, c);
+            if (h >= 3.0f) { Vec2 n(-std::sin(angle), std::cos(angle)); line(cx - d.x * 0.8f + n.x, cy - d.y * 0.8f + n.y, cx + d.x * 0.8f + n.x, cy + d.y * 0.8f + n.y, Color{ mod.r, mod.g, mod.b, (u8)(alpha / 2) }); }
+        } else SDL_RenderCopyF(ren, s.tex, nullptr, &dst);
+        return;
+    }
+    SDL_RenderCopyExF(ren, s.tex, nullptr, &dst, angle * 57.29578f, nullptr, SDL_FLIP_NONE);
 }
 void Gfx::discFill(float cx, float cy, float r, Color c) {
     if (!disc.tex || r < 1) return;
@@ -270,6 +285,46 @@ void Gfx::bakeTerrain() {
     if (shroudTex) SDL_SetTextureBlendMode(shroudTex, SDL_BLENDMODE_BLEND);
 }
 
+void Gfx::rebakeTerrain() {
+    if (worldTerrain.tex) SDL_DestroyTexture(worldTerrain.tex);
+    if (minimapTerrain.tex) SDL_DestroyTexture(minimapTerrain.tex);
+    if (shroudTex) SDL_DestroyTexture(shroudTex);
+    worldTerrain = Sprite(); minimapTerrain = Sprite(); shroudTex = nullptr;
+    bakeTerrain();
+    terrainEdited = false;
+}
+
+void Gfx::refreshTerrain() {
+    if (g_map.cleared.empty()) return;
+    // one structure's footprint at a time (Map::clearForStructure ends each with -1): structures placed far apart must not merge into one huge rectangle
+    std::vector<int> group;
+    for (size_t i = 0; i <= g_map.cleared.size(); i++) {
+        if (i < g_map.cleared.size() && g_map.cleared[i] >= 0) { group.push_back(g_map.cleared[i]); continue; }
+        if (!group.empty()) uploadTerrainPatch(group);
+        group.clear();
+    }
+    g_map.cleared.clear();
+}
+
+void Gfx::uploadTerrainPatch(const std::vector<int>& group) {
+    int x = 0, y = 0, w = 0, h = 0; std::vector<u32> px;
+    bool ok = terrainRepaint(group, x, y, w, h, px);
+    if (!ok || !worldTerrain.tex) return;
+    terrainEdited = true;
+    SDL_Rect r = { x, y, w, h };
+    Uint32 fmt = 0; SDL_QueryTexture(worldTerrain.tex, &fmt, nullptr, nullptr, nullptr);
+    if (fmt != SDL_PIXELFORMAT_RGB565) { SDL_UpdateTexture(worldTerrain.tex, &r, px.data(), w * 4); return; }
+    static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };   // (the same dither as fromCanvas565, on world coordinates)
+    std::vector<u16> out((size_t)w * h);
+    for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+        Color col = Canvas::unpack(px[(size_t)j * w + i]);
+        int dth = BAYER[((y + j) & 3) * 4 + ((x + i) & 3)] - 8;
+        int rr = clampi((int)col.r + dth / 4, 0, 255) >> 3, gg = clampi((int)col.g + dth / 8, 0, 255) >> 2, bb = clampi((int)col.b + dth / 4, 0, 255) >> 3;
+        out[(size_t)j * w + i] = (u16)((rr << 11) | (gg << 5) | bb);
+    }
+    SDL_UpdateTexture(worldTerrain.tex, &r, out.data(), w * 2);
+}
+
 void Gfx::updateShroud(const std::vector<u8>& ex) {
     if (!shroudTex) return;
     // 0 = explored, 255 = never seen. The binary map is upsampled with bilinear weights and the edge is pushed around by value noise, so
@@ -290,20 +345,42 @@ void Gfx::updateShroud(const std::vector<u8>& ex) {
             edgeN[(size_t)y * W2 + x] = vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f;
         }
     }
-    buf.assign((size_t)W2 * H2, 0);
-    for (int y = 0; y < H2; y++) for (int x = 0; x < W2; x++) {
-        float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
-        int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx = fx - x0, ty = fy - y0;
-        auto E = [&](int a, int b) { return ex[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)] ? 1.0f : 0.0f; };
-        float v = lerpf(lerpf(E(x0, y0), E(x0 + 1, y0), tx), lerpf(E(x0, y0 + 1), E(x0 + 1, y0 + 1), tx), ty);
-        if (v <= 0.0f) { buf[(size_t)y * W2 + x] = (u32)mottle[(size_t)y * W2 + x] << 24 | 12u << 16 | 8u << 8 | 5u; continue; }   // unseen: mottled dark
-        if (v >= 1.0f) continue;                                                                                                                   // seen: clear
-        float n = edgeN[(size_t)y * W2 + x];
-        float s = clampf((v - 0.5f) * 1.6f + (n - 0.5f) * 0.9f + 0.5f, 0, 1);
-        s = s * s * (3 - 2 * s);
-        buf[(size_t)y * W2 + x] = (u32)((1.0f - s) * 242) << 24 | 12u << 16 | 8u << 8 | 5u;
+    // Only the blocks of BLK x BLK tiles where the exploration changed (and their neighbours, which the bilinear fringe reaches into) are
+    // rebuilt and re-uploaded: units uncovering ground in a big match used to rebuild and upload the whole mask several times a second.
+    static std::vector<u8> last;
+    const int BLK = 8, BW = (MAP_W + BLK - 1) / BLK, BH = (MAP_H + BLK - 1) / BLK;
+    static std::vector<u8> dirty;
+    dirty.assign((size_t)BW * BH, 0);
+    bool full = (int)buf.size() != W2 * H2 || last.size() != ex.size();
+    if (full) { buf.assign((size_t)W2 * H2, 0); std::fill(dirty.begin(), dirty.end(), 1); }
+    else {
+        bool any = false;
+        for (int i = 0; i < MAP_W * MAP_H; i++) if (ex[i] != last[i]) {
+            int bx = (i % MAP_W) / BLK, by = (i / MAP_W) / BLK; any = true;
+            for (int j = -1; j <= 1; j++) for (int k = -1; k <= 1; k++) { int X = bx + k, Y = by + j; if (X >= 0 && Y >= 0 && X < BW && Y < BH) dirty[(size_t)Y * BW + X] = 1; }
+        }
+        if (!any) return;
     }
-    SDL_UpdateTexture(shroudTex, nullptr, buf.data(), W2 * 4);
+    last = ex;
+    auto E = [&](int a, int b) { return ex[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)] ? 1.0f : 0.0f; };
+    for (int by = 0; by < BH; by++) for (int bx = 0; bx < BW; bx++) {
+        if (!dirty[(size_t)by * BW + bx]) continue;
+        int px0 = bx * BLK * SS, py0 = by * BLK * SS, px1 = std::min(W2, (bx + 1) * BLK * SS), py1 = std::min(H2, (by + 1) * BLK * SS);
+        for (int y = py0; y < py1; y++) for (int x = px0; x < px1; x++) {
+            float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
+            int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx = fx - x0, ty = fy - y0;
+            float v = lerpf(lerpf(E(x0, y0), E(x0 + 1, y0), tx), lerpf(E(x0, y0 + 1), E(x0 + 1, y0 + 1), tx), ty);
+            u32& o = buf[(size_t)y * W2 + x];
+            if (v <= 0.0f) { o = (u32)mottle[(size_t)y * W2 + x] << 24 | 12u << 16 | 8u << 8 | 5u; continue; }   // unseen: mottled dark
+            if (v >= 1.0f) { o = 0; continue; }                                                                     // seen: clear
+            float n = edgeN[(size_t)y * W2 + x];
+            float sm = clampf((v - 0.5f) * 1.6f + (n - 0.5f) * 0.9f + 0.5f, 0, 1);
+            sm = sm * sm * (3 - 2 * sm);
+            o = (u32)((1.0f - sm) * 242) << 24 | 12u << 16 | 8u << 8 | 5u;
+        }
+        if (!full) { SDL_Rect r = { px0, py0, px1 - px0, py1 - py0 }; SDL_UpdateTexture(shroudTex, &r, &buf[(size_t)py0 * W2 + px0], W2 * 4); }
+    }
+    if (full) SDL_UpdateTexture(shroudTex, nullptr, buf.data(), W2 * 4);
 }
 
 static Sprite cropToSprite(Gfx& g, Canvas& c, float cx, float cy, float dscale);   // defined with the buildings below; unit sprites are cropped to their painted area too

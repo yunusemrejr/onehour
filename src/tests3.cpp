@@ -159,7 +159,7 @@ static bool shipsFight(Faction me, Faction foe, u64 seed) {
     for (Ref r : mine) if (Entity* e = g_sim.get(r)) CHECK3(onWater(*e), "a fighting ship is on land");
     // cruiser rockets hit a tank on the shore, a long way off, and nothing closer than the minimum range
     lakeScene(me, foe, seed + 1);
-    Vec2 shore = g_map.nearestFree(lakePoint(0, -15), 10);
+    Vec2 shore = g_map.nearestFree(lakePoint(0, -29), 10);   // (the north shore, beyond the beach of the bigger lake)
     Ref tank = g_sim.spawnUnit(tankF, 1, shore);
     Entity* tk = g_sim.get(tank); tk->disabledUntil = 1e9f;   // it sits still and takes it
     Vec2 wpos = g_map.nearestWater(Vec2(tk->pos.x, tk->pos.y + 11.0f * TILE), 12);
@@ -237,7 +237,9 @@ static bool mapConnectivity() {
     for (auto& sp : g_map.supplies) CHECK3(comp[sp.ty * MAP_W + sp.tx] == main, "a supply pile is cut off from the rest of the land");
     int island = comp[(MAP_H / 2) * MAP_W + MAP_W / 2];   // the lake's island is cut off by design (reached by airlift, not by road)
     CHECK3(island != 0 && island != main, "the island in the middle of the lake is not an island");
-    int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main && i != island) stray += size[i];
+    std::vector<int> islandComps{ island };   // (both lake islands are cut off by design)
+    for (auto& isl : g_map.islands) islandComps.push_back(comp[(int)isl.cy * MAP_W + (int)isl.cx]);
+    int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main && std::find(islandComps.begin(), islandComps.end(), i) == islandComps.end()) stray += size[i];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "map: main land %d tiles, island %d, %d tiles in small pockets\n", size[main], size[island], stray);
     CHECK3(stray <= 40, "the lake and rivers cut off pockets of land");
     return true;

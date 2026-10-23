@@ -7,3 +7,7 @@
 void terrainBake(Canvas& world);
 // Box-filtered overview of the baked world for the minimap (size x size).
 void terrainOverview(const Canvas& world, Canvas& out);
+// Structures were placed over trees, bushes or small rocks (Map::cleared: tile | kind << 24, kind 1 a footprint tile, 2 quarried rock). Repaints the
+// baked world there: the felled trees and bushes vanish (the ground they stood on comes back with the trees round it redrawn), quarried rock becomes
+// bare earth. 'out' gets the final pixels of the world rectangle (x, y, w, h) to upload; false when nothing visible changed.
+bool terrainRepaint(const std::vector<int>& cleared, int& x, int& y, int& w, int& h, std::vector<u32>& out);

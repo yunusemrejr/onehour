@@ -365,7 +365,49 @@ Canvas makeProp(int kind, float R, u32 seed) {
     return downsample2(big);
 }
 
-struct Tree { float x, y, r; int kind; u32 seed; };
+struct Tree { float x, y, r; int kind; u32 seed; int tile = -1; };   // tile: the map tile it grows on (a structure built there clears it)
+
+// What the bake leaves behind for local repaints (see terrainRepaint): the world as it was before the trees were drawn, every tree and bush,
+// and the tree sprites. A structure placed over trees then only has to recompose a small rectangle.
+struct Kept {
+    std::vector<u32> preTree;
+    std::vector<Tree> trees;
+    std::vector<Canvas> sprites[T_KINDS];
+    bool ok = false;
+};
+Kept& kept() { static Kept k; return k; }
+
+float spriteBase(int kind) { return kind == T_BUSH ? 8.5f : (kind == T_CONIFER ? 15.0f : 16.5f); }
+// One tree into 'dst', whose pixel (0,0) is world pixel (ox, oy)
+void drawTree(Canvas& dst, const Tree& t, int ox, int oy) {
+    const Canvas& s = kept().sprites[t.kind][t.seed % kept().sprites[t.kind].size()];
+    float sc = t.r / spriteBase(t.kind);
+    if (std::abs(sc - 1.0f) < 0.18f) { blitOver(dst, s, (int)(t.x - s.w * 0.5f) - ox, (int)(t.y - s.h * 0.5f) - oy); return; }
+    // scale by nearest sampling for the odd size
+    int nw = std::max(4, (int)(s.w * sc)), nh = std::max(4, (int)(s.h * sc));
+    Canvas sc2(nw, nh);
+    for (int y = 0; y < nh; y++) for (int x = 0; x < nw; x++) sc2.px[y * nw + x] = s.px[std::min(s.h - 1, (int)(y / sc)) * s.w + std::min(s.w - 1, (int)(x / sc))];
+    blitOver(dst, sc2, (int)(t.x - nw * 0.5f) - ox, (int)(t.y - nh * 0.5f) - oy);
+}
+// The pixel rectangle a tree's sprite covers (canopy and its shadow), generously
+void treeRect(const Tree& t, int& x0, int& y0, int& x1, int& y1) {
+    const Canvas& s = kept().sprites[t.kind][t.seed % kept().sprites[t.kind].size()];
+    float sc = t.r / spriteBase(t.kind);
+    if (std::abs(sc - 1.0f) < 0.18f) sc = 1.0f;
+    float hw = s.w * sc * 0.5f + 2, hh = s.h * sc * 0.5f + 2;
+    x0 = (int)(t.x - hw) - 1; y0 = (int)(t.y - hh) - 1; x1 = (int)(t.x + hw) + 2; y1 = (int)(t.y + hh) + 2;
+}
+// The final colour grade of the bake (broad light variation and the split-tone curve), for repainted ground
+F3 gradeGround(F3 col, float x, float y, const Noise& nz) {
+    col = mul3(col, 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
+    float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
+    auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
+    vr = curve(vr); vg = curve(vg); vb = curve(vb);
+    float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+    vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
+    float warm = (lum - 0.5f) * 0.045f;
+    return f3((int)clampf((vr + warm) * 255.0f, 0, 255), (int)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (int)clampf((vb - warm) * 255.0f, 0, 255));
+}
 
 }  // namespace
 
@@ -436,6 +478,7 @@ void terrainBake(Canvas& world) {
                 t.kind = zone > 0.55f ? (u < 0.8f ? T_CONIFER : T_BROAD) : (u < 0.11f ? T_AUTUMN : T_BROAD);
                 t.r = (t.kind == T_CONIFER ? r.f(13, 17) : r.f(14, 19));
                 t.seed = r.next();
+                t.tile = ty * MAP_W + tx;
                 trees.push_back(t);
             }
         }
@@ -448,7 +491,7 @@ void terrainBake(Canvas& world) {
             for (auto& s : g_map.starts) if (std::abs(tx - s.tx) < 8 && std::abs(ty - s.ty) < 8) near = true;
             for (auto& s : g_map.supplies) if (std::abs(tx - s.tx) < 3 && std::abs(ty - s.ty) < 3) near = true;
             if (near) continue;
-            Tree t; t.x = tx * TILE + r.f(4, TILE - 4); t.y = ty * TILE + r.f(4, TILE - 4); t.kind = T_BUSH; t.r = r.f(7, 10); t.seed = r.next();
+            Tree t; t.x = tx * TILE + r.f(4, TILE - 4); t.y = ty * TILE + r.f(4, TILE - 4); t.kind = T_BUSH; t.r = r.f(7, 10); t.seed = r.next(); t.tile = ty * MAP_W + tx;
             trees.push_back(t);
         }
         std::sort(trees.begin(), trees.end(), [](const Tree& a, const Tree& b) { return a.y < b.y; });
@@ -844,21 +887,75 @@ void terrainBake(Canvas& world) {
         }
     }
 
-    // ---- trees, back to front
+    // ---- trees, back to front (the world without them is kept for local repaints)
     {
-        std::vector<Canvas> sprites[T_KINDS];
-        for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) { float R = k == T_BUSH ? 8.5f : (k == T_CONIFER ? 15.0f : 16.5f); sprites[k].push_back(makeTree(k, R + v * 0.6f, 5000u + k * 97u + v * 13u)); }
-        for (auto& t : trees) {
-            const Canvas& s = sprites[t.kind][t.seed % sprites[t.kind].size()];
-            float sc = t.r / (t.kind == T_BUSH ? 8.5f : (t.kind == T_CONIFER ? 15.0f : 16.5f));
-            if (std::abs(sc - 1.0f) < 0.18f) { blitOver(world, s, (int)(t.x - s.w * 0.5f), (int)(t.y - s.h * 0.5f)); continue; }
-            // scale by nearest sampling for the odd size
-            int nw = std::max(4, (int)(s.w * sc)), nh = std::max(4, (int)(s.h * sc));
-            Canvas sc2(nw, nh);
-            for (int y = 0; y < nh; y++) for (int x = 0; x < nw; x++) sc2.px[y * nw + x] = s.px[std::min(s.h - 1, (int)(y / sc)) * s.w + std::min(s.w - 1, (int)(x / sc))];
-            blitOver(world, sc2, (int)(t.x - nw * 0.5f), (int)(t.y - nh * 0.5f));
+        Kept& K = kept();
+        if (K.sprites[0].empty()) for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) K.sprites[k].push_back(makeTree(k, spriteBase(k) + v * 0.6f, 5000u + k * 97u + v * 13u));
+        K.preTree = world.px;
+        K.trees = trees;
+        K.ok = true;
+        for (auto& t : trees) drawTree(world, t, 0, 0);
+    }
+}
+
+bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, int& rh, std::vector<u32>& out) {
+    Kept& K = kept();
+    if (!K.ok || cleared.empty()) return false;
+    const Noise& nz = NZ();
+    std::vector<u8> foot((size_t)MAP_W * MAP_H, 0);   // 1 footprint tile, 2 quarried rock
+    for (int c : cleared) { int k = c & 0xFFFFFF, kind = c >> 24; if (k >= 0 && k < MAP_W * MAP_H) foot[k] = (u8)std::max<int>(foot[k], kind == 2 ? 2 : 1); }
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
+    auto grow = [&](int a, int b, int c, int d) { x0 = std::min(x0, a); y0 = std::min(y0, b); x1 = std::max(x1, c); y1 = std::max(y1, d); };
+    // the trees and bushes that grew on the footprint go
+    std::vector<Tree> keep; keep.reserve(K.trees.size());
+    for (auto& t : K.trees) {
+        if (t.tile >= 0 && foot[t.tile]) { int a, b, c, d; treeRect(t, a, b, c, d); grow(a, b, c, d); continue; }
+        keep.push_back(t);
+    }
+    bool felled = keep.size() != K.trees.size();
+    K.trees.swap(keep);
+    // quarried rock becomes bare earth, feathered into what is round it
+    const int FEATHER = 14;
+    bool rock = false;
+    int qx0 = 1 << 30, qy0 = 1 << 30, qx1 = -1, qy1 = -1;
+    for (int i = 0; i < MAP_W * MAP_H; i++) if (foot[i] == 2) { rock = true; int tx = i % MAP_W, ty = i / MAP_W; qx0 = std::min(qx0, tx); qy0 = std::min(qy0, ty); qx1 = std::max(qx1, tx); qy1 = std::max(qy1, ty); }
+    if (rock) {
+        int px0 = std::max(0, qx0 * TILE - FEATHER), py0 = std::max(0, qy0 * TILE - FEATHER);
+        int px1 = std::min(WORLD_W - 1, (qx1 + 1) * TILE + FEATHER), py1 = std::min(WORLD_H - 1, (qy1 + 1) * TILE + FEATHER);
+        grow(px0, py0, px1 + 1, py1 + 1);
+        for (int y = py0; y <= py1; y++) for (int x = px0; x <= px1; x++) {
+            float best = 1e9f;   // distance to the nearest quarried tile (px)
+            for (int ty = std::max(0, (y - FEATHER) / TILE); ty <= std::min(MAP_H - 1, (y + FEATHER) / TILE); ty++)
+                for (int tx = std::max(0, (x - FEATHER) / TILE); tx <= std::min(MAP_W - 1, (x + FEATHER) / TILE); tx++) {
+                    if (foot[ty * MAP_W + tx] != 2) continue;
+                    float dx = std::max(0.0f, std::max(tx * TILE - (float)x, x - (tx + 1.0f) * TILE)), dy = std::max(0.0f, std::max(ty * TILE - (float)y, y - (ty + 1.0f) * TILE));
+                    best = std::min(best, std::sqrt(dx * dx + dy * dy));
+                }
+            if (best > FEATHER) continue;
+            float w = best <= 2.0f ? 1.0f : sstep((float)FEATHER, 2.0f, best);
+            float macro = nz.fbm(x * 0.012f, y * 0.012f);
+            F3 dirt = groundColor(K_DIRT, (float)x, (float)y, nz, macro, 0);
+            dirt = lerp3(dirt, SCREE, 0.25f * nz.v(x * 0.2f + 4, y * 0.2f + 9));   // rubble left by the quarrying
+            dirt = gradeGround(dirt, (float)x, (float)y, nz);
+            u32& d = K.preTree[(size_t)y * WORLD_W + x];
+            Color o = Canvas::unpack(d);
+            d = Canvas::pack(Color{ (u8)clampf(o.r + (dirt.r - o.r) * w, 0, 255), (u8)clampf(o.g + (dirt.g - o.g) * w, 0, 255), (u8)clampf(o.b + (dirt.b - o.b) * w, 0, 255), 255 });
         }
     }
+    if (!felled && !rock) return false;
+    x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(WORLD_W, x1); y1 = std::min(WORLD_H, y1);
+    if (x1 <= x0 || y1 <= y0) return false;
+    rx = x0; ry = y0; rw = x1 - x0; rh = y1 - y0;
+    // recompose: the ground before the trees, then every tree that reaches into the rectangle, back to front
+    Canvas patch(rw, rh);
+    for (int y = 0; y < rh; y++) memcpy(&patch.px[(size_t)y * rw], &K.preTree[(size_t)(ry + y) * WORLD_W + rx], (size_t)rw * 4);
+    for (auto& t : K.trees) {
+        int a, b, c, d; treeRect(t, a, b, c, d);
+        if (c < rx || a > rx + rw || d < ry || b > ry + rh) continue;
+        drawTree(patch, t, rx, ry);
+    }
+    out.swap(patch.px);
+    return true;
 }
 
 void terrainOverview(const Canvas& world, Canvas& out) {

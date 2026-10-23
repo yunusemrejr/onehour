@@ -121,15 +121,27 @@ static bool spyCapture(Faction me, Faction foe, u64 seed) {
     Ref b = placeAt(bar, 1, mid);
     CHECK(b.valid(), "no spot for the barracks");
     Vec2 bp = g_sim.get(b)->pos;
-    // ---- a defended structure: a spy that gets shot never finishes
+    // ---- a structure guarded by a sniper: the sniper finds the stealthy infiltrator and shoots it, so it never finishes. (A tank, which cannot
+    // see an infiltrator, would not have stopped it.)
     Ref spy = spawnAt(spyMe, 0, bp + Vec2(0, 6 * TILE));
-    Ref guard = spawnAt(firstUnitOf(foe) + 5, 1, bp + Vec2(2 * TILE, 3 * TILE));
+    Ref guard = spawnAt(foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER, 1, bp + Vec2(2 * TILE, 3 * TILE));
+    Ref tank = spawnAt(firstUnitOf(foe) + 5, 1, bp + Vec2(-2 * TILE, 3 * TILE));
     g_sim.cmdAttack({spy}, b);
     CHECK(g_sim.get(spy)->order == O_CAPTURE, "a right-click on an enemy structure did not give the spy a capture order");
     run(40);
-    CHECK(!alive(spy), "a spy walking past an enemy tank survived");
+    CHECK(!alive(spy), "a spy walking past an enemy sniper survived");
     CHECK(g_sim.get(b)->owner == 1, "a dead spy captured a structure");
     g_sim.destroy(*g_sim.get(guard), false);
+    {   // the tank alone: it never sees the infiltrator, which walks past it and takes the structure (then the scene is put back)
+        Ref spyT = spawnAt(spyMe, 0, bp + Vec2(0, 6 * TILE));
+        g_sim.cmdAttack({spyT}, b);
+        run(g_sim.captureTime(*g_sim.get(b)) + 12);
+        CHECK(alive(spyT), "a tank shot an infiltrator it cannot see");
+        CHECK(g_sim.get(b)->owner == 0, "an infiltrator could not take a structure guarded only by a tank");
+        g_sim.get(b)->owner = 1;
+        if (Entity* x = g_sim.get(spyT)) g_sim.destroy(*x, false);
+    }
+    if (Entity* t = g_sim.get(tank)) g_sim.destroy(*t, false);
     g_sim.cmdTrain(b, firstUnitOf(foe) + 2);   // the enemy has a trooper in the queue (frozen at the start): capturing refunds it
     g_sim.get(b)->queueProgress = -100.0f;
     int enemyMoney = g_sim.players[1].money;
@@ -348,7 +360,11 @@ static bool infantryTest(Faction me, Faction foe, u64 seed) {
     int rifle = firstUnitOf(me) + 2;
     Ref r = spawnAt(rifle, 0, mid);
     float base = g_sim.get(r)->maxHp;
-    for (int i = 0; i < VET_KILLS; i++) { Ref v = spawnAt(foe == F_CYBER ? U_C_SPY : U_K_SPY, 1, mid + Vec2(30, 0)); g_sim.cmdAttack({r}, v); run(6); }
+    for (int i = 0; i < VET_KILLS; i++) {   // (a stunned enemy rifleman: it cannot fire back; the spies the scene used to use are stealthy now)
+        Ref v = spawnAt(firstUnitOf(foe) + 2, 1, mid + Vec2(30, 0));
+        if (Entity* ve = g_sim.get(v)) ve->disabledUntil = 1e9f;
+        g_sim.cmdAttack({r}, v); run(12);
+    }
     CHECK(alive(r) && g_sim.get(r)->rank >= 1, "four kills did not make a veteran");
     CHECK(g_sim.get(r)->maxHp > base, "a veteran is no tougher than a recruit");
     printf("stealthtest %s: rocket infantry and promotions ok\n", FACTION_NAME[me]);
@@ -700,7 +716,9 @@ static bool bunkerRetaliateTest(Faction me, Faction foe, u64 seed) {
     bp = g_sim.get(bk)->pos;
     flattenArena(bp, 13, 13);   // the fixture measures retaliation range, not terrain relocation
     g_sim.get(bk)->hatch = 0; g_sim.get(bk)->lastDamaged = g_sim.time;
-    Ref lr = spawnAt(longFoe, 1, bp + Vec2(longReach * TILE, 0));
+    Vec2 lrAt = bp + Vec2(longReach * TILE, 0);   // (the first free spot on the ring at exactly that reach: a landmark or a pile may stand east of the bunker)
+    for (int k = 0; k < 16; k++) { Vec2 q = bp + Vec2(std::cos(k * 0.3927f), std::sin(k * 0.3927f)) * (longReach * TILE); if (g_map.passable(tileOf(q.x), tileOf(q.y))) { lrAt = q; break; } }
+    Ref lr = spawnAt(longFoe, 1, lrAt);
     CHECK(lr.valid(), "no spot for the long-range attacker");
     g_sim.get(lr)->maxHp *= 10; g_sim.get(lr)->hp = g_sim.get(lr)->maxHp;
     float lr0 = hpOf(lr), lrDist = dist(g_sim.get(lr)->pos, bp) / TILE;

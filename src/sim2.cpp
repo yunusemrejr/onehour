@@ -458,6 +458,136 @@ void Sim::strikeJetRun(Entity& e) {
     if (D < 640.0f && D > 220.0f && std::abs(angDelta(e.angle, want)) < 0.12f) { e.salvoLeft = STRIKE_SALVO; e.actionTimer = 0; emit(EV_SOUND, e.owner, SND_JET, e.pos); }   // (a pass begins with the roar of the engines)
 }
 
+// ------------------------------------------------------------ indestructible structures and the Island Nuke Launchers
+void Sim::heatUp(Entity& b, float amount) {
+    if (amount <= 0) return;
+    float before = b.heat;
+    b.heat = std::min(HEAT_MAX, b.heat + amount);
+    if (before < 0.25f && b.heat >= 0.25f) fx.push_back({FX_SMOKE, b.pos, b.pos, 0, 2.4f, rgb(70, 62, 54), b.radius() * 0.6f, Vec2(rng.f(-6, 6), -26)});   // it catches
+}
+
+void Sim::updateIslandNuke(Entity& b) {
+    // A neutral launcher sleeps. A held one keeps its clock (ISLAND_NUKE_COOLDOWN, the bunkers' cooldown) whatever burns round it; the renderer shows the
+    // laser chamber flaring when something hits it (lastDamaged) and the flames (heat).
+    if (b.owner < 0) return;
+    if (time >= b.siloTimer && (tick + b.gen) % 200 == 0) fx.push_back({FX_SPARK, b.pos, b.pos, 0, 0.5f, rgb(255, 120, 90), 6});   // armed: a red light blinks
+}
+
+bool Sim::cmdIslandNuke(int player, Vec2 pos, bool force, Ref from) {
+    if (player < 0 || player >= numPlayers) return false;
+    force = force && !players[player].isAI;
+    auto ready = [&](const Entity& e) { return e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_ISLANDNUKE && time >= e.siloTimer; };
+    Entity* l = get(from);
+    if (!l || !ready(*l)) {
+        l = nullptr;
+        for (auto& e : ents) if (ready(e)) { l = &e; break; }
+    }
+    if (!l) return false;
+    l->siloTimer = time + ISLAND_NUKE_COOLDOWN;
+    players[player].islandLaunches++;
+    nukes.push_back({l->pos, pos, player, 0, force, ISLAND_NUKE_SCALE});
+    emit(EV_SOUND, -1, SND_ROCKET, l->pos);
+    for (int k = 0; k < 8; k++) fx.push_back({FX_SMOKE, l->pos + Vec2(rng.f(-20, 20), rng.f(-14, 14)), Vec2(), -rng.f(0, 0.3f), 2.6f, rgb(214, 210, 200), rng.f(10, 18), Vec2(rng.f(-20, 20), rng.f(-30, -8))});
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) {
+        emit(EV_MSG, p, SND_ATTACKED, pos, "ISLAND NUCLEAR LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Nuclear missile from the island incoming!");
+    }
+    return true;
+}
+int Sim::islandNukesReady(int player) const {
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_ISLANDNUKE && time >= e.siloTimer) n++;
+    return n;
+}
+float Sim::islandNukeWait(int player) const {
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_ISLANDNUKE) {
+        float w = std::max(0.0f, e.siloTimer - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+// ------------------------------------------------------------ the Nuclear Bomber call-in
+// The bomber comes in from the map corner behind the caller's base (the corner nearest it), holds a straight line at altitude to the called
+// spot, lets its one bomb go just short of it so the bomb's fall carries it on, and flies straight on out over the far side of the map.
+Vec2 Sim::bomberEntry(int player, Vec2 target) const {
+    Vec2 base = player >= 0 && player < numPlayers ? players[player].basePos : target;
+    const float m = 40.0f;
+    Vec2 corners[4] = { Vec2(m, m), Vec2(WORLD_W - m, m), Vec2(m, WORLD_H - m), Vec2(WORLD_W - m, WORLD_H - m) };
+    int best = 0; float bd = 1e30f;
+    for (int i = 0; i < 4; i++) { float d = dist2(corners[i], base); if (d < bd) { bd = d; best = i; } }
+    if (dist(corners[best], target) < 14.0f * TILE) {   // the spot is right by that corner: come in from the next one along so the run has room
+        float far = -1;
+        for (int i = 0; i < 4; i++) { float d = dist2(corners[i], target); if (i != best && (far < 0 || d < far) && dist(corners[i], target) >= 14.0f * TILE) { far = d; best = i; } }
+    }
+    return corners[best];
+}
+
+int Sim::bombersReady(int player) const {
+    if (player < 0 || player >= numPlayers || time < NUKEBOMBER_OPEN) return 0;
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && e.disabledUntil <= time && time >= e.bomberTimer) n++;
+    return n;
+}
+float Sim::bomberWait(int player) const {
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH) {
+        float w = std::max(0.0f, std::max(e.bomberTimer, NUKEBOMBER_OPEN) - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+bool Sim::cmdNukeBomber(int player, Vec2 pos) {
+    if (player < 0 || player >= numPlayers || time < NUKEBOMBER_OPEN) return false;
+    Entity* tech = nullptr;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH && e.disabledUntil <= time && time >= e.bomberTimer) { tech = &e; break; }
+    if (!tech) return false;
+    tech->bomberTimer = time + NUKEBOMBER_COOLDOWN;
+    players[player].bomberCalls++;
+    pos = Vec2(clampf(pos.x, TILE, WORLD_W - TILE), clampf(pos.y, TILE, WORLD_H - TILE));
+    Vec2 from = bomberEntry(player, pos);
+    int type = players[player].faction == F_CYBER ? U_C_NUKEBOMBER : U_K_NUKEBOMBER;
+    Ref r = spawnUnit(type, player, from);
+    Entity& b = ents[r.idx];
+    b.pos = b.prevPos = b.lastPos = from;
+    b.alt = 1; b.airspeed = UNITS[type].speed;
+    Vec2 d = pos - from;
+    b.angle = b.turret = std::atan2(d.y, d.x);
+    b.order = O_NUKERUN; b.target = pos; b.bombDropped = false; b.lifeUntil = time + NUKEBOMBER_LIFE;
+    strikeMarks.push_back({pos, player, time});
+    emit(EV_SOUND, player, SND_JET, from);
+    emit(EV_MSG, player, SND_NONE, pos, (std::string(UNITS[type].name) + " inbound with a nuclear bomb").c_str());
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) { emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY NUCLEAR BOMBER INBOUND"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "A nuclear bomber is heading for this spot!"); }
+    return true;
+}
+
+void Sim::nukeBomberRun(Entity& e) {
+    const UnitType& ut = e.ut();
+    if (!e.bombDropped) {
+        Vec2 to = e.target - e.pos;
+        float D = to.len();
+        airSteer(e, std::atan2(to.y, to.x), ut.speed, false);
+        // the bomb keeps most of the bomber's speed while it falls: let it go a fall's worth of flight short of the spot (and never past it)
+        float lead = ut.speed * NUKEBOMBER_FALL * 0.55f;
+        if (D <= lead || D < 24.0f) {
+            Projectile p;
+            p.pos = e.pos; p.prevPos = e.pos; p.vel = e.pos;
+            p.dest = e.target; p.target = NOREF; p.owner = e.owner; p.shooter = refOf(e);
+            p.weapon = W_NUKE_BOMB; p.nukeScale = NUKEBOMBER_SCALE;
+            p.arcLen = NUKEBOMBER_FALL; p.arcT = 0; p.life = p.arcLen + 0.3f;
+            projs.push_back(p);
+            e.bombDropped = true;
+            emit(EV_SOUND, -1, SND_AIR, e.pos);
+        }
+        return;
+    }
+    // bomb gone: on straight out over the far side of the map
+    airSteer(e, e.angle, ut.speed, false);
+    float dl = std::min(std::min(e.pos.x, WORLD_W - e.pos.x), std::min(e.pos.y, WORLD_H - e.pos.y));
+    if (dl < 12.0f) destroy(e, false);
+}
+
 void Sim::updateStrikeMarks() {
     for (size_t i = 0; i < strikeMarks.size();) {
         StrikeMark& m = strikeMarks[i];

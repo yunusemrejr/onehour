@@ -578,6 +578,7 @@ BArtSize artBuildingSize(int type) {
 void artBuilding(Canvas& c, Canvas& mask, int type) {
     const BuildType& bt = BUILDS[type];
     if (artNavalBuilding(c, mask, type)) return;
+    if (artSpecialBuilding(c, mask, type)) return;
     if (artCivicBuilding(c, mask, type)) return;
     bool cy = bt.faction == F_CYBER;
     Bld b(c, mask, bt.w * TILE, bt.h * TILE, cy, 1000u + (u32)type * 31u);

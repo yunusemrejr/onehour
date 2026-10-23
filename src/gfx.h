@@ -115,6 +115,10 @@ struct Gfx {
     static const int SHROUD_SS = 4;     // shroud mask cells per tile
     SDL_Texture* shroudTex = nullptr;   // (MAP_W*SS) x (MAP_H*SS) alpha mask, bilinear-scaled; the edge is displaced by noise so it drifts like cloud
     void updateShroud(const std::vector<u8>& explored);
+    void rebakeTerrain();           // a new match on a map whose baked ground was edited by the last one: bake it afresh
+    void refreshTerrain();          // structures cleared trees / rocks (Map::cleared): repaint and re-upload just that part of the baked world
+    bool terrainEdited = false;
+    void uploadTerrainPatch(const std::vector<int>& footprint);
     bool softwareRenderer = false;  // no GPU: skip purely atmospheric full-screen blends (cloud shadows)
     int userScale = 0;              // 0 = pick the UI scale from the window size
     bool init(int scale, bool software, int reqW = 0, int reqH = 0);

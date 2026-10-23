@@ -10,7 +10,8 @@ enum Order : u8 { O_IDLE = 0, O_MOVE, O_ATTACKMOVE, O_ATTACK, O_HARVEST, O_RETUR
                   O_ENTER,      // walk to a transport / bunker (targetEnt) and climb aboard
                   O_CAPTURE,    // spy: take the enemy structure targetEnt
                   O_UNLOAD,     // transport: fly to 'target' and let the passengers out there
-                  O_STRIKERUN };// Hotline Strike fighter: rocket passes over 'target', then it leaves the map (see Sim::strikeJetRun)
+                  O_STRIKERUN,  // Hotline Strike fighter: rocket passes over 'target', then it leaves the map (see Sim::strikeJetRun)
+                  O_NUKERUN };  // Nuclear Bomber call-in: straight over 'target', one bomb, on off the map (see Sim::nukeBomberRun)
 
 struct Ref {
     i32 idx = -1; u32 gen = 0;
@@ -140,6 +141,10 @@ struct Entity {
     float guardHitAt = -100;          // bunker: the last time a friendly structure it watches over was hit (its pod and guns answer that too)
     float dozerAt = 0;                // civilian structure: sim time its next free dozer comes out ...
     u8 dozerKind = 0;                 // ... and which kind: 0 a military dozer, 1 a civilian one (they take turns)
+    float heat = 0;                   // indestructible structure (island launcher, Bastion Wall): how hard it is burning (0 cold .. HEAT_MAX ablaze); cosmetic only
+    float bomberTimer = 0;            // tech structure: sim time its next Nuclear Bomber call is ready
+    bool bombDropped = false;         // Nuclear Bomber: its bomb has left the bay
+    int visKey = -1;                  // the tile and owner its sight was last written from (explored ground is never forgotten: unmoved, it is skipped)
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -165,6 +170,7 @@ struct Projectile {
     float arcT = 0, arcLen = 1;
     bool alive = true;
     bool forced = false;   // fired on purpose at a friendly: the blast hurts everybody
+    float nukeScale = 0;   // a Nuclear Bomber's bomb (W_NUKE_BOMB): an ordinary warhead of this share of a full blast area (0: the Supersonic Bomber's silver one)
 };
 
 enum FxType { FX_BEAM = 0, FX_ARC, FX_RAIL, FX_FLASH, FX_EXPLODE, FX_SMOKE, FX_SPARK, FX_RING, FX_DEBRIS, FX_EMP, FX_WRECK, FX_RUBBLE, FX_MUSHROOM, FX_FALLOUT };
@@ -203,6 +209,7 @@ struct Player {
     // stats
     int mined = 0;                // income from Oil Wells / Bitcoin Datacenters
     int unitsBuilt = 0, unitsLost = 0, unitsKilled = 0, structuresLost = 0, structuresKilled = 0, harvested = 0;
+    int islandLaunches = 0, bomberCalls = 0, launchersTaken = 0;   // the October update's strategic assets used (self-play reports)
     float valueDealt[U_COUNT] = {};   // enemy value destroyed by each of our unit types (AI adapts composition to this)
     float spentOn[U_COUNT] = {};
     std::vector<UnitOutcome> unitOutcomes;   // bounded completed trials, drained by the commander
@@ -367,6 +374,18 @@ struct Sim {
     float deepNukeWait(int player) const;     // seconds until the soonest silo is ready (0 = ready, -1 = no silo)
     static bool hardened(const Entity& b);    // a finished bunker or Underground Nuke silo: doors/hatch first, plating, and only troops can finish it with conventional fire - warheads ignore the floor and can destroy it
     static bool wall(const Entity& b) { return b.isBuilding() && b.bt().role == BR_WALL; }
+    static bool invulnerable(const Entity& b) { return b.isBuilding() && invulnerableRole(b.bt().role); }   // island launchers and Bastion Walls: never damaged, they only burn
+    static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD); }   // nobody's: any army's spy may take it
+    void heatUp(Entity& b, float amount);   // an indestructible structure takes a hit: it burns hotter (flames, smoke), nothing else changes
+    // ---- the Island Nuke Launchers: neutral at the start, an infiltrator takes one, its army fires small nukes from it on a bunker's cooldown
+    bool cmdIslandNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);
+    int islandNukesReady(int player) const;
+    float islandNukeWait(int player) const;   // seconds until the soonest launcher it holds is ready (0 = ready, -1 = it holds none)
+    // ---- the Nuclear Bomber call-in of the tech structure: a strategic bomber from the map corner, one mid-sized nuke, gone
+    bool cmdNukeBomber(int player, Vec2 pos);
+    int bombersReady(int player) const;
+    float bomberWait(int player) const;       // seconds until the soonest tech structure can call one (0 = ready, -1 = no tech structure)
+    Vec2 bomberEntry(int player, Vec2 target) const;   // the map corner the bomber comes in from (the one behind the caller's base)
     static bool canRaise(const Entity& dozer, int buildType);   // civilian dozers raise only the civilian town, the others only military structures
     static bool canMend(const Entity& dozer, int buildType);    // civilian dozers mend only the town; the others mend anything
     int civicPeople(const Entity& b) const;   // townsfolk walking about a civilian structure (decoration; 0 for anything else)
@@ -446,7 +465,31 @@ struct Sim {
     int countBuildings(int player, int type = -1, bool onlyConstructed = false) const;
     int countRole(int player, BuildRole role, bool onlyConstructed) const;
     Entity* nearestEntity(Vec2 p, float maxDist, bool (*pred)(const Entity&, void*), void* ctx);
-    void forEachNear(Vec2 p, float r, const std::function<void(Entity&)>& fn);
+    // Every live entity whose edge is within r px of p. A template so the per-entity callback inlines (a std::function call per neighbour was a
+    // seventh of a crowded tick); the distance test is done on squares first, without a square root.
+    template <class F> void forEachNear(Vec2 p, float r, F&& fn) {
+        float rr = r + 96;  // buildings are inserted at their center; widen the cell search
+        int x0 = clampi((int)((p.x - rr) / GRID_CELL), 0, GRID_W - 1), x1 = clampi((int)((p.x + rr) / GRID_CELL), 0, GRID_W - 1);
+        int y0 = clampi((int)((p.y - rr) / GRID_CELL), 0, GRID_H - 1), y1 = clampi((int)((p.y + rr) / GRID_CELL), 0, GRID_H - 1);
+        const float r2 = r * r;
+        for (int cy = y0; cy <= y1; cy++) for (int cx = x0; cx <= x1; cx++) {
+            const std::vector<int>& cell = grid[cy * GRID_W + cx];
+            for (size_t k = 0; k < cell.size(); k++) {
+                Entity& e = ents[cell[k]];
+                if (!e.alive) continue;
+                if (e.kind == EK_BUILDING) {
+                    const BuildType& b = BUILDS[e.type];
+                    float bx0 = e.tx * (float)TILE, by0 = e.ty * (float)TILE, bx1 = bx0 + b.w * TILE, by1 = by0 + b.h * TILE;
+                    float dx = std::max(std::max(bx0 - p.x, 0.0f), p.x - bx1), dy = std::max(std::max(by0 - p.y, 0.0f), p.y - by1);
+                    if (dx * dx + dy * dy > r2) continue;
+                } else {
+                    float reach = r + e.radius();
+                    if (dist2(p, e.pos) > reach * reach) continue;
+                }
+                fn(e);
+            }
+        }
+    }
     Entity* findPile(Entity& h, float maxDist);   // nearest supply pile with supplies left
     Vec2 unitExit(const Entity& b) const;
     int padsUsed(const Entity& airfield, const Entity* except = nullptr) const;   // fixed-wing aircraft based at an airfield (helicopters do not take a pad)
@@ -455,7 +498,15 @@ struct Sim {
     bool exploredRaw(int player, int tx, int ty) const { return players[player].explored[ty * MAP_W + tx] != 0; }
     bool revealed(int player) const { return time < players[player].revealUntil; }
     Vec2 buildingCenter(int type, int tx, int ty) const { return Vec2(tx * TILE + BUILDS[type].w * TILE * 0.5f, ty * TILE + BUILDS[type].h * TILE * 0.5f); }
-    float distToEntity(Vec2 p, const Entity& e) const; // edge distance in px
+    float distToEntity(Vec2 p, const Entity& e) const {   // edge distance in px
+        if (e.kind == EK_BUILDING) {
+            const BuildType& b = BUILDS[e.type];
+            float x0 = e.tx * (float)TILE, y0 = e.ty * (float)TILE, x1 = x0 + b.w * TILE, y1 = y0 + b.h * TILE;
+            float dx = std::max(std::max(x0 - p.x, 0.0f), p.x - x1), dy = std::max(std::max(y0 - p.y, 0.0f), p.y - y1);
+            return std::sqrt(dx * dx + dy * dy);
+        }
+        return std::max(0.0f, dist(p, e.pos) - e.radius());
+    }
     bool inFallout(Vec2 p, float margin = 0) const;      // inside a radiation zone that is still dangerous
     float aaCover(const Entity& t, int owner);          // how many anti-air guns of players hostile to 'owner' cover a target (flak a bomber would fly into)
 
@@ -482,6 +533,8 @@ private:
     bool passengersFire(Entity& host, float reachTiles); // every passenger shoots its own weapon at the best target it can hit from the host; true if anybody fired
     void moveShip(Entity& e, float speed);              // a ship's drive: it turns at a limited rate and builds up speed (the lake has no corners to slip round)
     void strikeJetRun(Entity& e);                        // Hotline Strike fighter: line up, salvo of rockets on the called spot, break away, come round again, then leave
+    void nukeBomberRun(Entity& e);                       // Nuclear Bomber: hold the line to the target, release, fly on and leave the map
+    void updateIslandNuke(Entity& b);                    // an island launcher: keeps its clock, cools down, flares its laser chamber
     void fireStrikeRocket(Entity& e);
     void deliverAid(AidDrop& a);
     void releaseUnit(Airlift& a);
@@ -507,6 +560,7 @@ private:
     void checkVictory();
     void moveAlong(Entity& e, float speed);
     bool requestPath(Entity& e, Vec2 dest);
+    bool requestSidePath(Entity& e, const Entity& b);   // ground unit to the nearest reachable side of a structure (dozers, spies)
     bool tryFire(Entity& e, Entity& tgt);
     void fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle = nullptr);
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap = -1.0f, bool nuke = false);   // nuke: warhead damage (it ignores the hardened floor: a bunker / silo can be destroyed by them)

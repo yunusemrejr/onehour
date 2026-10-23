@@ -17,8 +17,8 @@ typedef uint64_t u64;
 
 // World geometry
 static const int TILE = 32;          // pixels per tile
-static const int MAP_W = 128;        // tiles: 51.5% more ground than the 104x104 arena
-static const int MAP_H = 128;
+static const int MAP_W = 146;        // tiles: 30% more ground than the 128x128 arena (which had 51.5% more than 104x104)
+static const int MAP_H = 146;
 static const int WORLD_W = MAP_W * TILE;
 static const int WORLD_H = MAP_H * TILE;
 
