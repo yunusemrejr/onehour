@@ -11,7 +11,11 @@ struct SupplySpot { int tx, ty; int amount; };
 // 5 Mountain Fortress (set into a ridge), 6 Island Nuke Launcher (one on each lake island) (see Sim::spawnMapLandmarks).
 // They are filled in by generate() in four rotated copies, so every corner of the map gets the same set.
 struct LandmarkSpot { int tx, ty; int kind; };
-struct RoadSeg { float x0, y0, x1, y1, halfW; };   // tile units; kept so the baked terrain can paint centre lines
+struct RoadSeg { float x0, y0, x1, y1, halfW; };
+// The towns and cities round the lake (see DISTRICT_* in data.h and Sim::districts): a cluster of civic blocks (CivicKind, top-left tile) with a
+// paved street round every block. 'city' areas use the glass-and-steel (Cyber) civic designs, the others the old brick (Clanker) ones.
+struct DistrictBlock { int kind, tx, ty; };
+struct DistrictSpot { const char* name; bool city; float cx, cy; std::vector<DistrictBlock> blocks; };   // tile units; kept so the baked terrain can paint centre lines
 
 struct Map {
     u8 tiles[MAP_W * MAP_H];
@@ -26,6 +30,7 @@ struct Map {
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
     std::vector<SupplySpot> supplies;
     std::vector<LandmarkSpot> landmarks;   // neutral civilian castles / bunkers / watchtowers, 4 rotated copies of each kind, the ridge fortresses and island launchers
+    std::vector<DistrictSpot> districts;   // the civilian areas round the lake (four: either side of the north and south shore piles)
     struct Island { float cx, cy, r; };    // the lake's islands (tile units): [0] the big one in the middle, [1] the small one off the east shore
     std::vector<Island> islands;
     std::vector<RoadSeg> roads;

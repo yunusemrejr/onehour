@@ -61,6 +61,7 @@ static int unitLocal(int type) {
     if (type == U_C_FIGHTER || type == U_K_FIGHTER) return 25;          // the plain fighters (art_jet.cpp)
     if (type == U_C_NUKEBOMBER || type == U_K_NUKEBOMBER) return 26;    // the call-in strategic bombers (art_jet.cpp)
     if (type == U_C_PATROL || type == U_K_PATROL) return 27;            // the patrol boats (art_ship.cpp)
+    if (type == U_RIOTER || type == U_FIREBOMBER) return 28;            // the civilian rioters (art_riot.cpp)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -1203,6 +1204,7 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 25: artFighterBody(c, team, cy); break;            // plain fighter (art_jet.cpp)
     case 26: artNukeBomberBody(c, team, cy); break;         // call-in strategic bomber (art_jet.cpp)
     case 27: artPatrolBoatBody(c, team, cy); break;         // patrol boat (art_ship.cpp)
+    case 28: artRioterBody(c, team, type == U_FIREBOMBER ? 1 : 0, frame); break;   // civilian rioters (art_riot.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
         enhance(c, 0.7f);

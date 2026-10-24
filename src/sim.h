@@ -146,6 +146,8 @@ struct Entity {
     float bomberTimer = 0;            // tech structure: sim time its next Nuclear Bomber call is ready
     bool bombDropped = false;         // Nuclear Bomber: its bomb has left the bay
     int visKey = -1;                  // the tile and owner its sight was last written from (explored ground is never forgotten: unmoved, it is skipped)
+    int district = -1;                // a block of one of the civilian areas round the lake (index into Sim::districts), -1 for anything else
+    int riot = -1;                    // a rioter: the id of the crowd it marches with (see Sim::riots)
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -227,6 +229,33 @@ struct Player {
 };
 
 enum EventType { EV_SOUND = 0, EV_MSG, EV_BUILD_DONE, EV_UNIT_READY, EV_UNDER_ATTACK, EV_NOFUNDS, EV_LOWPOWER, EV_PLAYER_DEAD, EV_SUPPLY_EMPTY, EV_AID };
+
+// A civilian area round the lake (see DISTRICT_* in data.h): its blocks are civic buildings with Entity.district set. It changes hands as a whole.
+struct District {
+    const char* name = "";
+    bool city = false;
+    Vec2 center; float radius = 0;   // px: the circle its blocks stand in
+    int owner = -1;                  // the army that holds it (-1: nobody)
+    std::vector<Ref> blocks;
+    float payAt = 0;                 // sim time of the next payout
+    float integrity = 1;             // health of the whole area, ruins included (0..1)
+    int ruins = 0;                   // blocks razed and being raised again
+    int pay = 0;                     // credits per payout while it is intact enough
+    float lastHit = -100;            // the last time any block was hit
+    float takenAt = -100;            // the last time it changed hands
+    int people = 0;                  // townsfolk about (grows back as the blocks are rebuilt; decoration and the panel)
+};
+// A crowd of rioters (see RIOT_* in data.h): civilians that turned on the army 'victim' after it lost control.
+struct Riot {
+    int id = 0;
+    int victim = -1;                 // the army it rose against
+    bool city = false;               // marching on a town the victim holds rather than on its base
+    Vec2 origin;
+    std::vector<Ref> members;
+    Ref target;                      // the structure it is wrecking
+    float until = 0;                 // the survivors melt away after this
+    float nextOrder = 0;
+};
 struct Event { EventType type; int player; Sound sound; Vec2 pos; std::string msg; int other = -1; };   // other: EV_AID, the army that received it (-1 nobody)
 
 struct Sim {
@@ -305,6 +334,31 @@ struct Sim {
     static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
+    // ---- the civilian areas round the lake and the riots (sim2.cpp)
+    std::vector<District> districts;
+    std::vector<Riot> riots;
+    int riotSeq = 0;
+    bool riotsOn = true;                      // (tests that need a quiet base switch the riots off)
+    static inline bool riotsDefault = true;   // what Sim::init sets riotsOn to: the headless scene tests turn it off (main.cpp), full matches keep it
+    float unrest[MAX_PLAYERS] = {};           // per army: fills toward the next riot (1 = a crowd forms)
+    float control[MAX_PLAYERS] = {};          // per army: 0 lost all control .. 1 firmly in control (refreshed every couple of seconds)
+    int riotsRaised[MAX_PLAYERS] = {};        // crowds that rose against each army (stats)
+    float lossHeat[MAX_PLAYERS] = {};         // per army: the value of what it lost lately (decays with a half-life of about a minute and a half)
+    float basePeak[MAX_PLAYERS] = {};         // per army: what its base was worth at its best lately (slowly forgotten)
+    float riotNoteAt[MAX_PLAYERS] = {};       // throttle for the riot warnings
+    static bool districtBlock(const Entity& e) { return e.isBuilding() && e.district >= 0; }
+    static bool districtRuin(const Entity& e) { return districtBlock(e) && !e.constructed; }
+    void spawnDistricts();                    // the map's towns and cities, neutral at the start
+    void updateDistricts();                   // pay, integrity, townsfolk (every half second)
+    void updateDistrictBlock(Entity& b);      // a block mends itself, a ruin is raised again by its people
+    void collapseBlock(Entity& b, int attackerOwner);   // a razed block falls into a ruin instead of vanishing
+    void captureDistrict(int d, int to);      // the whole area changes hands
+    bool dozerMayWork(const Entity& dozer, const Entity& b) const;   // may this dozer raise / mend this structure (its own, or a block of a town that is not an enemy's)
+    float armyControl(int p) const;           // see control[]
+    void updateRiots();                       // unrest, new crowds, and the crowds' orders (once a second)
+    bool riotSpawnSpot(int victim, Vec2& out);
+    Entity* riotPickTarget(Riot& r, Vec2 from);
+    int riotersAlive() const;
     struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; float life = FALLOUT_LIFE; int visTag = 0; };   // life: seconds it lasts (an Underground Nuke's three times as long); visTag: the FX_FALLOUT haze it is drawn as
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
@@ -381,7 +435,7 @@ struct Sim {
     static bool invulnerable(const Entity& b) { return b.isBuilding() && invulnerableRole(b.bt().role); }   // island launchers and Bastion Walls: never damaged, they only burn
     static bool swimmer(const Entity& e) { return e.isUnit() && !e.isAir() && e.ut().role == UR_SPY; }   // infiltrators paddle across water they cannot walk round (see SWIM_COST)
     static bool walkable(const Entity& e, int tx, int ty) { return swimmer(e) ? g_map.swimPassable(tx, ty) : g_map.passable(tx, ty); }
-    static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD); }   // nobody's: any army's spy may take it
+    static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD || b.district >= 0); }   // nobody's: any army's spy may take it (a town: the whole of it)
     // what an infiltrator of 'player' may capture: an enemy structure, a neutral one (see neutralTakeable), and - for a human player only, never a
     // computer army - an ally's structure (the human takes it over; the ally is not asked)
     bool allyTakeable(int player, const Entity& b) const { return b.isBuilding() && player >= 0 && b.owner >= 0 && b.owner != player && !players[player].isAI && !enemies(player, b.owner); }

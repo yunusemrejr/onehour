@@ -170,6 +170,9 @@ private:
     void drawEntity(Entity& e);
     void drawBuildingAnim(const Entity& e, Vec2 p, bool disabled);
     void drawTownsfolk(const Entity& e, Vec2 p);   // the townsfolk walking about a civilian structure (decoration)
+    void drawDistrictLife();                       // ui2.cpp: the streets of the towns round the lake (walkers and cars), under the structures
+    void drawRebuildCrew(const Entity& e, Vec2 p); // ui2.cpp: the townsfolk raising a razed block again / patching a damaged one
+    void drawDistrictLabels();                     // ui2.cpp: each town's name, holder and state over its streets
     void drawBuildingDamage(const Entity& e, Vec2 p);
     void drawIndestructible(const Entity& e, Vec2 p);   // island launcher / Bastion Wall: its flames (Entity.heat) and the launcher's live laser cage
     void drawFx();

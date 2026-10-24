@@ -10,12 +10,14 @@ static const float EMP_DURATION = 8.0f;
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
     ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); nukeSeq = 0;
+    districts.clear(); riots.clear(); riotSeq = 0; riotsOn = riotsDefault && !getenv("ONEHOUR_NORIOTS");   // (ONEHOUR_NORIOTS=1: a match without riots)
+    for (int p = 0; p < MAX_PLAYERS; p++) { unrest[p] = 0; control[p] = 1; riotsRaised[p] = 0; lossHeat[p] = 0; basePeak[p] = 0; riotNoteAt[p] = -100; }
     for (auto& c : grid) c.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
     g_map.generate();
-    numPlayers = clampi(nPlayers, 1, MAX_PLAYERS);
+    numPlayers = clampi(nPlayers, 1, MAX_ARMIES);
     // Assign start spots: human gets a random corner, enemies spread to the others
     int order[4] = {0, 1, 2, 3};
     for (int i = 3; i > 0; i--) std::swap(order[i], order[rng.range(0, i)]);
@@ -35,6 +37,11 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
         // one dozer, ready to work
         Vec2 dz = pl.basePos + Vec2(0, BUILDS[hqType].h * TILE * 0.5f + 30);
         spawnUnit(firstUnitOf(pl.faction) + 0, p, g_map.nearestFree(dz));
+    }
+    {   // the riot crowd: a slot after the armies (not counted in numPlayers), on no army's team, so it fights them all and never wins or loses
+        Player& rp = players[RIOT_PLAYER];
+        rp.active = false; rp.alive = true; rp.isAI = true; rp.difficulty = 1; rp.team = 99; rp.faction = F_CLANKER; rp.money = 0;
+        rp.explored.assign(MAP_W * MAP_H, 0); rp.basePos = Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f);
     }
     for (auto& s : g_map.supplies) spawnResource(s.tx, s.ty, s.amount);
     spawnMapLandmarks();   // the map's neutral civilian strongholds: empty until somebody garrisons them
@@ -125,6 +132,7 @@ void Sim::spawnMapLandmarks() {
         Ref r = placeBuilding(type, -1, L.tx, L.ty, true);
         if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; if (BUILDS[type].role == BR_ISLANDNUKE) e->siloTimer = time + ISLAND_NUKE_ARM; }
     }
+    spawnDistricts();   // and the towns and cities round the lake
 }
 
 void Sim::deathFx(Entity& e) {
@@ -184,6 +192,8 @@ void Sim::destroy(Entity& e, bool violent) {
     } else if (e.owner >= 0 && violent) {
         players[e.owner].unitsLost++;
     }
+    if (violent && e.owner >= 0 && e.owner < numPlayers && e.kind != EK_RESOURCE && e.district < 0)   // what an army loses shakes its hold on its own people (see updateRiots)
+        lossHeat[e.owner] += e.isUnit() ? (float)UNITS[e.type].cost : (float)BUILDS[e.type].cost;
     if (e.isUnit() && !e.passengers.empty()) ejectAll(e, violent);   // a cargo chopper shot down in the air takes everyone aboard with it
     if (e.isUnit() && e.carrier.valid()) {   // (a soldier that dies aboard, e.g. through a rule change, leaves its host's list)
         if (Entity* c = get(e.carrier)) c->passengers.erase(std::remove(c->passengers.begin(), c->passengers.end(), refOf(e)), c->passengers.end());
@@ -221,8 +231,8 @@ Entity* Sim::nearestEntity(Vec2 p, float maxDist, bool (*pred)(const Entity&, vo
     return best;
 }
 
-bool Sim::hasBuilding(int player, int buildType) const {
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.type == buildType && e.constructed) return true;
+bool Sim::hasBuilding(int player, int buildType) const {   // (a block of a town the army holds is not its own: no Town Hall prerequisite from it)
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.type == buildType && e.constructed && e.district < 0) return true;
     return false;
 }
 bool Sim::techOnline(int player) const {   // a standing tech structure that is not switched off by an EMP strike
@@ -265,12 +275,12 @@ int Sim::countUnits(int player, int type) const {
 }
 int Sim::countBuildings(int player, int type, bool onlyConstructed) const {
     int n = 0;
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && (type < 0 || e.type == type) && (!onlyConstructed || e.constructed)) n++;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.district < 0 && (type < 0 || e.type == type) && (!onlyConstructed || e.constructed)) n++;   // (a town the army holds is not its own base)
     return n;
 }
 int Sim::countRole(int player, BuildRole role, bool onlyConstructed) const {
     int n = 0;
-    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.bt().role == role && (!onlyConstructed || e.constructed)) n++;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.district < 0 && e.bt().role == role && (!onlyConstructed || e.constructed)) n++;
     return n;
 }
 
@@ -399,7 +409,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         Entity* e = get(r);
         if (!e || e == t || e->carrier.valid() || (e->isUnit() && e->ut().temp)) continue;
         if (e->isUnit() && e->ut().role == UR_SPY) {   // a spy takes an enemy structure; against anything else it just walks over
-            if (t->isBuilding() && t->constructed && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
+            if (t->isBuilding() && (t->constructed || t->district >= 0) && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
         }
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
@@ -417,7 +427,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         takeOrder(*e); e->loiterUntil = -1;
         const UnitType& ut = e->ut();
         if (ut.role == UR_DOZER) {
-            if (t->isBuilding() && t->owner == e->owner) { cmdAssist({r}, target); continue; }
+            if (t->isBuilding() && dozerMayWork(*e, *t)) { cmdAssist({r}, target); continue; }   // (its own structure, or a town round the lake that is not an enemy's)
             cmdMove({r}, t->pos, false); continue;
         }
         if (ut.role == UR_HARVESTER) {
@@ -537,7 +547,7 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
     std::vector<Entity*> dz;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (e && e->isUnit() && e->ut().role == UR_DOZER && e->owner == b->owner && !e->carrier.valid() && (b->constructed ? canMend(*e, b->type) : canRaise(*e, b->type))) dz.push_back(e);   // (only the right kind of dozer builds; a civilian one mends only the town)
+        if (e && e->isUnit() && e->ut().role == UR_DOZER && !e->carrier.valid() && dozerMayWork(*e, *b)) dz.push_back(e);   // (only the right kind of dozer builds; a civilian one mends only the town; any helps a town round the lake that is not an enemy's)
     }
     Vec2 at = b->pos;
     std::stable_sort(dz.begin(), dz.end(), [&](const Entity* x, const Entity* y) { return dist2(x->pos, at) < dist2(y->pos, at); });
@@ -588,7 +598,7 @@ void Sim::cmdSetRally(Ref building, Vec2 p) {
 
 void Sim::cmdSell(Ref building) {
     Entity* b = get(building);
-    if (!b || !b->isBuilding() || b->owner < 0 || neutralRole(b->bt().role)) return;   // (a captured island launcher or a claimed stronghold is held, not sold)
+    if (!b || !b->isBuilding() || b->owner < 0 || neutralRole(b->bt().role) || b->district >= 0) return;   // (a captured island launcher, a claimed stronghold or a town is held, not sold)
     if (b->bt().role == BR_HQ && countBuildings(b->owner, -1, false) == 1 && countUnits(b->owner) == 0) return;
     float frac = b->constructed ? 0.5f : 0.5f * (0.3f + 0.7f * (1 - b->progress));
     players[b->owner].money += (int)(b->bt().cost * frac);
@@ -1078,7 +1088,7 @@ int Sim::aidCandidates(int sender, Vec2 at, int* out) const {
     float best[MAX_PLAYERS];
     for (int p = 0; p < MAX_PLAYERS; p++) best[p] = -1;
     for (auto& e : ents) {
-        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || e.owner >= numPlayers || e.owner == sender || !players[e.owner].alive) continue;
+        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || e.owner >= numPlayers || e.owner == sender || !players[e.owner].alive || e.district >= 0) continue;   // (a town it holds is not the army)
         float d = distToEntity(at, e);
         if (best[e.owner] < 0 || d < best[e.owner]) best[e.owner] = d;
     }
@@ -1600,6 +1610,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     // an island launcher or a Bastion Wall: shooting it does nothing but set it burning (only a spy takes it), so only a player's own order aims at it
     const bool burnOrder = invulnerable(t) && t.constructed && e.forceTarget.valid() && !players[e.owner].isAI && get(e.forceTarget) == &t;
     if (invulnerable(t) && t.constructed && !burnOrder) return false;
+    if (districtRuin(t) && t.progress < DISTRICT_RUIN_SAFE) return false;   // a razed town block is rubble until its people have raised it again a way
     if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, spy drones)
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
@@ -1863,10 +1874,17 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
             // shot by something hidden (a sniper, a garrisoned bunker) that none of our detectors has found: say so, it needs a spy drone
             bool hidden = false;
             if (attU) { const Entity* src = attU->carrier.valid() ? get(attU->carrier) : attU; hidden = src && stealthOf(*src) && !visibleTo(*src, tgt.owner); }
-            emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, hidden ? (tgt.isBuilding() ? "Our base is under fire from a hidden enemy: a spy drone can find it" : "Our forces are under fire from a hidden enemy: a spy drone can find it") : (tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack"));
+            char townMsg[96]; if (tgt.district >= 0) snprintf(townMsg, sizeof townMsg, "%s is under attack", districts[tgt.district].name);
+            emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, tgt.district >= 0 ? townMsg : hidden ? (tgt.isBuilding() ? "Our base is under fire from a hidden enemy: a spy drone can find it" : "Our forces are under fire from a hidden enemy: a spy drone can find it") : (tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack"));
             for (int q = 0; q < numPlayers; q++)   // human teammates hear about it too (an AI ally being hit)
                 if (q != tgt.owner && !players[q].isAI && players[q].team == pl.team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Your ally's base is under attack" : "Your ally's forces are under attack");
         }
+    }
+    if (tgt.district >= 0) districts[tgt.district].lastHit = time;
+    if (tgt.hp <= 0 && districtBlock(tgt)) {   // a town block is never wiped out: it falls into a ruin its people raise again (a ruin hit again starts over)
+        if (tgt.constructed) collapseBlock(tgt, attackerOwner);
+        else { tgt.progress = 0; tgt.hp = tgt.maxHp * 0.1f; }
+        return;
     }
     if (tgt.hp <= 0) {
         if (foe) {
@@ -2714,7 +2732,7 @@ int Sim::repairCrewCap(const Entity& b) {
 int Sim::repairCrew(const Entity& b, const Entity* except) const {
     int n = 0; Ref br = refOf(b);
     for (auto& u : ents)
-        if (u.alive && &u != except && u.isUnit() && u.owner == b.owner && u.order == O_BUILD && u.targetEnt == br && u.ut().role == UR_DOZER) n++;
+        if (u.alive && &u != except && u.isUnit() && (u.owner == b.owner || b.district >= 0) && u.order == O_BUILD && u.targetEnt == br && u.ut().role == UR_DOZER) n++;   // (any army's dozers may help a town)
     return n;
 }
 
@@ -2724,9 +2742,9 @@ int Sim::repairCrew(const Entity& b, const Entity* except) const {
 Entity* Sim::repairJob(Entity& dz, float maxDist) {
     Entity* best = nullptr; float bs = 1e18f;
     for (auto& b : ents) {
-        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || !b.constructed || !canMend(dz, b.type) || (b.hp >= b.maxHp * 0.995f && b.hatch >= b.hatchMax) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
+        if (!b.alive || !b.isBuilding() || !b.constructed || !dozerMayWork(dz, b) || (b.hp >= b.maxHp * 0.995f && b.hatch >= b.hatchMax) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
-        if (d > maxDist) continue;
+        if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE)) continue;   // (a town's blocks only by a dozer that is close by)
         float hurt = 1.0f - b.hp / b.maxHp;
         int crew = repairCrew(b, &dz), cap = repairCrewCap(b);
         if (hurt < 0.5f) cap = std::min(cap, 1 + (hurt > 0.25f ? 1 : 0));   // a scratch needs one dozer
@@ -2745,9 +2763,9 @@ Entity* Sim::repairJob(Entity& dz, float maxDist) {
 Entity* Sim::siteJob(Entity& dz, float maxDist) {
     Entity* best = nullptr; float bs = 1e18f;
     for (auto& b : ents) {
-        if (!b.alive || !b.isBuilding() || b.owner != dz.owner || b.constructed || !canRaise(dz, b.type) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
+        if (!b.alive || !b.isBuilding() || b.constructed || !dozerMayWork(dz, b) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
-        if (d > maxDist) continue;
+        if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE)) continue;   // (a town's ruins only by a dozer that is close by)
         int crew = repairCrew(b, &dz);
         if (crew >= DOZER_SITE_CREW) continue;
         float score = d / TILE + crew * 12.0f - b.progress * 6.0f;   // (a nearly finished one is worth a short detour)
@@ -2758,7 +2776,7 @@ Entity* Sim::siteJob(Entity& dz, float maxDist) {
 
 bool Sim::siteOpen(const Entity& dz, Ref site) const {
     const Entity* b = get(site);
-    return b && b->isBuilding() && b->owner == dz.owner && !b->constructed && canRaise(dz, b->type);
+    return b && b->isBuilding() && !b->constructed && dozerMayWork(dz, *b);
 }
 
 void Sim::keepSite(Entity& dz) {
@@ -3118,9 +3136,9 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.order = O_MOVE; e.target = g_map.nearestFree(players[e.owner].basePos + Vec2(0, 60), 6); e.targetEnt = NOREF; e.autoTask = true; requestPath(e, e.target); break;
         }
         Entity* b = get(e.targetEnt);
-        if (!b || !b->isBuilding() || b->owner != e.owner || (b->constructed && b->hp >= b->maxHp && b->hatch >= b->hatchMax)) {
+        if (!b || !b->isBuilding() || !dozerMayWork(e, *b) || (b->constructed && b->hp >= b->maxHp && b->hatch >= b->hatchMax)) {
             e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.autoTask = false;
-            if (b && b->constructed && b->owner == e.owner) {   // a repair is done: move straight on to the next job (a site first, then mending close by)
+            if (b && b->constructed && dozerMayWork(e, *b)) {   // a repair is done: move straight on to the next job (a site first, then mending close by)
                 if (!e.siteQueue.empty() || time < e.autoHoldUntil) { dozerFindWork(e); break; }
                 Entity* next = siteJob(e);
                 if (!next) next = repairJob(e, 18.0f * TILE);
@@ -3133,7 +3151,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             Entity* site = siteJob(e);
             if (site && repairCrew(*site, &e) == 0) { e.targetEnt = refOf(*site); e.repathTimer = 0; e.actionTimer = 0; e.path.clear(); break; }
         }
-        if (!(b->constructed ? canMend(e, b->type) : canRaise(e, b->type))) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.autoTask = false; break; }   // the wrong kind of dozer for this job
+        if (!dozerMayWork(e, *b)) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.autoTask = false; break; }   // the wrong kind of dozer for this job
         float d = distToEntity(e.pos, *b);
         // a dozer boxed in by neighbouring structures cannot always get right up to the wall: after a short wait it works from where it is
         bool inReach = d <= BUILD_REACH || (e.actionTimer > 1.5f && d <= BUILD_REACH + 3 * TILE);
@@ -3185,7 +3203,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_CAPTURE: {   // spy: walk up to an enemy structure and take it
         Entity* b = get(e.targetEnt);
-        if (!b || !b->isBuilding() || !b->constructed || !spyMayTake(e.owner, *b) || !visibleTo(*b, e.owner)) {
+        if (!b || !b->isBuilding() || (!b->constructed && b->district < 0) || !spyMayTake(e.owner, *b) || !visibleTo(*b, e.owner)) {
             e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; break;
         }
         float d = distToEntity(e.pos, *b);
@@ -3244,6 +3262,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
 // ------------------------------------------------------------ buildings
 void Sim::finishBuilding(Entity& b) {
     b.constructed = true; b.progress = 1; b.hp = std::max(b.hp, b.maxHp);
+    if (b.district >= 0) return;   // a town block raised again from its ruins: no fanfare (see updateDistrictBlock)
     if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; b.siloTimer = time + MINI_NUKE_ARM; }
     if (b.bt().role == BR_UNUKE) b.hatchMax = b.hatch = UNUKE_DOOR_HP;
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
@@ -3290,6 +3309,7 @@ void Sim::updateBuilding(Entity& b) {
     if (b.dmgLoad > 0) b.dmgLoad *= 0.975f;   // (a time constant of two seconds)
     if (b.heat > 0) b.heat = std::max(0.0f, b.heat - HEAT_COOL * SIM_DT);   // an indestructible structure's fire dies down
     if (b.bt().role == BR_WAYMAKER) { updateWaymaker(b); return; }
+    if (b.district >= 0) { updateDistrictBlock(b); return; }   // a block of a town round the lake: it mends and rebuilds itself, the town pays (see updateDistricts)
     if (!b.constructed) return;
     if (invulnerable(b)) { b.disabledUntil = -1; if (b.bt().role == BR_ISLANDNUKE) updateIslandNuke(b); return; }   // (burning or not, nothing switches it off; no upgrades, no guns)
     if (b.disabledUntil > time) return;
@@ -3989,16 +4009,18 @@ bool Sim::canMend(const Entity& d, int buildType) {   // (the town's free civili
 }
 int Sim::civicPeople(const Entity& b) const {
     int k = b.isBuilding() && b.constructed ? civicKind(b.type) : -1;
+    if (k >= 0 && b.district >= 0) return (int)(CIVICS[k].people * (0.35f + 0.65f * b.hp / b.maxHp) + 0.5f);   // a town block's people come back as it is rebuilt
     return k < 0 ? 0 : CIVICS[k].people;
 }
 
 float Sim::captureTime(const Entity& b) const {
+    if (b.district >= 0) return DISTRICT_CAPTURE;   // a town is taken as a whole, through any of its blocks
     return SPY_CAPTURE_BASE + SPY_CAPTURE_PER_TILE * (b.bt().w * b.bt().h);
 }
 
 void Sim::cmdCapture(const std::vector<Ref>& sel, Ref building) {
     Entity* b = get(building);
-    if (!b || !b->isBuilding() || !b->constructed) return;
+    if (!b || !b->isBuilding() || (!b->constructed && b->district < 0)) return;   // (a town is taken through any block, a ruin too)
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || !e->isUnit() || e->ut().role != UR_SPY || e->carrier.valid() || !spyMayTake(e->owner, *b) || !visibleTo(*b, e->owner)) continue;
@@ -4012,6 +4034,7 @@ void Sim::cmdCapture(const std::vector<Ref>& sel, Ref building) {
 void Sim::captureBuilding(Entity& b, Entity& spy) {
     int from = b.owner, to = spy.owner;
     if (to < 0 || from == to) return;
+    if (b.district >= 0) { captureDistrict(b.district, to); return; }   // the whole town changes hands
     if (!b.passengers.empty()) ejectAll(b, false);
     if (from >= 0) for (int t : b.queue) players[from].money += UNITS[t].cost;
     b.queue.clear(); b.queueProgress = 0; b.hasRally = false; b.engaged = NOREF; b.engaged2 = NOREF; b.forceTarget = NOREF; b.unloading = false;
@@ -4184,11 +4207,12 @@ void Sim::checkVictory() {
         // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too.
         // Civilian dozers do not: they are civilians, they cannot raise a base, and nobody hunts them (the town's structures do count)
         bool any = false;
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type))) && !invulnerable(e)) { any = true; break; }   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type))) && !invulnerable(e) && e.district < 0) { any = true; break; }   // (a town it holds is not its army either)   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
         if (!any) {
             pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]);
             for (auto& e : ents) if (e.alive && e.owner == p && e.isUnit() && civicDozerType(e.type)) destroy(e, false);   // its civilian dozers leave the war behind
             for (auto& e : ents) if (e.alive && e.owner == p && invulnerable(e)) { e.owner = -1; e.attacker = NOREF; for (int q = 0; q < MAX_PLAYERS; q++) e.detUntil[q] = 0; }   // its island launchers and Bastion Walls fall to nobody (any spy may take them)
+            for (int d = 0; d < (int)districts.size(); d++) if (districts[d].owner == p) captureDistrict(d, -1);   // and its towns are free again
         }
     }
     if (!anyDied) return;
@@ -4240,6 +4264,8 @@ void Sim::step() {
     if (tick % 10 == 0) updatePower();
     if (tick % 5 == 0) updateResearch();
     if (tick % 20 == 0) checkVictory();
+    if (tick % 10 == 3) updateDistricts();
+    if (tick % 20 == 7) updateRiots();
     // low-power notices
     for (int p = 0; p < numPlayers; p++) {
         bool low = players[p].lowPower();

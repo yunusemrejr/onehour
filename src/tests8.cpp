@@ -78,16 +78,16 @@ static bool constantsTest(Faction me, u64 seed) {
     CHECK8(std::fabs(ANTINUKE_LASER_NUKE_MUL - 0.60f) < 1e-5f && std::fabs(WALL_PD_NUKE_MUL - 0.30f) < 1e-5f, "the anti-nuke laser / wall warhead nerfs are not 40% / 70%");
     CHECK8(std::fabs(BUILDS[bunker].hp - 11000.0f) < 0.01f, "the underground bunkers are not 11,000 hp");
     CHECK8(BUILDS[bunker].hp > BUILDS[tech].hp, "a bunker is not tougher than the tech structure");
-    // durability pass: walls, the Command structure and the tech structure are far less tough; the Underground Nuke silo is the second-toughest
-    // structure and its armoured silver warhead is harder to shoot down
+    // durability pass: walls, the Command structure and the tech structure are far less tough; the Underground Nuke silo (doubled in the riot update)
+    // is now the toughest structure of all and its armoured silver warhead is harder to shoot down
     int wall = me == F_CYBER ? B_C_WALL : B_K_WALL, hq = firstBuildOf(me), silo = me == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
     CHECK8(std::fabs(WALL_HP - 1800.0f) < 0.01f && std::fabs(BUILDS[wall].hp - WALL_HP) < 0.01f, "the walls are not 1,800 hp");
     CHECK8(BUILDS[hq].hp < 20000.0f && BUILDS[tech].hp < 10000.0f, "the Command structure / tech structure durability was not reduced");
-    CHECK8(BUILDS[silo].hp >= 14000.0f && BUILDS[silo].hp < BUILDS[hq].hp, "the Underground Nuke silo is not in the expected band");
-    CHECK8(UNUKE_DOOR_HP >= 5000.0f, "the Underground Nuke silo's blast doors were not strengthened");
+    CHECK8(BUILDS[silo].hp >= 28000.0f && BUILDS[silo].hp > BUILDS[hq].hp, "the Underground Nuke silo is not twice as tough (28,000 / 29,000)");
+    CHECK8(UNUKE_DOOR_HP >= 10000.0f, "the Underground Nuke silo's blast doors are not 10,000 hp");
     CHECK8(UNUKE_INTERCEPT_RESIST > 0.0f && UNUKE_INTERCEPT_RESIST < 1.0f, "the silver warhead is not armoured against interception");
-    CHECK8(BUILDS[hq].hp > BUILDS[silo].hp && BUILDS[silo].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[wall].hp,
-           "the Command / silo / bunker / tech / wall durability order is wrong");
+    CHECK8(BUILDS[silo].hp > BUILDS[hq].hp && BUILDS[hq].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[wall].hp,
+           "the silo / Command / bunker / tech / wall durability order is wrong");
     // not stealthy: an enemy can see it and target it like any other building
     Ref bk = place8(bunker, 0, openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 12));
     CHECK8(bk.valid(), "no spot for the test bunker");

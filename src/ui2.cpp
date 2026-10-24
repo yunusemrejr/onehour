@@ -250,3 +250,149 @@ void Game::drawDock(const Entity& e, Vec2 p) {
     float pulse = 0.5f + 0.5f * std::sin(wallTime * 3.0f + (float)e.gen);
     g.glowAdd(tip.x + s.x * 14, tip.y + s.y * 14, 9, Color{lamp.r, lamp.g, lamp.b, (u8)(70 + 80 * pulse)});
 }
+
+// ------------------------------------------------------------ the towns and cities round the lake
+// A townsperson seen from above (the same little figure the civic blocks' townsfolk are): shadow, legs swinging with the stride, arms, shirt,
+// head and hair. 'carry' adds what they have in hand: 1 a box, 2 a shopping bag, 3 a hard hat and hammer (a builder), 4 a plank on the shoulder.
+static void drawCivilian(Gfx& g, Vec2 at, u32 h, float stride, bool moving, int carry, float hammer = 0) {
+    static const Color SHIRT[8] = { rgb(220, 70, 60), rgb(70, 120, 220), rgb(240, 200, 70), rgb(90, 180, 110), rgb(236, 236, 236), rgb(160, 90, 200), rgb(240, 140, 60), rgb(60, 60, 70) };
+    static const Color SKIN[4] = { rgb(246, 210, 178), rgb(220, 170, 128), rgb(170, 116, 80), rgb(110, 74, 50) };
+    Color shirt = carry == 3 || carry == 4 ? ((h >> 3) & 1 ? rgb(255, 150, 40) : rgb(236, 220, 60)) : SHIRT[h % 8];   // builders wear hi-vis
+    Color skin = SKIN[(h >> 4) % 4], legs = (h >> 7) & 1 ? rgb(52, 58, 80) : rgb(90, 76, 60);
+    float sw = moving ? std::sin(stride) * 2.0f : 0;
+    g.fillCircle(at.x + 1.0f, at.y + 0.8f, 2.8f, rgb(0, 0, 0, 80));
+    g.line(at.x - 1.0f, at.y - 3.4f, at.x - 1.0f + sw, at.y + 0.4f, legs);
+    g.line(at.x + 1.0f, at.y - 3.4f, at.x + 1.0f - sw, at.y + 0.4f, legs);
+    if (carry == 3) {   // a builder: one arm swings the hammer
+        float up = hammer;
+        g.line(at.x - 2.3f, at.y - 6.6f, at.x - 2.6f, at.y - 3.6f, skin);
+        g.line(at.x + 2.3f, at.y - 6.6f, at.x + 4.0f, at.y - 6.0f - 3.5f * up, skin);
+        g.line(at.x + 4.0f, at.y - 6.0f - 3.5f * up, at.x + 6.2f, at.y - 7.0f - 3.0f * up, rgb(70, 60, 50));
+        g.fill((int)(at.x + 5.6f), (int)(at.y - 8.0f - 3.0f * up), 2, 2, rgb(150, 154, 160));
+    } else {
+        g.line(at.x - 2.3f, at.y - 6.6f, at.x - 2.6f - sw * 0.6f, at.y - 3.6f, skin);
+        g.line(at.x + 2.3f, at.y - 6.6f, at.x + 2.6f + sw * 0.6f, at.y - 3.6f, skin);
+    }
+    g.fill((int)std::floor(at.x - 2.0f), (int)std::floor(at.y - 7.6f), 4, 5, shirt);
+    if (carry == 1) g.fill((int)(at.x - 2.5f), (int)(at.y - 7.0f), 5, 4, rgb(176, 132, 82));                   // a cardboard box held in front
+    if (carry == 2) g.fill((int)(at.x + 2.4f), (int)(at.y - 5.0f), 2, 3, rgb(232, 232, 220));                  // a shopping bag
+    if (carry == 4) g.line(at.x - 5.0f, at.y - 9.0f, at.x + 5.0f, at.y - 7.6f, rgb(196, 160, 110));           // a plank on the shoulder
+    g.fillCircle(at.x, at.y - 9.4f, 1.8f, skin);
+    if (carry == 3 || carry == 4) g.fill((int)std::floor(at.x - 2.0f), (int)std::floor(at.y - 11.6f), 4, 2, rgb(250, 200, 40));   // hard hat
+    else if ((h >> 9) & 1) g.fill((int)std::floor(at.x - 1.8f), (int)std::floor(at.y - 11.4f), 4, 2, (h >> 10) & 1 ? rgb(60, 40, 30) : rgb(200, 170, 90));
+}
+
+// The point 'u' px along the loop round a block's footprint, 'off' px outside it (clockwise from the north-west corner), and the heading there.
+static Vec2 blockLoop(float x0, float y0, float fw, float fh, float off, float u, Vec2& dir) {
+    float w = fw + 2 * off, h = fh + 2 * off, L = 2 * (w + h);
+    u = std::fmod(u, L); if (u < 0) u += L;
+    float ax = x0 - off, ay = y0 - off;
+    if (u < w) { dir = Vec2(1, 0); return Vec2(ax + u, ay); }
+    u -= w; if (u < h) { dir = Vec2(0, 1); return Vec2(ax + w, ay + u); }
+    u -= h; if (u < w) { dir = Vec2(-1, 0); return Vec2(ax + w - u, ay + h); }
+    u -= w; dir = Vec2(0, -1); return Vec2(ax, ay + h - u);
+}
+
+// The streets: people walking the pavements round the blocks (shoppers with bags, a courier with a box, folk out for a stroll) and a few cars
+// on the roads. How many are out follows the town's population, which grows back as its blocks are rebuilt; when the town is under fire the
+// cars stop and the people run. Everything comes from the clock and a hash: nothing is stored, nothing is simulated.
+void Game::drawDistrictLife() {
+    Gfx& g = g_gfx;
+    const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
+    const bool rev = g_sim.revealed(g_sim.humanPlayer);
+    float night = nightLevel();
+    for (int d = 0; d < (int)g_sim.districts.size(); d++) {
+        const District& D = g_sim.districts[d];
+        Vec2 c = worldToScreen(D.center);
+        float R = D.radius + 80;
+        if (c.x < -R || c.y < -R || c.x > SCREEN_W + R || c.y > VIEW_H + R || D.blocks.empty()) continue;
+        if (!rev && !ex[clampi(tileOf(D.center.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(D.center.x), 0, MAP_W - 1)]) continue;
+        bool panic = g_sim.time - D.lastHit < 6.0f;
+        int walkers = std::min(60, D.people / 2), cars = std::max(1, (int)D.blocks.size() / 3);
+        if (panic) walkers /= 2;   // (half of them have taken cover)
+        for (int i = 0; i < walkers + cars; i++) {
+            bool car = i >= walkers;
+            u32 h = (u32)(d * 7919u + i * 104729u + 977u); h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+            const Entity* b = g_sim.get(D.blocks[h % D.blocks.size()]);
+            if (!b) continue;
+            const BuildType& bt = b->bt();
+            float fw = bt.w * TILE, fh = bt.h * TILE, x0 = b->tx * TILE - cam.x, y0 = b->ty * TILE - cam.y;
+            float dirS = (h >> 5) & 1 ? 1.0f : -1.0f;
+            float speed = car ? (panic ? 0.0f : 34.0f + (h >> 7) % 20) : (12.0f + (h >> 7) % 9) * (panic ? 2.6f : 1.0f);
+            float u = dirS * (wallTime * speed + (h >> 11) % 997);
+            Vec2 dir, at = blockLoop(x0, y0, fw, fh, car ? 18.0f : 9.0f + (h >> 3) % 3, u, dir);
+            if (dirS < 0) dir = dir * -1.0f;
+            if (at.x < -20 || at.y < -20 || at.x > SCREEN_W + 20 || at.y > VIEW_H + 20) continue;
+            if (car) {   // a small saloon or van, its lights on after dark
+                static const Color BODY[6] = { rgb(200, 52, 46), rgb(46, 98, 188), rgb(226, 226, 220), rgb(40, 40, 46), rgb(236, 190, 50), rgb(60, 140, 90) };
+                Color bc = BODY[(h >> 9) % 6];
+                float ang = std::atan2(dir.y, dir.x);
+                Vec2 f = dir, s(-dir.y, dir.x);
+                Vec2 p0 = at + s * 3.0f;   // drive on the right
+                g.thickLine(p0.x - f.x * 6 + 1, p0.y - f.y * 6 + 2, p0.x + f.x * 6 + 1, p0.y + f.y * 6 + 2, rgb(0, 0, 0, 70), 7.0f);
+                g.thickLine(p0.x - f.x * 6, p0.y - f.y * 6, p0.x + f.x * 6, p0.y + f.y * 6, bc, 6.0f);
+                g.thickLine(p0.x + f.x * 1, p0.y + f.y * 1, p0.x + f.x * 3.5f, p0.y + f.y * 3.5f, rgb(30, 40, 54), 4.4f);   // windscreen
+                if (night > 0.3f && !panic) { g.glowAdd(p0.x + f.x * 12, p0.y + f.y * 12, 9, Color{255, 236, 170, (u8)(120 * night)}); }
+                (void)ang;
+                continue;
+            }
+            int carry = ((h >> 13) % 7 == 0) ? 1 : ((h >> 13) % 5 == 0) ? 2 : 0;
+            drawCivilian(g, at, h, u * 0.55f, true, panic ? 0 : carry);
+        }
+    }
+}
+
+// A razed block: its people clear the rubble and put it up again (builders in hard hats hammering round the site, one carrying planks). A damaged
+// block that is out of the fire gets a couple of builders patching it. They down tools and run while the town is under fire.
+void Game::drawRebuildCrew(const Entity& e, Vec2 p) {
+    Gfx& g = g_gfx;
+    if (e.district < 0 || p.x < -120 || p.y < -120 || p.x > SCREEN_W + 120 || p.y > VIEW_H + 120) return;
+    bool ruin = !e.constructed;
+    if (!ruin && (e.hp >= e.maxHp * 0.9f || g_sim.time - e.lastDamaged < DISTRICT_MEND_DELAY)) return;
+    if (ruin && g_sim.time - e.lastDamaged < DISTRICT_REBUILD_DELAY) return;
+    const BuildType& bt = e.bt();
+    float fw = bt.w * TILE, fh = bt.h * TILE, x0 = p.x - fw * 0.5f, y0 = p.y - fh * 0.5f;
+    int n = ruin ? 3 + bt.w * bt.h / 3 : 2;
+    for (int i = 0; i < n; i++) {
+        u32 h = (u32)(e.gen * 2654435761u) ^ (u32)(i * 40503u + 17u);
+        float u = (i + 0.5f) / n * 2 * (fw + fh + 8) + (h % 23);
+        Vec2 dir, at = blockLoop(x0, y0, fw, fh, 5.0f, u, dir);
+        bool porter = ruin && i == n - 1;
+        if (porter) {   // one carries planks to and fro along the site
+            float t = wallTime * 0.35f + (h % 100) * 0.01f, k = std::fabs(std::fmod(t, 2.0f) - 1.0f);
+            at = blockLoop(x0, y0, fw, fh, 9.0f, k * (fw + fh), dir);
+            drawCivilian(g, at, h, wallTime * 6.0f, true, 4);
+            continue;
+        }
+        float ph = wallTime * (5.0f + (h % 5)) + (h % 31);
+        float up = 0.5f + 0.5f * std::sin(ph);
+        drawCivilian(g, at, h, 0, false, 3, up);
+        if (up < 0.08f && ((int)(wallTime * 10.0f + i) % 3) == 0) g.glowAdd(at.x + 6.0f, at.y - 6.0f, 4.0f, Color{255, 220, 150, 170});   // the blow lands
+    }
+}
+
+// Each town's name over its streets, in the colour of whoever holds it, with its state (rebuilding, too damaged to pay).
+void Game::drawDistrictLabels() {
+    Gfx& g = g_gfx;
+    const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
+    const bool rev = g_sim.revealed(g_sim.humanPlayer);
+    for (int d = 0; d < (int)g_sim.districts.size(); d++) {
+        const District& D = g_sim.districts[d];
+        Vec2 c = worldToScreen(D.center);
+        if (c.x < -300 || c.y < -200 || c.x > SCREEN_W + 300 || c.y > VIEW_H + 200) continue;
+        if (!rev && !ex[clampi(tileOf(D.center.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(D.center.x), 0, MAP_W - 1)]) continue;
+        char buf[128];
+        const char* who = D.owner < 0 ? "neutral" : D.owner == g_sim.humanPlayer ? "ours" : g_sim.enemies(g_sim.humanPlayer, D.owner) ? "enemy" : "ally";
+        snprintf(buf, sizeof buf, "%s  (%s)", D.name, who);
+        Color col = D.owner < 0 ? rgb(236, 228, 200) : playerColor(D.owner);
+        float top = c.y - D.radius - 10;
+        int w = g.textW(buf, 1);
+        g.fill((int)c.x - w / 2 - 4, (int)top - 2, w + 8, 12, rgb(10, 12, 16, 150));
+        g.text((int)c.x - w / 2, (int)top, buf, col);
+        const char* st = nullptr; char sb[96];
+        if (D.owner >= 0 && D.integrity < DISTRICT_PAY_MIN) { snprintf(sb, sizeof sb, "too damaged to pay (%d%%)", (int)(D.integrity * 100)); st = sb; }
+        else if (D.ruins > 0) { snprintf(sb, sizeof sb, "rebuilding %d block%s", D.ruins, D.ruins == 1 ? "" : "s"); st = sb; }
+        else if (g_sim.time - D.lastHit < 6.0f) st = "under fire";
+        if (st) { int sw = g.textW(st, 1); g.text((int)c.x - sw / 2, (int)top + 11, st, rgb(255, 196, 120)); }
+    }
+}

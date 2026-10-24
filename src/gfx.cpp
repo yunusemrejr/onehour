@@ -8,8 +8,8 @@
 
 Gfx g_gfx;
 
-const Color PLAYER_COLOR[MAX_PLAYERS] = { rgb(70, 170, 255), rgb(235, 70, 60), rgb(240, 205, 60), rgb(90, 215, 95) };
-int g_colorSlot[MAX_PLAYERS] = { 0, 1, 2, 3 };
+const Color PLAYER_COLOR[MAX_PLAYERS] = { rgb(70, 170, 255), rgb(235, 70, 60), rgb(240, 205, 60), rgb(90, 215, 95), rgb(186, 92, 214) };   // (the last: the riot crowd's violet armbands)
+int g_colorSlot[MAX_PLAYERS] = { 0, 1, 2, 3, 4 };
 
 // 5x7 bitmap font, column-major, LSB = top row (ASCII 32..126)
 static const u8 FONT5x7[95][5] = {

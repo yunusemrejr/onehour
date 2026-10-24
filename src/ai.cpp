@@ -57,6 +57,8 @@ static float unitValue(const Entity& e) { return e.isUnit() ? UNITS[e.type].cost
 static int featOff() { static const int off = getenv("ONEHOUR_FEATOFF") ? atoi(getenv("ONEHOUR_FEATOFF")) : 0; return off; }
 
 void AiManager::init(u64 seed) {
+    for (int t = 0; t < MAX_PLAYERS; t++) focus[t] = -1;
+    focusAt = 0;
     for (int p = 0; p < MAX_PLAYERS; p++) {
         bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
@@ -65,6 +67,7 @@ void AiManager::init(u64 seed) {
     }
 }
 void AiManager::update() {
+    updateTeamFocus();
     for (int p = 0; p < MAX_PLAYERS; p++) if (ais[p].player >= 0 && g_sim.players[p].alive) { ais[p].dodgeNukes(); ais[p].think(); }
 }
 // A finished match is the reward signal for the doctrine each commander opened with (a win counts 1, a loss a little for lasting long).
@@ -106,6 +109,7 @@ void AiPlayer::init(int p, u64 seed) {
         case DOC_BOOM:   st.incomes = std::min(INCOME_MAX, st.incomes + 1); st.incomeFrom -= 0.4f; st.first = 1.15f; st.thr = 1.1f; st.army = 1.1f; break;
         default: break;
         }
+        choosePersona();   // the commander who carries the doctrine out (ai_civil.cpp)
     }
     // The AI knows where the start positions are (like a human reading the map)
     Player& pl = g_sim.players[p];
@@ -387,11 +391,13 @@ Entity* AiPlayer::pickAttackTarget() {
     for (auto& e : g_sim.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner)) continue;
         if (Sim::invulnerable(e)) continue;   // an island launcher or a Bastion Wall is taken by a spy, never by a wave
+        if (Sim::districtRuin(e) || e.owner == RIOT_PLAYER) continue;   // (a razed town block is rubble; rioters are met on the way, never an objective)
         if (!(g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) continue;
         float s = dist(e.pos, hasFront ? humanFront : base) / TILE;   // (with a teammate's push under way, near their front rather than near home)
         if (e.isBuilding()) {
             BuildRole r = e.bt().role;
-            if (smart && r == BR_NUKE) s -= 18; else if (smart && (r == BR_INCOME || r == BR_CIVIC)) s -= 12;   // (a town keeps paying for its army's rebuilding: raze it like an income structure)
+            if (e.district >= 0) s += on(FEAT_TOWNS) ? -4.0f : -12.0f;   // a town round the lake: worth hitting (its holder stops earning), but an infiltrator takes it back cheaper
+            else if (smart && r == BR_NUKE) s -= 18; else if (smart && (r == BR_INCOME || r == BR_CIVIC)) s -= 12;   // (a town keeps paying for its army's rebuilding: raze it like an income structure)
             if (r == BR_SUPPLY) s -= 14; else if (r == BR_POWER) s -= 12; else if (r == BR_FACTORY || r == BR_BARRACKS || r == BR_AIRFIELD) s -= 8;
             else if (r == BR_TURRET || r == BR_AATURRET) s += 4; else if (r == BR_HQ) s += 6;
             // defended targets cost more: count turrets around it
@@ -399,6 +405,8 @@ Entity* AiPlayer::pickAttackTarget() {
             if (g_sim.refOf(e) == failedTarget && g_sim.time - failedAt < 240) s += 18;
             s += enemyStrengthNear(e.pos, 9) / 500.0f;   // prefer the softest worthwhile target
             if (smart) for (auto& f : g_sim.fallouts) if (f.t < f.life - 15.0f && dist(e.pos, f.pos) < f.r) s += 30;   // radiation: come back when it has faded
+            if (on(FEAT_TEAM) && e.owner == teamFocus()) s -= 8;   // the enemy the whole team is after
+            if (on(FEAT_PERSONA) && e.owner >= 0 && e.owner < MAX_PLAYERS) s -= 6.0f * pers().finisher * (1.0f - g_sim.control[e.owner]);   // an army fighting its own people is a softer target than it looks
         } else {
             if (e.ut().role == UR_HARVESTER) s -= 10;
             else {   // armies are met on the way, not hunted - unless nothing else of the enemy is left to find (a stranded fleet, a last tank, a last dozer): then they are the objective
@@ -534,6 +542,17 @@ void AiPlayer::think() {
     int base = firstBuildOf(pl.faction);
     int ubase = firstUnitOf(pl.faction);
     float minutes = S.time / 60.0f;
+    if (on(FEAT_PERSONA) && !introduced && S.time > 3.0f && pl.difficulty >= 1) {   // who the human player is up against (or fighting beside)
+        introduced = true;
+        const Persona& P = pers();
+        for (int q = 0; q < S.numPlayers; q++) {
+            if (q == player || S.players[q].isAI) continue;
+            char msg[200];
+            if (S.enemies(player, q)) snprintf(msg, sizeof msg, "Enemy commander %s (%s, %s): %s", commander, P.title, FACTION_NAME[pl.faction], P.blurb);
+            else snprintf(msg, sizeof msg, "Allied commander %s (%s) is with you: %s", commander, P.title, P.blurb);
+            S.emit(EV_MSG, q, SND_NONE, pl.basePos, msg);
+        }
+    }
     // a commander with money in the bank does not wait for the clock: the timed gates for tech, airfields, upgrades and nukes run on 'effective' minutes
     float tm = minutes;
     const float ease = pl.difficulty >= 2 ? 1.0f : 0.5f;   // Normal uses the spending engine at half strength: the full engine is Hard and Brutal's
@@ -570,6 +589,7 @@ void AiPlayer::think() {
                 if (ut.cargoCap > 0 && ut.kind == UK_VEH) { jeeps.push_back(S.refOf(e)); shipsOrJeeps++; }
             }
         } else {
+            if (e.district >= 0) continue;   // a town round the lake it holds is not part of its base (see civilAffairs)
             if (e.constructed && e.hp < e.maxHp * 0.6f && !(smart && S.inFallout(e.pos))) damaged.push_back(&e);
             switch (e.bt().role) {
             case BR_HQ: hq = &e; break;
@@ -602,11 +622,19 @@ void AiPlayer::think() {
     Entity* threat = nullptr; float threatDist = 1e18f; int threatCount = 0;
     std::vector<Entity*> enemyUnits;
     std::vector<Entity*> ownBuildings;
-    for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player) ownBuildings.push_back(&e);
+    for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && e.district < 0) ownBuildings.push_back(&e);   // (its towns round the lake are defended apart: civilAffairs)
     for (auto& e : S.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner)) continue;
         int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
         if (!S.explored(player, tx, ty) || !S.visibleTo(e, player)) continue;   // (stealthy enemies stay unknown until a spy drone finds them)
+        if (e.owner == RIOT_PLAYER && on(FEAT_RIOT)) {   // rioters: a threat to put down at home, never the army the production answers
+            if (!e.isUnit()) continue;
+            float d = 1e18f;
+            for (auto* b : ownBuildings) if (b->district < 0) d = std::min(d, S.distToEntity(e.pos, *b));
+            if (d < 12 * TILE) { threatCount++; float db = dist(e.pos, pl.basePos); if (db < threatDist) { threatDist = db; threat = &e; } }
+            enemyUnits.push_back(&e);
+            continue;
+        }
         if (e.isUnit()) {
             const UnitType& ut = e.ut();
             if (ut.role == UR_COMBAT) {
@@ -669,7 +697,8 @@ void AiPlayer::think() {
 
     learnOutcomes();
 
-    // main enemy = nearest living enemy base
+    // main enemy = nearest living enemy base (or, playing as a team, the one the team agreed on)
+    if (on(FEAT_TEAM) && !attacking) { int f = teamFocus(); if (f >= 0 && f != mainEnemy && S.players[f].alive) { mainEnemy = f; enemyDir = (S.players[f].basePos - pl.basePos).norm(); } }
     if (mainEnemy < 0 || !S.players[mainEnemy].alive) {
         float bd = 1e18f; mainEnemy = -1;
         for (int p = 0; p < S.numPlayers; p++) if (S.players[p].alive && S.enemies(player, p)) { float d = dist2(S.players[p].basePos, pl.basePos); if (d < bd) { bd = d; mainEnemy = p; } }
@@ -1090,6 +1119,7 @@ void AiPlayer::think() {
         std::vector<Entity*> cand;
         for (auto& e : S.ents) {
             if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.isAir()) continue;
+            if (Sim::districtRuin(e) || e.owner == RIOT_PLAYER) continue;   // (rubble of a town and a street crowd are not worth a warhead)
             if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             cand.push_back(&e);
         }
@@ -1100,7 +1130,7 @@ void AiPlayer::think() {
                 float d = dist(c->pos, o->pos); if (d > R) continue;
                 float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
                 if (o->isUnit()) score += UNITS[o->type].cost * (UNITS[o->type].hp > 1200 && f < 0.5f ? 0.3f : 1.0f);
-                else { float cost = (float)BUILDS[o->type].cost * (BUILDS[o->type].role == BR_CIVIC ? 0.4f : 1.0f); bool small = BUILDS[o->type].w * BUILDS[o->type].h <= 6; score += small ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }   // (a town is worth less to a warhead than an army)
+                else { float cost = (float)BUILDS[o->type].cost * (o->district >= 0 ? 0.1f : BUILDS[o->type].role == BR_CIVIC ? 0.4f : 1.0f); bool small = BUILDS[o->type].w * BUILDS[o->type].h <= 6; score += small ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }   // (a town is worth less to a warhead than an army, and a town round the lake, which rebuilds itself, far less)
             }
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && o.owner != player && !S.enemies(player, o.owner) && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;   // fallout hurts friends too
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner == player && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;
@@ -1190,7 +1220,7 @@ void AiPlayer::think() {
     // ---------- army
     float waveThreshold = 3200.0f + minutes * 320.0f;
     if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.6f;
-    waveThreshold = std::min(waveThreshold * style.thr, 11000.0f);
+    waveThreshold = std::min(waveThreshold * style.thr * (on(FEAT_PERSONA) ? pers().patience : 1.0f), 11000.0f);
     float firstWaveAt = (pl.difficulty >= 3 ? 165.0f : (pl.difficulty == 2 ? 270.0f : (pl.difficulty == 1 ? 360.0f : 480.0f))) * style.first;
 
     // medics keep up with the army (the healer's own AI handles the last few tiles: it drifts to wounded friends)
@@ -1243,6 +1273,7 @@ void AiPlayer::think() {
         float waveNow = 0;
         for (auto r : wave) waveNow += unitValue(*S.get(r));
         Entity* tgt = S.get(attackTarget);
+        if (tgt && (Sim::districtRuin(*tgt) || !S.enemies(player, tgt->owner))) tgt = nullptr;   // (a town block razed or taken over: on to the next objective)
         if (!tgt) { tgt = pickAttackTarget(); attackTarget = tgt ? S.refOf(*tgt) : NOREF; if (tgt) S.cmdMove(wave, tgt->pos, true); }
         bool exhausted = waveNow < waveValue * 0.5f || wave.empty();
         bool stale = S.time - attackStarted > 240.0f;
@@ -1311,7 +1342,8 @@ void AiPlayer::think() {
         bool overwhelming = armyValue > enemyArmyValue * 1.6f + 1500 && armyCount >= 6;
         bool eligible = (armyValue >= waveThreshold * (on(FEAT_LAUNCH) ? 0.7f : 1.0f) || (overwhelming && minutes > 6)) && !recovering;   // (a recovering army keeps its last units home)
         bool waveModel = useBrain && ablate() != 1;
-        if (S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
+        bool joined = !helpingAlly && S.time > regroupUntil && S.time > firstWaveAt * 0.7f && teamJoin(army, armyValue, waveThreshold);   // a teammate's attack under way: go in beside it
+        if (!joined && S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
             Entity* tgt = pickAttackTarget();
             float defense = tgt ? enemyStrengthNear(tgt->pos, 11) : 0;
             float x[WAVE_F]; Brain::waveFeatures(armyValue, defense, enemyArmyValue, minutes, armyCount, x);
@@ -1343,10 +1375,29 @@ void AiPlayer::think() {
             if (tgt && go) {
                 attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*tgt);
                 wave = army;
+                // a home guard stays behind: the commander's own habit (an Iron Wall keeps a quarter home), and more of it while order at home is low
+                // and crowds may rise against the base (FEAT_RIOT). The ones nearest home stay; they hold the rally point.
+                float keep = on(FEAT_PERSONA) ? pers().guard : 0.0f;
+                if (on(FEAT_RIOT) && S.time > RIOT_GRACE - 30.0f) keep += 0.35f * clampf((0.7f - S.control[player]) / 0.7f, 0.0f, 1.0f);
+                int stay = (int)(army.size() * keep);
+                if (stay > 0 && (int)army.size() - stay >= 4) {
+                    std::vector<std::pair<float, Ref>> c;
+                    for (auto r : army) c.push_back({dist(S.get(r)->pos, pl.basePos), r});
+                    std::sort(c.begin(), c.end(), [](const std::pair<float, Ref>& a, const std::pair<float, Ref>& b) { return a.first < b.first; });
+                    std::vector<Ref> home;
+                    wave.clear(); waveValue = 0;
+                    for (size_t k = 0; k < c.size(); k++) { if ((int)k < stay) home.push_back(c[k].second); else { wave.push_back(c[k].second); waveValue += unitValue(*S.get(c[k].second)); } }
+                    S.cmdGuardArea(home, rally, clampf((4.0f + stay * 0.2f) * TILE, 5.0f * TILE, 8.0f * TILE));
+                }
                 memcpy(waveX, x, sizeof x); waveHasSample = true; beginWaveLearning();
-                if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d -> %s at %d,%d\n", player, S.time, armyValue, armyCount, tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
-                S.cmdMove(army, tgt->pos, true);
+                if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d (home guard %d) -> %s at %d,%d\n", player, S.time, waveValue, (int)wave.size(), (int)(army.size() - wave.size()), tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
+                S.cmdMove(wave, tgt->pos, true);
                 nextOrderTime = S.time + 6;
+                if (on(FEAT_TEAM) && S.time - lastAnnounce > 45.0f && tgt->owner >= 0) {   // a human teammate hears the plan and where to join it
+                    lastAnnounce = S.time;
+                    char m[160]; snprintf(m, sizeof m, "attacking the %s of the %s with %d units - join in!", tgt->isUnit() ? tgt->ut().name : tgt->bt().name, FACTION_NAME[S.players[tgt->owner].faction], (int)wave.size());
+                    announce(m, tgt->pos);
+                }
             }
         }
         // only the enemy's hidden things are left (a bunker, snipers, spy drones): nothing is in sight to attack, so the army sweeps the ground around its
@@ -1358,14 +1409,15 @@ void AiPlayer::think() {
             if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] HUNT the enemy's hidden forces at %d,%d with %d units\n", player, S.time, tileOf(huntPoint.x), tileOf(huntPoint.y), armyCount);
             S.cmdMove(army, huntPoint, true);
         }
-        // harassment: hard AIs send a small fast squad after enemy harvesters
-        if (pl.difficulty >= 2 && minutes > (pl.brutal() ? 3 : 4) && S.time - lastHarass > (pl.brutal() ? 55 : 90) && armyCount >= 5) {
+        // harassment: hard AIs send a small fast squad after enemy harvesters (a raider by nature does it on Normal too, more often and in force)
+        const float raid = on(FEAT_PERSONA) ? pers().raid : 1.0f;
+        if ((pl.difficulty >= 2 || (raid >= 1.5f && pl.difficulty >= 1)) && minutes > (pl.brutal() ? 3 : 4) && S.time - lastHarass > (pl.brutal() ? 55 : 90) / raid && armyCount >= 5) {
             Entity* h = nullptr; float bd = 1e18f;
             for (auto& e : S.ents) if (e.alive && e.isUnit() && S.enemies(player, e.owner) && e.ut().role == UR_HARVESTER && (S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) { float d = dist2(e.pos, pl.basePos); if (d < bd) { bd = d; h = &e; } }
             if (h) {
                 lastHarass = S.time;
                 std::vector<Ref> squad;
-                for (auto r : army) { Entity* e = S.get(r); if (e && e->ut().kind == UK_VEH && e->ut().speed >= 70) { squad.push_back(r); if ((int)squad.size() >= (pl.brutal() ? 4 : 2)) break; } }
+                for (auto r : army) { Entity* e = S.get(r); if (e && e->ut().kind == UK_VEH && e->ut().speed >= 70) { squad.push_back(r); if ((int)squad.size() >= (int)((pl.brutal() ? 4 : 2) * raid + 0.5f)) break; } }
                 if (!squad.empty()) S.cmdAttack(squad, S.refOf(*h));
             }
         }
@@ -1397,6 +1449,11 @@ void AiPlayer::think() {
         if (best && bs > -400.0f) {
             std::vector<Ref> idle;
             for (auto r : spies) { Entity* sp = S.get(r); if (sp && sp->order != O_CAPTURE && !sp->carrier.valid()) idle.push_back(r); }
+            if (on(FEAT_TOWNS) && townTarget >= 0 && !idle.empty()) {   // the infiltrator nearest the town we want is kept for it (see civilAffairs)
+                size_t k = 0; float kd = 1e30f;
+                for (size_t i = 0; i < idle.size(); i++) { float d = dist(S.get(idle[i])->pos, S.districts[townTarget].center); if (d < kd) { kd = d; k = i; } }
+                idle.erase(idle.begin() + k);
+            }
             if (!idle.empty()) S.cmdCapture(idle, S.refOf(*best));
         }
     }
@@ -1503,5 +1560,19 @@ void AiPlayer::think() {
         if (e->hp < e->maxHp * 0.22f && e->ut().kind == UK_VEH && !attacking && dist(e->pos, pl.basePos) > 12 * TILE && e->order != O_MOVE) S.cmdMove({r}, pl.basePos, false);
     }
     if (!threat && !attacking) garrisonStrongholds();
+    civilAffairs(army, spies, threat != nullptr, dozers);   // the towns round the lake (FEAT_TOWNS, ai_civil.cpp)
+    // riots: once crowds have risen against us and order is still shaky, the softest spot of the economy (the hub or income structure with the
+    // fewest guns round it) gets a turret of its own
+    if (on(FEAT_RIOT) && S.riotsRaised[player] > 0 && S.control[player] < 0.6f && !threat && !recovering && S.time > nextSoftTurret && pl.money > 2500 + reserve && idleDozer()) {
+        nextSoftTurret = S.time + 100.0f;
+        Entity* soft = nullptr; int fewest = 99;
+        for (auto* b : ownBuildings) {
+            if (!b->alive || b->district >= 0 || !b->constructed || (b->bt().role != BR_SUPPLY && b->bt().role != BR_INCOME && b->bt().role != BR_POWER)) continue;
+            int guns = 0;
+            for (auto* t : ownBuildings) if (t->alive && t->constructed && (t->bt().role == BR_TURRET || t->bt().role == BR_AATURRET) && dist(t->pos, b->pos) < 8.0f * TILE) guns++;
+            if (guns < fewest) { fewest = guns; soft = b; }
+        }
+        if (soft && fewest < 2) tryBuild(base + BR_TURRET, soft->pos, 10);
+    }
     if (on(FEAT_FRONTIER)) frontier();
 }

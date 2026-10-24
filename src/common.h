@@ -34,7 +34,9 @@ inline void setScreenSize(int w, int h) { SCREEN_W = w; SCREEN_H = h; VIEW_H = h
 static const int SIM_HZ = 20;
 static const float SIM_DT = 1.0f / SIM_HZ;
 
-static const int MAX_PLAYERS = 4;
+static const int MAX_ARMIES = 4;      // armies in a match (four start spots)
+static const int RIOT_PLAYER = 4;     // the slot after the armies: civilian rioters, who belong to nobody and fight every army (see Sim::updateRiots)
+static const int MAX_PLAYERS = 5;     // armies + the riot crowd (per-player arrays are sized for both; numPlayers counts only the armies)
 
 struct Vec2 {
     float x = 0, y = 0;

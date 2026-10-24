@@ -70,6 +70,7 @@ enum UnitTypeId {
     U_C_FIGHTER, U_K_FIGHTER,       // the plain fighter jet (Raptor / Saber): air superiority first, strafes ground targets too; no tech needed
     U_C_NUKEBOMBER, U_K_NUKEBOMBER, // the strategic bomber of a Nuclear Bomber call-in: never built, it crosses the map once, drops a mid-sized nuke and leaves
     U_C_PATROL, U_K_PATROL,         // the cheap patrol boat of the Naval Yard: small, fast and fragile, its gun and rockets hit aircraft, ships, troops and shore structures
+    U_RIOTER, U_FIREBOMBER,         // civilian rioters (owned by RIOT_PLAYER, never built): an old rifle / petrol bombs (see Sim::updateRiots)
     U_COUNT
 };
 
@@ -269,6 +270,7 @@ static const int   W_SBOMBER_GUN = 43;   // the Supersonic Bomber's defensive ta
 static const int   W_NUKE_BOMB = 44;     // the compact nuclear bomb it drops (PJ_BOMB: handled by Sim::bombImpact, never fired like a gun)
 static const int   W_FIGHTER_C = 45, W_FIGHTER_K = 46;   // the plain fighters' missiles and cannon
 static const int   W_PATROL_C = 47, W_PATROL_K = 48;     // the patrol boats' autocannon and rocket pod (one mount that hits everything)
+static const int   W_RIOT_RIFLE = 49, W_MOLOTOV = 50;     // the rioters' hunting rifles and petrol bombs
 // Supersonic Bomber: a small fixed-wing nuclear bomber of both armies, built at the airfield with a tech structure. It is the fastest
 // aircraft in the game while its one bomb is aboard; after the drop it holds the dash just long enough to clear its own fireball, then
 // slows right down and is easy prey for anti-air. Its bomb is a compact casing (drawn small) holding a silver warhead: the damage is an
@@ -464,7 +466,7 @@ static const float UNUKE_SCALE = 9.0f;            // share of a full warhead's b
 static const float UNUKE_DAMAGE = 2.7f;           // damage multiplier over a ramp's warhead (10% weaker than the original 3x)
 static const float UNUKE_FALLOUT = 3.0f;          // radiation: strength and duration multiplier
 static const float UNUKE_INTERCEPT_RESIST = 0.5f; // the silver warhead is armoured against interception: every defence's chance to shoot it down is halved
-static const float UNUKE_DOOR_HP = 5000.0f;       // the silo's blast doors (they take the damage first, like a bunker's hatch)
+static const float UNUKE_DOOR_HP = 10000.0f;      // the silo's blast doors (they take the damage first, like a bunker's hatch)
 static const float UNUKE_ARM = 60.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)
 static const Color UNUKE_GLOW = rgb(206, 210, 218); // the silver of its warhead, cloud and radiation
 // Super Nuke: what an Island Nuke Launcher fires. The biggest warhead in the game: twice an Underground Nuke's blast radius (six times a ramp's),
@@ -477,6 +479,33 @@ static const float ISLAND_NUKE_INTERCEPT_RESIST = UNUKE_INTERCEPT_RESIST / 5.0f;
 static const float ISLAND_NUKE_COOLDOWN = 30.0f;     // seconds between two launches of one launcher
 static const float ISLAND_NUKE_FALLOUT_R = 0.45f;    // its fallout zone's radius, as a share of the blast radius (the outer blast is a pressure wave, not a crater)
 static const Color ISLAND_NUKE_GLOW = rgb(255, 120, 210);   // the magenta-white of its warhead, fireball and radiation
+// Civilian areas: the towns and cities round the lake (Map::districts). Every one starts neutral; an infiltrator of any army takes the WHOLE area
+// at once (any of its buildings will do), and from then on it pays its holder and is a target for the holder's enemies. It is never wiped out:
+// a block that is razed collapses into a ruin that its people raise again by themselves (a dozer of the holder, an ally, or of anybody while the
+// area is neutral speeds that up a lot), and a damaged block is patched up the same way once the shooting stops. A badly damaged area pays nothing.
+static const int   DISTRICT_MAX = 16;
+static const float DISTRICT_PAY_INTERVAL = 10.0f;    // seconds between two payouts
+static const float DISTRICT_PAY_SHARE = 0.35f;       // pay per block as a share of the same civic building's pay in a player's own town (CIVICS[].income): a whole town pays about half an income structure
+static const float DISTRICT_PAY_MIN = 0.5f;          // integrity (health of the whole area, ruins included) below which it pays nothing
+static const float DISTRICT_HP = 1.6f;               // a block's health as a multiple of the civic building's (brick and concrete, full of people)
+static const float DISTRICT_MEND = 0.010f;           // share of max health a damaged block patches up per second (once out of combat) ...
+static const float DISTRICT_MEND_DELAY = 6.0f;       // ... this long after the last hit
+static const float DISTRICT_REBUILD = 75.0f;         // seconds the townsfolk alone take to raise a razed block from its ruins ...
+static const float DISTRICT_REBUILD_DELAY = 8.0f;    // ... starting this long after it was last hit (a dozer works at its own build rate on top: about 5x faster)
+static const float DISTRICT_RUIN_SAFE = 0.25f;       // a ruin is not worth a shot until it has been raised this far again (nobody pounds rubble)
+static const float DISTRICT_CAPTURE = 9.0f;          // seconds an infiltrator needs to take a whole area
+static const float DISTRICT_HELP_RANGE = 30.0f;      // tiles: how far an idle dozer goes on its own to help raise its army's ruined blocks
+// Riots: when an army loses control - its forces outgunned by its enemies, its base burning, its losses piling up - its own population turns on it.
+// Groups of armed civilians (owned by RIOT_PLAYER: they belong to no army and fight every army) gather in the open ground near the base, pick
+// the weakest-guarded infrastructure and wreck it, and some march on the towns the army holds round the lake. A strong army sees only the odd small
+// group; a beaten one faces bigger crowds, more often. Unrest builds per army (Sim::unrest) and a group forms each time it fills.
+static const float RIOT_GRACE = 300.0f;              // seconds into the match before anyone riots
+static const float RIOT_CALM_RATE = 1.0f / 480.0f;   // unrest per second of a fully in-control army (one small group every eight minutes)
+static const float RIOT_ANGRY_RATE = 1.0f / 40.0f;   // ... and of an army that has lost all control (a big crowd every 40 s)
+static const int   RIOT_MIN_GROUP = 3, RIOT_MAX_GROUP = 12;
+static const int   RIOT_CAP = 72;                    // rioters on the map at once, all armies together
+static const float RIOT_LIFE = 210.0f;               // seconds a group keeps at it before the survivors melt away
+static const float RIOT_HP = 0.8f;                   // a rioter's health as a share of the type's (they wear no armour)
 // Spies
 static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
 static const float SPY_REACH = 22.0f;             // px from the structure's edge

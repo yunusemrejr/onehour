@@ -12,8 +12,29 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
               FEAT_CIVIC = 512,     // a civilian dozer raises a town behind the base once the economy is running (income and free dozers)
               FEAT_DEEPNUKE = 1024, // a rich commander with a Nuke Ramp sinks an Underground Nuke silo and fires its silver warhead
               FEAT_FRONTIER = 0x8000, // the island launchers (a lifter flies an infiltrator out to take one), their small nukes and the Nuclear Bomber call-in
-              FEAT_ALL = 0xFFFF,
-    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER };   // what ships
+              FEAT_TOWNS = 0x10000,   // the towns round the lake (ai_civil.cpp): infiltrators take them with an escort, the army defends and rebuilds them, retakes lost ones
+              FEAT_RIOT = 0x20000,    // riots: a home guard stays behind while order is low, rioters do not skew the army's composition, soft spots get a turret
+              FEAT_TEAM = 0x40000,    // allied commanders play as a team: one focus enemy for the whole team, joint attacks, plans called out to a human ally
+              FEAT_PERSONA = 0x80000, // every commander is a person with a style of their own (see Persona): raids, patience, appetite for towns and spies
+              FEAT_ALL = 0xFFFFF,
+    FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER
+                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA };   // what ships
+
+// A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
+// carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
+// care for the towns round the lake and for infiltrators, and how they treat a beaten enemy.
+enum PersonaId { PE_STRATEGIST = 0, PE_BLITZ, PE_IRONWALL, PE_SKYMARSHAL, PE_TYCOON, PE_SHADOW, PE_COUNT };
+struct Persona {
+    const char* title;      // "Blitz", "Iron Wall" ...
+    const char* blurb;      // what the opponent should expect
+    float raid;             // harassment: how often and how big (1 = the old default)
+    float patience;         // multiplies the wave threshold (below 1 attacks sooner with less)
+    float towns;            // appetite for the towns round the lake (infiltrators kept for them, escorts, defence)
+    float spies;            // infiltrators used on enemy structures
+    float guard;            // share of the army kept home (also more turrets at the soft spots)
+    float finisher;         // weight on attacking the weakest enemy (one that riots and is losing) instead of the nearest
+};
+extern const Persona PERSONAS[PE_COUNT];
 
 struct AiPlayer {
     int player = -1;
@@ -58,6 +79,20 @@ struct AiPlayer {
     float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
     bool recovering = false;    // most of the base is gone: rebuild the core before anything else (see FEAT_RECOVER)
+    // ---- the newer commander (ai_civil.cpp): persona, towns, riots, team play
+    int persona = PE_STRATEGIST;
+    const char* commander = "";     // the commander's name (messages, the selftest report)
+    float nextCivil = 0, lastTownGuard = -100, lastTownRebuild = -100, lastEscort = -100, lastAnnounce = -100, lastTeamJoin = -100, nextSoftTurret = 0;
+    int townTarget = -1;            // the town its infiltrators are after (-1 none)
+    std::vector<Ref> escort;        // the squad covering the infiltrator on its way to a town
+    int townDefences = 0, townRebuilds = 0, teamJoins = 0;   // (statistics for the self-play report)
+    bool introduced = false;        // the commander has introduced itself to the human player
+    const Persona& pers() const { return PERSONAS[on(FEAT_PERSONA) ? persona : PE_STRATEGIST]; }
+    void choosePersona();
+    void civilAffairs(const std::vector<Ref>& army, const std::vector<Ref>& spies, bool threat, int dozers);   // FEAT_TOWNS
+    int teamFocus() const;          // FEAT_TEAM: the enemy the whole team goes after (-1: no team plan)
+    bool teamJoin(const std::vector<Ref>& army, float armyValue, float waveThreshold);   // FEAT_TEAM: join a teammate's attack under way
+    void announce(const char* what, Vec2 at);   // a computer ally tells the human teammate what it is doing
 
     bool on(int f) const { return pro && (feat & f) != 0; }
     void init(int p, u64 seed);
@@ -92,5 +127,9 @@ struct AiManager {
     void init(u64 seed);
     void update();
     void finish(int winnerTeam);        // the match is over: every commander's doctrine learns whether it won
+    int focus[MAX_PLAYERS];             // FEAT_TEAM: per team index (0..MAX_PLAYERS-1 by team id modulo), the enemy army the team goes after
+    float focusAt = 0;
+    void updateTeamFocus();
+    bool raiseDifficulty(int p);        // the human raised a computer army's difficulty mid-match (pause menu): one step up, never down
 };
 extern AiManager g_ai;

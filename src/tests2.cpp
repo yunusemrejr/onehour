@@ -781,11 +781,11 @@ static bool huntTest(Faction me, Faction foe, u64 seed) {
     bool revealed = false, dead = false;
     for (int t = 0; t < 20 * 900 && !dead; t++) {
         g_sim.step(); g_ai.update(); g_sim.events.clear();
-        if (!alive(bk)) { dead = true; break; }
+        if (!alive(bk) || g_sim.get(bk)->owner != 0) { dead = true; break; }   // destroyed, or taken by an infiltrator (the town infiltrators are free once the towns are held)
         if (g_sim.visibleTo(*g_sim.get(bk), 1)) revealed = true;
     }
     CHECK(revealed, "the computer's army never found the human's hidden bunker");
-    CHECK(dead, "the computer never destroyed the hidden bunker it had found");
+    CHECK(dead, "the computer never destroyed or took the hidden bunker it had found");
     run(2);
     CHECK(!g_sim.players[0].alive && g_sim.gameOver, "the human was not out once the hidden bunker fell");
     printf("stealthtest %s: computer hunt ok\n", FACTION_NAME[me]);

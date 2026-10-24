@@ -15,6 +15,7 @@ Vec2 frontierTarget(int player, float R, float scale, bool bomber, float& best) 
     std::vector<const Entity*> cand;
     for (auto& e : S.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.isAir() || Sim::invulnerable(e)) continue;
+        if (Sim::districtRuin(e) || e.owner == RIOT_PLAYER) continue;   // (rubble of a town and a street crowd are not worth a warhead)
         if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
         cand.push_back(&e);
     }
@@ -25,7 +26,7 @@ Vec2 frontierTarget(int player, float R, float scale, bool bomber, float& best) 
             float d = dist(c->pos, o->pos); if (d > R) continue;
             float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
             if (o->isUnit()) score += UNITS[o->type].cost * f;
-            else { const BuildType& bt = o->bt(); float cost = bt.cost * (bt.role == BR_CIVIC ? 0.4f : 1.0f); score += bt.w * bt.h <= 6 ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }
+            else { const BuildType& bt = o->bt(); float cost = bt.cost * (o->district >= 0 ? 0.1f : bt.role == BR_CIVIC ? 0.4f : 1.0f); score += bt.w * bt.h <= 6 ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }
         }
         for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && !S.enemies(player, o.owner) && dist(c->pos, o.pos) < R * 1.05f) score -= UNITS[o.type].cost * 1.2f;   // our own and our allies' people
         const bool super = !bomber && scale >= ISLAND_NUKE_SCALE;   // (an island launcher's Super Nuke: only lasers try for it, at a fifth of their chance)

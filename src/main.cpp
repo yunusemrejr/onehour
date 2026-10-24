@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -117,6 +117,12 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("selftest: %d ticks in %.0f ms (%.3f ms/tick), peak entities %d, gameOver=%d winnerTeam=%d\n", ticks, ms, ms / std::max(1, ticks), maxEnts, (int)g_sim.gameOver, g_sim.winnerTeam);
+    {
+        int rioters = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == RIOT_PLAYER) rioters++;
+        printf("  riots: %d crowds raised, %d rioters on the map now; towns:", g_sim.riotSeq, rioters);
+        for (auto& D : g_sim.districts) printf(" %s P%d %d%%%s", D.name, D.owner, (int)(D.integrity * 100), D.ruins ? "*" : "");
+        printf("\n");
+    }
     for (int p = 0; p < g_sim.numPlayers; p++) {
         Player& pl = g_sim.players[p];
         int ubase = firstUnitOf(pl.faction);
@@ -137,6 +143,11 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             int ft = pl.faction == F_CYBER ? U_C_FIGHTER : U_K_FIGHTER, forts = 0, held = 0;
             for (auto& e : g_sim.ents) if (e.alive && e.owner == p && e.isBuilding()) { if (e.type == B_C_FORTRESS) forts++; if (e.bt().role == BR_ISLANDNUKE) held++; }
             printf("  P%d: island launchers taken %d (held now %d), island nukes %d, Nuclear Bombers called %d, fighters bought %d, fortresses held %d\n", p, pl.launchersTaken, held, pl.islandLaunches, pl.bomberCalls, (int)(pl.spentOn[ft] / UNITS[ft].cost), forts);
+        }
+        {   // the towns round the lake and the riots
+            int towns = 0; for (auto& D : g_sim.districts) if (D.owner == p) towns++;
+            const AiPlayer& a = g_ai.ais[p];
+            printf("  P%d: %s (%s), towns held %d (defences %d, rebuilds %d), joint attacks %d, riots against it %d, order now %.2f (unrest %.2f)\n", p, a.commander, PERSONAS[a.persona].title, towns, a.townDefences, a.townRebuilds, a.teamJoins, g_sim.riotsRaised[p], g_sim.control[p], g_sim.unrest[p]);
         }
         {   // the special forces: spies, spy drones, snipers (ids sit after both armies' blocks)
             int sp = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, sd = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, sn = pl.faction == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
@@ -638,6 +649,7 @@ bool supersonicTest(u64 seed); // tests8.cpp: the balance pass (anti-nuke/wall v
 bool radiationTest(u64 seed); // tests9.cpp: the Anti-Radiation Truck (scrubbing fallout, shielding inside its field, and the damage it absorbs)
 bool fortTest(u64 seed);     // tests10.cpp: the map's neutral civilian strongholds (claim, garrison, fire, durability)
 bool lakeUpdateTest(u64 seed);   // tests13.cpp: infiltrators swim to the island launchers, Waymakers, the patrol boat, the bigger lake, weather
+bool civilTest(u64 seed);        // tests15.cpp: the towns round the lake, the riots, the newer commander, difficulty raised mid-match
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
@@ -2079,9 +2091,25 @@ static bool uiTest() {
         if (g_game.menuOpen) return fail("Esc did not close the pause menu");
         frames(10);
         if (g_sim.tick == tick0) return fail("sim did not resume after the pause menu");
+        // a computer army's difficulty: its row follows "Controls help"; Right asks once, Right again raises it a step, Left never lowers it
+        int armies = 0, firstAi = -1;
+        for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.players[p].isAI && g_sim.players[p].alive) { armies++; if (firstAi < 0) firstAi = p; }
+        if (firstAi >= 0) {
+            int d0 = g_sim.players[firstAi].difficulty;
+            key(SDLK_ESCAPE);
+            for (int i = 0; i < 4; i++) key(SDLK_DOWN);
+            key(SDLK_RIGHT);
+            if (g_sim.players[firstAi].difficulty != d0) return fail("raising an army's difficulty did not ask for confirmation");
+            key(SDLK_RIGHT);
+            if (d0 < 3 && g_sim.players[firstAi].difficulty != d0 + 1) return fail("the pause menu did not raise the army's difficulty");
+            key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_RETURN); key(SDLK_ESCAPE);
+            if (g_sim.players[firstAi].difficulty < std::min(3, d0 + 1)) return fail("the pause menu lowered an army's difficulty");
+            if (g_game.menuOpen) key(SDLK_ESCAPE);
+            if (g_game.menuOpen) return fail("Esc did not close the pause menu after the difficulty row");
+        }
         // surrender needs a second confirmation and ends the game as a defeat
         key(SDLK_ESCAPE);
-        for (int i = 0; i < 5; i++) key(SDLK_DOWN);
+        for (int i = 0; i < 5 + armies; i++) key(SDLK_DOWN);
         key(SDLK_RETURN);
         if (g_game.state != GS_PLAYING) return fail("surrender did not ask for confirmation");
         key(SDLK_RETURN);
@@ -2628,6 +2656,10 @@ bool placementBench(u64 seed);
 int main(int argc, char** argv) {
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0;
+    for (int i = 1; i < argc; i++) {   // the headless scene tests check one mechanic each in scenes that run for minutes: no riots in them (full matches - the game,
+        std::string a = argv[i];         // --selftest, --fuzztest, --determinismtest, the AI evaluations - keep them; --civiltest switches them on where it tests them)
+        if ((a.find("test") != std::string::npos || a.find("matrix") != std::string::npos || a == "--scenario") && a != "--selftest" && a != "--fuzztest" && a != "--determinismtest") Sim::riotsDefault = false;
+    }
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--scale" && i + 1 < argc) scale = clampi(atoi(argv[++i]), 1, 4);
@@ -2666,7 +2698,11 @@ int main(int argc, char** argv) {
         else if (a == "--fuzztest") { g_map.generate(); int secs = 400; if (i + 1 < argc && argv[i + 1][0] != '-') secs = atoi(argv[++i]); bool ok = true; for (int k = 0; k < 6 && ok; k++) ok = fuzzTest(seed + k, secs); return ok ? 0 : 1; }
         else if (a == "--mapdump") {   // ASCII tile map: . grass, : dirt, s sand, = road, B bridge, ~ water, ^ rock, T tree
             g_map.generate();
-            for (int y = 0; y < MAP_H; y++) { for (int x = 0; x < MAP_W; x++) { int t = g_map.tile(x, y); putchar(g_map.bridge[y * MAP_W + x] ? 'B' : ".. :s=~^T"[t == T_GRASS2 ? 0 : (t == T_GRASS ? 0 : (t == T_DIRT ? 3 : (t == T_SAND ? 4 : (t == T_ROAD ? 5 : (t == T_WATER ? 6 : (t == T_ROCK ? 7 : 8))))))]); } putchar('\n'); }
+            // (structures: # a block of a town round the lake, L another landmark, $ a supply pile)
+            for (int y = 0; y < MAP_H; y++) { for (int x = 0; x < MAP_W; x++) { int t = g_map.tile(x, y); u8 b = g_map.blocked[y * MAP_W + x]; char c = g_map.bridge[y * MAP_W + x] ? 'B' : ".. :s=~^T"[t == T_GRASS2 ? 0 : (t == T_GRASS ? 0 : (t == T_DIRT ? 3 : (t == T_SAND ? 4 : (t == T_ROAD ? 5 : (t == T_WATER ? 6 : (t == T_ROCK ? 7 : 8))))))];
+                if (b & 4) c = '$'; else if (b & 2) { c = 'L'; for (auto& D : g_map.districts) for (auto& k : D.blocks) { const BuildType& bt = BUILDS[B_C_HOUSE + k.kind]; if (x >= k.tx && x < k.tx + bt.w && y >= k.ty && y < k.ty + bt.h) c = '#'; } }
+                putchar(c); } putchar('\n'); }
+            for (auto& D : g_map.districts) fprintf(stderr, "district %s (%s) centre %.1f,%.1f blocks %d\n", D.name, D.city ? "city" : "town", D.cx, D.cy, (int)D.blocks.size());
             return 0;
         }
         else if (a == "--rulestest") { g_map.generate(); return rulesTest(seed) ? 0 : 1; }
@@ -2686,6 +2722,7 @@ int main(int argc, char** argv) {
         else if (a == "--updatetest") { g_map.generate(); return updateTest(seed) ? 0 : 1; }
         else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
+        else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -3483,6 +3520,34 @@ int main(int argc, char** argv) {
                     g_game.selection.clear(); for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_HEALANT) g_game.selection.push_back(g_sim.refOf(e));
                     camOn(bp);
                     play(36);
+                }
+            }
+            if (const char* cv = getenv("ONEHOUR_CIVIL")) {   // showcase of the towns and the riots: riot | ruin | town (prints the frames' cost)
+                std::string m = cv;
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                auto camOn = [&](Vec2 p) { g_game.cam = Vec2(clampf(p.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(p.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); };
+                auto play = [&](int ticks) {
+                    double worst = 0, sum = 0;
+                    for (int t = 0; t < ticks; t++) {
+                        g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT;
+                        u64 a0 = SDL_GetPerformanceCounter(); g_game.render(); SDL_RenderPresent(g_gfx.ren); double ms = (SDL_GetPerformanceCounter() - a0) * 1000.0 / SDL_GetPerformanceFrequency();
+                        sum += ms; worst = std::max(worst, ms); g_game.updateParticles(SIM_DT);
+                    }
+                    printf("civil showcase: %d frames, avg %.1f ms, worst %.1f ms\n", ticks, sum / std::max(1, ticks), worst);
+                };
+                if (m == "riot") {   // a crowd rising against the viewed army near its base
+                    g_sim.riotsOn = true;
+                    if (g_sim.time < RIOT_GRACE) g_sim.time = RIOT_GRACE + 1;
+                    int v = viewPlayer; g_sim.unrest[v] = 1.5f; g_sim.control[v] = 0.1f;
+                    for (int t = 0; t < 30 && g_sim.riots.empty(); t++) { g_sim.step(); g_sim.events.clear(); }
+                    if (!g_sim.riots.empty()) { camOn(g_sim.riots[0].origin); play(getenv("ONEHOUR_CIVILT") ? atoi(getenv("ONEHOUR_CIVILT")) : 160); Vec2 c; int n = 0; for (Ref r : g_sim.riots[0].members) if (Entity* e = g_sim.get(r)) { c += e->pos; n++; } if (n) camOn(c * (1.0f / n)); }
+                } else {   // a town held by the viewed army: 'ruin' razes a few blocks and lets the townsfolk start rebuilding, 'town' shows it whole
+                    District& D = g_sim.districts[getenv("ONEHOUR_TOWNIDX") ? atoi(getenv("ONEHOUR_TOWNIDX")) % (int)g_sim.districts.size() : 0];
+                    g_sim.captureDistrict((int)(&D - &g_sim.districts[0]), viewPlayer);
+                    if (m == "ruin") { int k = 0; for (Ref r : D.blocks) if (Entity* b = g_sim.get(r)) { if (k++ % 3 == 0) g_sim.applyDamagePublic(*b, b->maxHp * 4.0f, -1, NOREF); else if (k % 3 == 2) b->hp = b->maxHp * 0.55f; } }
+                    camOn(D.center);
+                    play(m == "ruin" ? (int)((DISTRICT_REBUILD_DELAY + 12.0f) * SIM_HZ) : 60);
+                    g_game.selection.clear(); g_game.selection.push_back(D.blocks[0]);
                 }
             }
             if (getenv("ONEHOUR_PAUSEMENU")) g_game.openPauseMenu();

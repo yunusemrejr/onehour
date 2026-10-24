@@ -75,7 +75,7 @@ static const float AREA_DEFAULT_R = 6.0f * TILE;   // circle radius for a plain 
 
 // An army as messages name it: the colour it plays in and its faction ("Red Clanker Army")
 static std::string armyName(int p) {
-    static const char* const COLOUR[MAX_PLAYERS] = { "Blue", "Red", "Yellow", "Green" };
+    static const char* const COLOUR[MAX_PLAYERS] = { "Blue", "Red", "Yellow", "Green", "Rioting" };
     return std::string(COLOUR[slotOf(p)]) + " " + FACTION_NAME[g_sim.players[p].faction];
 }
 
@@ -118,14 +118,15 @@ void Game::startGame() {
         ai[n] = true; diff[n] = menu.allyDiff; team[n] = 0; g_colorSlot[n] = 3; n++;
     }
     int e = 0;
-    for (int i = 0; i < 3 && n < MAX_PLAYERS; i++) {
+    for (int i = 0; i < 3 && n < MAX_ARMIES; i++) {
         int f = menu.enemyFaction[i];
         if (f == 3) continue;
         fac[n] = f == 2 ? (Faction)r.range(0, 1) : (Faction)f;
         ai[n] = true; diff[n] = menu.enemyDiff[i]; team[n] = menu.enemiesAllied ? 1 : 1 + e; g_colorSlot[n] = 1 + e;
         n++; e++;
     }
-    for (int k = n; k < MAX_PLAYERS; k++) g_colorSlot[k] = k;
+    for (int k = n; k < MAX_ARMIES; k++) g_colorSlot[k] = k;
+    g_colorSlot[RIOT_PLAYER] = RIOT_PLAYER;
     if (g_gfx.terrainEdited) { g_map.generate(); g_gfx.rebakeTerrain(); }   // (the last match cleared trees off the baked ground: start from a fresh bake)
     g_sim.init(n, fac, ai, diff, team, seed);
     g_ai.init(seed);
@@ -342,7 +343,15 @@ void Game::issueRightClick(Vec2 w) {
         g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
-    if (t && t->isBuilding() && t->constructed && ((Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD) || g_sim.allyTakeable(g_sim.humanPlayer, *t)) && selectionHasRole(UR_SPY)) {
+    if (t && Sim::districtBlock(*t) && selectionHasRole(UR_DOZER) && !g_sim.enemies(g_sim.humanPlayer, t->owner) && !selectionHasRole(UR_SPY)) {   // a town round the lake that is not an enemy's: the dozers help raise and patch it
+        std::vector<Ref> dz, rest;
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && o->ut().role == UR_DOZER ? dz : rest).push_back(r); }
+        g_sim.cmdAssist(dz, g_sim.refOf(*t));
+        if (!rest.empty()) g_sim.cmdMove(rest, t->pos, false);
+        g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+        return;
+    }
+    if (t && t->isBuilding() && (t->constructed || t->district >= 0) && ((Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD) || g_sim.allyTakeable(g_sim.humanPlayer, *t)) && selectionHasRole(UR_SPY)) {
         // nobody's island launcher or Bastion Wall, or an ally's structure: the infiltrators go and take it (swimming out to an island), everybody else goes along
         std::vector<Ref> spies, rest;
         for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && o->ut().role == UR_SPY ? spies : rest).push_back(r); }
@@ -466,6 +475,7 @@ void Game::buildButtonsRaw() {
     Entity* b = selectedBuilding();
     char tip[640];
     if (b) {
+        if (b->district >= 0) return;   // a block of a town round the lake: held, never sold, nothing to build there
         if (!b->constructed) { add(BK_SELL, 0, true, "Sell", "Sell this structure for a partial refund"); return; }
         BuildRole role = b->bt().role;
         for (int u = 0; u < U_COUNT; u++) {
@@ -1169,7 +1179,7 @@ void Game::drawTownsfolk(const Entity& e, Vec2 p) {
     const BuildType& bt = e.bt();
     float fw = bt.w * TILE, fh = bt.h * TILE, x0 = p.x - fw * 0.5f, y0 = p.y - fh * 0.5f;
     bool plaza = k == CV_SQUARE || k == CV_EVENTHALL;
-    bool panic = g_sim.time - e.lastDamaged < 4.0f;
+    bool panic = g_sim.time - e.lastDamaged < 4.0f || (e.district >= 0 && g_sim.time - g_sim.districts[e.district].lastHit < 6.0f);   // (a whole town takes cover when any of it is hit)
     // the walkway: a U round the west side, the front and the east side, just outside the footprint (on a plaza each pair wanders its own loop)
     const float out = 7.0f, side = fh * 0.55f + out, front = fw + 2 * out, L = 2 * side + front;
     auto walk = [&](float u, Vec2& dir) -> Vec2 {   // u: distance along the walkway, 0..L
@@ -1486,6 +1496,7 @@ void Game::drawEntity(Entity& e) {
         }
         // damage: soot, then flames and smoke columns once the structure is badly hurt (drawn live, cheap)
         if (e.constructed && e.hp < e.maxHp * 0.66f && !disabled) drawBuildingDamage(e, p);
+        if (e.district >= 0) drawRebuildCrew(e, p);   // a town block's people raising it again / patching it
         if (e.constructed && Sim::invulnerable(e)) drawIndestructible(e, p);
         if (selected) {
             Color sc = rgb(255, 255, 255, 230); float L = 9;
@@ -1703,6 +1714,22 @@ void Game::drawEntity(Entity& e) {
     }
     if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
     drawEscorts(e, p);
+    if (e.owner == RIOT_PLAYER) {   // the crowd: the petrol bombs' rags burn, and now and then somebody shouts
+        u32 h = e.gen * 2654435761u;
+        if (e.type == U_FIREBOMBER) {
+            float fl = 0.6f + 0.4f * std::sin(wallTime * 17.0f + (h % 50)) * std::sin(wallTime * 7.3f + (h % 13));
+            Vec2 hand = p + Vec2(std::cos(e.angle), std::sin(e.angle)) * 9.0f;
+            g.glowAdd(hand.x, hand.y - 2, 9.0f + 3.0f * fl, Color{255, 140, 40, (u8)(110 + 70 * fl)});
+            g.fillCircle(hand.x, hand.y - 2, 1.6f, rgb(255, 230, 150));
+        }
+        float ph = std::fmod(wallTime * 0.45f + (h % 997) * 0.013f, 3.0f);
+        if (ph < 0.9f && g_sim.time - e.lastDamaged > 2.0f) {   // a shout: a jagged white bubble with an exclamation mark
+            float bx = p.x + 4, by = p.y - 20 - ph * 3.0f;
+            g.fill((int)bx, (int)by, 7, 8, rgb(250, 248, 240, 220));
+            g.fill((int)bx + 1, (int)by + 8, 2, 2, rgb(250, 248, 240, 220));
+            g.fill((int)bx + 3, (int)by + 1, 1, 4, rgb(200, 40, 30)); g.fill((int)bx + 3, (int)by + 6, 1, 1, rgb(200, 40, 30));
+        }
+    }
     if (selected || e.hp < e.maxHp) hpBar(g, p.x - 10 - (ut.naval ? 8.0f : 0.0f), p.y - e.radius() - 7, 20 + (ut.naval ? 16.0f : 0.0f) + (ut.cargoCap > 0 && ut.kind == UK_AIR ? 24.0f : 0.0f), e.hp / e.maxHp);
     if (e.rank > 0) {   // veteran / elite chevrons beside the health bar
         Color cc = e.rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255);
@@ -1909,6 +1936,7 @@ void Game::renderWorld() {
     drawZones();
     drawRangeRings();
     drawStrikeMarks();
+    drawDistrictLife();   // the towns' streets: walkers and cars (under the blocks' roofs and shadows)
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
@@ -1988,6 +2016,7 @@ void Game::renderWorld() {
     for (auto* e : air) drawEntity(*e);
     drawAirlifts();
     drawShroud();
+    drawDistrictLabels();
     drawAidDrops();
     drawRain();
     if (!g.softwareRenderer && g.vignette.tex) g.drawRect(g.vignette, 0, 0, SCREEN_W, VIEW_H);   // soft dark corners frame the battlefield (one draw, GPU only)
@@ -2041,7 +2070,9 @@ void Game::renderWorld() {
             const char* nm = h->isUnit() ? h->ut().name : h->bt().name;
             bool foe = g_sim.enemies(g_sim.humanPlayer, h->owner);
             char buf[128];
-            if (h->owner < 0) snprintf(buf, sizeof buf, "%s (neutral civilian%s)", nm, h->isBuilding() && h->bt().role == BR_STRONGHOLD ? ": send infantry to garrison it" : "");
+            if (h->district >= 0) { const District& D = g_sim.districts[h->district]; snprintf(buf, sizeof buf, "%s, %s (%s%s)", nm, D.name, h->owner < 0 ? "neutral: an infiltrator takes the whole " : foe ? "enemy-held " : "ally-held ", h->owner < 0 ? (D.city ? "city" : "town") : (D.city ? "city" : "town")); }
+            else if (h->owner < 0) snprintf(buf, sizeof buf, "%s (neutral civilian%s)", nm, h->isBuilding() && h->bt().role == BR_STRONGHOLD ? ": send infantry to garrison it" : "");
+            else if (h->owner == RIOT_PLAYER) snprintf(buf, sizeof buf, "%s (rioting civilians: they fight every army)", nm);
             else snprintf(buf, sizeof buf, "%s (%s%s)", nm, foe ? "" : "ally, ", FACTION_NAME[g_sim.players[h->owner].faction]);
             g.text(mouseX + 12, mouseY - 4, buf, foe ? rgb(255, 150, 140) : (h->owner < 0 ? rgb(228, 220, 190) : rgb(150, 235, 165)));
         } else if (h && h->kind == EK_RESOURCE) { char buf[40]; snprintf(buf, sizeof buf, "Supplies: $%d", h->amount); g.text(mouseX + 12, mouseY - 4, buf, rgb(240, 220, 150)); }
@@ -2072,6 +2103,12 @@ void Game::drawMinimap(int x, int y, int size) {
         Color c = e.owner < 0 ? rgb(198, 190, 170) : playerColor(e.owner);
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
+    }
+    for (auto& D : g_sim.districts) {   // the towns round the lake: a frame in the colour of whoever holds them
+        int tx = clampi(tileOf(D.center.x), 0, MAP_W - 1), ty = clampi(tileOf(D.center.y), 0, MAP_H - 1);
+        if (!rev && !ex[ty * MAP_W + tx]) continue;
+        int r = std::max(3, (int)(D.radius / WORLD_W * size)), mx = (int)(x + D.center.x / WORLD_W * size), my = (int)(y + D.center.y / WORLD_H * size);
+        g.box(mx - r, my - r, 2 * r, 2 * r, D.owner < 0 ? rgb(236, 228, 200, 220) : playerColor(D.owner));
     }
     for (auto& a : g_sim.airlifts) {
         int tx = clampi(tileOf(a.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(a.pos.y), 0, MAP_H - 1);
@@ -2123,6 +2160,15 @@ void Game::renderHud() {
     g.fill(px + 44, 7, (int)(barW * std::min(1.0f, made / (float)mx)), 7, pl.lowPower() ? rgb(230, 70, 60) : rgb(80, 220, 90));
     g.fill(px + 44 + (int)(barW * std::min(1.0f, used / (float)mx)) - 1, 5, 2, 11, rgb(255, 255, 255));
     snprintf(buf, sizeof buf, "%d/%d", used, made); g.text(px + 150, 6, buf, pl.lowPower() ? rgb(255, 140, 120) : hudText());
+    {   // ORDER: how firmly the army holds its own people (low order means riots: see Sim::updateRiots)
+        float ctl = g_sim.control[g_sim.humanPlayer];
+        int ox = px + 196;
+        Color oc = ctl > 0.66f ? rgb(110, 220, 120) : (ctl > 0.4f ? rgb(240, 200, 70) : rgb(240, 90, 70));
+        g.text(ox, 6, "ORDER", hudDim());
+        g.fill(ox + 34, 7, 44, 7, rgb(30, 34, 40));
+        g.fill(ox + 34, 7, (int)(44 * clampf(ctl, 0, 1)), 7, oc);
+        if (g_sim.time >= RIOT_GRACE && g_sim.unrest[g_sim.humanPlayer] > 0.75f && ((int)(wallTime * 3) & 1)) g.box(ox + 33, 6, 46, 9, rgb(255, 120, 90));   // a crowd is about to rise
+    }
     int secs = (int)g_sim.time;
     snprintf(buf, sizeof buf, "%02d:%02d", secs / 60, secs % 60); g.text(SCREEN_W / 2 - 15, 6, buf, hudText());
     { const char* wl = weatherLabel(); g.text(SCREEN_W / 2 - 26 - g.textW(wl), 6, wl, hudDim()); }   // the hour and the weather
@@ -2173,7 +2219,7 @@ void Game::renderHud() {
             }
             const char* name = e->isUnit() ? e->ut().name : e->bt().name;
             g.text(INFO_X + 86, hy + 16, name, rgb(255, 255, 255), 2);
-            if (e->isBuilding() && !e->constructed) { snprintf(buf, sizeof buf, "Under construction %d%%", (int)(e->progress * 100)); g.text(INFO_X + 86, hy + 36, buf, rgb(240, 220, 130)); }
+            if (e->isBuilding() && !e->constructed) { snprintf(buf, sizeof buf, e->district >= 0 ? "RAZED: its people are rebuilding it %d%%" : "Under construction %d%%", (int)(e->progress * 100)); g.text(INFO_X + 86, hy + 36, buf, rgb(240, 220, 130)); }
             else { snprintf(buf, sizeof buf, "HP %d / %d", (int)std::ceil(e->hp), (int)e->maxHp); g.text(INFO_X + 86, hy + 36, buf, hudText()); }
             hpBar(g, INFO_X + 86, hy + 48, 150, e->isBuilding() && !e->constructed ? e->progress : e->hp / e->maxHp, true);
             if (e->isUnit()) {
@@ -2202,6 +2248,23 @@ void Game::renderHud() {
                     int rdy = 0; for (int i = 0; i < dn; i++) if (e->droneAt[i] <= g_sim.time) rdy++;
                     snprintf(buf, sizeof buf, "Guard drones %d / %d ready: they shoot down rockets and shells aimed at it", rdy, dn); g.text(INFO_X + 86, hy + 110, buf, rgb(150, 220, 255));
                 } else if ((ut.naval || ut.cargoCap > 0) && ut.kind == UK_VEH && e->owner == g_sim.humanPlayer && !g_sim.hasUpgrade(g_sim.humanPlayer, UPG_DRONES) && ut.naval) g.text(INFO_X + 86, hy + 110, "No drones yet: the Guard Drones upgrade at the tech structure gives every ship a screen", hudDim());
+            } else if (e->district >= 0) {   // a block of a town round the lake: the town as a whole is what matters
+                const District& D = g_sim.districts[e->district];
+                bool ours = D.owner == g_sim.humanPlayer, foe = D.owner >= 0 && g_sim.enemies(g_sim.humanPlayer, D.owner);
+                std::string holder = D.owner < 0 ? "nobody (neutral)" : ours ? "us" : armyName(D.owner) + (foe ? " (enemy)" : " (ally)");
+                snprintf(buf, sizeof buf, "%s %s, held by %s", D.city ? "City of" : "Town of", D.name, holder.c_str());
+                g.text(INFO_X + 86, hy + 58, buf, D.owner < 0 ? rgb(236, 228, 200) : playerColor(D.owner));
+                bool pays = D.integrity >= DISTRICT_PAY_MIN;
+                snprintf(buf, sizeof buf, "Integrity %d%%   %d blocks, %d razed   %d people   pays $%d / %ds", (int)(D.integrity * 100 + 0.5f), (int)D.blocks.size(), D.ruins, D.people, pays ? (int)(D.pay * D.integrity) : 0, (int)DISTRICT_PAY_INTERVAL);
+                g.text(INFO_X + 86, hy + 70, buf, pays ? rgb(240, 220, 130) : rgb(255, 150, 120));
+                const char* l3 = D.owner < 0 ? "Neutral: an infiltrator of any army takes the WHOLE town at once (right-click a block with an infiltrator)"
+                               : ours ? "Ours: it pays us and our enemies will come for it. An enemy infiltrator can take it from us"
+                               : foe ? "Enemy-held: send an infiltrator to take it all, or wreck it to stop the pay (it rebuilds itself)"
+                                     : "Held by an ally: it pays them; our dozers may help rebuild it";
+                g.text(INFO_X + 86, hy + 84, l3, hudDim());
+                const char* l4 = !pays && D.owner >= 0 ? "TOO DAMAGED TO PAY until it is rebuilt past half its strength: dozers rebuild it much faster"
+                               : "Never wiped out: razed blocks are rebuilt by their people (right-click with dozers to speed it up)";
+                g.text(INFO_X + 86, hy + 96, l4, !pays && D.owner >= 0 ? rgb(255, 180, 120) : hudDim());
             } else {
                 const BuildType& bt = e->bt();
                 if (bt.power != 0) { snprintf(buf, sizeof buf, "Power %+d", bt.power); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
@@ -2647,23 +2710,42 @@ void Game::closePauseMenu() {
     g_audio.play(SND_CLICK, Vec2(), true);
 }
 
-static const int PM_ROWS = 8;
-static const char* PM_LABEL[PM_ROWS] = { "Resume", "Game speed", "Sound", "Controls help", "Restart match", "Surrender (end game)", "Quit to main menu", "Quit to desktop" };
-static int pmY0() { return SCREEN_H / 2 - 178; }
+// The pause menu's rows: the fixed ones, and after "Controls help" one row per computer army whose difficulty can be raised (never lowered) mid-match.
+enum PmRow { PMR_RESUME = 0, PMR_SPEED, PMR_SOUND, PMR_HELP, PMR_ARMY, PMR_RESTART, PMR_SURRENDER, PMR_MENU, PMR_QUIT };
+struct PmItem { PmRow kind; int player; };
+static std::vector<PmItem> pmRows() {
+    std::vector<PmItem> r = { {PMR_RESUME, -1}, {PMR_SPEED, -1}, {PMR_SOUND, -1}, {PMR_HELP, -1} };
+    for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.players[p].isAI && g_sim.players[p].alive) r.push_back({PMR_ARMY, p});
+    for (PmRow k : {PMR_RESTART, PMR_SURRENDER, PMR_MENU, PMR_QUIT}) r.push_back({k, -1});
+    return r;
+}
+static const char* PM_LABEL[PMR_QUIT + 1] = { "Resume", "Game speed", "Sound", "Controls help", "", "Restart match", "Surrender (end game)", "Quit to main menu", "Quit to desktop" };
+static int pmY0(int rows) { return std::max(70, SCREEN_H / 2 - 178 - std::max(0, rows - 8) * 17); }
 static const int PM_W = 440, PM_RH = 34;
 
 void Game::pauseMenuActivate(int row) {
-    // destructive rows ask twice
-    bool destructive = row >= 4;
-    if (destructive && menuConfirm != row) { menuConfirm = row; g_audio.play(SND_CLICK, Vec2(), true); return; }
+    std::vector<PmItem> rows = pmRows();
+    if (row < 0 || row >= (int)rows.size()) return;
+    PmItem it = rows[row];
+    // destructive rows ask twice, and so does raising an army's difficulty (it cannot be undone)
+    bool confirm = it.kind >= PMR_RESTART || (it.kind == PMR_ARMY && g_sim.players[it.player].difficulty < 3);
+    if (it.kind == PMR_ARMY && g_sim.players[it.player].difficulty >= 3) { g_audio.play(SND_CANT, Vec2(), true); return; }
+    if (confirm && menuConfirm != row) { menuConfirm = row; g_audio.play(SND_CLICK, Vec2(), true); return; }
     menuConfirm = -1;
-    switch (row) {
-    case 0: closePauseMenu(); break;
-    case 1: stepSpeed(1); break;
-    case 2: g_audio.setMuted(!g_audio.isMuted()); break;
-    case 3: closePauseMenu(); showHelp = true; break;
-    case 4: closePauseMenu(); startGame(); break;
-    case 5: {
+    switch (it.kind) {
+    case PMR_RESUME: closePauseMenu(); break;
+    case PMR_SPEED: stepSpeed(1); break;
+    case PMR_SOUND: g_audio.setMuted(!g_audio.isMuted()); break;
+    case PMR_HELP: closePauseMenu(); showHelp = true; break;
+    case PMR_ARMY:
+        if (g_ai.raiseDifficulty(it.player)) {
+            char msg[128]; snprintf(msg, sizeof msg, "The %s now plays on %s", armyName(it.player).c_str(), DIFF_NAME[g_sim.players[it.player].difficulty]);
+            addMessage(msg, rgb(255, 200, 120));
+            g_audio.play(SND_BUILD_DONE, Vec2(), true);
+        }
+        break;
+    case PMR_RESTART: closePauseMenu(); startGame(); break;
+    case PMR_SURRENDER: {
         closePauseMenu(); paused = false;
         int me = g_sim.humanPlayer, winner = -1;
         for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.enemies(me, p) && g_sim.players[p].alive) { winner = g_sim.players[p].team; break; }   // an ally does not win the game for you
@@ -2671,20 +2753,24 @@ void Game::pauseMenuActivate(int row) {
         g_sim.gameOver = true; g_sim.winnerTeam = winner;
         break;
     }
-    case 6: closePauseMenu(); state = GS_MENU; break;
-    case 7: quitRequested = true; break;
+    case PMR_MENU: closePauseMenu(); state = GS_MENU; break;
+    case PMR_QUIT: quitRequested = true; break;
     }
 }
 
 void Game::pauseMenuEvent(const SDL_Event& e) {
-    int x0 = SCREEN_W / 2 - PM_W / 2, y0 = pmY0();
+    std::vector<PmItem> rows = pmRows();
+    const int N = (int)rows.size();
+    int x0 = SCREEN_W / 2 - PM_W / 2, y0 = pmY0(N);
+    if (menuCursor >= N) menuCursor = 0;
     if (e.type == SDL_KEYDOWN) {
         SDL_Keycode k = e.key.keysym.sym;
+        PmRow kind = rows[menuCursor].kind;
         if (k == SDLK_ESCAPE) { if (menuConfirm >= 0) menuConfirm = -1; else closePauseMenu(); return; }
-        if (k == SDLK_UP) { menuCursor = (menuCursor + PM_ROWS - 1) % PM_ROWS; menuConfirm = -1; }
-        else if (k == SDLK_DOWN) { menuCursor = (menuCursor + 1) % PM_ROWS; menuConfirm = -1; }
-        else if (k == SDLK_LEFT) { if (menuCursor == 1) stepSpeed(-1); else if (menuCursor == 2) g_audio.setMuted(!g_audio.isMuted()); }
-        else if (k == SDLK_RIGHT) { if (menuCursor == 1) stepSpeed(1); else if (menuCursor == 2) g_audio.setMuted(!g_audio.isMuted()); }
+        if (k == SDLK_UP) { menuCursor = (menuCursor + N - 1) % N; menuConfirm = -1; }
+        else if (k == SDLK_DOWN) { menuCursor = (menuCursor + 1) % N; menuConfirm = -1; }
+        else if (k == SDLK_LEFT) { if (kind == PMR_SPEED) stepSpeed(-1); else if (kind == PMR_SOUND) g_audio.setMuted(!g_audio.isMuted()); else if (kind == PMR_ARMY) g_audio.play(SND_CANT, Vec2(), true); }   // (a difficulty never goes down)
+        else if (k == SDLK_RIGHT) { if (kind == PMR_SPEED) stepSpeed(1); else if (kind == PMR_SOUND) g_audio.setMuted(!g_audio.isMuted()); else if (kind == PMR_ARMY) pauseMenuActivate(menuCursor); }
         else if (k == SDLK_MINUS || k == SDLK_KP_MINUS) stepSpeed(-1);
         else if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) stepSpeed(1);
         else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
@@ -2694,13 +2780,13 @@ void Game::pauseMenuEvent(const SDL_Event& e) {
     }
     if (e.type == SDL_MOUSEMOTION) {
         int row = (mouseY - y0) / PM_RH;
-        if (mouseX >= x0 && mouseX < x0 + PM_W && mouseY >= y0 && row >= 0 && row < PM_ROWS && row != menuCursor) { menuCursor = row; menuConfirm = -1; }
+        if (mouseX >= x0 && mouseX < x0 + PM_W && mouseY >= y0 && row >= 0 && row < N && row != menuCursor) { menuCursor = row; menuConfirm = -1; }
     }
     if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
         int row = (mouseY - y0) / PM_RH;
-        if (mouseX < x0 || mouseX >= x0 + PM_W || mouseY < y0 || row < 0 || row >= PM_ROWS) return;
+        if (mouseX < x0 || mouseX >= x0 + PM_W || mouseY < y0 || row < 0 || row >= N) return;
         menuCursor = row;
-        if (row == 1) {
+        if (rows[row].kind == PMR_SPEED) {
             // slider: click a notch to jump there, the arrows step
             int sx = x0 + 190, sw = PM_W - 200;
             if (mouseX >= sx - 14 && mouseX <= sx + sw + 14) {
@@ -2715,26 +2801,43 @@ void Game::renderPauseMenu() {
     Gfx& g = g_gfx;
     Player& pl = g_sim.players[g_sim.humanPlayer];
     Color accent = hudAccent(pl.faction), base = hudBase(pl.faction);
+    std::vector<PmItem> rows = pmRows();
+    const int N = (int)rows.size();
     g.fill(0, 0, SCREEN_W, SCREEN_H, rgb(6, 8, 12, 165));
-    int x0 = SCREEN_W / 2 - PM_W / 2, y0 = pmY0();
-    g.bevelPanel(x0 - 16, y0 - 62, PM_W + 32, PM_ROWS * PM_RH + 112, shade(base, 0.7f), true);
+    int x0 = SCREEN_W / 2 - PM_W / 2, y0 = pmY0(N);
+    g.bevelPanel(x0 - 16, y0 - 62, PM_W + 32, N * PM_RH + 112, shade(base, 0.7f), true);
     g.fill(x0 - 16, y0 - 62, PM_W + 32, 3, accent);
     g.text(SCREEN_W / 2 - g.textW("GAME PAUSED", 3) / 2, y0 - 46, "GAME PAUSED", rgb(255, 255, 255), 3);
-    int secs = (int)g_sim.time; char buf[96];
+    int secs = (int)g_sim.time; char buf[160];
     snprintf(buf, sizeof buf, "%s   %02d:%02d   $%d", FACTION_NAME[pl.faction], secs / 60, secs % 60, pl.money);
     g.text(SCREEN_W / 2 - g.textW(buf) / 2, y0 - 16, buf, hudDim());
-    for (int i = 0; i < PM_ROWS; i++) {
+    for (int i = 0; i < N; i++) {
         int y = y0 + i * PM_RH;
+        PmRow kind = rows[i].kind;
         bool cur = i == menuCursor, conf = menuConfirm == i;
-        Color rowc = conf ? rgb(150, 50, 40) : (cur ? shade(base, 1.6f) : shade(base, 1.05f));
+        Color rowc = conf ? (kind == PMR_ARMY ? rgb(150, 100, 30) : rgb(150, 50, 40)) : (cur ? shade(base, 1.6f) : shade(base, 1.05f));
         g.bevelPanel(x0, y, PM_W, PM_RH - 4, rowc, true);
-        const char* lab = PM_LABEL[i];
-        if (conf) lab = i == 5 ? "Surrender? Enter = yes" : (i == 4 ? "Restart? Enter = yes" : (i == 6 ? "Leave the match? Enter = yes" : "Exit game? Enter = yes"));
-        g.text(x0 + 12, y + 9, lab, cur ? rgb(255, 255, 255) : hudText(), 1);
-        if (i == 0) g.text(x0 + PM_W - 12 - g.textW("Esc"), y + 9, "Esc", hudDim());
-        if (i == 2) g.text(x0 + PM_W - 12 - g.textW(g_audio.isMuted() ? "Off" : "On"), y + 9, g_audio.isMuted() ? "Off" : "On", g_audio.isMuted() ? rgb(255, 150, 120) : accent);
-        if (i == 3) g.text(x0 + PM_W - 12 - g.textW("F1"), y + 9, "F1", hudDim());
-        if (i == 1) {
+        std::string lab = PM_LABEL[kind];
+        if (kind == PMR_ARMY) {   // an army: its colour flag, name and commander; its difficulty with a [+] while it can still go up
+            int p = rows[i].player, d = g_sim.players[p].difficulty;
+            const AiPlayer& a = g_ai.ais[p];
+            g.drawFlag((float)x0 + 14, (float)y + 26, p, 0.62f, wallTime * 3.0f);
+            lab = std::string(g_sim.enemies(g_sim.humanPlayer, p) ? "Enemy: " : "Ally: ") + armyName(p) + (a.commander && *a.commander ? std::string(", ") + a.commander : std::string());
+            if (conf) { snprintf(buf, sizeof buf, "Raise to %s? (cannot be lowered) Enter = yes", DIFF_NAME[std::min(3, d + 1)]); lab = buf; }
+            g.text(x0 + 38, y + 9, lab.c_str(), cur ? rgb(255, 255, 255) : hudText(), 1);
+            if (!conf) {
+                snprintf(buf, sizeof buf, d < 3 ? "%s  [+]" : "%s (max)", DIFF_NAME[d]);
+                Color dc = d >= 3 ? rgb(255, 120, 90) : (d == 2 ? rgb(255, 190, 90) : (d == 1 ? accent : rgb(150, 220, 150)));
+                g.text(x0 + PM_W - 12 - g.textW(buf), y + 9, buf, dc);
+            }
+            continue;
+        }
+        if (conf) lab = kind == PMR_SURRENDER ? "Surrender? Enter = yes" : (kind == PMR_RESTART ? "Restart? Enter = yes" : (kind == PMR_MENU ? "Leave the match? Enter = yes" : "Exit game? Enter = yes"));
+        g.text(x0 + 12, y + 9, lab.c_str(), cur ? rgb(255, 255, 255) : hudText(), 1);
+        if (kind == PMR_RESUME) g.text(x0 + PM_W - 12 - g.textW("Esc"), y + 9, "Esc", hudDim());
+        if (kind == PMR_SOUND) g.text(x0 + PM_W - 12 - g.textW(g_audio.isMuted() ? "Off" : "On"), y + 9, g_audio.isMuted() ? "Off" : "On", g_audio.isMuted() ? rgb(255, 150, 120) : accent);
+        if (kind == PMR_HELP) g.text(x0 + PM_W - 12 - g.textW("F1"), y + 9, "F1", hudDim());
+        if (kind == PMR_SPEED) {
             int sx = x0 + 190, sw = PM_W - 200, ty = y + 13;
             g.fill(sx, ty, sw, 3, shade(base, 0.5f));
             int cur_i = 0; float bd = 1e9f;
@@ -2750,7 +2853,8 @@ void Game::renderPauseMenu() {
             g.text(x0 + 110, y + 9, buf, accent);
         }
     }
-    g.text(SCREEN_W / 2 - g.textW("Up/Down choose   Left/Right change   Enter select   Esc resume") / 2, y0 + PM_ROWS * PM_RH + 6, "Up/Down choose   Left/Right change   Enter select   Esc resume", hudDim());
+    const char* help = "Up/Down choose   Left/Right change   Enter select   Esc resume   (army difficulty only goes up)";
+    g.text(SCREEN_W / 2 - g.textW(help) / 2, y0 + N * PM_RH + 6, help, hudDim());
 }
 
 void Game::renderGameOver() {

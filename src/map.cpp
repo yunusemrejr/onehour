@@ -481,7 +481,80 @@ void Map::generate() {
             prev = next;
         }
     }
-
+    // The towns and cities round the lake (see DISTRICT_* in data.h). The lake country is open between the beach and the ring road on either side of the
+    // north and south shore piles (the rivers leave the lake beside the east and west ones and the old strongholds hold the diagonals), so a civilian
+    // area stands in each of those four stretches: every corner base has one nearest to it. Each is a cluster of civic blocks, the Town Hall at its
+    // heart, with a paved street round every block. Two are glass-and-steel cities and two old brick towns (the Cyber and Clanker civic designs, the
+    // opposite corners alike); they hold the same blocks, so each is worth the same.
+    districts.clear();
+    {
+        static const char* const NAMES[4] = { "Port Halden", "Lakeview", "Marrowgate", "Fernside" };
+        static const float ANG[4] = { -104.0f, -76.0f, 76.0f, 104.0f };   // degrees in screen axes (y down): beside the north and the south pile
+        static const int KINDS[] = { CV_TOWNHALL, CV_GOVERNMENT, CV_SKYSCRAPER, CV_EVENTHALL, CV_SKYSCRAPER, CV_SQUARE, CV_APARTMENTS, CV_GROCERY, CV_APARTMENTS,
+                                     CV_GAS, CV_HOUSE, CV_HOUSE, CV_HOUSE };
+        for (int d = 0; d < 4; d++) {
+            float th = ANG[d] * 3.14159265f / 180.0f, cs = std::cos(th), sn = std::sin(th);
+            float ringD = ring / std::max(std::fabs(cs), std::fabs(sn));   // where the ring road crosses this bearing
+            float shore = ringD;
+            for (float r = ringD - 2.0f; r > 10.0f; r -= 0.5f) {   // walk in from the road to the water
+                int x = (int)(C + r * cs), y = (int)(C + r * sn);
+                if (inMap(x, y) && tile(x, y) == T_WATER) { shore = r; break; }
+            }
+            float ar = (shore + ringD) * 0.5f;
+            DistrictSpot spot; spot.name = NAMES[d]; spot.city = d == 0 || d == 2; spot.cx = C + ar * cs; spot.cy = C + ar * sn;
+            auto clearAround = [&](int x, int y, int w, int h) {   // a street round the block: no structure, pile, water or ridge rock in the ring
+                for (int j = y - 1; j <= y + h; j++) for (int i = x - 1; i <= x + w; i++) {
+                    if (i >= x && i < x + w && j >= y && j < y + h) continue;
+                    if (!inMap(i, j)) return false;
+                    int k = j * MAP_W + i;
+                    if ((blocked[k] & ~1) || tiles[k] == T_WATER || bridge[k] || (tiles[k] == T_ROCK && !clearable[k])) return false;
+                }
+                return true;
+            };
+            auto fits = [&](int x, int y, int w, int h) {
+                for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
+                    if (!buildable(i, j) || tile(i, j) == T_ROAD || tile(i, j) == T_SAND) return false;
+                    if (blocked[j * MAP_W + i] & 6) return false;
+                }
+                for (auto& sp : supplies) if (std::abs(sp.tx - (x + w / 2)) <= 2 + w / 2 + 1 && std::abs(sp.ty - (y + h / 2)) <= 2 + h / 2 + 1) return false;   // the shore pile keeps its yard
+                return clearAround(x, y, w, h) && !wouldPlug(x, y, w, h);
+            };
+            struct Cand { int x, y; float d; };
+            std::vector<Cand> cand;
+            for (int kk : KINDS) {
+                const BuildType& bt = BUILDS[B_C_HOUSE + kk];
+                int w = bt.w, h = bt.h;
+                cand.clear();
+                for (int y = (int)spot.cy - 12; y <= (int)spot.cy + 12; y++) for (int x = (int)spot.cx - 12; x <= (int)spot.cx + 12; x++) {
+                    float dx = x + w * 0.5f - spot.cx, dy = y + h * 0.5f - spot.cy, dd = dx * dx + dy * dy;
+                    if (dd <= 11.5f * 11.5f) cand.push_back({ x, y, dd + hash2(x, y, SEED + 900 + d) * 0.8f });   // (a little jitter: no perfect rings)
+                }
+                std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
+                for (auto& c : cand) {
+                    if (!fits(c.x, c.y, w, h)) continue;
+                    spot.blocks.push_back({ kk, c.x, c.y });
+                    setStructure(c.x, c.y, w, h, true);
+                    break;
+                }
+            }
+            if (spot.blocks.empty()) continue;
+            // the streets: every open tile round a block is paved (a tree or a small rock there is cleared first)
+            for (auto& b : spot.blocks) {
+                const BuildType& bt = BUILDS[B_C_HOUSE + b.kind];
+                for (int j = b.ty - 1; j <= b.ty + bt.h; j++) for (int i = b.tx - 1; i <= b.tx + bt.w; i++) {
+                    if (!inMap(i, j)) continue;
+                    int k = j * MAP_W + i;
+                    if (blocked[k] & ~1) continue;
+                    u8 t = tiles[k];
+                    if (t == T_WATER || bridge[k] || (t == T_ROCK && !clearable[k])) continue;
+                    if (t == T_TREE || t == T_ROCK) { blocked[k] &= ~1; clearable[k] = 0; }
+                    tiles[k] = T_ROAD;
+                }
+            }
+            regionDirty = true;
+            districts.push_back(spot);
+        }
+    }
 }
 
 bool Map::wouldPlug(int tx, int ty, int w, int h) const {

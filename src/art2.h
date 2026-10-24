@@ -47,3 +47,7 @@ void artFighterBody(Canvas& c, Color team, bool cyber);
 // The strategic bomber of the Nuclear Bomber call-in (Nightfall / Thunderhead): a big heavy bomber (Cyber: a B-2 style flying wing; Clanker:
 // a Tu-160 style swing-wing with four engines). 64x64 canvas, nose +x, it fills most of the canvas; shown at about twice a jet's size.
 void artNukeBomberBody(Canvas& c, Color team, bool cyber);
+
+// The civilian rioters (no army's soldiers): kind 0 "Rioter" is a hoodie-clad civilian with an old hunting rifle, kind 1 "Firebomber" carries a
+// lit bottle and a canvas bag of them. Both are 64x64 canvas, facing +x, centred at (32,32), with the walk cycle in frame 0 / 1 / 2 as the soldiers.
+void artRioterBody(Canvas& c, Color team, int kind, int frame);
