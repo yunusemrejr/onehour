@@ -141,6 +141,7 @@ struct Entity {
     float guardHitAt = -100;          // bunker: the last time a friendly structure it watches over was hit (its pod and guns answer that too)
     float dozerAt = 0;                // civilian structure: sim time its next free dozer comes out ...
     u8 dozerKind = 0;                 // ... and which kind: 0 a military dozer, 1 a civilian one (they take turns)
+    u32 mendTick = 0;                 // the last tick a Healing Antenna mended it (antennas do not stack: one pulse per tick, see updateHealAntenna)
     float heat = 0;                   // indestructible structure (island launcher, Bastion Wall): how hard it is burning (0 cold .. HEAT_MAX ablaze); cosmetic only
     float bomberTimer = 0;            // tech structure: sim time its next Nuclear Bomber call is ready
     bool bombDropped = false;         // Nuclear Bomber: its bomb has left the bay
@@ -248,16 +249,18 @@ struct Sim {
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; Ref source; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; Ref source; bool super = false; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
+                                          // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
     static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
     std::vector<Nuke> nukes;
     static constexpr float NUKE_FLIGHT = 7.0f;
+    static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : NUKE_FLIGHT; }   // seconds from launch to impact (a Super Nuke is much faster)
     int nukeSeq = 0;
     int fxTagSeq = 0;   // handles into Sim::fx (a fallout zone shrinks its own haze as an Anti-Radiation Truck scrubs it)
     // The air position of a warhead t seconds into its flight: a long arc over the ground line from the ramp to the target (the renderer draws the missile here too).
-    static Vec2 nukeAirPos(const Nuke& n, float t) { float u = clampf(t / NUKE_FLIGHT, 0.0f, 1.0f); Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; }
+    static Vec2 nukeAirPos(const Nuke& n, float t) { float u = clampf(t / flightOf(n), 0.0f, 1.0f); Vec2 p = n.from + (n.pos - n.from) * u; p.y -= std::sin(u * 3.14159f) * 260.0f; return p; }
     // A shot of an anti-nuke defence in the air: a laser beam or an interceptor rocket on its way to meet the warhead at 'aim' (hit: it will get it).
     struct Interceptor { Vec2 from, aim; int owner = -1; int nukeId = 0; float launchT = 0, dur = 0.5f; bool laser = true, hit = false, done = false; };
     std::vector<Interceptor> interceptors;
@@ -379,6 +382,10 @@ struct Sim {
     static bool swimmer(const Entity& e) { return e.isUnit() && !e.isAir() && e.ut().role == UR_SPY; }   // infiltrators paddle across water they cannot walk round (see SWIM_COST)
     static bool walkable(const Entity& e, int tx, int ty) { return swimmer(e) ? g_map.swimPassable(tx, ty) : g_map.passable(tx, ty); }
     static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD); }   // nobody's: any army's spy may take it
+    // what an infiltrator of 'player' may capture: an enemy structure, a neutral one (see neutralTakeable), and - for a human player only, never a
+    // computer army - an ally's structure (the human takes it over; the ally is not asked)
+    bool allyTakeable(int player, const Entity& b) const { return b.isBuilding() && player >= 0 && b.owner >= 0 && b.owner != player && !players[player].isAI && !enemies(player, b.owner); }
+    bool spyMayTake(int player, const Entity& b) const { return enemies(player, b.owner) || neutralTakeable(b) || allyTakeable(player, b); }
     void heatUp(Entity& b, float amount);   // an indestructible structure takes a hit: it burns hotter (flames, smoke), nothing else changes
     // ---- the Island Nuke Launchers: neutral at the start, an infiltrator takes one, its army fires small nukes from it on a bunker's cooldown
     bool cmdIslandNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);
@@ -414,7 +421,7 @@ struct Sim {
     Vec2 dronePos(const Entity& e, int i) const { return dronePosAt(e, i, time); }   // where its i-th drone is (they circle their host)
     Vec2 dronePosAt(const Entity& e, int i, float t) const;
     // chance the defences covering 'at' stop a warhead of 'scale' (of anybody who would hurt 'victim'): 1 - prod(1 - each one's antiNukeShot)
-    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // deep: an Underground Nuke (only lasers count)
+    float antiNukeChance(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false, bool super = false) const;   // deep: an Underground Nuke (only lasers count); super: an island Super Nuke
     float antiNukeWarheadShot(const Entity& b) const;        // its chance against a nuclear warhead (the lasers' sighting nerf lives here; rockets, shells and aircraft use antiNukeShot)
     int antiNukeCovering(Vec2 at, int victim, bool knownOnly = false, float scale = 1.0f, bool deep = false) const;   // how many working defences cover 'at'
     bool antiNukeWorking(const Entity& b) const;             // a finished anti-nuke defence (or an Anti-Rocket wall) that is switched on and powered
@@ -538,6 +545,7 @@ private:
     void strikeJetRun(Entity& e);                        // Hotline Strike fighter: line up, salvo of rockets on the called spot, break away, come round again, then leave
     void nukeBomberRun(Entity& e);                       // Nuclear Bomber: hold the line to the target, release, fly on and leave the map
     void updateIslandNuke(Entity& b);                    // an island launcher: keeps its clock, cools down, flares its laser chamber
+    void updateHealAntenna(Entity& b);                   // a Healing Antenna mends everything friendly round it (see HEALANT_*)
     void updateWaymaker(Entity& b);                      // a Waymaker clears its ground by itself, then is gone (see WAYMAKER_TIME)
     void fireStrikeRocket(Entity& e);
     void deliverAid(AidDrop& a);

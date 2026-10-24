@@ -297,6 +297,33 @@ void Map::generate() {
     for (auto& s : supplies) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 3.4f, T_DIRT, [](u8 t) { return t == T_TREE || t == T_ROCK || t == T_WATER; });
     for (auto& s : starts) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 11.5f, T_GRASS, [](u8 t) { return t == T_TREE || t == T_ROCK; });
 
+    // Clearings sealed inside a forest (a few tiles of open ground with trees on every side, no road through them) grow over: on the bigger
+    // map the noise woods close more of them, and nothing can ever walk in (a structure or a Waymaker still clears its way to the ground)
+    {
+        static u8 seenC[MAP_W * MAP_H];
+        memset(seenC, 0, sizeof(seenC));
+        std::vector<int> comp, stack;
+        auto open = [&](int i) { u8 t = tiles[i]; return t != T_WATER && t != T_ROCK && t != T_TREE; };
+        for (int i = 0; i < MAP_W * MAP_H; i++) {
+            if (seenC[i] || !open(i)) continue;
+            comp.clear(); stack.assign(1, i); seenC[i] = 1; bool sealed = true;
+            while (!stack.empty()) {
+                int c = stack.back(); stack.pop_back(); comp.push_back(c);
+                if (tiles[c] == T_ROAD) sealed = false;
+                int cx = c % MAP_W, cy = c / MAP_W;
+                static const int DX4[4] = {1, -1, 0, 0}, DY4[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++) {
+                    int nx = cx + DX4[k], ny = cy + DY4[k];
+                    if (!inMap(nx, ny)) { sealed = false; continue; }
+                    int n = ny * MAP_W + nx;
+                    if (!open(n)) { if (tiles[n] != T_TREE) sealed = false; continue; }
+                    if (!seenC[n]) { seenC[n] = 1; stack.push_back(n); }
+                }
+                if (comp.size() > 24) sealed = false;
+            }
+            if (sealed && comp.size() <= 24) for (int c : comp) tiles[c] = T_TREE;
+        }
+    }
     // Blocked flags
     for (int i = 0; i < MAP_W * MAP_H; i++) {
         u8 t = tiles[i];
@@ -413,13 +440,15 @@ void Map::generate() {
         }
         // The Mountain Fortresses in the ridges (their ground was cut back above, before the trees and the blocked flags)
         for (auto& f : forts) { landmarks.push_back(f); setStructure(f.tx, f.ty, 5, 4, true); }
-        // The lake islands: an Island Nuke Launcher in the middle of each, and an old watchtower beside the big island's launcher. They are not
-        // part of the four-corner symmetry.
-        for (size_t k = 0; k < islands.size(); k++) {
-            int tx = (int)islands[k].cx - 1, ty = (int)islands[k].cy - 1;
+        // The lake islands: two Island Nuke Launchers on each (the big island's side by side on its north side, clear of the landing ground in
+        // its middle; the small one's one above the other), and an old watchtower beside the big island's pair. They are not part of the
+        // four-corner symmetry.
+        static const int PADS[2][2][2] = { { {-2, -4}, {1, -4} }, { {-1, -4}, {-1, 1} } };   // footprint top-left offsets from each island's centre tile
+        for (size_t k = 0; k < islands.size() && k < 2; k++) for (int j = 0; j < 2; j++) {
+            int tx = (int)islands[k].cx + PADS[k][j][0], ty = (int)islands[k].cy + PADS[k][j][1];
             landmarks.push_back({ tx, ty, 6 });
             setStructure(tx, ty, 3, 3, true);
-            paintDisc(*this, islands[k].cx + 0.5f, islands[k].cy + 0.5f, 2.6f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2; });
+            paintDisc(*this, tx + 1.5f, ty + 1.5f, 2.6f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2; });
         }
         {
             int tx = (int)C - 4, ty = (int)C + 1;

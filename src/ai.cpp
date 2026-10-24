@@ -325,10 +325,10 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
             }
         }
         if (B.hp > 1.0f) {
-            float base0 = std::log(Force::ratio(A, B));
+            float base0 = std::log(std::max(0.02f, Force::ratio(A, B)));
             for (size_t k = 0; k < cands.size(); k++) {
                 Force A2 = A; A2.addType(cands[k].type, 3000.0f / UNITS[cands[k].type].cost, player);
-                estGain[k] = std::max(0.0f, std::log(Force::ratio(A2, B)) - base0);
+                estGain[k] = std::max(0.0f, std::log(std::max(0.02f, Force::ratio(A2, B))) - base0);
                 estMax = std::max(estMax, estGain[k]);
             }
         }
@@ -508,7 +508,7 @@ void AiPlayer::dodgeNukes() {
     float notice = pl.difficulty >= 3 ? 0.3f : (pl.difficulty == 2 ? 2.0f : 4.5f);   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
     for (auto& n : S.nukes) {
         bool hurts = S.nukeHurts(n, player);   // (a human ally's nuke hurts us too: get out of the way, never hit back)
-        if (!hurts || n.t < notice || n.t > Sim::NUKE_FLIGHT - 0.5f) continue;
+        if (!hurts || n.super || n.t < notice || n.t > Sim::flightOf(n) - 0.5f) continue;   // (nothing outruns a Super Nuke)
         float safe = Sim::nukeRadius(n) + 2.0f * TILE;
         for (auto& e : S.ents) {
             if (!e.alive || e.owner != player || !e.isUnit() || e.isAir()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger)
@@ -549,7 +549,7 @@ void AiPlayer::think() {
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps, decon;
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
-    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0, walls = 0;
+    int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0, walls = 0, masts = 0;
     for (auto& e : S.ents) {
         if (!e.alive || e.owner != player) continue;
         if (e.isUnit()) {
@@ -592,6 +592,7 @@ void AiPlayer::think() {
             case BR_ISLANDNUKE: break;
             case BR_FWALL: walls++; break;
             case BR_WAYMAKER: break;   // (gone again in a few seconds)
+            case BR_HEALANT: masts++; break;
             case BR_NONE: break;
             }
         }
@@ -877,6 +878,14 @@ void AiPlayer::think() {
                 float ang = antiNukes * 1.2566f + 0.4f;
                 built = tryBuild(anType, pl.basePos + Vec2(std::cos(ang), std::sin(ang)) * (5.5f * TILE), 14);
             }
+        }
+        // Healing Antennas: a few cheap masts spread over the base mend whatever was hit and scrub fallout off it (more on the harder settings)
+        int mastType = pl.faction == F_CYBER ? B_C_HEALANT : B_K_HEALANT;
+        int wantMasts = pl.difficulty >= 3 ? 7 : (pl.difficulty == 2 ? 5 : (pl.difficulty == 1 ? 3 : 1));
+        if (!built && masts < wantMasts && tm > 4.0f && pl.money > BUILDS[mastType].cost + 1200 && !threat) {
+            float ang = masts * 2.39996f + 0.9f;   // (golden-angle spiral: they spread evenly over the base)
+            float rad = (3.5f + 1.1f * masts) * TILE;
+            built = tryBuild(mastType, pl.basePos + Vec2(std::cos(ang), std::sin(ang)) * rad, 10);
         }
         // walls: a thick, unlimited belt around the base. The AI builds one segment per think toward a slowly turning ring, then
         // researches Anti-Rocket so the finished line becomes overlapping point-defence lasers.

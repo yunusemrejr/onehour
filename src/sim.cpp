@@ -399,7 +399,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         Entity* e = get(r);
         if (!e || e == t || e->carrier.valid() || (e->isUnit() && e->ut().temp)) continue;
         if (e->isUnit() && e->ut().role == UR_SPY) {   // a spy takes an enemy structure; against anything else it just walks over
-            if (t->isBuilding() && t->constructed && (enemies(e->owner, t->owner) || neutralTakeable(*t))) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
+            if (t->isBuilding() && t->constructed && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
         }
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
@@ -1182,7 +1182,7 @@ void Sim::updateNukes() {
     }
     for (auto& n : nukes) if (!n.broken && n.killT >= 0 && n.t >= n.killT) breakNuke(n);
     for (size_t i = 0; i < nukes.size();) {
-        if (nukes[i].t < NUKE_FLIGHT) { i++; continue; }
+        if (nukes[i].t < flightOf(nukes[i])) { i++; continue; }
         Nuke n = nukes[i];
         nukes.erase(nukes.begin() + i);
         nukeBlast(n);
@@ -1192,7 +1192,8 @@ void Sim::updateNukes() {
 void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
     const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
-    const float D = n.deep ? UNUKE_DAMAGE : 1.0f;   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius)
+    const float D = n.super ? ISLAND_NUKE_DAMAGE : (n.deep ? UNUKE_DAMAGE : 1.0f);   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius); a Super Nuke harder still
+    const bool heavy = n.deep || n.super;   // (the two big warheads flatten large structures in their inner blast and throw things further)
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
@@ -1238,11 +1239,11 @@ void Sim::nukeBlast(const Nuke& n) {
                 else if (small) dmg = e->maxHp * 1.6f * f * D;                                    // f above ~0.63 (the inner blast) brings it down
                 else {
                     dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f) * D;                      // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
-                    if (!n.deep) dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));   // never lethal (an Underground Nuke's triple blast flattens the inner half)
+                    if (!heavy) dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));   // never lethal (an Underground Nuke's triple blast flattens the inner half)
                 }
                 if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr, cap > 0 ? lessen(cap, *e) : -1.0f, true);
                 e = get(r); if (!e) continue;
-                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f) * (n.deep ? 1.5f : 1.0f));   // the pulse knocks survivors offline for a while
+                e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f) * (heavy ? 1.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
                     for (int k = 0; k < 4; k++) {
                         Vec2 p = e->pos + Vec2(rng.f(-e->radius() * 0.7f, e->radius() * 0.7f), rng.f(-e->radius() * 0.5f, e->radius() * 0.5f));
@@ -1265,7 +1266,7 @@ void Sim::nukeBlast(const Nuke& n) {
             }
         }
         if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
-            Vec2 np = e->pos + away * (90.0f * f * P * (n.deep ? 1.6f : 1.0f));
+            Vec2 np = e->pos + away * (90.0f * f * P * (n.super ? 2.0f : n.deep ? 1.6f : 1.0f));
             if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
         }
@@ -1289,9 +1290,10 @@ void Sim::nukeBlast(const Nuke& n) {
             fx.push_back({FX_SMOKE, p, p, -rng.f(0, 1.8f), 4.0f, rgb(60, 54, 50), rng.f(16, 34), Vec2(rng.f(-10, 10), rng.f(-34, -14))});
         }
         for (int k = 0; k < 24; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.8f), rng.f(0.7f, 1.6f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-300, 300), rng.f(-380, -90))});
-        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), n.deep ? UNUKE_GLOW : rgb(120, 255, 90), R * 0.95f});
+        const float fr = R * (n.super ? ISLAND_NUKE_FALLOUT_R : 0.95f);
+        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), n.super ? ISLAND_NUKE_GLOW : n.deep ? UNUKE_GLOW : rgb(120, 255, 90), fr});
         fx.back().tag = ++fxTagSeq;
-        fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, P * (n.deep ? UNUKE_FALLOUT : 1.0f), -1, false, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), fxTagSeq});
+        fallouts.push_back({n.pos, fr, 0.0f, 0.0f, P * (n.deep ? UNUKE_FALLOUT : 1.0f), -1, false, FALLOUT_LIFE * (n.deep ? UNUKE_FALLOUT : 1.0f), fxTagSeq});
         emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
         emit(EV_SOUND, -1, SND_EXPLODE_S, n.pos);
         return;
@@ -1299,6 +1301,30 @@ void Sim::nukeBlast(const Nuke& n) {
     // the fireball, the shock rings, a rolling field of secondary blasts and the mushroom cloud
     // (an Underground Nuke's is silver: a white-silver fireball, grey-silver rings, cloud and radiation glow. Its shock ring runs out to the whole
     // triple radius, but the fireball and the cloud are drawn at most 1.7 times a ramp's: three times as wide would be nine times the overdraw)
+    if (n.super) {   // a Super Nuke: a magenta-white flash and fireball, shock rings that run out over the whole huge circle, a field of blasts across it
+        // (the fireball and the cloud are drawn at most 1.8 times a ramp's, the fireball's flash no bigger than an Underground Nuke's: the blast itself
+        // reaches six times as far, and on the software renderer a fireball sprite that size cost over 100 ms a frame)
+        const Color G = ISLAND_NUKE_GLOW;
+        const float Rs = std::min(R, NUKE_RADIUS * TILE * 1.8f);
+        fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.4f, rgb(255, 240, 252), std::min(Rs, NUKE_RADIUS * TILE * 1.7f) * 1.3f});
+        fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.2f, rgb(255, 200, 240), Rs * 1.5f});
+        fx.push_back({FX_RING, n.pos, n.pos, 0, 1.6f, rgb(255, 230, 248), R * 0.45f});
+        fx.push_back({FX_RING, n.pos, n.pos, -0.3f, 2.6f, G, R * 1.02f});
+        fx.push_back({FX_RING, n.pos, n.pos, -0.8f, 3.2f, rgb(255, 170, 120), R * 1.15f});
+        fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 22.0f, rgb(255, 214, 240), Rs});
+        for (int k = 0; k < 90; k++) {
+            float a = rng.f(0, 6.283f), r = R * std::sqrt(rng.f(0.0f, 1.0f)); Vec2 p = n.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
+            fx.push_back({FX_EXPLODE, p, p, -rng.f(0.0f, 2.0f) - r / R * 2.2f, 1.0f, (k & 1) ? rgb(255, 150, 60) : rgb(255, 140, 220), rng.f(28, 76)});
+            fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f) - r / R * 2.0f, 6.0f, rgb(70, 58, 66), rng.f(30, 60), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
+        }
+        for (int k = 0; k < 60; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.2f), rgb(70, 66, 62), rng.f(2, 7), Vec2(rng.f(-560, 560), rng.f(-680, -140))});
+        const float fr = R * ISLAND_NUKE_FALLOUT_R;
+        fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, FALLOUT_LIFE, G, fr});
+        fx.back().tag = ++fxTagSeq;
+        fallouts.push_back({n.pos, fr, 0.0f, 0.0f, 1.5f, -1, false, FALLOUT_LIFE, fxTagSeq});
+        for (int k = 0; k < 4; k++) emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
+        return;
+    }
     const bool sv = n.deep;
     const float Rv = sv ? std::min(R, NUKE_RADIUS * TILE * 1.7f) : R;
     fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, sv ? rgb(240, 242, 246) : rgb(255, 240, 200), Rv * 1.3f});
@@ -1340,8 +1366,26 @@ void Sim::updateFallout() {
         for (Ref tr : trucks) { const Entity* t = get(tr); if (t && dist(p, t->pos) <= RADTRUCK_RADIUS * TILE) return true; }
         return false;
     };
+    // Healing Antennas scrub too, much more slowly, unharmed, and without shielding anyone (see HEALANT_SCRUB)
+    static std::vector<Vec2> masts; masts.clear();
+    for (auto& a : ents) if (a.alive && a.isBuilding() && a.constructed && a.owner >= 0 && a.bt().role == BR_HEALANT && a.disabledUntil <= time) masts.push_back(a.pos);
     for (size_t i = 0; i < fallouts.size();) {
         Fallout& f = fallouts[i];
+        if (!masts.empty()) {
+            int n = 0;
+            for (auto& m : masts) if (dist(m, f.pos) <= f.r + HEALANT_RADIUS * TILE) n++;
+            if (n > 0) {
+                float k = std::exp(-std::min(HEALANT_SCRUB * n, HEALANT_SCRUB_MAX) * SIM_DT);
+                f.power = std::max(0.0f, f.power * k);
+                f.r *= k;
+                if (f.visTag) for (auto& vf : fx) if (vf.type == FX_FALLOUT && vf.tag == f.visTag) { vf.size *= k; break; }
+                if (f.power <= 0.02f || f.r < 6.0f) {
+                    if (f.visTag) for (auto& vf : fx) if (vf.type == FX_FALLOUT && vf.tag == f.visTag) { vf.t = vf.life; break; }
+                    fallouts.erase(fallouts.begin() + i);
+                    continue;
+                }
+            }
+        }
         if (!trucks.empty()) {
             int scrubbing = 0;
             for (Ref tr : trucks) { const Entity* t = get(tr); if (t && dist(t->pos, f.pos) <= f.r + RADTRUCK_RADIUS * TILE) scrubbing++; }
@@ -2415,8 +2459,8 @@ bool Sim::dodgeDanger(Entity& e) {
     for (auto& n : nukes) {
         if (e.isAir()) break;
         bool hurts = nukeHurts(n, e.owner);
-        float left = NUKE_FLIGHT - n.t;
-        if (!hurts || n.t < 1.0f || left < 0.3f) continue;
+        float left = flightOf(n) - n.t;
+        if (!hurts || n.super || n.t < 1.0f || left < 0.3f) continue;   // (nothing outruns a Super Nuke's blast: nobody tries)
         float R = nukeRadius(n) + 1.5f * TILE;
         if (dist(e.pos, n.pos) > R) continue;
         if (e.order == O_MOVE && dist(e.target, n.pos) > R) return false;   // already on its way out
@@ -3141,7 +3185,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_CAPTURE: {   // spy: walk up to an enemy structure and take it
         Entity* b = get(e.targetEnt);
-        if (!b || !b->isBuilding() || !b->constructed || !(enemies(e.owner, b->owner) || neutralTakeable(*b)) || !visibleTo(*b, e.owner)) {
+        if (!b || !b->isBuilding() || !b->constructed || !spyMayTake(e.owner, *b) || !visibleTo(*b, e.owner)) {
             e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; break;
         }
         float d = distToEntity(e.pos, *b);
@@ -3259,7 +3303,8 @@ void Sim::updateBuilding(Entity& b) {
         b.hp = std::min(b.maxHp, b.hp + b.maxHp * rate * SIM_DT);
         if ((tick + b.gen) % 40 == 0) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-bt.w * 12.0f, bt.w * 12.0f), rng.f(-bt.h * 12.0f, bt.h * 12.0f)), Vec2(), 0, 0.3f, pl.faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
     }
-    if (bt.role == BR_CIVIC) { updateCivic(b); return; }   // the town has no roof guns, no queue: it pays and sends out dozers (may spawn a unit: b is done with)
+    if (bt.role == BR_CIVIC) { updateCivic(b); return; }
+    if (bt.role == BR_HEALANT) { updateHealAntenna(b); return; }   // (no guns, no queue: it mends what stands round it)   // the town has no roof guns, no queue: it pays and sends out dozers (may spawn a unit: b is done with)
     if (pl.upg[UPG_GUNS] && bt.role != BR_BUNKER) updateRoofGun(b, powered);
     if (bt.role == BR_BUNKER) { updateBunkerSelf(b); updateBunkerWard(b); updateBunker(b); }
     if (bt.role == BR_UNUKE) updateSilo(b);
@@ -3530,10 +3575,10 @@ void Sim::updateBunkerAntiNuke(Entity& b, bool surrounded) {
     bool cy = b.bt().faction == F_CYBER;
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
-        if (n.broken || n.killT >= 0 || n.deep || !enemies(n.owner, b.owner)) continue;   // (an Underground Nuke's warhead is too much for it: only Anti-Nuke Lasers)
+        if (n.broken || n.killT >= 0 || n.deep || n.super || !enemies(n.owner, b.owner)) continue;   // (an Underground Nuke's or a Super Nuke's warhead is too much for it: only Anti-Nuke Lasers)
         float cover = BUNKER_ANTINUKE_COVER * TILE + nukeRadius(n);
         if (dist(n.pos, b.pos) > cover) continue;
-        float left = NUKE_FLIGHT - n.t;
+        float left = flightOf(n) - n.t;
         const float flight = cy ? 0.28f : 0.45f, gap = 0.22f;
         if (left > BUNKER_ANTINUKE_WINDOW || left < flight + 0.25f) continue;
         if (std::find(n.engagedBy.begin(), n.engagedBy.end(), self) != n.engagedBy.end()) continue;
@@ -3956,7 +4001,7 @@ void Sim::cmdCapture(const std::vector<Ref>& sel, Ref building) {
     if (!b || !b->isBuilding() || !b->constructed) return;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || !e->isUnit() || e->ut().role != UR_SPY || e->carrier.valid() || !(enemies(e->owner, b->owner) || neutralTakeable(*b)) || !visibleTo(*b, e->owner)) continue;
+        if (!e || !e->isUnit() || e->ut().role != UR_SPY || e->carrier.valid() || !spyMayTake(e->owner, *b) || !visibleTo(*b, e->owner)) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF;
         e->order = O_CAPTURE; e->postOrder = O_IDLE; e->targetEnt = building; e->engaged = NOREF; e->path.clear(); e->pathIdx = 0; e->repathTimer = 0; e->actionTimer = 0; e->stuckTimer = 0;
     }
@@ -3979,17 +4024,23 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     b.attacker = NOREF; b.lastDamaged = -100;
     for (int q = 0; q < MAX_PLAYERS; q++) b.detUntil[q] = 0;
     { Ref bref = refOf(b); for (auto& u : ents) if (u.alive && u.isUnit() && u.home == bref) u.home = NOREF; }   // aircraft based here must find another airfield: they never land on an enemy pad
-    if (from >= 0) { players[to].structuresKilled++; players[from].structuresLost++; }
+    const bool ally = from >= 0 && !enemies(to, from);   // a human's infiltrator took an ally's structure (see allyTakeable)
+    if (from >= 0 && !ally) { players[to].structuresKilled++; players[from].structuresLost++; }
     for (int k = 0; k < 10; k++) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-b.radius(), b.radius()), rng.f(-b.radius(), b.radius())), Vec2(), -rng.f(0, 0.4f), 0.5f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 5});
     fx.push_back({FX_RING, b.pos, b.pos, 0, 0.9f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), b.radius() * 1.3f});
     char msg[96];
-    snprintf(msg, sizeof msg, from >= 0 ? "Captured an enemy %s" : "Captured the %s", b.bt().name);
+    snprintf(msg, sizeof msg, ally ? "Took over an ally's %s" : from >= 0 ? "Captured an enemy %s" : "Captured the %s", b.bt().name);
     emit(EV_MSG, to, SND_NONE, b.pos, msg);
     emit(EV_SOUND, to, SND_BUILD_DONE, b.pos);
-    snprintf(msg, sizeof msg, "A spy captured our %s", b.bt().name);
-    if (from >= 0) emit(EV_UNDER_ATTACK, from, SND_ATTACKED, b.pos, msg);
-    snprintf(msg, sizeof msg, "A spy captured your ally's %s", b.bt().name);
-    if (from >= 0) for (int q = 0; q < numPlayers; q++) if (q != from && players[q].team == players[from].team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, b.pos, msg);
+    if (ally) {   // an ally loses it to its own side: no alarm, just word of it
+        snprintf(msg, sizeof msg, "Our ally's infiltrator took over our %s", b.bt().name);
+        emit(EV_MSG, from, SND_NONE, b.pos, msg);
+    } else {
+        snprintf(msg, sizeof msg, "A spy captured our %s", b.bt().name);
+        if (from >= 0) emit(EV_UNDER_ATTACK, from, SND_ATTACKED, b.pos, msg);
+        snprintf(msg, sizeof msg, "A spy captured your ally's %s", b.bt().name);
+        if (from >= 0) for (int q = 0; q < numPlayers; q++) if (q != from && players[q].team == players[from].team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, b.pos, msg);
+    }
     updatePower();
 }
 

@@ -241,6 +241,16 @@ static bool mapConnectivity() {
     for (auto& isl : g_map.islands) islandComps.push_back(comp[(int)isl.cy * MAP_W + (int)isl.cx]);
     int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main && std::find(islandComps.begin(), islandComps.end(), i) == islandComps.end()) stray += size[i];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "map: main land %d tiles, island %d, %d tiles in small pockets\n", size[main], size[island], stray);
+    if (getenv("ONEHOUR_DEBUG")) for (int i = 1; i <= ncomp; i++) if (i != main && std::find(islandComps.begin(), islandComps.end(), i) == islandComps.end())
+        for (int t = 0; t < MAP_W * MAP_H; t++) if (comp[t] == i) {
+            fprintf(stderr, "  pocket of %d tiles at %d,%d\n", size[i], t % MAP_W, t / MAP_W);
+            if (size[i] >= 8) for (int y = t / MAP_W - 5; y <= t / MAP_W + 7; y++) {   // (what walls it in: ~ water, # rock, T tree, o the pocket, . open land)
+                fprintf(stderr, "    ");
+                for (int x = t % MAP_W - 8; x <= t % MAP_W + 10; x++) { if (!inMap(x, y)) { fputc(' ', stderr); continue; } u8 c = g_map.tile(x, y); fputc(comp[y * MAP_W + x] == i ? 'o' : c == T_WATER ? '~' : c == T_ROCK ? '#' : c == T_TREE ? 'T' : '.', stderr); }
+                fputc('\n', stderr);
+            }
+            break;
+        }
     CHECK3(stray <= 40, "the lake and rivers cut off pockets of land");
     return true;
 }

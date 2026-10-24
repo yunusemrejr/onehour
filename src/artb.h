@@ -27,3 +27,5 @@ void artSiloArmed(Canvas& c, int type);
 // The map's special structures (artb_special.cpp): the Island Nuke Launcher in its laser chamber, the Mountain Fortress and the Bastion Wall.
 // Paints the structure and its team mask; false for any other type.
 bool artSpecialBuilding(Canvas& c, Canvas& mask, int type);
+// The Healing Antenna of either army (artb_antenna.cpp): a 1x1 mast with a heal glyph and a green beacon. Paints the structure and its team mask.
+bool artHealAntenna(Canvas& c, Canvas& mask, bool cyber, u32 seed);

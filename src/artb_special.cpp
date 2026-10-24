@@ -380,6 +380,7 @@ void waymaker(Bld& b) {
 
 bool artSpecialBuilding(Canvas& c, Canvas& mask, int type) {
     const BuildType& bt = BUILDS[type];
+    if (bt.role == BR_HEALANT) return artHealAntenna(c, mask, bt.faction == F_CYBER, 9100u + (u32)type * 29u);
     if (bt.role != BR_ISLANDNUKE && bt.role != BR_FWALL && bt.role != BR_WAYMAKER && type != B_C_FORTRESS) return false;
     Bld b(c, mask, bt.w * TILE, bt.h * TILE, bt.faction == F_CYBER, 9100u + (u32)type * 29u);
     if (bt.role == BR_ISLANDNUKE) islandLauncher(b);

@@ -258,15 +258,20 @@ static bool aiTownTest(u64 seed) {
     Faction fac[2] = { F_CYBER, F_CLANKER };
     bool ai[2] = { true, true }; int diff[2] = { 2, 2 }; int team[2] = { 0, 1 };
     g_sim.init(2, fac, ai, diff, team, seed);
+    for (int p = 0; p < 2; p++) g_ai.featMask[p] = FEAT_DEFAULT & ~FEAT_FRONTIER;   // (no island Super Nukes: one every 30 s flattens both bases long before a town)
     g_ai.init(seed);
+    for (int p = 0; p < 2; p++) { g_ai.featMask[p] = FEAT_DEFAULT; g_ai.ais[p].regroupUntil = 1e9f; }   // (no attack waves either: a war won in eight minutes would end the test early)
     int civics[2] = { 0, 0 }, civD[2] = { 0, 0 };
     for (int t = 0; t < (int)(720.0f * SIM_HZ) && !g_sim.gameOver; t++) {
-        g_sim.step(); g_ai.update(); g_sim.events.clear();
+        g_sim.step(); g_ai.update();
+        g_sim.events.clear();
         if (t % 200 == 0) for (int p = 0; p < 2; p++) {
             civics[p] = std::max(civics[p], g_sim.countRole(p, BR_CIVIC, true));
             civD[p] = std::max(civD[p], countType(p, p == 0 ? U_C_CIVDOZER : U_K_CIVDOZER));
         }
     }
+    if (getenv("ONEHOUR_DEBUG")) for (int p = 0; p < 2; p++) fprintf(stderr, "army %d at %.0f s (game over %d): money %d, %d structures, %d units, hq %d, built %d lost %d, island launches %d\n", p, g_sim.time, (int)g_sim.gameOver, g_sim.players[p].money,
+        g_sim.countBuildings(p, -1, true), (int)std::count_if(g_sim.ents.begin(), g_sim.ents.end(), [&](const Entity& e) { return e.alive && e.owner == p && e.isUnit(); }), g_sim.countRole(p, BR_HQ, true), g_sim.players[p].unitsBuilt, g_sim.players[p].unitsLost, g_sim.players[p].islandLaunches);
     CHECK6(civD[0] + civD[1] > 0, "no computer army trained a civilian dozer in twelve minutes");
     CHECK6(civics[0] + civics[1] > 0, "no computer army raised a civilian structure in twelve minutes");
     printf("civictest: computer armies built towns ok (Cyber %d civilian structures, Clanker %d)\n", civics[0], civics[1]);

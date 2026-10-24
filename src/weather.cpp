@@ -274,6 +274,12 @@ void Game::drawWeatherTint() {
         if (e.isBuilding()) {
             if (!e.constructed || e.bt().role == BR_WALL || e.bt().role == BR_FWALL || e.bt().role == BR_WAYMAKER) continue;
             const BuildType& bt = e.bt();
+            if (bt.role == BR_HEALANT) {   // a Healing Antenna has no windows: its green beacon glows at the top of the mast
+                float pulse = 0.75f + 0.25f * std::sin(wallTime * 3.0f + e.gen);
+                g.glowAdd(p.x, p.y - 20, 8.0f, Color{120, 255, 170, (u8)(150 * night * pulse)});
+                g.glowAdd(p.x, p.y, TILE * 0.9f, Color{120, 255, 170, (u8)(20 * night)});
+                continue;
+            }
             bool cyber = bt.faction == F_CYBER;
             Color lc = e.owner < 0 ? rgb(255, 200, 120) : (cyber ? rgb(170, 220, 255) : rgb(255, 196, 110));
             int n = std::min(4, 1 + bt.w * bt.h / 4);

@@ -190,8 +190,8 @@ void Game::drawInterceptors() {
     // the pieces of a warhead that was shot down keep falling along its path to the target
     for (auto& n : g_sim.nukes) {
         if (!n.broken) continue;
-        float k = clampf(n.t / Sim::NUKE_FLIGHT, 0, 1), k0 = clampf(n.killT / Sim::NUKE_FLIGHT, 0, 1);
-        float since = std::max(0.0f, (n.t - n.killT) / Sim::NUKE_FLIGHT);
+        float k = clampf(n.t / Sim::flightOf(n), 0, 1), k0 = clampf(n.killT / Sim::flightOf(n), 0, 1);
+        float since = std::max(0.0f, (n.t - n.killT) / Sim::flightOf(n));
         for (int i = 0; i < 9; i++) {
             float h1 = hash01((u32)(n.id * 31 + i * 7 + 1)), h2 = hash01((u32)(n.id * 17 + i * 13 + 5)), h3 = hash01((u32)(n.id * 5 + i * 3 + 9));
             Vec2 w = Sim::nukeAirPos(n, n.t);

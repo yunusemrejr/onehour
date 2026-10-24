@@ -613,6 +613,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     Ref air = spawnAt(airFoe, 1, bp + Vec2(0, -4 * TILE)); if (Entity* a = g_sim.get(air)) { a->alt = 1; a->order = O_IDLE; }
     Ref inf = spawnAt(rifleFoe, 1, bp + Vec2(3 * TILE, 3 * TILE));
     for (Ref r : {tk, tk2, far}) if (Entity* a = g_sim.get(r)) { a->maxHp *= 10; a->hp = a->maxHp; }
+    if (Entity* a = g_sim.get(far)) a->disabledUntil = g_sim.time + 30;   // (held where it stands: left alone it drives in on the bunker, into the guns' range)
     float tk0 = hpOf(tk), tk20 = hpOf(tk2), far0 = hpOf(far), air0 = hpOf(air);
     run(0.5f);
     CHECK(B->gunTgt[0].valid() && B->gunTgt[1].valid(), "the two miniguns did not both pick a target");
@@ -620,6 +621,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(!alive(inf), "the miniguns did not kill an infantryman");
     CHECK(hpOf(tk) < tk0 || hpOf(tk2) < tk20, "the miniguns did not shoot a tank");
     CHECK(!alive(air) || hpOf(air) < air0 * 0.9f, "the miniguns did not shoot an aircraft");
+    if (getenv("ONEHOUR_DEBUG")) { Entity* f = g_sim.get(far); fprintf(stderr, "far tank: hp %.1f of %.1f, %.1f tiles from the bunker, attacker %d\n", hpOf(far), far0, f ? dist(f->pos, bp) / TILE : -1.0f, f && g_sim.get(f->attacker) ? g_sim.get(f->attacker)->type : -1); }
     CHECK(hpOf(far) == far0, "the miniguns shot a tank beyond their range");
     CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker should remain visible while its miniguns fire");
     for (Ref r : {tk, tk2, far, air, inf}) if (alive(r)) g_sim.destroy(*g_sim.get(r), false);
@@ -631,9 +633,19 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     run(MINI_NUKE_ARM + 0.5f);
     CHECK(g_sim.miniNukesReady(0) == 1 && g_sim.miniNukeWait(0) == 0, "the bunker's missile never became ready");
     Vec2 gz = bp + Vec2(18 * TILE, 0);
+    {   // open ground for the scene: ground zero and the three tanks east of it each stand where they were put (the ground near the bunker may be rough)
+        auto open = [](Vec2 p) { return inMap(tileOf(p.x), tileOf(p.y)) && dist(g_map.nearestFree(p, 30), p) < TILE; };
+        float xs[4] = { 0.0f, 0.7f * NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE), 1.25f * NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE) + 40.0f, 0.7f * NUKE_RADIUS * TILE };
+        for (int k = 0; k < 16; k++) {
+            float a = k * 0.3927f; Vec2 c = bp + Vec2(std::cos(a), std::sin(a)) * (18.0f * TILE);
+            bool ok = true; for (float x : xs) if (!open(c + Vec2(x, 0))) ok = false;
+            if (ok) { gz = c; break; }
+        }
+    }
     Ref centre = spawnAt(tankFoe, 1, gz), rim = spawnAt(tankFoe, 1, gz + Vec2(0.7f * NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE), 0));
     Ref outside = spawnAt(tankFoe, 1, gz + Vec2(1.25f * NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE) + 40.0f, 0));
     Ref wide = spawnAt(tankFoe, 1, gz + Vec2(0.7f * NUKE_RADIUS * TILE, 0));   // inside a full warhead's circle, far outside the small one
+    for (Ref r : {centre, rim, outside, wide}) if (Entity* a = g_sim.get(r)) a->disabledUntil = g_sim.time + 30;   // (held where they stand: this is about the blast's reach, not about running from it)
     CHECK(!g_sim.cmdMiniNuke(1, gz), "an army without a bunker launched a bunker missile");
     CHECK(g_sim.cmdMiniNuke(0, gz), "a lone bunker could not launch its missile");
     CHECK(g_sim.nukes.size() == 1 && g_sim.nukes[0].scale == MINI_NUKE_SCALE && Sim::nukeRadius(g_sim.nukes[0]) < NUKE_RADIUS * TILE * 0.5f, "the bunker's missile is not a small one");
@@ -644,6 +656,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(g_sim.nukes.size() == 2 && dist(g_sim.nukes[1].pos, g_sim.nukes[0].pos) < 1.0f && g_sim.nukes[1].scale == MINI_NUKE_SCALE, "a bunker's salvo did not follow with a second missile at the same spot");
     run(Sim::NUKE_FLIGHT + 1.0f + MINI_NUKE_SALVO_GAP);   // (both missiles land)
     CHECK(!alive(centre), "a mini nuke did not destroy a tank at ground zero");
+    if (getenv("ONEHOUR_DEBUG") && alive(rim)) fprintf(stderr, "rim tank: hp %.0f of %.0f, %.1f tiles from ground zero (circle %.1f)\n", hpOf(rim), g_sim.get(rim)->maxHp, dist(g_sim.get(rim)->pos, gz) / TILE, NUKE_RADIUS * std::sqrt(MINI_NUKE_SCALE));
     CHECK(!alive(rim) || hpOf(rim) < g_sim.get(rim)->maxHp * 0.5f, "a mini nuke did not reach the inside of its circle");
     CHECK(alive(outside) && alive(wide), "a mini nuke blasted outside its small circle");
     CHECK(hpOf(wide) == g_sim.get(wide)->maxHp, "a mini nuke hurt a tank outside its small circle");

@@ -178,6 +178,8 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
 
 // ---------------------------------------------------------------- trees and props
 inline bool inMapPx(int x, int y) { return x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H; }
+// Decor counts are per tile, not fixed: a count tuned for the 176x176 map scales with the map's area (so a bigger map keeps its density)
+inline int decorCount(int base) { return (int)(base * ((float)(MAP_W * MAP_H) / (176.0f * 176.0f)) + 0.5f); }
 Canvas downsample2(const Canvas& big) {
     Canvas out(big.w / 2, big.h / 2);
     for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) {
@@ -276,7 +278,9 @@ Canvas makeBoulder(float R, u32 seed) {
     return downsample2(big);
 }
 
-// Decorative props baked into the ground. kind: 0 fallen log, 1 ruined wall, 2 standing stone, 3 burnt-out hulk, 4 lily pad, 5 broken pillar, 6 stump
+// Decorative props baked into the ground. kind: 0 fallen log, 1 ruined wall, 2 standing stone, 3 burnt-out hulk, 4 lily pad, 5 broken pillar, 6 stump,
+// 7 hay bales, 8 post-and-rail fence, 9 wildflower patch, 10 mossy boulder cluster, 11 camp site, 12 crates and barrels, 13 driftwood,
+// 14 rowboat on the sand, 15 signpost, 16 cattails, 17 toadstool ring, 18 bones, 19 wheat strip
 Canvas makeProp(int kind, float R, u32 seed) {
     int S = (int)(R * 2 + 14);
     Canvas big(S * 2, S * 2);
@@ -352,6 +356,226 @@ Canvas makeProp(int kind, float R, u32 seed) {
         a.box(cx, cy + R * 0.05f - h * 0.5f, R * 0.17f, h * 0.5f + R * 0.06f, 1, c, 2.0f, 0.8f);
         a.poly({ {cx - R * 0.17f, cy + R * 0.05f - h}, {cx - R * 0.02f, cy + R * 0.05f - h - 3}, {cx + R * 0.1f, cy + R * 0.05f - h}, {cx + R * 0.17f, cy + R * 0.05f - h + 2}, {cx, cy + R * 0.05f - h + 3} }, shade(c, 1.1f), 1, 0.4f);
         a.poly({ {cx + R * 0.25f, cy + R * 0.2f}, {cx + R * 0.5f, cy + R * 0.18f}, {cx + R * 0.45f, cy + R * 0.3f} }, shade(c, 0.85f), 1, 0.5f);
+        break;
+    }
+    case 7: {   // hay: two round bales with banded straw and a loose scatter of stalks
+        Color straw = shade(rgb(214, 180, 96), r.f(0.9f, 1.08f));
+        for (int i = 0; i < 2; i++) {
+            float bx = cx + (i ? R * 0.4f : -R * 0.36f), by = cy + (i ? -R * 0.12f : R * 0.16f), br = R * (i ? 0.42f : 0.5f);
+            a.shadowCircle(bx, by, br, 1.8f, 2.0f, 1.6f, 90);
+            a.circle(bx, by, br, shade(straw, r.f(0.94f, 1.06f)), br * 0.35f, 0.55f);
+            a.ring(bx, by, br * 0.62f, 0.45f, rgba(shade(straw, 0.8f), 170), 0.6f, 0.2f);
+            a.ring(bx, by, br * 0.28f, 0.4f, rgba(shade(straw, 0.78f), 150), 0.5f, 0.2f);
+            a.dot(bx - br * 0.25f, by - br * 0.25f, br * 0.2f, rgba(shade(straw, 1.25f), 210));
+        }
+        for (int i = 0; i < 9; i++) {
+            float px = cx + r.f(-R * 0.8f, R * 0.8f), py = cy + r.f(-R * 0.5f, R * 0.6f), an = r.f(0, 3.14f);
+            a.line(px, py, px + std::cos(an) * 2.0f, py + std::sin(an) * 1.0f, 0.5f, rgba(rgb(176, 140, 66), 200));
+        }
+        break;
+    }
+    case 8: {   // a short post-and-rail fence, one rail missing from the middle bay
+        float an = r.f() < 0.5f ? r.f(-0.2f, 0.2f) : 1.5708f + r.f(-0.2f, 0.2f), ca = std::cos(an), sa = std::sin(an);
+        const int n = 5;
+        float half = R * 0.95f, step = 2 * half / (n - 1);
+        auto at = [&](float t, float off) { return P{ cx + ca * t - sa * off, cy + sa * t + ca * off }; };
+        Color wood = shade(rgb(152, 114, 74), r.f(0.9f, 1.08f));
+        for (int k = 0; k < 2; k++) {
+            float off = k ? 1.1f : -1.5f;
+            for (int i = 0; i < n - 1; i++) {
+                if (k == 0 && i == 2) continue;
+                P p0 = at(-half + i * step + 1.5f, off), p1 = at(-half + (i + 1) * step - 1.5f, off);
+                a.cap(p0.x, p0.y, p1.x, p1.y, 0.55f, shade(wood, k ? 1.12f : 0.86f), 0.5f, 0.4f);
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            P p = at(-half + i * step, 0);
+            a.shadowCircle(p.x, p.y, 1.5f, 1.4f, 1.6f, 1.0f, 90);
+            a.box(p.x, p.y, 1.5f, 1.5f, 0.4f, shade(wood, 1.05f), 0.6f, 0.5f);
+        }
+        break;
+    }
+    case 9: {   // a wildflower patch: leaves underneath, then the blooms in one of four two-colour mixes
+        static const Color SETS[4][2] = { { rgb(244, 214, 70), rgb(246, 244, 230) }, { rgb(176, 130, 220), rgb(240, 150, 170) },
+                                          { rgb(214, 66, 58), rgb(246, 226, 150) }, { rgb(150, 190, 246), rgb(244, 214, 70) } };
+        const Color* set = SETS[r.range(0, 3)];
+        int n = 18 + r.range(0, 8);
+        std::vector<P> pts;
+        for (int i = 0; i < n; i++) { float an = r.f(0, 6.2832f), d = std::sqrt(r.f()) * R * 0.85f; pts.push_back(P{ cx + std::cos(an) * d, cy + std::sin(an) * d * 0.85f }); }
+        a.shadowCircle(cx, cy, R * 0.75f, 1.5f, 2.0f, 3.0f, 40);
+        for (auto& p : pts) a.dot(p.x + 0.4f, p.y + 0.6f, 1.5f, rgba(rgb(60, 92, 40), 170));
+        for (auto& p : pts) {
+            Color c = r.f() < 0.6f ? set[0] : set[1];
+            a.dot(p.x, p.y, r.f(1.4f, 2.0f), shade(c, r.f(0.92f, 1.08f)));
+            a.dot(p.x, p.y, 0.7f, rgba(rgb(236, 196, 74), 230));
+        }
+        break;
+    }
+    case 10: {   // a cluster of stones with moss on the shaded south-east lips and a few lichen flecks
+        int n = 3 + r.range(0, 1);
+        a.shadowCircle(cx, cy, R * 0.9f, 2.5f, 2.8f, 3.0f, 95);
+        for (int i = 0; i < n; i++) {
+            float an = r.f(0, 6.2832f), d = i ? R * r.f(0.25f, 0.5f) : 0.0f, rr = i ? R * r.f(0.26f, 0.4f) : R * r.f(0.5f, 0.6f);
+            float bx = cx + std::cos(an) * d, by = cy + std::sin(an) * d * 0.8f;
+            std::vector<P> v;
+            for (int k = 0; k < 7; k++) { float t = k * 6.2832f / 7 + r.f(-0.2f, 0.2f), q = rr * r.f(0.8f, 1.0f); v.push_back(P{ bx + std::cos(t) * q, by + std::sin(t) * q * 0.85f }); }
+            a.poly(v, shade(rgb(118, 112, 102), r.f(0.85f, 1.1f)), rr * 0.45f, 0.8f);
+            a.ell(bx + rr * 0.35f, by + rr * 0.4f, rr * 0.5f, rr * 0.3f, rgba(rgb(70, 98, 46), 200), 1, 0);
+        }
+        for (int i = 0; i < 5; i++) a.dot(cx + r.f(-R * 0.5f, R * 0.5f), cy + r.f(-R * 0.4f, R * 0.4f), 0.8f, rgba(rgb(176, 178, 110), 200));
+        break;
+    }
+    case 11: {   // an abandoned camp: a trampled patch, a dead fire ringed with stones, a pitched tent and a log seat
+        float an = r.f(0, 6.2832f), ca = std::cos(an), sa = std::sin(an);
+        Color tent = shade(rgb(150, 138, 96), r.f(0.9f, 1.08f));
+        a.ell(cx, cy, R * 0.8f, R * 0.7f, rgba(rgb(120, 96, 66), 90), 1, 0);
+        // the tent: a low canvas roof with its ridge running across the radius from the fire
+        float tcx = cx + ca * R * 0.72f, tcy = cy + sa * R * 0.72f, ux = -sa, uy = ca, vx = ca, vy = sa;
+        float hl = R * 0.5f, hw = R * 0.3f;
+        auto T = [&](float u, float v) { return P{ tcx + ux * u + vx * v, tcy + uy * u + vy * v }; };
+        std::vector<P> tp = { T(-hl, -hw), T(hl, -hw), T(hl, hw), T(-hl, hw) }, tsh;
+        for (auto& p : tp) tsh.push_back(P{ p.x + 2.0f, p.y + 2.2f });
+        a.poly(tsh, rgba(rgb(0, 0, 0), 80), 0.8f, 0.0f);
+        a.poly(tp, tent, 0.8f, 0.5f);
+        P e0 = T(-hl * 0.9f, 0), e1 = T(hl * 0.9f, 0);
+        a.line(e0.x, e0.y, e1.x, e1.y, 0.8f, rgba(shade(tent, 0.7f), 220));
+        // dead fire: an ash bed, two charred sticks and a ring of stones
+        for (int i = 0; i < 7; i++) {
+            float t = i * 6.2832f / 7 + r.f(-0.15f, 0.15f);
+            a.circle(cx + std::cos(t) * R * 0.32f, cy + std::sin(t) * R * 0.32f, r.f(1.4f, 1.9f), shade(rgb(120, 116, 108), r.f(0.85f, 1.1f)), 0.8f, 0.6f);
+        }
+        a.ell(cx, cy, R * 0.22f, R * 0.2f, rgb(88, 84, 80), 1.2f, 0.2f);
+        a.cap(cx - R * 0.16f, cy - R * 0.08f, cx + R * 0.14f, cy + R * 0.1f, 0.7f, rgb(46, 34, 26), 0.5f, 0.2f);
+        a.cap(cx + R * 0.1f, cy - R * 0.12f, cx - R * 0.12f, cy + R * 0.08f, 0.6f, rgb(40, 30, 24), 0.5f, 0.2f);
+        for (int i = 0; i < 6; i++) a.dot(cx + r.f(-R * 0.18f, R * 0.18f), cy + r.f(-R * 0.16f, R * 0.16f), 0.5f, rgba(rgb(150, 146, 138), 200));
+        // a log seat on the far side of the fire, facing the tent
+        float sx = cx - ca * R * 0.62f, sy = cy - sa * R * 0.62f;
+        a.cap(sx - ux * R * 0.22f, sy - uy * R * 0.22f, sx + ux * R * 0.22f, sy + uy * R * 0.22f, R * 0.09f, rgb(120, 88, 56), 0.8f, 0.5f);
+        break;
+    }
+    case 12: {   // a stack of supply crates (one stacked on another) and two barrels
+        Color wood = shade(rgb(160, 122, 80), r.f(0.9f, 1.08f));
+        auto crate = [&](float x, float y, float h) {
+            a.shadowRect(x - h, y - h, h * 2, h * 2, 1.8f, 2.2f, 1.6f, 100);
+            a.box(x, y, h, h, 0.5f, shade(wood, r.f(0.93f, 1.07f)), 0.7f, 0.5f);
+            a.line(x - h * 0.85f, y - h * 0.85f, x + h * 0.85f, y + h * 0.85f, 0.45f, rgba(rgb(96, 68, 42), 170));
+            a.line(x - h * 0.85f, y + h * 0.85f, x + h * 0.85f, y - h * 0.85f, 0.45f, rgba(rgb(96, 68, 42), 170));
+        };
+        auto barrel = [&](float x, float y, float rad) {
+            a.shadowCircle(x, y, rad, 1.5f, 2.0f, 1.4f, 100);
+            a.circle(x, y, rad, shade(rgb(124, 84, 54), r.f(0.92f, 1.08f)), rad * 0.4f, 0.6f);
+            a.ring(x, y, rad * 0.62f, 0.4f, rgba(rgb(52, 38, 26), 200), 0.5f, 0.2f);
+            a.dot(x - rad * 0.3f, y - rad * 0.3f, rad * 0.28f, rgba(rgb(176, 130, 90), 220));
+        };
+        crate(cx - R * 0.3f, cy + R * 0.15f, R * 0.26f);
+        crate(cx + R * 0.38f, cy - R * 0.1f, R * 0.22f);
+        crate(cx - R * 0.3f - 1.0f, cy + R * 0.15f - 1.6f, R * 0.2f);   // stacked on the first
+        barrel(cx + R * 0.2f, cy + R * 0.6f, R * 0.2f);
+        barrel(cx - R * 0.72f, cy - R * 0.42f, R * 0.2f);
+        break;
+    }
+    case 13: {   // sun-bleached driftwood: a long pale trunk, a snapped branch stub and a knot
+        float an = r.f(0, 6.2832f), L = R * 1.05f, ca = std::cos(an), sa = std::sin(an), th = R * 0.15f;
+        float ax = cx - ca * L, ay = cy - sa * L, bx = cx + ca * L, by = cy + sa * L;
+        a.cap(ax + 1.5f, ay + 2.0f, bx + 1.5f, by + 2.0f, th, rgba(rgb(0, 0, 0), 60), 0.5f, 0.0f);
+        Color wood = shade(rgb(196, 184, 160), r.f(0.9f, 1.05f));
+        a.cap(ax, ay, bx, by, th, wood, th * 0.7f, 0.6f);
+        float t = r.f(0.3f, 0.7f), px = ax + (bx - ax) * t, py = ay + (by - ay) * t, side = r.f() < 0.5f ? -1.0f : 1.0f;
+        a.cap(px, py, px - sa * side * R * 0.42f + ca * R * 0.18f, py + ca * side * R * 0.42f + sa * R * 0.18f, th * 0.45f, shade(wood, 0.95f), 0.4f, 0.5f);
+        float k2 = 1.0f - t;
+        a.dot(ax + (bx - ax) * k2, ay + (by - ay) * k2, th * 0.3f, rgba(rgb(122, 104, 82), 220));
+        break;
+    }
+    case 14: {   // a rowboat drawn up on the sand: pointed bow, planked inside, two thwarts and an oar lying alongside
+        float an = r.f(0, 6.2832f), L = R * 1.0f, w = R * 0.27f, ca = std::cos(an), sa = std::sin(an);
+        auto W2 = [&](float u, float v) { return P{ cx + ca * u - sa * v, cy + sa * u + ca * v }; };   // along the keel (u), across it (v)
+        std::vector<P> hull = { W2(-L * 0.92f, -w), W2(L * 0.5f, -w), W2(L, 0), W2(L * 0.5f, w), W2(-L * 0.92f, w) }, hsh;
+        for (auto& p : hull) hsh.push_back(P{ p.x + 2.0f, p.y + 2.4f });
+        a.poly(hsh, rgba(rgb(0, 0, 0), 70), 0.8f, 0.0f);
+        a.poly(hull, shade(rgb(146, 96, 58), r.f(0.92f, 1.08f)), 1.4f, 0.5f);
+        a.poly({ W2(-L * 0.75f, -w * 0.6f), W2(L * 0.45f, -w * 0.6f), W2(L * 0.8f, 0), W2(L * 0.45f, w * 0.6f), W2(-L * 0.75f, w * 0.6f) }, rgb(184, 140, 92), 0.6f, 0.3f);
+        float thw[2] = { -L * 0.42f, L * 0.12f };
+        for (float u : thw) { P p0 = W2(u, -w * 0.6f), p1 = W2(u, w * 0.6f); a.cap(p0.x, p0.y, p1.x, p1.y, 0.45f, rgb(108, 74, 44), 0.4f, 0.3f); }
+        P o0 = W2(-L * 0.6f, -w * 1.7f), o1 = W2(L * 0.85f, -w * 1.7f);
+        a.cap(o0.x, o0.y, o1.x, o1.y, 0.5f, rgb(120, 92, 62), 0.4f, 0.3f);
+        break;
+    }
+    case 15: {   // a wooden signpost: two arrow boards pointing different ways from one post
+        float an = r.f(0, 6.2832f);
+        auto board = [&](float ang, float len) {
+            float ca2 = std::cos(ang), sa2 = std::sin(ang), hw = R * 0.13f, head = R * 0.22f;
+            auto W2 = [&](float u, float v) { return P{ cx + ca2 * u - sa2 * v, cy + sa2 * u + ca2 * v }; };
+            std::vector<P> v = { W2(R * 0.15f, -hw), W2(len - head, -hw), W2(len, 0), W2(len - head, hw), W2(R * 0.15f, hw) }, sh;
+            for (auto& p : v) sh.push_back(P{ p.x + 1.6f, p.y + 2.0f });
+            a.poly(sh, rgba(rgb(0, 0, 0), 80), 0.6f, 0.0f);
+            a.poly(v, shade(rgb(184, 140, 90), r.f(0.92f, 1.06f)), 0.6f, 0.4f);
+            P s0 = W2(R * 0.3f, 0), s1 = W2(len - head - 1.0f, 0);
+            a.line(s0.x, s0.y, s1.x, s1.y, 0.45f, rgba(rgb(96, 64, 38), 190));
+        };
+        board(an, R * 0.95f);
+        board(an + 2.5f + r.f(-0.2f, 0.2f), R * 0.8f);
+        a.shadowCircle(cx, cy, 1.6f, 1.2f, 1.8f, 1.0f, 100);
+        a.circle(cx, cy, 1.6f, rgb(110, 80, 50), 0.6f, 0.6f);
+        break;
+    }
+    case 16: {   // a clump of cattails: green blades and dark brown heads on tall stalks, leaning a little
+        int n = 5 + r.range(0, 3);
+        float lean = r.f(-0.35f, 0.35f);
+        a.shadowCircle(cx, cy, R * 0.45f, 1.2f, 1.6f, 2.0f, 60);
+        for (int i = 0; i < n; i++) {
+            float bx = cx + r.f(-R * 0.5f, R * 0.5f), by = cy + r.f(-R * 0.15f, R * 0.25f), len = R * r.f(0.7f, 1.0f);
+            float tx = bx + lean * len * 0.3f, ty = by - len;
+            a.cap(bx, by, bx + r.f(-0.25f, 0.25f) * len, by - len * 0.55f, 0.35f, rgb(70, 104, 50), 0.3f, 0.3f);   // a blade
+            a.cap(bx, by, tx, ty, 0.3f, rgb(84, 122, 58), 0.3f, 0.3f);
+            float hl = len * r.f(0.22f, 0.3f);
+            a.cap(tx, ty + len * 0.15f, tx, ty + len * 0.15f + hl, 0.7f, rgb(96, 62, 34), 0.5f, 0.4f);   // the seed head
+        }
+        break;
+    }
+    case 17: {   // a fairy ring of toadstools on the grass, some red with white spots, some brown
+        int n = 7 + r.range(0, 3);
+        Color capA = rgb(176, 56, 44), capB = rgb(150, 112, 70);
+        a.shadowCircle(cx, cy, R * 0.9f, 1.5f, 2.0f, 4.0f, 30);
+        for (int i = 0; i < n; i++) {
+            float an = i * 6.2832f / n + r.f(-0.15f, 0.15f), d = R * r.f(0.72f, 0.92f);
+            float mx = cx + std::cos(an) * d, my = cy + std::sin(an) * d * 0.9f, mr = r.f(1.8f, 2.6f);
+            bool red = r.f() < 0.5f;
+            a.cap(mx, my, mx + 0.4f, my + mr * 0.8f, mr * 0.32f, rgb(230, 220, 196), 0.4f, 0.3f);
+            a.ell(mx, my - 0.2f, mr, mr * 0.72f, shade(red ? capA : capB, r.f(0.92f, 1.08f)), mr * 0.45f, 0.6f);
+            if (red) for (int k = 0; k < 2; k++) a.dot(mx + r.f(-mr * 0.5f, mr * 0.5f), my - 0.2f + r.f(-mr * 0.4f, mr * 0.3f), 0.45f, rgba(rgb(246, 240, 228), 230));
+        }
+        break;
+    }
+    case 18: {   // the bones of a large beast, bleached: a long leg bone with knuckle ends, a skull and a rib
+        float an = r.f(0, 6.2832f), ca = std::cos(an), sa = std::sin(an);
+        Color bone = shade(rgb(222, 212, 186), r.f(0.9f, 1.05f));
+        auto rot = [&](float x, float y) { return P{ cx + x * ca - y * sa, cy + x * sa + y * ca }; };
+        P b0 = rot(-R * 0.72f, -R * 0.18f), b1 = rot(R * 0.3f, R * 0.22f);
+        a.cap(b0.x + 1.5f, b0.y + 2.0f, b1.x + 1.5f, b1.y + 2.0f, R * 0.1f, rgba(rgb(0, 0, 0), 60), 0.5f, 0.0f);
+        a.cap(b0.x, b0.y, b1.x, b1.y, R * 0.085f, bone, 0.5f, 0.4f);
+        a.circle(b0.x, b0.y, R * 0.17f, bone, 0.6f, 0.4f);
+        a.circle(b1.x, b1.y, R * 0.17f, bone, 0.6f, 0.4f);
+        P s = rot(R * 0.5f, -R * 0.32f);
+        a.ell(s.x, s.y, R * 0.3f, R * 0.25f, bone, 0.8f, 0.5f);
+        P e0 = rot(R * 0.58f, -R * 0.42f), e1 = rot(R * 0.58f, -R * 0.22f);
+        a.dot(e0.x, e0.y, R * 0.07f, rgb(58, 50, 42));
+        a.dot(e1.x, e1.y, R * 0.07f, rgb(58, 50, 42));
+        P k0 = rot(-R * 0.22f, -R * 0.36f), k1 = rot(-R * 0.1f, -R * 0.82f), k2 = rot(R * 0.12f, -R * 0.86f);
+        a.cap(k0.x, k0.y, k1.x, k1.y, R * 0.06f, bone, 0.4f, 0.4f);
+        a.cap(k1.x, k1.y, k2.x, k2.y, R * 0.06f, bone, 0.4f, 0.4f);
+        break;
+    }
+    case 19: {   // a strip of ripe wheat on tilled soil: rows of ears, a green row every third furrow
+        float hw = R * 1.0f, hh = R * 0.56f;
+        Color soil = shade(rgb(126, 96, 62), r.f(0.92f, 1.06f));
+        a.shadowRect(cx - hw, cy - hh, hw * 2, hh * 2, 2.0f, 2.4f, 2.2f, 90);
+        a.rect(cx - hw, cy - hh, hw * 2, hh * 2, 0.6f, soil, 1.0f, 0.3f);
+        for (int i = 0; i < 7; i++) {
+            float y = cy - hh + (i + 0.5f) * (hh * 2 / 7.0f);
+            Color ear = i % 3 == 2 ? rgb(116, 146, 66) : rgb(214, 182, 96);
+            a.line(cx - hw + 1.2f, y, cx + hw - 1.2f, y, 0.9f, rgba(shade(soil, 0.8f), 150));
+            for (float x = cx - hw + 1.6f; x < cx + hw - 1.0f; x += 1.7f) a.dot(x + r.f(-0.3f, 0.3f), y + r.f(-0.4f, 0.4f), 0.6f + r.f(0, 0.35f), shade(ear, r.f(0.88f, 1.12f)));
+        }
         break;
     }
     default: {   // stump
@@ -629,7 +853,7 @@ void terrainBake(Canvas& world) {
     auto tileAt = [&](float x, float y) { return g_map.tile(clampi(tileOf(x), 0, MAP_W - 1), clampi(tileOf(y), 0, MAP_H - 1)); };
     auto openGround = [&](float x, float y) { int t = tileAt(x, y); return t == T_GRASS || t == T_GRASS2 || t == T_DIRT || t == T_SAND; };
     // grass tufts
-    for (int i = 0; i < 44000; i++) {   // (decor counts scale with the map's area so density matches the old 80x80)
+    for (int i = 0; i < decorCount(88000); i++) {   // grass tufts: twice the old density
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_GRASS && t != T_GRASS2) continue;
@@ -644,7 +868,7 @@ void terrainBake(Canvas& world) {
         }
     }
     // wildflowers in drifts
-    for (int i = 0; i < 15000; i++) {
+    for (int i = 0; i < decorCount(30000); i++) {   // wildflowers: twice the old density
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_GRASS && t != T_GRASS2) continue;
@@ -655,7 +879,7 @@ void terrainBake(Canvas& world) {
         for (int k = 0; k < 3; k++) { float fx = x + r.f(-5, 5), fy = y + r.f(-5, 5); world.set((int)fx, (int)fy, c); world.set((int)fx + 1, (int)fy, shade(c, 0.85f)); world.set((int)fx, (int)fy + 1, rgb(60, 90, 40, 140)); }
     }
     // pebbles on dirt and sand, shells on the shore
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < decorCount(20000); i++) {   // pebbles: twice the old density
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_DIRT && t != T_SAND) continue;
@@ -669,7 +893,7 @@ void terrainBake(Canvas& world) {
         if (g_map.tile(tx, ty) != T_SAND) continue;
         bool shore = g_map.tile(tx + 1, ty) == T_WATER || g_map.tile(tx - 1, ty) == T_WATER || g_map.tile(tx, ty + 1) == T_WATER || g_map.tile(tx, ty - 1) == T_WATER;
         if (!shore) continue;
-        for (int k = 0; k < 5; k++) {
+        for (int k = 0; k < 10; k++) {   // reeds: twice as thick
             float x = tx * TILE + r.f(2, TILE - 2), y = ty * TILE + r.f(2, TILE - 2);
             int h = r.range(5, 10);
             for (int s = 0; s < h; s++) world.set((int)(x + s * 0.12f), (int)(y - s), s > h - 3 ? rgb(120, 78, 40) : rgb(70, 108, 52, 220));
@@ -826,7 +1050,7 @@ void terrainBake(Canvas& world) {
         };
         Rng pr(9137);
         // lily pads on the river shallows (not the deep lake)
-        for (int i = 0; i < 4200; i++) {
+        for (int i = 0; i < decorCount(8400); i++) {
             float x = pr.f(8, W - 8.0f), y = pr.f(8, H - 8.0f);
             if (tileAt(x, y) != T_WATER || tileAt(x + 12, y) != T_WATER || tileAt(x - 12, y) != T_WATER || tileAt(x, y + 12) != T_WATER || tileAt(x, y - 12) != T_WATER) continue;
             {   // not out on the open lake: only its shallows next to the shore (rivers and pools anywhere)
@@ -843,7 +1067,7 @@ void terrainBake(Canvas& world) {
         }
         // fallen logs and stumps near the trees, logs on river banks
         int placed = 0;
-        for (int i = 0; i < 6500 && placed < 140; i++) {
+        for (int i = 0; i < decorCount(13000) && placed < decorCount(280); i++) {
             float x = pr.f(40, W - 40.0f), y = pr.f(40, H - 40.0f);
             if (!flat(x, y) || !clearOf(x, y, 9, 90)) continue;
             bool nearTree = false;
@@ -875,13 +1099,78 @@ void terrainBake(Canvas& world) {
                 for (int i = 0; i < 3; i++) { float px = cx + sr.f(-70, 70), py = cy + sr.f(-50, 50); int t = tileAt(px, py); if (t == T_WATER || t == T_ROCK || t == T_TREE) continue; put(hulks[sr.range(0, 3)], px, py); }
             }
         }
+        // ---- more decor: thirteen more kinds, each scattered by density over the ground it belongs on (counts scale with the map's area)
+        std::vector<Canvas> hay, fence, wildflowers, mossy, camp, crates, driftwood, boats, signs, cattails, rings, bones, wheat;
+        for (int i = 0; i < 4; i++) hay.push_back(makeProp(7, 11.0f + i * 1.5f, 8100u + i));
+        for (int i = 0; i < 4; i++) fence.push_back(makeProp(8, 14.0f + i * 2.0f, 8200u + i));
+        for (int i = 0; i < 4; i++) wildflowers.push_back(makeProp(9, 9.0f + i * 1.5f, 8300u + i));
+        for (int i = 0; i < 3; i++) mossy.push_back(makeProp(10, 12.0f + i * 2.0f, 8400u + i));
+        for (int i = 0; i < 3; i++) camp.push_back(makeProp(11, 16.0f + i * 2.0f, 8500u + i));
+        for (int i = 0; i < 3; i++) crates.push_back(makeProp(12, 18.0f + i * 1.5f, 8600u + i));
+        for (int i = 0; i < 3; i++) driftwood.push_back(makeProp(13, 12.0f + i * 2.0f, 8700u + i));
+        for (int i = 0; i < 3; i++) boats.push_back(makeProp(14, 15.0f + i * 1.5f, 8800u + i));
+        for (int i = 0; i < 3; i++) signs.push_back(makeProp(15, 14.0f + i * 1.5f, 8900u + i));
+        for (int i = 0; i < 4; i++) cattails.push_back(makeProp(16, 10.0f + i * 1.5f, 9000u + i));
+        for (int i = 0; i < 3; i++) rings.push_back(makeProp(17, 10.0f + i * 1.5f, 9100u + i));
+        for (int i = 0; i < 3; i++) bones.push_back(makeProp(18, 12.0f + i * 2.0f, 9200u + i));
+        for (int i = 0; i < 3; i++) wheat.push_back(makeProp(19, 14.0f + i * 2.0f, 9300u + i));
+        Rng mr(6161);
+        // a candidate spot is taken if it lies within minD of a spot already taken by the same kind
+        auto spaced = [](const std::vector<P>& pts, float x, float y, float minD) { for (const P& p : pts) if (hyp(p.x - x, p.y - y) < minD) return false; return true; };
+        auto scatter = [&](int attempts, int maxN, float minD, auto ok, auto place) {
+            std::vector<P> got;
+            for (int i = 0; i < attempts && (int)got.size() < maxN; i++) {
+                float x = mr.f(40, W - 40.0f), y = mr.f(40, H - 40.0f);
+                if (!ok(x, y) || !spaced(got, x, y, minD)) continue;
+                got.push_back(P{ x, y });
+                place(x, y);
+            }
+        };
+        auto dry = [](int t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT || t == T_SAND; };
+        auto onLand = [&](float x, float y, int rad) {   // every tile within rad is dry ground: no water, road, rock or tree
+            for (int j = -rad; j <= rad; j++) for (int i = -rad; i <= rad; i++) if (!dry(tileAt(x + i * TILE, y + j * TILE))) return false;
+            return true;
+        };
+        auto nearTile = [&](float x, float y, int t, int rad) {
+            for (int j = -rad; j <= rad; j++) for (int i = -rad; i <= rad; i++) if (tileAt(x + i * TILE, y + j * TILE) == t) return true;
+            return false;
+        };
+        auto grassAt = [&](float x, float y) { int t = tileAt(x, y); return t == T_GRASS || t == T_GRASS2; };
+        auto apart = [&](float x, float y) { return clearOf(x, y, 7, 70); };   // clear of the bases and supply piles
+        // hay and wheat lie in meadow drifts, flowers in their own drifts, the rest by what they stand on
+        scatter(decorCount(9000), decorCount(90), 44, [&](float x, float y) { return grassAt(x, y) && flat(x, y) && apart(x, y) && nz.v(x * 0.008f + 61, y * 0.008f + 44) > 0.5f; },
+                [&](float x, float y) { put(hay[mr.range(0, 3)], x, y); });
+        scatter(decorCount(16000), decorCount(170), 30, [&](float x, float y) { return grassAt(x, y) && apart(x, y) && nz.v(x * 0.011f + 50, y * 0.011f + 17) > 0.6f; },
+                [&](float x, float y) { put(wildflowers[mr.range(0, 3)], x, y); });
+        scatter(decorCount(14000), decorCount(12), 130, [&](float x, float y) { return flat(x, y) && apart(x, y); },
+                [&](float x, float y) { put(camp[mr.range(0, 2)], x, y); });
+        scatter(decorCount(6000), decorCount(60), 60, [&](float x, float y) { return flat(x, y) && apart(x, y); },
+                [&](float x, float y) { put(fence[mr.range(0, 3)], x, y); });
+        scatter(decorCount(8000), decorCount(60), 48, [&](float x, float y) { return openGround(x, y) && nearTile(x, y, T_ROCK, 1) && apart(x, y); },
+                [&](float x, float y) { put(mossy[mr.range(0, 2)], x, y); });
+        scatter(decorCount(12000), decorCount(28), 60, [&](float x, float y) { return flat(x, y) && nearTile(x, y, T_ROAD, 2) && apart(x, y); },
+                [&](float x, float y) { put(crates[mr.range(0, 2)], x, y); });
+        scatter(decorCount(12000), decorCount(22), 90, [&](float x, float y) { return flat(x, y) && nearTile(x, y, T_ROAD, 2) && apart(x, y); },
+                [&](float x, float y) { put(signs[mr.range(0, 2)], x, y); });
+        scatter(decorCount(12000), decorCount(44), 36, [&](float x, float y) { return onLand(x, y, 1) && nearTile(x, y, T_WATER, 2) && apart(x, y); },
+                [&](float x, float y) { put(driftwood[mr.range(0, 2)], x, y); });
+        scatter(decorCount(12000), decorCount(10), 150, [&](float x, float y) { return tileAt(x, y) == T_SAND && onLand(x, y, 1) && nearTile(x, y, T_WATER, 2) && apart(x, y); },
+                [&](float x, float y) { put(boats[mr.range(0, 2)], x, y); });
+        scatter(decorCount(30000), decorCount(240), 18, [&](float x, float y) { return dry(tileAt(x, y)) && nearTile(x, y, T_WATER, 1) && apart(x, y); },
+                [&](float x, float y) { put(cattails[mr.range(0, 3)], x, y); });
+        scatter(decorCount(20000), decorCount(60), 60, [&](float x, float y) { return grassAt(x, y) && flat(x, y) && nearTile(x, y, T_TREE, 2) && apart(x, y); },
+                [&](float x, float y) { put(rings[mr.range(0, 2)], x, y); });
+        scatter(decorCount(12000), decorCount(26), 90, [&](float x, float y) { return flat(x, y) && apart(x, y); },
+                [&](float x, float y) { put(bones[mr.range(0, 2)], x, y); });
+        scatter(decorCount(16000), decorCount(30), 110, [&](float x, float y) { return grassAt(x, y) && flat(x, y) && apart(x, y) && nz.v(x * 0.006f + 12, y * 0.006f + 71) > 0.55f; },
+                [&](float x, float y) { put(wheat[mr.range(0, 2)], x, y); });
     }
 
     // ---- boulders: scattered where open ground meets rock, plus a few strays
     {
         std::vector<Canvas> boulder; float br[6];
         for (int i = 0; i < 6; i++) { br[i] = 5.0f + i * 1.6f; boulder.push_back(makeBoulder(br[i], 900u + i)); }
-        for (int i = 0; i < 1150; i++) {
+        for (int i = 0; i < decorCount(2300); i++) {
             float x = r.f(8, W - 8.0f), y = r.f(8, H - 8.0f);
             if (!openGround(x, y)) continue;
             bool nearRock = false;

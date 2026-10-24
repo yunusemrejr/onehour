@@ -17,8 +17,8 @@ typedef uint64_t u64;
 
 // World geometry
 static const int TILE = 32;          // pixels per tile
-static const int MAP_W = 176;        // tiles: 45% more ground than the 146x146 map, room for a central lake with twice the water (146 had 30% more than 128x128)
-static const int MAP_H = 176;
+static const int MAP_W = 208;        // tiles: 40% more ground than the 176x176 map (176 had 45% more than 146x146, room for a central lake with twice the water)
+static const int MAP_H = 208;
 static const int WORLD_W = MAP_W * TILE;
 static const int WORLD_H = MAP_H * TILE;
 

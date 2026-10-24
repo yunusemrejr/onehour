@@ -81,7 +81,8 @@ static std::string armyName(int p) {
 
 // HUD layout: minimap left, command grid anchored right, the info panel takes whatever is between
 static const int MINIMAP_X = 8, MINIMAP_SIZE = 116, BTN_W = 156, BTN_H = 28, BTN_GAP = 3;   // (wide enough for an icon and "Anti-Radiation Truck")
-static const int BTN_MAX = 18, BTN_H_COMPACT = 22, BTN_H_DENSE = 19;   // up to six rows of three; past four rows (12 buttons) every button shrinks to fit, past five (15) a little more
+static const int BTN_MAX = 20, BTN_H_COMPACT = 22, BTN_H_DENSE = 19;   // up to six rows of three; past four rows (12 buttons) every button shrinks to fit, past five (15) a little more;
+                                                                       // past six rows (18) the grid becomes five compact rows of four narrower buttons
 static const int INFO_X = 134;
 static inline int MINIMAP_Y_() { return SCREEN_H - HUD_H + 8; }
 static inline int GRID_X_() { return SCREEN_W - (3 * BTN_W + 2 * BTN_GAP) - 10; }
@@ -235,6 +236,7 @@ static float roofLift(const BuildType& b) {
     case BR_HQ: return 22; case BR_POWER: return 14; case BR_SUPPLY: return 16; case BR_BARRACKS: return 12; case BR_FACTORY: return 20;
     case BR_AIRFIELD: return 16; case BR_TECH: return 16; case BR_AATURRET: return 6; case BR_INCOME: return b.faction == F_CYBER ? 10 : 8; case BR_NUKE: return 16;
     case BR_NAVAL: return 18; case BR_ANTINUKE: return b.faction == F_CYBER ? 22 : 10; case BR_WALL: case BR_FWALL: return 10;
+    case BR_HEALANT: return 18;   // (the mast)
     case BR_STRONGHOLD: return b.w >= 4 ? 26 : (b.w >= 3 ? 12 : 24);   // castle keep / low bunker / watchtower
     default: return 0;
     }
@@ -340,8 +342,8 @@ void Game::issueRightClick(Vec2 w) {
         g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
-    if (t && t->isBuilding() && t->constructed && Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD && selectionHasRole(UR_SPY)) {
-        // nobody's island launcher or Bastion Wall: the infiltrators go and take it (swimming out to an island), everybody else goes along
+    if (t && t->isBuilding() && t->constructed && ((Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD) || g_sim.allyTakeable(g_sim.humanPlayer, *t)) && selectionHasRole(UR_SPY)) {
+        // nobody's island launcher or Bastion Wall, or an ally's structure: the infiltrators go and take it (swimming out to an island), everybody else goes along
         std::vector<Ref> spies, rest;
         for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && o->ut().role == UR_SPY ? spies : rest).push_back(r); }
         g_sim.cmdCapture(spies, g_sim.refOf(*t));
@@ -431,7 +433,11 @@ void Game::buildButtons() {
     buildButtonsRaw();
     // five rows do not fit at full height, and six (a dozer's 18 structures: the Bastion Wall, the Waymaker and the Command structure are the sixth row)
     // only fit as dense buttons with a 2 px gap: the bar is 124 px tall. (Six compact rows ran off the bottom of the screen and hid that last row.)
-    if ((int)buttons.size() > 15) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_DENSE + 2); buttons[i].h = BTN_H_DENSE; }
+    if ((int)buttons.size() > 18) {   // a dozer's 19 structures (the Healing Antenna joined them): four columns in the same width, five compact rows
+        const int w4 = (3 * BTN_W - BTN_GAP) / 4;
+        for (size_t i = 0; i < buttons.size(); i++) { buttons[i].x = GRID_X + (int)(i % 4) * (w4 + BTN_GAP); buttons[i].w = w4; buttons[i].y = GRID_Y + (int)(i / 4) * (BTN_H_COMPACT + BTN_GAP); buttons[i].h = BTN_H_COMPACT; }
+    }
+    else if ((int)buttons.size() > 15) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_DENSE + 2); buttons[i].h = BTN_H_DENSE; }
     else if ((int)buttons.size() > 12) for (size_t i = 0; i < buttons.size(); i++) { buttons[i].y = GRID_Y + (int)(i / 3) * (BTN_H_COMPACT + BTN_GAP); buttons[i].h = BTN_H_COMPACT; }
 }
 
@@ -526,9 +532,9 @@ void Game::buildButtonsRaw() {
         if (role == BR_ISLANDNUKE) {   // a captured island launcher: it only launches (nothing sells, repairs or upgrades it)
             if (b->owner != g_sim.humanPlayer) return;
             float iw = g_sim.islandNukeWait(g_sim.humanPlayer);
-            snprintf(tip, sizeof tip, "Launch Island Nuke  [K]  A small nuclear missile with twice a bunker missile's blast (%.1f tile radius, leaves radiation), anywhere on the map. One launch per launcher every %d s. Nothing destroys the launcher: only an enemy infiltrator taking it back stops it%s",
-                     NUKE_RADIUS * std::sqrt(ISLAND_NUKE_SCALE), (int)ISLAND_NUKE_COOLDOWN, iw > 0 ? "  (reloading)" : "");
-            add(BK_ISLANDNUKE, 0, g_sim.islandNukesReady(g_sim.humanPlayer) > 0, "Island Nuke", tip);
+            snprintf(tip, sizeof tip, "Launch Super Nuke  [K]  The biggest warhead there is: twice an Underground Nuke's blast (%.0f tile radius, leaves radiation), anywhere on the map, landing in %.1f s. Bunkers and interceptor missiles cannot touch it and a laser's chance is a fifth of its chance against an Underground Nuke. It hurts your own army too if it is in the circle. One launch per launcher every %d s. Nothing destroys the launcher: only an enemy infiltrator taking it back stops it%s",
+                     NUKE_RADIUS * std::sqrt(ISLAND_NUKE_SCALE), ISLAND_NUKE_FLIGHT, (int)ISLAND_NUKE_COOLDOWN, iw > 0 ? "  (reloading)" : "");
+            add(BK_ISLANDNUKE, 0, g_sim.islandNukesReady(g_sim.humanPlayer) > 0, "Super Nuke", tip);
             return;
         }
         if (role == BR_BUNKER) {
@@ -2343,7 +2349,11 @@ void Game::renderHud() {
         else iconDraw(g, buttonIcon(b.kind, b.id, b.label, pl.faction), icx, icy, is, b.enabled);
         Color tc = b.enabled ? rgb(255, 255, 255) : hudDim();
         const int ly = b.h >= BTN_H ? 4 : (b.h > BTN_H_DENSE ? 3 : 1), sy = b.h >= BTN_H ? 15 : (b.h > BTN_H_DENSE ? 12 : 10);   // label and second-line offsets (a compact button is tighter, a dense one tighter still)
-        g.text(tx, b.y + ly, b.label, tc);
+        if (g.textW(b.label) > b.x + b.w - 3 - tx) {   // (a narrow four-column button: the label is cut to fit, the tooltip has the full name)
+            std::string cut = b.label;
+            while (cut.size() > 2 && g.textW((cut + ".").c_str()) > b.x + b.w - 3 - tx) cut.pop_back();
+            g.text(tx, b.y + ly, (cut + ".").c_str(), tc);
+        } else g.text(tx, b.y + ly, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
         if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(tx, b.y + sy, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
         if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE || b.kind == BK_NUKEBOMBER || b.kind == BK_ISLANDNUKE) {
@@ -2545,15 +2555,23 @@ void Game::drawAidDrops() {
 void Game::drawNukes() {
     Gfx& g = g_gfx;
     for (auto& n : g_sim.nukes) {
-        float k = clampf(n.t / Sim::NUKE_FLIGHT, 0, 1);
+        float k = clampf(n.t / Sim::flightOf(n), 0, 1);
         Vec2 tgt = worldToScreen(n.pos);
         // warning zone
-        float pulse = 0.5f + 0.5f * std::sin(wallTime * 9.0f);
+        float pulse = 0.5f + 0.5f * std::sin(wallTime * (n.super ? 16.0f : 9.0f));
         float nr = Sim::nukeRadius(n);
         const bool sv = n.deep;   // an Underground Nuke: everything about it is silver
-        g.discFill(tgt.x, tgt.y, nr, sv ? rgb(196, 202, 212, (int)(18 + 22 * pulse)) : rgb(255, 60, 40, (int)(20 + 26 * pulse)));
-        g.dashedCircle(tgt.x, tgt.y, nr, sv ? rgb(220, 224, 232) : rgb(255, 90, 60), wallTime * 30.0f);
-        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (sv ? "UNDERGROUND NUKE" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE")), (int)std::ceil(Sim::NUKE_FLIGHT - n.t));
+        const bool su = n.super;  // an island Super Nuke: magenta-white, and the whole of its huge circle flashes
+        g.discFill(tgt.x, tgt.y, nr, su ? rgb(255, 70, 190, (int)(16 + 26 * pulse)) : sv ? rgb(196, 202, 212, (int)(18 + 22 * pulse)) : rgb(255, 60, 40, (int)(20 + 26 * pulse)));
+        g.dashedCircle(tgt.x, tgt.y, nr, su ? rgb(255, 120, 210) : sv ? rgb(220, 224, 232) : rgb(255, 90, 60), wallTime * 30.0f);
+        if (su) g.dashedCircle(tgt.x, tgt.y, nr * 0.35f, rgb(255, 200, 240), -wallTime * 40.0f);   // (its lethal core)
+        if (su && !n.broken && dist(Vec2(SCREEN_W * 0.5f, VIEW_H * 0.5f), tgt) < nr) {   // the view is inside the huge circle (its rim is off screen): say so plainly
+            Color edge = rgb(255, 70, 190, (int)(70 + 90 * pulse));
+            g.fill(0, 0, SCREEN_W, 4, edge); g.fill(0, VIEW_H - 4, SCREEN_W, 4, edge); g.fill(0, 0, 4, VIEW_H, edge); g.fill(SCREEN_W - 4, 0, 4, VIEW_H, edge);
+            char warn[64]; snprintf(warn, sizeof warn, "INSIDE THE SUPER NUKE'S BLAST  %ds", (int)std::ceil(Sim::flightOf(n) - n.t));
+            g.text((int)(SCREEN_W * 0.5f - g.textW(warn, 2) * 0.5f), 34, warn, rgb(255, 214, 240), 2);
+        }
+        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (su ? "SUPER NUKE" : sv ? "UNDERGROUND NUKE" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE")), (int)std::ceil(Sim::flightOf(n) - n.t));
         g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, n.broken ? rgb(255, 214, 140) : rgb(255, 230, 200));
         if (n.broken) continue;   // (the missile is gone: its pieces are drawn with the anti-nuke shots)
         // the missile: rises from the ramp on a long arc and falls on the target
@@ -2562,11 +2580,11 @@ void Game::drawNukes() {
         Vec2 w0 = world(k), w1 = world(std::min(1.0f, k + 0.012f));
         Vec2 m = worldToScreen(w0), dir = (w1 - w0).norm();
         float ang = std::atan2(dir.y, dir.x);
-        const float S = sv ? 1.7f : 1.3f;
+        const float S = su ? 2.0f : sv ? 1.7f : 1.3f;
         bool cyberArmy = g_sim.players[n.owner < 0 ? 0 : n.owner].faction == F_CYBER;
         const Sprite& body = cyberArmy ? g.fxs.missile : g.fxs.missileK;
-        const Color hot = sv ? rgb(236, 240, 248) : rgb(255, 244, 214), warm = sv ? rgb(196, 204, 218) : rgb(255, 190, 120);
-        const Color glowA = sv ? Color{200, 210, 228, 150} : Color{255, 150, 60, 150};
+        const Color hot = su ? rgb(255, 236, 250) : sv ? rgb(236, 240, 248) : rgb(255, 244, 214), warm = su ? rgb(255, 120, 210) : sv ? rgb(196, 204, 218) : rgb(255, 190, 120);
+        const Color glowA = su ? Color{255, 90, 200, 170} : sv ? Color{200, 210, 228, 150} : Color{255, 150, 60, 150};
         // its shadow slides across the ground below it, smaller and fainter the higher it climbs
         { Vec2 gs = worldToScreen(ground(k)); float lift = std::sin(k * 3.14159f); float sz = 34.0f - 12.0f * lift;
           g.drawSized(g.fxs.cloud[0], gs.x + 6, gs.y + 4, sz * 2.2f, sz, ang, rgb(0, 0, 0), (u8)(120 - 60 * lift)); }
@@ -2579,8 +2597,9 @@ void Game::drawNukes() {
         }
         g.glowAdd(tail.x, tail.y, 52 * S, glowA);
         g.glowAdd(tail.x - dir.x * 6, tail.y - dir.y * 6, 22 * S, Color{hot.r, hot.g, hot.b, 210});
-        g.draw(body, m.x, m.y, ang, S, sv ? UNUKE_GLOW : rgb(255, 255, 255));
+        g.draw(body, m.x, m.y, ang, S, su ? rgb(255, 196, 236) : sv ? UNUKE_GLOW : rgb(255, 255, 255));
         if (sv) g.glowAdd(m.x, m.y, 30 * S, Color{214, 220, 232, 70});   // the polished casing catches the light
+        if (su) g.glowAdd(m.x, m.y, 40 * S, Color{255, 110, 210, (u8)(90 + 60 * pulse)});   // the Super Nuke's casing burns magenta all the way
         if (k > 0.5f) {   // re-entry: the nose cone glows as the warhead dives
             float heat = clampf((k - 0.5f) / 0.4f, 0, 1);
             Vec2 nose = m + dir * (29.0f * S);

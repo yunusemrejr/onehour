@@ -247,7 +247,7 @@ bool Sim::antiNukeWorking(const Entity& b) const {
     return !(players[b.owner].lowPower() && b.bt().power < 0);   // a defence without power is blind
 }
 float Sim::antiNukeCover(const Entity& b, float scale) const {
-    Nuke probe; probe.scale = scale;
+    Nuke probe; probe.scale = std::min(scale, UNUKE_SCALE);   // (a Super Nuke's blast spans most of the map: a defence still only answers for the ground an Underground Nuke would hit round it)
     if (isAntiRocketWall(b)) return WALL_PD_COVER * TILE + nukeRadius(probe);
     if (b.bt().faction != F_CYBER) return ANTINUKE_COVER_K * TILE;
     return ANTINUKE_COVER_C * TILE + nukeRadius(probe);   // a laser has no blind ring at the edge: a blast that would reach into its circle is engaged
@@ -292,7 +292,8 @@ int Sim::antiNukeCovering(Vec2 at, int attacker, bool knownOnly, float scale, bo
     }
     return n;
 }
-float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bool deep) const {
+float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bool deep, bool super) const {
+    deep = deep || super;   // (only lasers try for either)
     float miss = 1.0f;
     Nuke probe; probe.owner = attacker;
     for (auto& b : ents) {
@@ -300,7 +301,7 @@ float Sim::antiNukeChance(Vec2 at, int attacker, bool knownOnly, float scale, bo
         if (knownOnly && attacker >= 0 && !explored(attacker, clampi(tileOf(b.pos.x), 0, MAP_W - 1), clampi(tileOf(b.pos.y), 0, MAP_H - 1))) continue;
         if (dist(at, b.pos) <= antiNukeCover(b, scale)) {
             float one = antiNukeWarheadShot(b);
-            if (deep) one *= UNUKE_INTERCEPT_RESIST;   // the armoured silver casing: half the chance to stop it
+            if (deep) one *= super ? ISLAND_NUKE_INTERCEPT_RESIST : UNUKE_INTERCEPT_RESIST;   // the armoured silver casing: half the chance to stop it (a Super Nuke: a tenth)
             miss *= 1.0f - one;
         }
     }
@@ -342,9 +343,9 @@ void Sim::updateAntiNuke(Entity& b) {
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
         if (n.broken || n.killT >= 0 || !nukeHurts(n, b.owner) || dist(n.pos, b.pos) > antiNukeCover(b, n.scale)) continue;
-        if (n.deep && !cy) continue;     // an Underground Nuke's warhead outruns interceptor missiles: only the lasers can burn it down
+        if ((n.deep || n.super) && !cy) continue;     // an Underground Nuke's or a Super Nuke's warhead outruns interceptor missiles: only the lasers can burn it down
         if (time < b.siloTimer) break;   // (a laser that just fired at one warhead is still recharging)
-        float left = NUKE_FLIGHT - n.t;
+        float left = flightOf(n) - n.t;
         int linked = cy ? antiNukeLinked(b) : 0;
         const float gap = cy ? 0.8f / (1.0f + ANTINUKE_LINK_TRACK * linked) : 1.5f, flight = cy ? 0.3f : 1.0f;
         if (left > (cy ? ANTINUKE_LASER_WINDOW : ANTINUKE_WINDOW) || left < flight + 0.2f) continue;
@@ -352,7 +353,8 @@ void Sim::updateAntiNuke(Entity& b) {
         n.engagedBy.push_back(self);
         int shots = cy ? 3 + linked : 2;
         while (shots > 1 && (shots - 1) * gap + flight > left - 0.2f) shots--;
-        int winner = rng.f() < antiNukeWarheadShot(b) * (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f) ? rng.range(0, shots - 1) : -1;   // (the silver casing is armoured: harder to shoot down)
+        float resist = n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f);   // (the silver casing is armoured: harder to shoot down; a Super Nuke five times harder still)
+        int winner = rng.f() < antiNukeWarheadShot(b) * resist ? rng.range(0, shots - 1) : -1;
         b.siloTimer = time + (cy ? (shots - 1) * gap + flight + ANTINUKE_LASER_RECHARGE : ANTINUKE_RELOAD);
         Vec2 muzzle = b.pos + Vec2(0, cy ? -22.0f : -8.0f);
         for (int k = 0; k < shots; k++) {
@@ -485,11 +487,14 @@ bool Sim::cmdIslandNuke(int player, Vec2 pos, bool force, Ref from) {
     if (!l) return false;
     l->siloTimer = time + ISLAND_NUKE_COOLDOWN;
     players[player].islandLaunches++;
-    nukes.push_back({l->pos, pos, player, 0, force, ISLAND_NUKE_SCALE});
+    Nuke n; n.from = l->pos; n.pos = pos; n.owner = player; n.t = 0; n.force = force; n.scale = ISLAND_NUKE_SCALE; n.super = true;
+    nukes.push_back(n);
     emit(EV_SOUND, -1, SND_ROCKET, l->pos);
-    for (int k = 0; k < 8; k++) fx.push_back({FX_SMOKE, l->pos + Vec2(rng.f(-20, 20), rng.f(-14, 14)), Vec2(), -rng.f(0, 0.3f), 2.6f, rgb(214, 210, 200), rng.f(10, 18), Vec2(rng.f(-20, 20), rng.f(-30, -8))});
+    emit(EV_SOUND, -1, SND_EXPLODE_S, l->pos);
+    for (int k = 0; k < 12; k++) fx.push_back({FX_SMOKE, l->pos + Vec2(rng.f(-24, 24), rng.f(-16, 16)), Vec2(), -rng.f(0, 0.3f), 2.8f, rgb(224, 214, 220), rng.f(12, 22), Vec2(rng.f(-26, 26), rng.f(-34, -8))});
+    fx.push_back({FX_FLASH, l->pos, l->pos, 0, 0.35f, ISLAND_NUKE_GLOW, 46});
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) {
-        emit(EV_MSG, p, SND_ATTACKED, pos, "ISLAND NUCLEAR LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Nuclear missile from the island incoming!");
+        emit(EV_MSG, p, SND_ATTACKED, pos, "SUPER NUKE LAUNCH DETECTED"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Super Nuke from the island incoming: it is almost unstoppable!");
     }
     return true;
 }
@@ -626,4 +631,24 @@ void Sim::updateWaymaker(Entity& b) {
     int opened = g_map.clearWay(tx, ty, bt.w, bt.h);
     for (int k = 0; k < 8; k++) { Vec2 q = at + Vec2(rng.f(-40, 40), rng.f(-34, 34)); fx.push_back({FX_SMOKE, q, q, -rng.f(0, 0.3f), 2.2f, rgb(170, 152, 124), rng.f(12, 20), Vec2(rng.f(-12, 12), -rng.f(4, 14))}); }
     if (owner >= 0) emit(EV_MSG, owner, SND_BUILD_DONE, at, opened > 0 ? "Waymaker: the way is clear" : "Waymaker: nothing left to clear");
+}
+
+// ------------------------------------------------------------ Healing Antennas
+// Every half second: everything of its army and its allies in reach gets a share of its health back. Antennas do not stack: a thing mended in the
+// last half second (by this antenna or another) waits for the next pulse. The scrubbing of fallout is done with the trucks' (see updateFallout).
+void Sim::updateHealAntenna(Entity& b) {
+    const u32 PULSE = (u32)(0.5f * SIM_HZ);
+    if ((tick + b.gen) % PULSE != 0) return;
+    const float R = HEALANT_RADIUS * TILE, dt = PULSE * SIM_DT;
+    int healed = 0;
+    forEachNear(b.pos, R + 2 * TILE, [&](Entity& t) {
+        if (t.kind == EK_RESOURCE || t.owner < 0 || t.hp >= t.maxHp || t.carrier.valid() || (t.owner != b.owner && enemies(b.owner, t.owner))) return;
+        if (t.isBuilding() && (!t.constructed || invulnerable(t))) return;
+        if (dist(t.pos, b.pos) > R + t.radius() * 0.5f || tick - t.mendTick < PULSE) return;
+        t.mendTick = tick;
+        t.hp = std::min(t.maxHp, t.hp + t.maxHp * HEALANT_RATE * (t.isBuilding() ? HEALANT_STRUCT : 1.0f) * dt);
+        if (((tick / PULSE) + (u32)(&t - &ents[0])) % 3 == 0) fx.push_back({FX_SPARK, t.pos + Vec2(rng.f(-6, 6), rng.f(-8, 2)), Vec2(), 0, 0.5f, rgb(120, 255, 170), 4});
+        healed++;
+    });
+    if (healed && ((tick / PULSE) + b.gen) % 4 == 0) fx.push_back({FX_RING, b.pos, b.pos, 0, 1.1f, rgb(120, 255, 180), R * 0.85f});
 }

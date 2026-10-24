@@ -41,7 +41,7 @@ static std::vector<Entity*> ofRole(BuildRole r) {
 
 // ---- the map
 static bool mapTest() {
-    CHECK12(MAP_W == 176 && MAP_H == 176, "the map is not 176x176 (it grew again with the lake: see --lakeupdatetest)");
+    CHECK12(MAP_W == 208 && MAP_H == 208, "the map is not 208x208 (it grew again: see --superupdatetest)");
     CHECK12(g_map.islands.size() == 2, "the lake does not have two islands");
     int lake = g_map.waterSize[g_map.lakeComp];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "lake: %d water tiles\n", lake);
@@ -62,7 +62,7 @@ static bool mapTest() {
         CHECK12(trees >= 2, "an island has no trees");
     }
     auto launchers = ofRole(BR_ISLANDNUKE);
-    CHECK12(launchers.size() == 2, "there are not exactly two Island Nuke Launchers");
+    CHECK12(launchers.size() == 4, "there are not exactly four Island Nuke Launchers (two on each island)");
     for (auto* l : launchers) {
         CHECK12(l->owner < 0, "an island launcher starts owned");
         bool onIsland = false;
@@ -121,9 +121,9 @@ static bool launcherTest() {
     size_t before = g_sim.nukes.size();
     Vec2 target = g_sim.players[1].basePos + Vec2(0, 300);
     CHECK12(g_sim.cmdIslandNuke(0, target), "a ready island launcher would not fire");
-    CHECK12(g_sim.nukes.size() == before + 1 && std::abs(g_sim.nukes.back().scale - 2 * MINI_NUKE_SCALE) < 1e-4f, "the island nuke is not one warhead with two bunker missiles' blast");
+    CHECK12(g_sim.nukes.size() == before + 1 && g_sim.nukes.back().super && std::abs(g_sim.nukes.back().scale - ISLAND_NUKE_SCALE) < 1e-4f, "the island nuke is not one Super Nuke");
     float wait = g_sim.islandNukeWait(0);
-    CHECK12(std::abs(wait - MINI_NUKE_COOLDOWN) < 0.2f, "the island launcher's cooldown is not a bunker's");
+    CHECK12(std::abs(wait - ISLAND_NUKE_COOLDOWN) < 0.2f, "the island launcher's cooldown is not ISLAND_NUKE_COOLDOWN");
     // burning changes nothing: it keeps its clock and is not switched off
     l = g_sim.get(L); l->heat = HEAT_MAX; l->disabledUntil = g_sim.time + 100;
     run12(1.0f);

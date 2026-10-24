@@ -41,9 +41,9 @@ static std::vector<Entity*> ofRole13(BuildRole r) {
 // ---- infiltrators swim out to the island launchers
 static bool swimCaptureTest() {
     auto launchers = ofRole13(BR_ISLANDNUKE);
-    CHECK13(launchers.size() == 2, "there are not two island launchers");
+    CHECK13(launchers.size() == 4, "there are not four island launchers");
     for (int k = 0; k < 2; k++) {
-        Entity* l = ofRole13(BR_ISLANDNUKE)[k];
+        Entity* l = ofRole13(BR_ISLANDNUKE)[k * 2];   // (two on each island, in island order: one from each)
         Ref L = g_sim.refOf(*l);
         // the nearest mainland ground north of the launcher, across the water
         Vec2 shore = l->pos;
@@ -98,7 +98,7 @@ static bool swimCaptureTest() {
 
 // ---- the lake grew: about twice the 146 map's 2,419 water tiles
 static bool lakeTest() {
-    CHECK13(MAP_W == 176 && MAP_H == 176, "the map is not 176x176");
+    CHECK13(MAP_W == 208 && MAP_H == 208, "the map is not 208x208 (it grew again: see --superupdatetest)");
     int lake = g_map.waterSize[g_map.lakeComp];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "lake: %d water tiles\n", lake);
     CHECK13(lake >= 2 * 2419 - 300, "the central lake is not about twice the 146 map's");

@@ -114,11 +114,11 @@ static void scene11(u64 seed, bool commander = true) {
 
 bool frontierMapTest(u64 seed) {
     scene11(seed,false);
-    VERIFY11(MAP_W==176 && MAP_H==176,"unexpected map scale");
+    VERIFY11(MAP_W==208 && MAP_H==208,"unexpected map scale");
     VERIFY11(g_map.supplies.size()==20,"supply count changed");
-    VERIFY11(g_map.landmarks.size()==27,"a quadrant lost a settlement building");
+    VERIFY11(g_map.landmarks.size()==29,"a quadrant lost a settlement building");
     int kinds[7]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<7,"invalid landmark kind");kinds[l.kind]++; }
-    VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4 && kinds[5]==4 && kinds[6]==2,"settlements are not distributed fairly");
+    VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4 && kinds[5]==4 && kinds[6]==4,"settlements are not distributed fairly");
     // Flood-fill real occupancy after HQs, resources and all landmarks are present.
     Vec2 start=g_map.nearestFree(g_sim.players[0].basePos+Vec2(0,6*TILE),10);
     std::vector<u8> seen(MAP_W*MAP_H);std::vector<int> q;
@@ -180,7 +180,7 @@ bool frontierMapTest(u64 seed) {
     Map m;memset(m.blocked,1,sizeof m.blocked);memset(m.tiles,T_ROCK,sizeof m.tiles);
     VERIFY11(!m.findPath(Vec2(-999,-999),Vec2(WORLD_W+999,WORLD_H+999),path) && path.empty(),"blocked out-of-world path was accepted");
     VERIFY11(!m.findPath(Vec2(std::numeric_limits<float>::quiet_NaN(),0),c,path),"NaN path input was accepted");
-    printf("frontiermaptest: 176x176, 20 supplies, 27 landmarks (4 ridge fortresses, 2 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
+    printf("frontiermaptest: 208x208, 20 supplies, 29 landmarks (4 ridge fortresses, 4 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
     return true;
 }
 

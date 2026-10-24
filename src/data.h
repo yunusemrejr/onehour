@@ -83,6 +83,7 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_ISLANDNUKE,  // neutral Island Nuke Launcher on a lake island: indestructible, taken only by an infiltrator, fires small nukes
                  BR_FWALL,       // Bastion Wall: indestructible wall segment (spies can take it), no guns and no point defence of its own
                  BR_WAYMAKER,    // Waymaker: placed like a structure, it clears the trees and rock under it into open ground and is gone (see WAYMAKER_*)
+                 BR_HEALANT,     // Healing Antenna: a cheap, unlimited 1x1 mast that mends everything friendly round it and slowly scrubs radiation (see HEALANT_*)
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -102,6 +103,7 @@ enum BuildTypeId {
     B_C_ISLANDNUKE,           // the Island Nuke Launcher (two of them, one on each lake island)
     B_C_FWALL, B_K_FWALL,     // Bastion Walls (see BR_FWALL)
     B_C_WAYMAKER, B_K_WAYMAKER,   // Waymakers (see BR_WAYMAKER)
+    B_C_HEALANT, B_K_HEALANT,     // Healing Antennas (see BR_HEALANT)
     B_COUNT
 };
 
@@ -225,16 +227,23 @@ inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHO
 // whole footprint into open, walkable ground by itself in WAYMAKER_TIME seconds: no dozer has to reach it, so a dozer can cut its own way into
 // rocky ground one Waymaker at a time and lay a road with a chain of them. It is gone once the ground is clear (nothing stays to defend or sell).
 static const float WAYMAKER_TIME = 2.5f;
+// Healing Antenna (both armies): a cheap 1x1 mast with no limit on how many stand. Every half second it mends everything of its own army and its
+// allies within HEALANT_RADIUS: infantry, vehicles, ships, aircraft overhead and structures (finished ones; another antenna too). Several antennas
+// over one spot do not add up (one pulse per tick mends a thing). It also scrubs fallout zones it reaches, slowly: all the antennas on one zone
+// together stay well below a single Anti-Radiation Truck (RADTRUCK_SCRUB), and they shield nobody from the radiation. As fragile as an ordinary small structure.
+static const float HEALANT_RADIUS = 5.0f;      // tiles
+static const float HEALANT_RATE = 0.03f;       // share of max health restored per second to units (half of a Medic's HEAL_RATE) ...
+static const float HEALANT_STRUCT = 0.5f;      // ... and this share of that to structures
+static const float HEALANT_SCRUB = 0.04f;      // share of a fallout zone's strength and radius scrubbed per second per antenna (exponential) ...
+static const float HEALANT_SCRUB_MAX = 0.12f;  // ... and by all the antennas on one zone together, at most (a truck does RADTRUCK_SCRUB alone)
 // The Mountain Fortress: the biggest neutral stronghold, dug into the hills. 100 infantry fire from it at once (ground and air, each with its own
 // weapon), its masonry shrugs off most conventional fire and no warhead takes more than FORTRESS_NUKE of its full health: it takes several nukes.
 static const float FORTRESS_ARMOR = 0.30f;    // fraction of conventional damage it takes
 static const float FORTRESS_NUKE = 0.24f;     // hard ceiling per warhead (five direct hits from full health)
 static const float FORTRESS_REACH = 1.5f;     // tiles of extra reach its garrison gets from the high firing galleries
-// Island Nuke Launchers: one on each lake island, neutral at the start. Indestructible (fire and fallout only make them burn), taken only by an
-// infiltrator, and the only way to silence one is to take it back. Each launch is one small warhead with the blast of a bunker's two missiles
-// (twice a missile's blast area), on a bunker's cooldown. Its laser chamber flares when something hits it.
-static const float ISLAND_NUKE_SCALE = 0.4f;         // share of a full warhead's blast area (2 x MINI_NUKE_SCALE)
-static const float ISLAND_NUKE_COOLDOWN = 65.0f;     // seconds between launches (MINI_NUKE_COOLDOWN)
+// Island Nuke Launchers: two on each lake island, neutral at the start. Indestructible (fire and fallout only make them burn), taken only by an
+// infiltrator, and the only way to silence one is to take it back. Each launch is a Super Nuke (see ISLAND_NUKE_SCALE and the rest below the
+// Underground Nuke). Its laser chamber flares when something hits it.
 static const float ISLAND_NUKE_ARM = 30.0f;          // seconds after the match starts (or after a capture) before it can fire
 // Indestructible structures catch fire instead of losing health: heat rises with every hit (a warhead sets it ablaze at once) and bleeds away.
 static const float HEAT_PER_DAMAGE = 1.0f / 700.0f;  // heat added per point of weapon damage that hits it (two tanks firing set a segment ablaze within seconds;
@@ -458,6 +467,16 @@ static const float UNUKE_INTERCEPT_RESIST = 0.5f; // the silver warhead is armou
 static const float UNUKE_DOOR_HP = 5000.0f;       // the silo's blast doors (they take the damage first, like a bunker's hatch)
 static const float UNUKE_ARM = 60.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)
 static const Color UNUKE_GLOW = rgb(206, 210, 218); // the silver of its warhead, cloud and radiation
+// Super Nuke: what an Island Nuke Launcher fires. The biggest warhead in the game: twice an Underground Nuke's blast radius (six times a ramp's),
+// hitting harder still, and very fast (ISLAND_NUKE_FLIGHT instead of a ramp's seven seconds). Bunkers and interceptor missiles cannot touch it;
+// only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can try, and every such chance is five times smaller than against an Underground Nuke.
+static const float ISLAND_NUKE_SCALE = UNUKE_SCALE * 4.0f;   // share of a full warhead's blast AREA: radius twice an Underground Nuke's (NUKE_RADIUS * 6)
+static const float ISLAND_NUKE_DAMAGE = 3.0f;        // damage multiplier over a ramp's warhead (an Underground Nuke's is UNUKE_DAMAGE)
+static const float ISLAND_NUKE_FLIGHT = 2.6f;        // seconds from launch to impact (Sim::NUKE_FLIGHT for every other warhead)
+static const float ISLAND_NUKE_INTERCEPT_RESIST = UNUKE_INTERCEPT_RESIST / 5.0f;   // each laser's chance to shoot it down, as a share of its usual chance
+static const float ISLAND_NUKE_COOLDOWN = 30.0f;     // seconds between two launches of one launcher
+static const float ISLAND_NUKE_FALLOUT_R = 0.45f;    // its fallout zone's radius, as a share of the blast radius (the outer blast is a pressure wave, not a crater)
+static const Color ISLAND_NUKE_GLOW = rgb(255, 120, 210);   // the magenta-white of its warhead, fireball and radiation
 // Spies
 static const float SPY_CAPTURE_BASE = 4.0f, SPY_CAPTURE_PER_TILE = 0.7f;   // seconds to capture a structure: base + per footprint tile
 static const float SPY_REACH = 22.0f;             // px from the structure's edge

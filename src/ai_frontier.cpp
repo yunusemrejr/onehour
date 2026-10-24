@@ -1,7 +1,7 @@
 // One Hour - the commander's use of the October update (FEAT_FRONTIER): the Island Nuke Launchers out on the lake, the Nuclear Bomber call-in
 // and the plain fighters.
 //  * a launcher it does not hold (neutral, or the enemy's) is a prize: a cargo lifter flies an infiltrator out to the island, sets down beside the
-//    launcher and the infiltrator takes it (with no lifter yet, one infiltrator swims out on its raft); a launcher it holds fires its small nuke at
+//    launcher and the infiltrator takes it (with no lifter yet, one infiltrator swims out on its raft); a launcher it holds fires its Super Nuke at
 //    the best target it knows
 //  * a tech structure's Nuclear Bomber is called on a target worth a mid-sized warhead, not into a wall of anti-air
 #include "ai.h"
@@ -28,7 +28,8 @@ Vec2 frontierTarget(int player, float R, float scale, bool bomber, float& best) 
             else { const BuildType& bt = o->bt(); float cost = bt.cost * (bt.role == BR_CIVIC ? 0.4f : 1.0f); score += bt.w * bt.h <= 6 ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }
         }
         for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && !S.enemies(player, o.owner) && dist(c->pos, o.pos) < R * 1.05f) score -= UNITS[o.type].cost * 1.2f;   // our own and our allies' people
-        score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true, scale, false);
+        const bool super = !bomber && scale >= ISLAND_NUKE_SCALE;   // (an island launcher's Super Nuke: only lasers try for it, at a fifth of their chance)
+        score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true, scale, super, super);
         if (bomber) {   // the bomber flies in from our corner over whatever stands in the way: count the batteries round the target
             int flak = 0;
             for (auto& o : S.ents) if (o.alive && o.isBuilding() && o.constructed && S.enemies(player, o.owner) && o.bt().role == BR_AATURRET && dist(o.pos, c->pos) < 12.0f * TILE) flak++;
