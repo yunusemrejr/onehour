@@ -329,6 +329,55 @@ void buildIcon(int id, Ico& I) {
         I.poly({ { 14.1f, -9.9f }, { 9.9f, -14.1f }, { 16.95f, -16.95f } }, rgb(240, 80, 70), 0.35f);
         I.circle(1, -1, 2.6f, rgb(255, 210, 110), 0).deco();
         break;
+    case ICO_BU_SHELL:   // the bunker's dome under a thick layered shell
+        I.poly(ellipse(0, 4, 21, 15), rgb(108, 116, 126), 0.5f);
+        I.poly(ellipse(0, 3, 16, 11), rgb(150, 160, 172), 0.6f);
+        I.poly(ellipse(0, 2, 10, 6.5f), rgb(70, 78, 90), 0.3f);
+        for (int k = 0; k < 6; k++) { float t = k * 1.0472f + 0.5f; I.circle(std::cos(t) * 18.5f, 4 + std::sin(t) * 13, 1.5f, rgb(226, 232, 240), 0.5f).deco(); }
+        break;
+    case ICO_BU_LASERS:   // a twin laser turret firing up into the sky
+        I.seg(4, -6, 20, -21, 1.3f, CYAN, 0).deco();
+        I.glow(20, -21, 7, paint::rgba(CYAN, 170));
+        I.box(-2, 13, 15, 5, 1.5f, rgb(96, 104, 116), 0.4f);
+        I.circle(-2, 4, 9, rgb(150, 162, 176), 0.55f);
+        I.seg(-2, 2, 9, -9, 2.2f, rgb(70, 78, 92), 0.3f);
+        I.seg(-6, 0, 5, -11, 2.2f, rgb(70, 78, 92), 0.3f);
+        I.circle(-2, 4, 3, CYAN, 0.2f);
+        break;
+    case ICO_BU_MEDIC:   // a green cross over a hatch
+        I.circle(0, 0, 20, rgb(234, 240, 236), 0.5f);
+        I.box(0, 0, 13, 4.5f, 1.0f, rgb(40, 190, 96), 0.35f);
+        I.box(0, 0, 4.5f, 13, 1.0f, rgb(40, 190, 96), 0.35f);
+        I.ring(0, 0, 17, 1.4f, rgb(120, 220, 150)).deco();
+        break;
+    case ICO_BU_TRIPLE:   // three warheads side by side
+        for (int k = -1; k <= 1; k++) {
+            float x = k * 13.0f, y = k == 0 ? -3.0f : 3.0f;
+            I.seg(x, y + 13, x, y - 7, 5.0f, rgb(246, 236, 220), 0.5f);
+            I.poly({ { x - 5, y - 7 }, { x + 5, y - 7 }, { x, y - 17 } }, rgb(232, 84, 40), 0.4f);
+            I.box(x, y + 2, 5, 1.6f, 0.4f, rgb(255, 186, 58), 0.2f).deco();
+        }
+        break;
+    case ICO_BU_SWIFT:   // a fast warhead with speed streaks
+        for (int k = 0; k < 3; k++) I.seg(-21, -8 + k * 8, -9, -8 + k * 8, 1.2f, rgb(255, 214, 140), 0).deco();
+        I.seg(-8, 0, 12, 0, 6.0f, rgb(240, 242, 246), 0.5f);
+        I.poly({ { 12, -6 }, { 12, 6 }, { 22, 0 } }, rgb(220, 50, 40), 0.4f);
+        I.poly({ { -8, -6 }, { -14, -12 }, { -4, -6 } }, rgb(220, 50, 40), 0.3f);
+        I.poly({ { -8, 6 }, { -14, 12 }, { -4, 6 } }, rgb(220, 50, 40), 0.3f);
+        I.box(2, 0, 2, 6, 0.4f, rgb(220, 50, 40), 0.2f).deco();
+        break;
+    case ICO_BU_PARA:   // a radio mast calling in parachutes
+        I.seg(-8, 20, -8, -14, 1.6f, rgb(170, 178, 190), 0.3f);
+        I.seg(-14, 20, -8, -6, 0.9f, rgb(130, 138, 150), 0).deco();
+        I.seg(-2, 20, -8, -6, 0.9f, rgb(130, 138, 150), 0).deco();
+        I.circle(-8, -16, 2.6f, rgb(255, 80, 60), 0.2f);
+        I.ring(-8, -16, 7, 1.0f, rgb(255, 214, 140)).deco();
+        for (float x : { 9.0f, 18.0f }) {
+            I.poly(ellipse(x, -4, 6, 4.5f, 8), rgb(112, 198, 255), 0.4f);
+            I.seg(x, 0, x, 8, 0.6f, PALE, 0).deco();
+            I.box(x, 10, 2.5f, 2.5f, 0.6f, rgb(110, 128, 80), 0.3f);
+        }
+        break;
     case ICO_UNLOAD:   // everybody out of a door
         I.box(-12, 0, 7, 14, 1.5f, rgb(110, 118, 130), 0.3f);
         I.box(-12, 0, 4, 11, 0.8f, rgb(24, 28, 36), 0).deco();

@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -373,8 +373,8 @@ static bool scenarioTest(u64 seed) {
             if (!g_sim.cmdScan(0) || !g_sim.revealed(0)) { fprintf(stderr, "scenario: scan failed\n"); return false; }
             if (g_sim.cmdScan(0)) { fprintf(stderr, "scenario: scan ignored its cooldown\n"); return false; }
             float until = pl.revealUntil;
-            if (until - g_sim.time < 29.0f || until - g_sim.time > 31.0f) { fprintf(stderr, "scenario: scan should last 30s (%.1f)\n", until - g_sim.time); return false; }
-            for (int guard = 0; guard < 20 * 31; guard++) { g_sim.step(); g_sim.events.clear(); }
+            if (until - g_sim.time < SCANS[fac[0]].duration - 1.0f || until - g_sim.time > SCANS[fac[0]].duration + 1.0f || SCANS[fac[0]].duration < 179.0f) { fprintf(stderr, "scenario: scan should last 3 minutes (%.1f)\n", until - g_sim.time); return false; }
+            for (int guard = 0; guard < (int)(SIM_HZ * (SCANS[fac[0]].duration + 1.0f)); guard++) { g_sim.step(); g_sim.events.clear(); }
             if (g_sim.revealed(0)) { fprintf(stderr, "scenario: scan did not expire\n"); return false; }
         }
         // train every unit from its producer
@@ -652,6 +652,7 @@ bool lakeUpdateTest(u64 seed);   // tests13.cpp: infiltrators swim to the island
 bool civilTest(u64 seed);        // tests15.cpp: the towns round the lake, the riots, the newer commander, difficulty raised mid-match
 bool oceanTest(u64 seed);        // tests16.cpp: the island map in the sea, the navy on the ocean, cargo ships, aircraft carriers
 bool fleetTest(u64 seed);        // tests17.cpp: the Fleet Call (a battle fleet from the map border), carrier deck operations
+bool bunkerUpdateTest(u64 seed); // tests18.cpp: nuclear-hardened bunkers, 200/5 garrison, per-bunker upgrades, shift-drag lines, the smarter Waymaker
 bool duelMatrix(u64 seed);       // tests17.cpp: sharp fire against plain fire in mirrored battles
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
@@ -2667,8 +2668,37 @@ static void writeArtSheet(const char* path) {
     printf("wrote %s\n", path);
 }
 
+// ONEHOUR_BUNKERSHEET=<file.bmp>: headless preview of both armies' bunkers (Cyber top row, Clanker bottom row) on grass, at the 2x art scale:
+// the bare bunker, then the bunker with each per-bunker upgrade alone (BunkerUpg order), then with all six. Live parts are not drawn.
+static void writeBunkerSheet(const char* path) {
+    const int GAP = 6, M = 8, N = BU_COUNT + 2;
+    BArtSize sz = artBuildingSize(B_C_BUNKER);
+    Canvas out(M * 2 + N * sz.w + (N - 1) * GAP, M * 2 + 2 * sz.h + GAP);
+    for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) out.px[y * out.w + x] = Canvas::pack(((x / 9 + y / 7) & 1) ? rgb(84, 118, 58) : rgb(78, 112, 54));
+    auto put = [&](const Canvas& src, int x0, int y0) { for (int y = 0; y < src.h; y++) for (int x = 0; x < src.w; x++) out.set(x0 + x, y0 + y, Canvas::unpack(src.px[y * src.w + x])); };
+    for (int f = 0; f < 2; f++) {
+        int type = f == 0 ? B_C_BUNKER : B_K_BUNKER;
+        Canvas base(sz.w, sz.h), mask(sz.w, sz.h);
+        artBuilding(base, mask, type);
+        for (int i = 0; i < (int)mask.px.size(); i++) {   // the team mask in the owner's colour, as the game tints it
+            Color m = Canvas::unpack(mask.px[i]);
+            if (m.a) { Color t = PLAYER_COLOR[f]; Color b0 = Canvas::unpack(base.px[i]); float k = m.a / 255.0f; base.px[i] = Canvas::pack(Color{(u8)(b0.r + (t.r * m.r / 255 - b0.r) * k), (u8)(b0.g + (t.g * m.g / 255 - b0.g) * k), (u8)(b0.b + (t.b * m.b / 255 - b0.b) * k), std::max(b0.a, m.a)}); }
+        }
+        Canvas ups[BU_COUNT] = { Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h) };
+        for (int u = 0; u < BU_COUNT; u++) artBunkerUpgrade(ups[u], type, u);
+        for (int cell = 0; cell < N; cell++) {
+            int x0 = M + cell * (sz.w + GAP), y0 = M + f * (sz.h + GAP);
+            put(base, x0, y0);
+            for (int u = 0; u < BU_COUNT; u++) if (cell == u + 1 || cell == N - 1) put(ups[u], x0, y0);
+        }
+    }
+    if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(out.px.data(), out.w, out.h, 32, out.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, path); SDL_FreeSurface(sf); }
+    printf("wrote %s\n", path);
+}
+
 int main(int argc, char** argv) {
     if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
+    if (const char* bs = getenv("ONEHOUR_BUNKERSHEET")) { writeBunkerSheet(bs); return 0; }
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0; int lateMin = 0;
     for (int i = 1; i < argc; i++) {   // the headless scene tests check one mechanic each in scenes that run for minutes: no riots in them (full matches - the game,
@@ -2741,6 +2771,7 @@ int main(int argc, char** argv) {
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
         else if (a == "--oceantest") { g_map.generate(); return oceanTest(seed) ? 0 : 1; }
         else if (a == "--fleettest") { g_map.generate(); return fleetTest(seed) ? 0 : 1; }
+        else if (a == "--bunkertest") { g_map.generate(); return bunkerUpdateTest(seed) ? 0 : 1; }
         else if (a == "--duelmatrix") { g_map.generate(); return duelMatrix(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
@@ -3204,6 +3235,7 @@ int main(int argc, char** argv) {
             if (haveStealthCam) g_game.cam = stealthCam;
             g_game.renderAlpha = 1;
             if (viewPlayer != 0 || getenv("ONEHOUR_REVEAL")) { std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1); }
+            if (getenv("ONEHOUR_SCAN")) { Player& sp = g_sim.players[g_sim.humanPlayer]; sp.revealUntil = g_sim.time + SCANS[sp.faction].duration - 20.0f; std::fill(sp.explored.begin(), sp.explored.end(), 1); }   // a satellite scan 20 s in (combine with ONEHOUR_WEATHER=night)
             if (const char* cm = getenv("ONEHOUR_CAM")) {   // ONEHOUR_CAM=tx,ty: centre the view on a map tile
                 float tx = 40, ty = 40; if (sscanf(cm, "%f,%f", &tx, &ty) == 2) g_game.cam = Vec2(clampf(tx * TILE - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(ty * TILE - VIEW_H / 2, 0, WORLD_H - VIEW_H));
             }
@@ -3470,6 +3502,49 @@ int main(int argc, char** argv) {
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 int left = 0, small = 0; for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1) { left++; printf("  %s %.0f%%\n", e.bt().name, 100 * e.hp / e.maxHp); }
                 (void)small; printf("nuke showcase: %d enemy structures left\n", left);
+            }
+            if (const char* bk = getenv("ONEHOUR_BUNKER")) {   // showcase of the bunker update: base | line | way (combine with ONEHOUR_WEATHER=...)
+                std::string m = bk;
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                auto camOn = [&](Vec2 p) { g_game.cam = Vec2(clampf(p.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(p.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); };
+                auto frames = [&](int n, bool sim) { for (int k = 0; k < n; k++) { if (sim) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); } g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; g_game.render(); g_game.updateParticles(SIM_DT); } };
+                Vec2 c = openGroundNear(g_sim.players[0].basePos + Vec2(15.0f * TILE, 4.0f * TILE), 9);
+                flattenArena(c, 9, 6);
+                int cx = tileOf(c.x), cy = tileOf(c.y);
+                Ref dz = NOREF; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER) { dz = g_sim.refOf(e); break; }
+                const bool cy0 = g_sim.players[0].faction == F_CYBER;
+                if (m == "base") {   // two bunkers: one bare, one with every upgrade (the laser battery tracking a gunship, the hospital at work, a soldier crowd inside)
+                    int bt = cy0 ? B_C_BUNKER : B_K_BUNKER;
+                    Ref a = g_sim.placeBuilding(bt, 0, cx - 6, cy - 1, true), b = g_sim.placeBuilding(bt, 0, cx + 3, cy - 1, true);
+                    for (int u = 0; u < BU_COUNT; u++) { g_sim.get(b)->bunkerUpg |= (u8)(1 << u); }
+                    g_sim.get(b)->maxHp *= BUNKER_SHELL_HP; g_sim.get(b)->hp = g_sim.get(b)->maxHp; g_sim.anyBunkerLasers = true;
+                    g_sim.get(a)->bunkerBusy = BU_LASERS; g_sim.get(a)->bunkerProgress = 0.6f;
+                    for (int k = 0; k < 30; k++) { Ref r = g_sim.spawnUnit(cy0 ? U_C_INF1 : U_K_INF1, 0, c + Vec2(0, 3.0f * TILE)); g_sim.boardQuiet(*g_sim.get(r), *g_sim.get(b)); }
+                    Ref t = g_sim.spawnUnit(cy0 ? U_C_TANK : U_K_TANK, 0, c + Vec2(6.0f * TILE, 3.5f * TILE)); g_sim.get(t)->hp *= 0.4f;
+                    g_sim.spawnUnit(cy0 ? U_K_AIR : U_C_AIR, 1, c + Vec2(9.0f * TILE, -5.0f * TILE));
+                    camOn(c + Vec2(0, TILE));
+                    frames(getenv("ONEHOUR_BUNKERTICKS") ? atoi(getenv("ONEHOUR_BUNKERTICKS")) : 18, true);
+                    g_game.selection.clear(); g_game.selection.push_back(b);
+                } else if (m == "line") {   // a dozer selected, the player shift-dragging a wall line (the preview), half of an earlier line already going up
+                    int wt = cy0 ? B_C_WALL : B_K_WALL;
+                    std::vector<std::pair<int, int>> row; for (int k = 0; k < 10; k++) row.push_back({cx - 7 + k, cy + 3});
+                    g_sim.cmdBuildLine({dz}, wt, row);
+                    camOn(c);
+                    frames(200, true);
+                    g_game.selection.clear(); g_game.selection.push_back(dz);
+                    g_game.placingType = wt; g_game.bulkDrag = true; g_game.bulkTx = cx - 7; g_game.bulkTy = cy - 2;
+                    Vec2 sc = tileCenter(cx + 6, cy - 5) - g_game.cam; g_game.mouseX = (int)sc.x; g_game.mouseY = (int)sc.y;
+                } else if (m == "way") {   // a Waymaker over the corner of a structure and the wood beside it: the ghost marks what it clears and what it keeps
+                    int pw = cy0 ? B_C_POWER : B_K_POWER, wt = cy0 ? B_C_WAYMAKER : B_K_WAYMAKER;
+                    g_sim.placeBuilding(pw, 0, cx - 1, cy - 1, true);
+                    for (int j = -3; j <= 3; j++) for (int i = 1; i <= 5; i++) { int q = (cy + j) * MAP_W + cx + i; g_map.tiles[q] = T_TREE; g_map.blocked[q] |= 1; }
+                    g_map.touch(); g_gfx.rebakeTerrain();
+                    camOn(c);
+                    frames(4, false);
+                    g_game.selection.clear(); g_game.selection.push_back(dz);
+                    g_game.placingType = wt;
+                    Vec2 sc = tileCenter(cx + 1, cy) - g_game.cam; g_game.mouseX = (int)sc.x; g_game.mouseY = (int)sc.y;
+                }
             }
             if (const char* lk = getenv("ONEHOUR_LAKE")) {   // showcase of the lake update: sea | swim | boats | way (combine with ONEHOUR_WEATHER=night,rain ...)
                 std::string m = lk;

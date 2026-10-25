@@ -1172,7 +1172,7 @@ void AiPlayer::think() {
                 float d = dist(c->pos, o->pos); if (d > R) continue;
                 float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
                 if (o->isUnit()) score += UNITS[o->type].cost * (UNITS[o->type].hp > 1200 && f < 0.5f ? 0.3f : 1.0f);
-                else { float cost = (float)BUILDS[o->type].cost * (o->district >= 0 ? 0.1f : BUILDS[o->type].role == BR_CIVIC ? 0.4f : 1.0f); bool small = BUILDS[o->type].w * BUILDS[o->type].h <= 6; score += small ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }   // (a town is worth less to a warhead than an army, and a town round the lake, which rebuilds itself, far less)
+                else { float cost = (float)BUILDS[o->type].cost * (o->district >= 0 ? 0.1f : BUILDS[o->type].role == BR_CIVIC ? 0.4f : (BUILDS[o->type].role == BR_BUNKER && o->constructed ? BUNKER_NUKE_SHARE : 1.0f)); bool small = BUILDS[o->type].w * BUILDS[o->type].h <= 6; score += small ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }   // (a town is worth less to a warhead than an army, a town round the lake, which rebuilds itself, far less, and a nuclear-hardened bunker next to nothing)
             }
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && o.owner != player && !S.enemies(player, o.owner) && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;   // fallout hurts friends too
             for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner == player && !o.isAir() && dist(c->pos, o.pos) < R * 0.95f) score -= UNITS[o.type].cost * 1.2f;
@@ -1236,6 +1236,37 @@ void AiPlayer::think() {
             }
         }
         if (go && S.cmdParadrop(player, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] PARADROP at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
+    }
+    // ---------- the bunkers' own upgrades (FEAT_BUNKERUP): with money to spare the commander fits its bunkers one upgrade at a time - the shell and the
+    // laser battery first - and a bunker with a radio mast calls its paratroopers in where a paradrop would go
+    if (on(FEAT_BUNKERUP) && bunkers > 0 && pl.difficulty >= 1 && (S.tick & 15) == (u32)(player & 15)) {
+        static const int order[BU_COUNT] = { BU_SHELL, BU_LASERS, BU_MEDIC, BU_SWIFT, BU_TRIPLE, BU_PARA };
+        float from = pl.difficulty >= 3 ? 9.0f : (pl.difficulty == 2 ? 11.0f : 14.0f);
+        Ref para;
+        for (size_t i = 0; i < S.ents.size(); i++) {
+            const Entity& b = S.ents[i];
+            if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER) continue;
+            if (!para.valid() && Sim::bunkerHas(b, BU_PARA) && S.bunkerParaWait(b) == 0 && b.disabledUntil <= S.time) para = S.refOf(b);
+        }
+        if (tm >= from) for (size_t i = 0; i < S.ents.size(); i++) {
+            const Entity& b = S.ents[i];
+            if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER || b.bunkerBusy >= 0) continue;
+            int next = -1; for (int u : order) if (!Sim::bunkerHas(b, u)) { next = u; break; }
+            if (next < 0) continue;
+            if (pl.money > BUNKER_UPGS[next].cost + (threat ? 4000 : 2500)) S.cmdBunkerUpgrade(S.refOf(b), next);
+            break;   // (one purchase per look)
+        }
+        if (para.valid() && wits) {
+            Vec2 at; bool go = false;
+            if (threat && threatCount >= 3 && dist(threat->pos, pl.basePos) < 26 * TILE) {
+                Vec2 d = threat->pos - pl.basePos; float l = std::max(1.0f, d.len());
+                at = pl.basePos + d * (std::min(l, 7.0f * TILE) / l); go = true;
+            } else if (attacking && !threat) {
+                Entity* tgt = S.get(attackTarget);
+                if (tgt && S.aaCover(*tgt, player) <= 3.0f) { at = tgt->pos + (pl.basePos - tgt->pos).norm() * (5.0f * TILE); go = true; }
+            }
+            if (go && S.cmdBunkerPara(para, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] BUNKER PARA at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
+        }
     }
 
     // ---------- Fleet Call (FEAT_FLEETCALL): a battle fleet from the open sea, free once per paradrop cooldown per tech structure. It is sent where the

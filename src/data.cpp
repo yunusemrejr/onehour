@@ -55,6 +55,7 @@ const Weapon WEAPONS[] = {
     /* 50 */{ "Petrol Bomb",      34, 4.2f, 0, 2.30f, PJ_SHELL,  0.7f, true, false, {0.9f, 0.70f, 0.35f, 1.60f, 0.0f}, 1, 300,  SND_EXPLODE_S,   rgb(255, 150, 50) },
     /* 51 */{ "Close-In Guns",    15, 7.0f, 0, 0.10f, PJ_BULLET, 0,    true, true,  {1.0f, 0.55f, 0.25f, 0.20f, 1.9f}, 1, 1300, SND_MG,          rgb(255, 228, 150) },
     /* 52 */{ "Strike Bombs",    125, 1.0f, 0, 0.00f, PJ_BOMB,   1.7f, true, false, {1.25f, 1.20f, 1.00f, 1.40f, 0.0f}, 1, 0,    SND_EXPLODE_L,   rgb(255, 196, 120) },
+    /* 53 */{ "Bunker Sky Laser",  140, 12.0f,0, 0.55f, PJ_LASER,  0,    true, true,  {1.2f, 1.10f, 0.95f, 0.50f, 2.6f}, 1, 0,    SND_LASER_HEAVY, rgb(130, 250, 255) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -173,8 +174,8 @@ const BuildType BUILDS[B_COUNT] = {
     { "Oil Well",        "O", F_CLANKER, BR_INCOME,   1500, 1400, 20, 2, 2, 0,  6, -1, B_K_POWER, "Pumps $380 every 5s forever (max 4), no power needed" },
     { "Nuke Ramp",       "K", F_CLANKER, BR_NUKE,     2800, 8000, 60, 3, 3, -5, 8, -1, B_K_TECH,  "A nuke every 6 min per ramp (key K): huge blast, mushroom cloud, fallout" },
 
-    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 11000, 7500, 30, 2, 2, 0, 8, -1, B_C_BARRACKS, "Fortified deep shelter (visible on the surface): 50 infantry and a Fabricator. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 90s). Very hard to crack by conventional fire, but a direct nuclear hit wrecks the hatch and repeated warheads destroy it. When surrounded by enemies, overdrive lasers and heavy guns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
-    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 11000, 7500, 30, 2, 2, 0, 8, -1, B_K_BARRACKS, "Fortified deep shelter (visible on the surface): 50 infantry and a Dozer. Earns $85 every 5s, mends itself, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 90s). Very hard to crack by conventional fire, but a direct nuclear hit wrecks the hatch and repeated warheads destroy it. When surrounded by enemies, overdrive lasers and heavy machineguns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
+    { "Deep Bunker",     "U", F_CYBER,   BR_BUNKER, 11000, 7500, 30, 3, 3, 0, 8, -1, B_C_BARRACKS, "Fortified deep shelter (visible on the surface): 200 infantry and five Fabricators. Earns $85 every 5s, mends itself fast, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 90s). Nuclear-hardened: a warhead only scrapes it (it takes 20-30 at once to destroy one), and radiation never hurts it - its filters scrub the fallout round it. Each bunker can be fitted with its own upgrades. When surrounded, overdrive lasers shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
+    { "Underground Bunker","U", F_CLANKER, BR_BUNKER, 11000, 7500, 30, 3, 3, 0, 8, -1, B_K_BARRACKS, "Fortified deep shelter (visible on the surface): 200 infantry and five Dozers. Earns $85 every 5s, mends itself fast, twin hatch miniguns, rocket pod and a salvo of two mini-nukes (every 90s). Nuclear-hardened: a warhead only scrapes it (it takes 20-30 at once to destroy one), and radiation never hurts it - its filters scrub the fallout round it. Each bunker can be fitted with its own upgrades. When surrounded, overdrive heavy machineguns shred aircraft, incoming nukes, tanks and infantry, and heavy hits vent a ring of radiation" },
 
     { "Nano Drydock",   "Y", F_CYBER,   BR_NAVAL,    4200, 2600, 32, 5, 4, -3, 8, -1, B_C_FACTORY, "Naval Yard: a big drydock on the shore of the ocean or the lake (its ships stay on that sea). Builds patrol boats, Pulse Destroyers and Tidewalker cargo ships; with a Data Center also the Lancer Cruiser and the Horizon aircraft carrier" },
     { "Shipyard",       "Y", F_CLANKER, BR_NAVAL,    4500, 2600, 32, 5, 4, -3, 8, -1, B_K_FACTORY, "Naval Yard: a big shipyard on the shore of the ocean or the lake (its ships stay on that sea). Builds gunboats, Iron Destroyers and Ironhold cargo ships; with an Arms Lab also the Rocket Cruiser and the Leviathan aircraft carrier" },
@@ -242,8 +243,8 @@ const PowerType POWERS[F_COUNT] = {
     { "Shell Storm", "Rains artillery shells on the area for 4s",                 180.0f, 3.5f },
 };
 const ScanType SCANS[F_COUNT] = {
-    { "Orbital Scan", "Reveals the whole map for 30s",                               210.0f, 30.0f },
-    { "Recon Flight", "A spotter plane reveals the whole map for 30s",               210.0f, 30.0f },
+    { "Orbital Scan", "A satellite pass shows the whole map, bright as day even at night, for 3 minutes",                   210.0f, 180.0f },
+    { "Recon Flight", "A spotter plane shows the whole map, bright as day even at night (flares and night optics), for 3 minutes", 210.0f, 180.0f },
 };
 const ProgramType PROGRAMS[F_COUNT] = {
     { "Overclock Program", "Unlocks Ion Lancer and Aegis Titan", 2500, 45.0f },
@@ -263,6 +264,16 @@ const UpgradeType UPGRADES[F_COUNT][UPG_COUNT] = {
       { "Flak Guard Drones","N", "Every ship flies with a screen of three protector drones that shoot down rockets and shells aimed at it (lasers and bullets are too quick), and every jeep gets a second drone", 2500, 40.0f },
       { "Hyper Protection", "H", "Every structure gets 100% more health, takes 60% less damage from conventional fire, and can never lose more than 42% of its full health to a single warhead. Even an Underground Nuke can no longer erase a full-health protected base: it only finishes buildings that were already damaged", 6000, 55.0f },
       { "Anti-Rocket",      "A", "Every wall mounts a point-defence laser (10 tiles): it burns incoming rockets, shells and nuclear warheads, and shoots down aircraft. Walls are unlimited, so a line of them blankets a base in overlapping fire", 4000, 45.0f } },
+};
+
+// Per-bunker upgrades (see BunkerUpg): bought for the selected bunker alone, one fitting at a time
+const BunkerUpgType BUNKER_UPGS[BU_COUNT] = {
+    { "Thick Shell", "Shell",   "T", "Super-thick shell for this bunker: 80% more health, a hatch two and a half times as strong, 45% less damage from guns and 40% less from every warhead", 3000, 30.0f },
+    { "Laser Battery", "Lasers", "L", "Two laser turrets on this bunker's roof: they burn down incoming warheads (24 tiles round it), rockets, shells and bombs aimed at anything of yours nearby, and shoot down any aircraft in 12 tiles", 4000, 35.0f },
+    { "Field Hospital", "Hospital","H", "A field hospital in this bunker: everything of yours within 8 tiles - soldiers, vehicles, aircraft and structures - is mended all the time, even under fire", 2500, 25.0f },
+    { "Triple Launch", "Triple", "N", "Three launch tubes for this bunker: every Mini Nuke launch fires three missiles at once, spread over the target (instead of a pair)", 5000, 40.0f },
+    { "Swift Warheads", "Swift","W", "Boosted, armoured missiles for this bunker: its mini-nukes reach the target in half the time and every defence's chance to shoot one down drops to 30%", 3500, 30.0f },
+    { "Para Backup", "Para",   "B", "A radio mast for this bunker: once a minute it calls a cargo plane that drops 35 paratroopers anywhere you pick - riflemen, anti-air troopers and snipers above all, with every other kind of soldier your army has unlocked (never infiltrators)", 4500, 35.0f },
 };
 
 const DropType DROPS[F_COUNT] = {

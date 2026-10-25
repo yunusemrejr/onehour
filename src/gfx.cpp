@@ -574,6 +574,12 @@ void Gfx::buildBuildings() {
         artSite(s, t);
         site[t] = cropToSprite(*this, s, sz.cx, sz.cy, 1.0f / BART_K);
         if (BUILDS[t].role == BR_NUKE || BUILDS[t].role == BR_UNUKE) { Canvas a(sz.w, sz.h); artArmed(a, t); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
+        if (BUILDS[t].role == BR_BUNKER) for (int u = 0; u < BU_COUNT; u++) {
+            Canvas a(sz.w, sz.h);
+            artBunkerUpgrade(a, t, u);
+            gradeArt(a, 3401u + (u32)(t * 8 + u), 0.08f, 0.05f);
+            bunkerUpg[BUILDS[t].faction][u] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K);
+        }
     }
     static const int RW[7] = { 1, 2, 3, 3, 4, 4, 5 }, RH[7] = { 1, 2, 2, 3, 3, 4, 3 };
     for (int i = 0; i < 7; i++) {

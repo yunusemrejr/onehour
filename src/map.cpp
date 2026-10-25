@@ -557,35 +557,51 @@ void Map::generate() {
         waterDist.assign((size_t)MAP_W * MAP_H, 0);
         for (int i = 0; i < MAP_W * MAP_H; i++) waterDist[i] = (u8)std::min(255, d[i] / 2);
     }
-    // Interior water grouped for the caustics pass (see map.h): aligned 4x4 blocks first, then whatever interior tiles remain. The ocean only gets
-    // them near a shore; its open water gets the swell blocks instead (the two overlap a little so the change is soft).
-    waterBlocks.clear(); waterTiles.clear(); seaBlocks.clear();
-    for (int by = 0; by + 7 < MAP_H; by += 8) for (int bx = 0; bx + 7 < MAP_W; bx += 8) {
-        int far = 0; bool sea = true;
-        for (int j = 0; j < 8 && sea; j++) for (int i = 0; i < 8; i++) {
-            int k = (by + j) * MAP_W + bx + i;
-            if (waterComp[k] != oceanComp) { sea = false; break; }
-            far = std::max(far, (int)shoreDist[k]);
-        }
-        if (sea && far >= 5) seaBlocks.push_back(by * MAP_W + bx);
-    }
+    // Interior water grouped for the overlay passes (see map.h): the whole ocean gets the swell in aligned 8x8 blocks, then 4x4 blocks, then
+    // single tiles (no seam between the coast and the open sea), and its shallows a list of tiles for the fading caustics; the lake and the
+    // rivers get caustics in aligned 4x4 blocks, then whatever interior tiles remain.
+    waterBlocks.clear(); waterTiles.clear(); seaBlocks.clear(); seaQuads.clear(); seaTiles.clear(); seaShallow.clear();
     {
         auto interior = [&](int x, int y) {
-            if (waterComp[y * MAP_W + x] == oceanComp && shoreDist[y * MAP_W + x] > 7) return false;   // (open sea: the swell covers it)
+            if (x < 1 || y < 1 || x > MAP_W - 2 || y > MAP_H - 2) return false;
             return tiles[y * MAP_W + x] == T_WATER && tiles[y * MAP_W + x - 1] == T_WATER && tiles[y * MAP_W + x + 1] == T_WATER
                 && tiles[(y - 1) * MAP_W + x] == T_WATER && tiles[(y + 1) * MAP_W + x] == T_WATER;
         };
+        auto ocean = [&](int x, int y) { return interior(x, y) && waterComp[y * MAP_W + x] == oceanComp; };
+        auto inland = [&](int x, int y) { return interior(x, y) && waterComp[y * MAP_W + x] != oceanComp; };
         static u8 covered[MAP_W * MAP_H];
+        memset(covered, 0, sizeof(covered));
+        // the ocean's swell: the biggest aligned blocks first, then 4x4 blocks, then single tiles
+        for (int by = 0; by + 7 < MAP_H; by += 8) for (int bx = 0; bx + 7 < MAP_W; bx += 8) {
+            bool full = true;
+            for (int j = 0; j < 8 && full; j++) for (int i = 0; i < 8; i++) if (!ocean(bx + i, by + j)) { full = false; break; }
+            if (!full) continue;
+            seaBlocks.push_back(by * MAP_W + bx);
+            for (int j = 0; j < 8; j++) for (int i = 0; i < 8; i++) covered[(by + j) * MAP_W + bx + i] = 1;
+        }
+        for (int by = 0; by + 3 < MAP_H; by += 4) for (int bx = 0; bx + 3 < MAP_W; bx += 4) {
+            bool full = true;
+            for (int j = 0; j < 4 && full; j++) for (int i = 0; i < 4; i++) if (covered[(by + j) * MAP_W + bx + i] || !ocean(bx + i, by + j)) { full = false; break; }
+            if (!full) continue;
+            seaQuads.push_back(by * MAP_W + bx);
+            for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) covered[(by + j) * MAP_W + bx + i] = 1;
+        }
+        for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++) {
+            if (!ocean(x, y)) continue;
+            if (!covered[y * MAP_W + x]) seaTiles.push_back(y * MAP_W + x);
+            if (shoreDist[y * MAP_W + x] <= SEA_CAUSTIC_REACH) seaShallow.push_back(y * MAP_W + x);
+        }
+        // the lake and the rivers: caustics everywhere
         memset(covered, 0, sizeof(covered));
         for (int by = 4; by + 3 < MAP_H - 1; by += 4) for (int bx = 4; bx + 3 < MAP_W - 1; bx += 4) {
             bool full = true;
-            for (int j = 0; j < 4 && full; j++) for (int i = 0; i < 4; i++) if (!interior(bx + i, by + j)) { full = false; break; }
+            for (int j = 0; j < 4 && full; j++) for (int i = 0; i < 4; i++) if (!inland(bx + i, by + j)) { full = false; break; }
             if (!full) continue;
             waterBlocks.push_back(by * MAP_W + bx);
             for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) covered[(by + j) * MAP_W + bx + i] = 1;
         }
         for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++)
-            if (!covered[y * MAP_W + x] && interior(x, y)) waterTiles.push_back(y * MAP_W + x);
+            if (!covered[y * MAP_W + x] && inland(x, y)) waterTiles.push_back(y * MAP_W + x);
     }
     // Neutral civilian strongholds: four rotated copies of a castle, a civilian bunker and a watchtower, so every quadrant gets the same set.
     // They are placed on valid open ground away from roads and, before they are reserved, checked not to seal a corridor. Each gets a worn dirt
@@ -872,18 +888,21 @@ void Map::clearForStructure(int x, int y, int w, int h) {
 
 int Map::clearWay(int x, int y, int w, int h) {
     int opened = 0;
-    regionDirty = true;
-    for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
-        if (!wayTile(i, j)) continue;
-        int k = j * MAP_W + i;
-        if (blocked[k] & 1) opened++;
-        if (tiles[k] != T_ROAD) tiles[k] = T_DIRT;   // (a road already through it stays a road)
-        blocked[k] &= ~1;
-        clearable[k] = 0;
-        if (cleared.size() < 200000) cleared.push_back(k | (2 << 24));   // the renderer grades it into bare earth and lifts any tree or bush off it
-    }
-    if (cleared.size() < 200000) cleared.push_back(-1);
+    for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) opened += clearWayTile(i, j);
+    clearWayDone();
     return opened;
+}
+
+bool Map::clearWayTile(int i, int j) {
+    if (!wayTile(i, j)) return false;   // (water, a bridge deck, a structure or a supply pile is left as it is)
+    regionDirty = true;
+    int k = j * MAP_W + i;
+    bool was = blocked[k] & 1;
+    if (tiles[k] != T_ROAD) tiles[k] = T_DIRT;   // (a road already through it stays a road)
+    blocked[k] &= ~1;
+    clearable[k] = 0;
+    if (cleared.size() < 200000) cleared.push_back(k | (2 << 24));   // the renderer grades it into bare earth and lifts any tree or bush off it
+    return was;
 }
 
 void Map::setStructure(int x, int y, int w, int h, bool on) {

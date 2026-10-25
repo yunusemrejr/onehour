@@ -190,22 +190,31 @@ void Gfx::buildEffects() {
         }
         waterFx[f] = fromCanvasAdd(c, 0, 0);
     }
-    // the open ocean's swell (512 px: 16 tiles before it repeats): long crests running before a north-westerly wind (integer frequencies again, so it tiles), sharpened into bright
-    // ridges with a sparkle of whitecaps on the highest of them; four frames that loop as the crests roll on
+    // the ocean's swell (512 px: 16 tiles before it repeats): wind-driven wavelets - thin, slightly wavy crest lines running across a
+    // north-westerly wind, broken into short dashes by a slow mask, with a glint on the brightest. Everything is a sum of integer-frequency
+    // waves (the warp too), so the pattern tiles seamlessly; the four frames move the breakup mask and the glints, not the crest lines, so the
+    // loop twinkles like light on moving water instead of stepping
     for (int f = 0; f < 4; f++) {
         const int N = 512;
+        const float TAU = 6.2831853f, Q = f * 1.5707963f;
         Canvas c(N, N);
-        static const int A[8] = { 3, 4, 5, 2, 7, 6, 9, 11 }, B[8] = { 4, 3, 6, 5, 5, 8, 7, 9 };
-        static const float W[8] = { 1.0f, 0.8f, 0.6f, 0.55f, 0.4f, 0.35f, 0.25f, 0.2f };
+        static const int A[6] = { 6, 8, 5, 10, 7, 12 }, B[6] = { 7, 5, 9, 8, 11, 7 };   // wave vectors pointing along the wind (crests run across it)
+        static const float WT[6] = { 1.0f, 0.85f, 0.8f, 0.6f, 0.55f, 0.45f };
         for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
-            float w = 0;
-            for (int k = 0; k < 8; k++) w += W[k] * std::sin(6.2831853f * (A[k] * x + B[k] * y) / (float)N + 1.1f * k + f * 1.5707963f * (k & 1 ? 1 : -1));
-            float crest = clampf((w - 0.7f) / 1.9f, 0, 1);
-            float chop = 0.5f + 0.5f * std::sin(6.2831853f * (23 * x - 13 * y) / (float)N + f * 3.1415926f);
-            float a = crest * crest * (0.6f + 0.4f * chop);
+            float X = x + 7.0f * std::sin(TAU * (2 * x - 3 * y) / N + 0.7f) + 4.0f * std::sin(TAU * (5 * x + 1 * y) / N + 2.1f);   // (the crests wander)
+            float Y = y + 7.0f * std::sin(TAU * (3 * x + 2 * y) / N + 1.9f) + 4.0f * std::sin(TAU * (-1 * x + 5 * y) / N + 0.3f);
+            float a = 0;
+            for (int k = 0; k < 6; k++) {
+                float th = TAU * (A[k] * X + B[k] * Y) / N + 1.37f * k;
+                float ridge = std::pow(std::max(0.0f, std::cos(th)), 14.0f);   // a thin bright line on each crest
+                float m = 0.5f + 0.5f * std::sin(TAU * ((3 + k) * x - (2 + (k & 1)) * y) / N + 0.9f * k + Q * (k & 1 ? 1 : -1))
+                                  * std::sin(TAU * ((1 + (k % 3)) * x + (4 - (k % 2)) * y) / N + 0.4f * k - Q);
+                float dash = std::min(1.0f, std::max(0.0f, (m - 0.52f) * 3.2f));   // broken into wavelets that come and go
+                a = std::max(a, ridge * dash * WT[k]);
+            }
             u32 h = (u32)(x * 73856093u) ^ (u32)(y * 19349663u) ^ (u32)(f * 83492791u); h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
-            if (crest > 0.65f && (h & 255) < 8) a = 0.9f;   // whitecaps
-            c.px[y * N + x] = Canvas::pack(Color{214, 236, 248, (u8)(clampf(a, 0, 1) * 60)});
+            if (a > 0.55f && (h & 255) < 6) a = 1.0f;   // glints
+            c.px[y * N + x] = Canvas::pack(Color{206, 232, 248, (u8)(clampf(a, 0, 1) * 62)});
         }
         seaSwell[f] = fromCanvasAdd(c, 0, 0);
     }

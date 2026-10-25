@@ -42,13 +42,16 @@ struct Map {
     std::vector<SeaIsland> seaIslands;
     int oceanComp = 0;              // waterComp id of the ocean round the islands (the largest body of water)
     std::vector<RoadSeg> roads;
-    // Interior water (water with water on all four sides), pre-grouped for the animated-caustics pass: origins of aligned 4x4
-    // all-interior blocks (one 128 px draw each) and every interior tile no block covers. Filled by generate().
+    // Interior water (water with water on all four sides), pre-grouped for the animated overlays. The lake and the rivers get caustics everywhere:
+    // origins of aligned 4x4 all-interior blocks (one 128 px draw each) and every interior tile no block covers. Filled by generate().
     std::vector<int> waterBlocks;
     std::vector<int> waterTiles;
-    // On the open ocean caustics would read as a repeating grid (they belong to shallow water): there the renderer lays a slow swell instead, one
-    // 256 px draw per aligned 8x8-tile block of open sea (origins in seaBlocks). shoreDist: tiles from the nearest land (chamfered, capped at 255).
-    std::vector<int> seaBlocks;
+    // The whole ocean, shore to open sea, gets one slow swell (caustics there would read as a repeating grid): aligned 8x8 blocks (seaBlocks),
+    // 4x4 blocks (seaQuads) and single tiles (seaTiles), so it covers every interior tile with no seam between "near shore" and "open sea";
+    // its shallows (seaShallow: shoreDist <= SEA_CAUSTIC_REACH) also get caustics tile by tile, fading out as the bottom drops away.
+    // shoreDist: tiles from the nearest land (chamfered, capped at 255).
+    std::vector<int> seaBlocks, seaQuads, seaTiles, seaShallow;
+    static constexpr int SEA_CAUSTIC_REACH = 6;
     std::vector<u8> shoreDist;
     std::vector<u8> waterDist;      // land tiles: tiles to the nearest water of any kind (chamfered, capped at 255; 0 on water)
 
@@ -76,6 +79,8 @@ struct Map {
         return tiles[i] != T_WATER && bridge[i] == 0 && (blocked[i] & ~1) == 0;
     }
     int clearWay(int x, int y, int w, int h);   // returns how many tiles were blocked before
+    bool clearWayTile(int x, int y);           // one tile of it (true if it was blocked); end the footprint with clearWayDone()
+    void clearWayDone() { if (cleared.size() < 200000) cleared.push_back(-1); }
     // Would a w x h structure at (x, y) cut the ground around it in two (a corridor between rock and water, a gap between two other structures)? Counts the
     // 4-connected regions of free ground in the window of a few tiles round the footprint before and after: more of them after means it would plug something.
     bool wouldPlug(int x, int y, int w, int h) const;

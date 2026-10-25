@@ -29,3 +29,8 @@ void artSiloArmed(Canvas& c, int type);
 bool artSpecialBuilding(Canvas& c, Canvas& mask, int type);
 // The Healing Antenna of either army (artb_antenna.cpp): a 1x1 mast with a heal glyph and a green beacon. Paints the structure and its team mask.
 bool artHealAntenna(Canvas& c, Canvas& mask, bool cyber, u32 seed);
+// The underground bunker of either army (artb_bunker.cpp): its 3x3 surface apron. Paints the structure and its team mask; false for any other type.
+// Live parts (the hatch leaves, miniguns, rocket pod, overdrive and laser heads) are drawn over it at the BUNKER_* spots in data.h.
+bool artBunker(Canvas& c, Canvas& mask, int type);
+// What one per-bunker upgrade (BunkerUpg) adds to that apron, painted alone on a clear canvas of the bunker's size (drawn over the bunker sprite).
+void artBunkerUpgrade(Canvas& c, int type, int upg);

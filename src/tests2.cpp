@@ -182,7 +182,7 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     CHECK(B->hatch > 0 && B->hatch == B->hatchMax, "a finished bunker has no hatch");
     Vec2 bp = B->pos;
     CHECK(g_sim.visibleTo(*B, 1) && g_sim.visibleTo(*B, 0), "an underground bunker should be plainly visible to both sides on the surface");
-    // ---- fifty soldiers and one dozer can climb in, the fifty-first soldier and a second dozer cannot
+    // ---- a crowd of soldiers and two dozers walk in (the bunker holds 200 and five: everyone gets in)
     std::vector<Ref> inf, ones;
     for (int i = 0; i < 52; i++) inf.push_back(spawnAt(i % 3 == 0 ? rpg : rifle, 0, bp + Vec2(((i % 9) - 4) * 22.0f, 3.5f * TILE + (i / 9) * 22.0f)));
     Ref dz1 = spawnAt(dozerMe, 0, bp + Vec2(-3 * TILE, 3 * TILE)), dz2 = spawnAt(dozerMe, 0, bp + Vec2(3 * TILE, 3 * TILE));
@@ -191,11 +191,21 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     if (getenv("ONEHOUR_DBGB")) { for (int sec = 0; sec < 40; sec++) { run(1); int ent = 0, idl = 0, in = 0; for (Ref r : inf) if (alive(r)) { Entity* u = g_sim.get(r); if (u->carrier.valid()) in++; else if (u->order == O_ENTER) ent++; else idl++; } fprintf(stderr, "t=%d in %d entering %d idle %d\n", sec, in, ent, idl); if (sec >= 3 && sec <= 9) for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) { Entity* u = g_sim.get(r); Entity* cc = g_sim.get(bk); if (sec >= 3) fprintf(stderr, "  stuck: path0 %.0f,%.0f order %d pos %.0f,%.0f dist %.1f path %zu/%zu actionTimer %.1f canBoard %d unloading %d constructed %d disabled %.1f fall %.1f time %.1f passable %d\n", u->path.empty() ? -1.0f : u->path[0].x, u->path.empty() ? -1.0f : u->path[0].y, (int)u->order, u->pos.x, u->pos.y, g_sim.distToEntity(u->pos, *cc), u->pathIdx, u->path.size(), u->actionTimer, (int)g_sim.canBoard(*u, *cc), (int)cc->unloading, (int)cc->constructed, u->disabledUntil, u->fall, g_sim.time, (int)g_map.passable(tileOf(u->pos.x), tileOf(u->pos.y))); break; } } }
     run(40);
     B = g_sim.get(bk);
-    if (g_sim.garrisonInfantry(*B) != BUNKER_INF_CAP) { for (int dy = -6; dy <= 8; dy++) { for (int dx = -8; dx <= 8; dx++) { int x = tileOf(bp.x) + dx, y = tileOf(bp.y) + dy; fprintf(stderr, "%c", !inMap(x, y) ? '?' : (g_map.blocked[y * MAP_W + x] ? (char)('0' + g_map.blocked[y * MAP_W + x]) : '.')); } fprintf(stderr, "\n"); } int idle = 0, enter = 0; for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) { if (g_sim.get(r)->order == O_ENTER) enter++; else idle++; } fprintf(stderr, "garrison %d, still entering %d, idle outside %d\n", g_sim.garrisonInfantry(*B), enter, idle); for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) { Entity* u = g_sim.get(r); fprintf(stderr, "  outside unit order %d pos %.0f,%.0f dist to bunker %.1f (bunker %.0f,%.0f) canBoard %d\n", (int)u->order, u->pos.x, u->pos.y, g_sim.distToEntity(u->pos, *B), B->pos.x, B->pos.y, (int)g_sim.canBoard(*u, *B)); break; } }
-    CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP, "the bunker does not hold exactly 50 soldiers");
-    CHECK(g_sim.garrisonDozers(*B) == 1, "the bunker does not hold exactly one dozer");
+    if (g_sim.garrisonInfantry(*B) != 52) { for (int dy = -6; dy <= 8; dy++) { for (int dx = -8; dx <= 8; dx++) { int x = tileOf(bp.x) + dx, y = tileOf(bp.y) + dy; fprintf(stderr, "%c", !inMap(x, y) ? '?' : (g_map.blocked[y * MAP_W + x] ? (char)('0' + g_map.blocked[y * MAP_W + x]) : '.')); } fprintf(stderr, "\n"); } int idle = 0, enter = 0; for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) { if (g_sim.get(r)->order == O_ENTER) enter++; else idle++; } fprintf(stderr, "garrison %d, still entering %d, idle outside %d\n", g_sim.garrisonInfantry(*B), enter, idle); for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) { Entity* u = g_sim.get(r); fprintf(stderr, "  outside unit order %d pos %.0f,%.0f dist to bunker %.1f (bunker %.0f,%.0f) canBoard %d\n", (int)u->order, u->pos.x, u->pos.y, g_sim.distToEntity(u->pos, *B), B->pos.x, B->pos.y, (int)g_sim.canBoard(*u, *B)); break; } }
+    CHECK(g_sim.garrisonInfantry(*B) == 52, "52 soldiers walking in did not all get into the bunker");
+    CHECK(g_sim.garrisonDozers(*B) == 2, "two dozers walking in did not both get into the bunker");
     int outside = 0; for (Ref r : all) if (alive(r) && !g_sim.get(r)->carrier.valid()) outside++;
-    CHECK(outside == 3, "two soldiers and one dozer should be left outside a full bunker");
+    CHECK(outside == 0, "somebody was left outside a bunker with room to spare");
+    {   // filled to the brim (put aboard directly): 200 soldiers and 5 dozers, and not one more
+        for (int i = 52; i < BUNKER_INF_CAP; i++) { Ref r = spawnAt(rifle, 0, bp + Vec2(0, 4.0f * TILE)); Entity* u = g_sim.get(r); if (u && g_sim.canBoard(*u, *g_sim.get(bk))) g_sim.boardQuiet(*u, *g_sim.get(bk)); }
+        for (int i = 2; i < BUNKER_DOZER_CAP; i++) { Ref r = spawnAt(dozerMe, 0, bp + Vec2(0, 4.0f * TILE)); Entity* u = g_sim.get(r); if (u && g_sim.canBoard(*u, *g_sim.get(bk))) g_sim.boardQuiet(*u, *g_sim.get(bk)); }
+        Ref xs = spawnAt(rifle, 0, bp + Vec2(0, 4.0f * TILE)), xd = spawnAt(dozerMe, 0, bp + Vec2(TILE, 4.0f * TILE));
+        B = g_sim.get(bk);
+        CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP && BUNKER_INF_CAP == 200, "the bunker does not hold 200 soldiers");
+        CHECK(g_sim.garrisonDozers(*B) == BUNKER_DOZER_CAP && BUNKER_DOZER_CAP == 5, "the bunker does not hold 5 dozers");
+        CHECK(!g_sim.canBoard(*g_sim.get(xs), *B) && !g_sim.canBoard(*g_sim.get(xd), *B), "a full bunker took one more");
+        g_sim.destroy(*g_sim.get(xs), false); g_sim.destroy(*g_sim.get(xd), false);
+    }
     // ---- the garrison fires from the hatch at tanks and at aircraft (rocket troopers); the surface bunker stays visible
     Ref tk = spawnAt(tankFoe, 1, bp + Vec2(5 * TILE, 0));
     Ref air = spawnAt(vultureFoe, 1, bp + Vec2(-4 * TILE, 2 * TILE)); if (Entity* a = g_sim.get(air)) { a->alt = 1; a->order = O_IDLE; }
@@ -204,18 +214,26 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     CHECK(!alive(tk) || hpOf(tk) < tk0 * 0.8f, "the garrison did not shoot an enemy tank");
     CHECK(!alive(air) || hpOf(air) < air0 * 0.9f, "the rocket troopers in the bunker did not shoot an aircraft");
     CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "a bunker firing its guns should stay plainly visible");
-    // ---- a nuke wrecks the hatch and hurts the bunker, but the garrison inside is untouched (the hatch guns fall silent)
+    // ---- three direct nukes wreck the hatch and scrape the bunker, but the garrison inside is untouched (the hatch guns fall silent)
     Ref tk2 = spawnAt(tankFoe, 1, bp + Vec2(12 * TILE, 0));
-    g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false});
+    for (int k = 0; k < 3; k++) g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false});
     run(0.2f); g_sim.fallouts.clear();
-    CHECK(alive(bk), "a single nuke destroyed an underground bunker outright");
+    CHECK(alive(bk), "three nukes destroyed an underground bunker outright");
     B = g_sim.get(bk);
-    CHECK(B->hatch <= 0, "a nuke left the surface hatch intact");
-    CHECK(B->hp < B->maxHp, "a nuke did not hurt the bunker at all");
+    CHECK(B->hatch <= 0, "three direct nukes left the surface hatch intact");
+    CHECK(B->hp < B->maxHp && B->hp > B->maxHp * 0.8f, "three nukes did not just scrape the bunker");
     CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP, "a nuke killed soldiers sheltering underground");
     Ref tk3 = spawnAt(tankFoe, 1, bp + Vec2(4 * TILE, 3 * TILE));
-    float t30 = hpOf(tk3); run(8);
-    CHECK(alive(tk3) && hpOf(tk3) >= t30, "a garrison fired with the hatch blown off");
+    {   // (the pop-up rocket pod still answers the tank: only the garrison and the hatch guns are silenced, so watch the hatch's own fire)
+        bool fired = false;
+        for (int t = 0; t < 8 * SIM_HZ; t++) {
+            g_sim.step(); g_sim.events.clear();
+            Entity* bb = g_sim.get(bk);
+            if (bb && bb->hatch <= 0 && (bb->cooldown2 > 0.55f || bb->gunCd[0] > WEAPONS[W_BUNKER_MINIGUN].cooldown * 0.5f)) fired = true;
+        }
+        CHECK(!fired, "a garrison fired with the hatch blown off");
+    }
+    (void)tk3;
     // ---- a dozer inside patches the hatch and the garrison is back in action
     run(30);
     B = g_sim.get(bk);
@@ -224,12 +242,13 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     float t31 = hpOf(tk4); run(10);
     CHECK(!alive(tk4) || hpOf(tk4) < t31, "the garrison did not resume fire after the hatch was patched");
     (void)tk2;
-    // ---- repeated warheads destroy a bunker: nukes ignore the floor, so a barrage brings it down and the garrison spills out
+    // ---- a barrage of some 20-30 warheads destroys a bunker (nukes ignore the floor) and the garrison spills out
     {
         int shells = 0;
-        while (alive(bk) && shells < 10) { g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false}); run(0.2f); g_sim.fallouts.clear(); shells++; }
-        CHECK(!alive(bk), "repeated nukes could not destroy the bunker");
-        CHECK(shells <= 6, "a bunker withstood too many warheads");
+        while (alive(bk) && shells < 40) { g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false}); run(0.2f); g_sim.fallouts.clear(); shells++; }
+        CHECK(!alive(bk), "a long barrage of nukes could not destroy the bunker");
+        if (shells < 18 || shells > 32) fprintf(stderr, "stealthtest: the bunker fell to warhead %d\n", shells);
+        CHECK(shells >= 18 && shells <= 32, "a bunker did not take some 20-30 warheads to destroy");
     }
     int exposed = 0; for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) exposed++;
     CHECK(exposed >= 40, "the garrison did not spill out onto the ground when nukes destroyed the bunker");
@@ -553,14 +572,16 @@ static bool bunkerFloorTest(Faction me, Faction foe, u64 seed) {
     // (the contract is that the bunker stops being its target; with the field this close to a corner base the gunship may
     // legitimately pick a fight with the enemy HQ in its sight instead — that is not it hovering over the bunker)
     CHECK(alive(heli) && g_sim.get(heli)->targetEnt != bk, "a gunship kept attacking a bunker it can no longer hurt");
+    B = g_sim.get(bk); B->hp = B->maxHp * BUNKER_FLOOR; B->lastDamaged = g_sim.time;   // (it mends a little: back at its floor, just hit)
     float floorHp = g_sim.get(bk)->hp;
     g_sim.cmdAttack({heli}, bk);
     run(2);
     CHECK(g_sim.get(heli)->targetEnt != bk, "a gunship was ordered onto a bunker it cannot hurt and stayed on it");
-    CHECK(g_sim.get(bk)->hp == floorHp, "a gunship damaged a bunker below its floor");
-    // ---- a tank on the ground still grinds the bunker below the floor
-    Ref tank = spawnAt(tankMe, 0, bp + Vec2(3 * TILE, 0));
-    g_sim.cmdAttack({tank}, bk);
+    CHECK(g_sim.get(bk)->hp >= floorHp, "a gunship damaged a bunker below its floor");
+    // ---- tanks on the ground still grind the bunker below the floor (outpacing the trickle it mends under fire)
+    std::vector<Ref> tanks;
+    for (int k = 0; k < 4; k++) tanks.push_back(spawnAt(tankMe, 0, bp + Vec2(3 * TILE, (k - 1.5f) * TILE)));
+    g_sim.cmdAttack(tanks, bk);
     run(12);
     CHECK(!alive(bk) || g_sim.get(bk)->hp < floorHp, "a tank could not hurt a bunker at its floor");
     printf("stealthtest %s: bunker floor ok\n", FACTION_NAME[me]);
@@ -587,13 +608,14 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(earned >= BUNKER_INCOME * 11 && earned <= BUNKER_INCOME * 13, "a lone bunker did not earn about one payout every five seconds");
     CHECK(g_sim.players[0].mined == earned, "a bunker's income is not counted as mined money");
     CHECK(BUNKER_INCOME < INCOME_CLANKER / 4, "a bunker should earn only a little");
-    // ---- it mends itself, slowly: not while it is being hit, then a small share of its health per second
+    // ---- it mends itself: a little while it is being hit (BUNKER_REGEN_HOT), then fast once left alone
     B->hp = B->maxHp * 0.5f; B->lastDamaged = g_sim.time;
     run(BUNKER_REGEN_DELAY - 1.0f);
-    CHECK(B->hp == B->maxHp * 0.5f, "a bunker mended while it was still under fire");
+    float hot = (B->hp - B->maxHp * 0.5f) / B->maxHp;
+    CHECK(hot > 0 && hot * B->maxHp < BUNKER_REGEN_HOT * (BUNKER_REGEN_DELAY - 1.0f) * 1.5f, "a bunker under fire did not mend at its reduced rate");
     run(21);
     float gain = (B->hp - B->maxHp * 0.5f) / B->maxHp;
-    CHECK(gain > BUNKER_REGEN * 16 && gain < BUNKER_REGEN * 22, "a bunker did not mend by itself at its slow rate");
+    CHECK(gain > BUNKER_REGEN * 16 && gain < BUNKER_REGEN * 22, "a bunker did not mend by itself at its own rate");
     B->hatch = 1000; run(10);
     CHECK(B->hatch > 1000 + B->hatchMax * BUNKER_HATCH_REGEN * 8 && B->hatch < 1000 + B->hatchMax * BUNKER_HATCH_REGEN * 12, "a damaged hatch did not mend by itself");
     // ---- a blown hatch silences the miniguns; the bunker refits it after a while without any help

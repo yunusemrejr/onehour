@@ -172,7 +172,7 @@ Entity* Sim::riotPickTarget(Riot& r, Vec2 from) {
         if (!e.alive || !e.isBuilding() || e.owner != r.victim || invulnerable(e)) continue;
         if (r.city != (e.district >= 0)) continue;
         if (districtRuin(e) && e.progress < DISTRICT_RUIN_SAFE) continue;
-        if (Sim::hardened(e) && e.hatch <= 0 && e.hp <= e.maxHp * BUNKER_FLOOR + 1.0f) continue;
+        if (Sim::hardened(e) && e.hatch <= 0 && e.hp <= e.maxHp * (BUNKER_FLOOR + BUNKER_FLOOR_MARGIN) + 1.0f) continue;
         float s = dist(e.pos, from) / TILE;
         if (!r.city) {
             BuildRole role = e.bt().role;

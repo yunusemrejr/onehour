@@ -156,6 +156,13 @@ struct Entity {
     float pdAt = 0;                   // anti-nuke / Anti-Rocket wall: cooldown for aircraft and projectile point-defence
     bool surrounded = false;          // bunker: enemy forces currently surround it (activates overdrive guns and radiation defense)
     float guardHitAt = -100;          // bunker: the last time a friendly structure it watches over was hit (its pod and guns answer that too)
+    u8 bunkerUpg = 0;                 // bunker: the upgrades fitted to this bunker alone (bit 1 << BunkerUpg) ...
+    int bunkerBusy = -1;              // ... the one being fitted now (-1: none) and how far along it is (0..1)
+    float bunkerProgress = 0;
+    float paraReady = 0;              // ... sim time its Para Backup can be called again (BU_PARA)
+    float lzCd[2] = {0, 0}, lzAng[2] = {0, 0};   // ... its laser battery's two roof lasers (BU_LASERS): cooldown, facing and target
+    Ref lzTgt[2];
+    float lzFired = -10;              // ... when one of them last fired (the emitters glow for a moment)
     float dozerAt = 0;                // civilian structure: sim time its next free dozer comes out ...
     u8 dozerKind = 0;                 // ... and which kind: 0 a military dozer, 1 a civilian one (they take turns)
     u32 mendTick = 0;                 // the last tick a Healing Antenna mended it (antennas do not stack: one pulse per tick, see updateHealAntenna)
@@ -296,14 +303,17 @@ struct Sim {
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; Ref source; bool super = false; };   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; Ref source; bool super = false; bool swift = false; };   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
                                           // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
     static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
     std::vector<Nuke> nukes;
+    bool anyBunkerLasers = false;   // a bunker's laser battery was fitted this match: only then is every rocket and shell checked against them (bunkerLaserIntercept)
     static constexpr float NUKE_FLIGHT = 7.0f;
-    static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : NUKE_FLIGHT; }   // seconds from launch to impact (a Super Nuke is much faster)
+    static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : (n.swift ? NUKE_FLIGHT * BUNKER_SWIFT_FLIGHT : NUKE_FLIGHT); }   // seconds from launch to impact (a Super Nuke is much faster)
+    // Share of a defence's usual chance to shoot this warhead down: the silver casing halves it, a Super Nuke's is a tenth, a swift bunker missile's 30%
+    static float nukeResist(const Nuke& n) { return (n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f)) * (n.swift ? BUNKER_SWIFT_RESIST : 1.0f); }
     int nukeSeq = 0;
     int fxTagSeq = 0;   // handles into Sim::fx (a fallout zone shrinks its own haze as an Anti-Radiation Truck scrubs it)
     // The air position of a warhead t seconds into its flight: a long arc over the ground line from the ramp to the target (the renderer draws the missile here too).
@@ -425,6 +435,8 @@ struct Sim {
     void cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius);
     void cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius);   // guard for fighters, gather for haulers
     bool cmdBuild(Ref dozer, int buildType, int tx, int ty);  // places a foundation and sends the dozer (a Waymaker needs no dozer: it clears its ground itself)
+    int cmdBuildLine(const std::vector<Ref>& dozers, int buildType, const std::vector<std::pair<int, int>>& spots);   // a whole line of foundations at once (shift-drag), shared out among the dozers
+    bool waymakerClears(int player, int i, int j) const;   // a tile a Waymaker of this player would clear (explored tree, rock or ridge, nothing built on it)
     bool waymakerFits(int player, int tx, int ty, int w, int h) const;   // explored land a Waymaker may clear, with something on it to clear
     void cmdAssist(const std::vector<Ref>& sel, Ref building); // dozer: continue construction or repair
     bool cmdTrain(Ref building, int unitType);
@@ -482,6 +494,13 @@ struct Sim {
     static bool canMend(const Entity& dozer, int buildType);    // civilian dozers mend only the town; the others mend anything
     int civicPeople(const Entity& b) const;   // townsfolk walking about a civilian structure (decoration; 0 for anything else)
     bool cmdMiniNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready bunker's small missile at pos (from that bunker if it is ready)
+    // Per-bunker upgrades (BunkerUpg, sim_bunker.cpp): each bunker is fitted with its own, one at a time, paid when the fitting starts
+    static bool bunkerHas(const Entity& b, int u) { return (b.bunkerUpg >> u) & 1; }
+    bool bunkerUpgAvailable(const Entity& b, int u) const;   // its owner's finished bunker, without it and with nothing else being fitted
+    bool cmdBunkerUpgrade(Ref bunker, int u);
+    bool cmdBunkerPara(Ref bunker, Vec2 pos, bool attackOn = false);   // BU_PARA: a cargo plane drops BUNKER_PARA_TROOPS paratroopers at pos
+    std::vector<int> bunkerParaManifest(int player) const;   // the infantry such a drop carries (what the army has unlocked; never infiltrators)
+    float bunkerParaWait(const Entity& b) const;             // seconds until it can call one (0 ready, -1 not fitted)
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
     bool cmdPhoneStrike(int player, Vec2 pos);   // tech structure: call in a strike package on a spot of your choice (see PhoneStrike)
     int strikesReady(int player) const;          // tech structures that can take a call right now
@@ -532,6 +551,7 @@ struct Sim {
     float miniNukeWait(int player) const;     // seconds until the soonest bunker missile is ready (0 = ready, -1 = no bunker)
     Vec2 bunkerGunPos(const Entity& b, int i) const;   // where each of a bunker's two miniguns sits (world px)
     Vec2 bunkerOverdrivePos(const Entity& b, int i) const;   // where each of a bunker's two overdrive laser/heavy-MG mounts sits (world px)
+    Vec2 bunkerLaserPos(const Entity& b, int i) const;   // ... and of a laser battery's two roof lasers (BU_LASERS)
     bool bunkerSurrounded(const Entity& b, int* countOut = nullptr);
     void updateBunkerAntiNuke(Entity& b, bool surrounded);
     void updateScoutSwarm(Entity& e);
@@ -639,6 +659,7 @@ private:
     void breakNuke(Nuke& n);                             // a warhead shot down: the airburst, and only its pieces fall on the target now
     void updateInterceptors();
     bool interceptProjectile(Projectile& p);             // a protector drone shoots a rocket or shell aimed at its host down (true: it did)
+    bool bunkerLaserIntercept(Projectile& p);            // ... or a bunker's laser battery burns it (BU_LASERS)
     void updateJeep(Entity& jeep);                       // the crew mends, climbs out when told to, and fires from the seats
     bool passengersFire(Entity& host, float reachTiles); // every passenger shoots its own weapon at the best target it can hit from the host; true if anybody fired
     void moveShip(Entity& e, float speed);              // a ship's drive: it turns at a limited rate and builds up speed (the lake has no corners to slip round)
@@ -664,6 +685,9 @@ private:
     void updateRoofGun(Entity& b, bool powered);
     void updateDetection();                              // detectors (spy drones, up-close drones) reveal stealthy enemies to their whole team
     void updateBunkerSelf(Entity& b);                    // the bunker's own business: income, mending, miniguns
+    void bunkerMend(Entity& b);                          // ... its own mending (it goes on while the bunker is knocked offline)
+    void updateBunkerUpgrades(Entity& b);                // ... fitting an upgrade, the laser battery and the field hospital
+    void bunkerNuked(Entity& b, float k, int attackerOwner);   // a warhead's blast at strength k (1: a direct ordinary hit) on a nuclear-hardened bunker
     void updateBunkerWard(Entity& b);                    // the bunker watches over the structures around it: seismic sensors, mending crews
     void updateCivic(Entity& b);                         // a civilian structure: pays its army and sends out a free dozer now and then
     void updateSilo(Entity& b);                          // an Underground Nuke silo mends its body and blast doors when left alone

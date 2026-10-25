@@ -102,6 +102,7 @@ Vec2 Sim::dronePosAt(const Entity& e, int i, float t) const {
 bool Sim::interceptProjectile(Projectile& p) {
     const Weapon& w = WEAPONS[p.weapon];
     if (w.proj != PJ_ROCKET && w.proj != PJ_SHELL && w.proj != PJ_BOMB) return false;   // (bombs are loosed, not fired, but a point defence burns them too)
+    if (bunkerLaserIntercept(p)) return true;
     Entity* h = get(p.target);
     if (w.proj == PJ_ROCKET && h && h->isBuilding() && h->constructed && h->bt().role == BR_BUNKER && h->hatch > 0 && h->disabledUntil <= time) {   // the hatch guns and overdrive lasers of a bunker swat rockets
         float range = (h->surrounded ? BUNKER_CIWS_RANGE + 1.5f : BUNKER_CIWS_RANGE) * TILE + h->radius();
@@ -367,7 +368,7 @@ void Sim::updateAntiNuke(Entity& b) {
         n.engagedBy.push_back(self);
         int shots = cy ? 3 + linked : 2;
         while (shots > 1 && (shots - 1) * gap + flight > left - 0.2f) shots--;
-        float resist = n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f);   // (the silver casing is armoured: harder to shoot down; a Super Nuke five times harder still)
+        float resist = nukeResist(n);   // (the silver casing is armoured: harder to shoot down; a Super Nuke five times harder still; a swift bunker missile too)
         int winner = rng.f() < antiNukeWarheadShot(b) * resist ? rng.range(0, shots - 1) : -1;
         b.siloTimer = time + (cy ? (shots - 1) * gap + flight + ANTINUKE_LASER_RECHARGE : ANTINUKE_RELOAD);
         Vec2 muzzle = b.pos + Vec2(0, cy ? -22.0f : -8.0f);
@@ -891,14 +892,25 @@ void Sim::updateStrikeMarks() {
 }
 
 // ------------------------------------------------------------ Waymakers
-// Explored land, none of it water, a bridge deck, a structure or a supply pile, and something on it worth clearing (a tree, rock, a ridge)
+// A Waymaker sorts out its own footprint: the trees, rock and ridge on explored land are what it clears; a structure, water, a bridge deck or a
+// supply pile under part of it is simply left alone (so it can be laid right up against a base, over a building's corner and the wood behind
+// it). It fits wherever at least one tile is worth clearing that no other Waymaker at work already has.
+bool Sim::waymakerClears(int player, int i, int j) const {
+    return inMap(i, j) && g_map.wayTile(i, j) && (g_map.blocked[j * MAP_W + i] & 1) && exploredRaw(player, i, j);
+}
+
 bool Sim::waymakerFits(int player, int tx, int ty, int w, int h) const {
+    if (!inMap(tx + w / 2, ty + h / 2)) return false;
     int rough = 0;
-    for (int j = ty; j < ty + h; j++) for (int i = tx; i < tx + w; i++) {
-        if (!g_map.wayTile(i, j) || !exploredRaw(player, i, j)) return false;
-        if (g_map.blocked[j * MAP_W + i] & 1) rough++;
+    for (int j = ty; j < ty + h; j++) for (int i = tx; i < tx + w; i++) if (waymakerClears(player, i, j)) rough++;
+    if (rough == 0) return false;
+    for (auto& e : ents) {   // (tiles another Waymaker is already grinding do not count)
+        if (!e.alive || !e.isBuilding() || e.bt().role != BR_WAYMAKER) continue;
+        int x0 = std::max(tx, e.tx), y0 = std::max(ty, e.ty), x1 = std::min(tx + w, e.tx + e.bt().w), y1 = std::min(ty + h, e.ty + e.bt().h);
+        for (int j = y0; j < y1; j++) for (int i = x0; i < x1; i++) if (waymakerClears(player, i, j)) rough--;
+        if (rough <= 0) return false;
     }
-    return rough > 0;
+    return true;
 }
 
 // The machine grinds its patch flat (dust and grit fly while the bar fills), then the ground is open earth and the Waymaker is gone
@@ -914,8 +926,12 @@ void Sim::updateWaymaker(Entity& b) {
     if (b.progress < 1.0f) return;
     int tx = b.tx, ty = b.ty, owner = b.owner;
     Vec2 at = b.pos;
-    destroy(b, false);   // (lifts its structure mark off the ground first)
-    int opened = g_map.clearWay(tx, ty, bt.w, bt.h);
+    std::vector<u8> mine((size_t)bt.w * bt.h);   // what its owner can see of the patch is what it clears (it never reveals or cuts unexplored ground)
+    for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) mine[j * bt.w + i] = owner < 0 || exploredRaw(owner, tx + i, ty + j);
+    destroy(b, false);
+    int opened = 0;
+    for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) if (mine[j * bt.w + i]) opened += g_map.clearWayTile(tx + i, ty + j);
+    g_map.clearWayDone();
     for (int k = 0; k < 8; k++) { Vec2 q = at + Vec2(rng.f(-40, 40), rng.f(-34, 34)); fx.push_back({FX_SMOKE, q, q, -rng.f(0, 0.3f), 2.2f, rgb(170, 152, 124), rng.f(12, 20), Vec2(rng.f(-12, 12), -rng.f(4, 14))}); }
     if (owner >= 0) emit(EV_MSG, owner, SND_BUILD_DONE, at, opened > 0 ? "Waymaker: the way is clear" : "Waymaker: nothing left to clear");
 }

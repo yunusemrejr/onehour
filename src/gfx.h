@@ -98,6 +98,7 @@ struct Gfx {
     Sprite turretHead[4];           // laser turret, gun nest, patriot, rocket battery
     Sprite building[B_COUNT];       // one colour sprite per structure type, shared by every owner (2x supersampled, shadow baked in)
     Sprite buildingTeam[B_COUNT];   // white-on-clear owner marks, drawn over the structure with the owner's colour modulated in
+    Sprite bunkerUpg[F_COUNT][BU_COUNT];   // per-bunker upgrades painted alone, drawn over a bunker that has them (same anchor as its sprite)
     Sprite site[B_COUNT];
     Sprite armed[B_COUNT];          // the warhead over a nuke ramp (only the nuke ramps have one)
     Sprite rubble[7];               // scorched ruins by footprint class

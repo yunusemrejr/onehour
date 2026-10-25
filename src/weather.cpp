@@ -536,6 +536,11 @@ Color Game::ambientTint() const {
     }
     float w = weather.rain;   // clouds and rain: greyer and dimmer
     cr *= 1 - 0.20f * w; cg *= 1 - 0.16f * w; cb *= 1 - 0.08f * w;
+    if (g_sim.numPlayers > 0 && g_sim.revealed(g_sim.humanPlayer)) {   // a scan is running: the satellite / spotter picture is light-amplified, near daylight at any hour
+        const Player& hp = g_sim.players[g_sim.humanPlayer];
+        float k = 0.85f * clampf((hp.revealUntil - g_sim.time) / 1.5f, 0, 1) * clampf((g_sim.time - (hp.revealUntil - SCANS[hp.faction].duration)) / 1.5f, 0, 1);   // (eased in and out)
+        cr += (1 - cr) * k; cg += (1 - cg) * k; cb += (0.98f - cb) * k;
+    }
     return rgb((int)clampf(cr * 255, 0, 255), (int)clampf(cg * 255, 0, 255), (int)clampf(cb * 255, 0, 255));
 }
 

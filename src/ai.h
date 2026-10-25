@@ -22,9 +22,10 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
               FEAT_EASYWIT = 0x800000,   // an Easy commander plays sensibly (dodges nukes late, leaves radiation, helps allies, breaks off a lost attack,
                                          // uses its tech structure's powers); its economy, army size and reaction times stay Easy's
               FEAT_COMBO = 0x1000000,    // Hard and Brutal: combined arms - an Air Strike goes in on the objective's defences as a wave sets off
-              FEAT_ALL = 0x1FFFFFF,
+              FEAT_BUNKERUP = 0x2000000, // Normal and up: the bunkers' own upgrades bought when the money is there (shell and lasers first), Para Backup called
+              FEAT_ALL = 0x3FFFFFF,
     FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER
-                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA | FEAT_FLEET2 | FEAT_HOLD | FEAT_FLEETCALL | FEAT_EASYWIT | FEAT_COMBO };   // what ships
+                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA | FEAT_FLEET2 | FEAT_HOLD | FEAT_FLEETCALL | FEAT_EASYWIT | FEAT_COMBO | FEAT_BUNKERUP };   // what ships
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they

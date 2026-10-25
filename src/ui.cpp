@@ -8,7 +8,9 @@ Game g_game;
 enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF, BK_MININUKE, BK_AIRSTRIKE, BK_DEEPNUKE,
        BK_ISLANDNUKE,   // an island launcher the army holds: fire its small nuke
        BK_NUKEBOMBER,   // tech structure: call in the Nuclear Bomber
-       BK_FLEET };      // tech structure: Fleet Call
+       BK_FLEET,        // tech structure: Fleet Call
+       BK_BUNKERUPG,    // a bunker's own upgrade (id: BunkerUpg)
+       BK_BUNKERPARA }; // a bunker's Para Backup call
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -33,6 +35,8 @@ static const char* kindHotkey(int kind, int id) {
     case BK_AREA: return "G";
     case BK_FORCE: return "F";
     case BK_UPGRADE: return UPGRADES[0][id].hotkey;   // (the same keys for both armies)
+    case BK_BUNKERUPG: return BUNKER_UPGS[id].hotkey;
+    case BK_BUNKERPARA: return "P";
     }
     return nullptr;
 }
@@ -60,6 +64,8 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_RESEARCH: return ICO_RESEARCH;
     case BK_UNLOAD: return ICO_UNLOAD;
     case BK_DROPOFF: return ICO_DROPOFF;
+    case BK_BUNKERUPG: return ICO_BU_SHELL + id;
+    case BK_BUNKERPARA: return ICO_PARADROP;
     case BK_UPGRADE:
         switch (id) {
         case UPG_RUGGED: return ICO_UP_RUGGED;
@@ -137,7 +143,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -440,6 +446,22 @@ static std::vector<std::string> wrapTip(Gfx& g, const std::string& s, int maxW) 
     return lines;
 }
 
+// The footprints of a shift-dragged line: from the one at (bulkTx, bulkTy) toward the one at (tx1, ty1), stepping a whole footprint at a time
+// along the longer axis (and the other axis when the line slants), so they sit edge to edge and never overlap. 1x1 walls follow the line
+// tile by tile, diagonals included (a diagonal chain still blocks: nothing squeezes between two segments that touch at a corner).
+void Game::bulkSpots(int type, int tx1, int ty1, std::vector<std::pair<int, int>>& out) const {
+    out.clear();
+    const int w = BUILDS[type].w, h = BUILDS[type].h, MAXN = 80;
+    int dx = tx1 - bulkTx, dy = ty1 - bulkTy;
+    int nx = (std::abs(dx) + w / 2) / w, ny = (std::abs(dy) + h / 2) / h;   // whole footprints along each axis
+    int n = std::min(std::max(nx, ny), MAXN - 1);
+    int sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
+    for (int k = 0; k <= n; k++) {
+        int ix = n > 0 ? (nx * k * 2 + n) / (2 * n) : 0, iy = n > 0 ? (ny * k * 2 + n) / (2 * n) : 0;   // (rounded: the steps spread evenly)
+        out.push_back({ bulkTx + sx * ix * w, bulkTy + sy * iy * h });
+    }
+}
+
 // ------------------------------------------------------------ command buttons
 void Game::buildButtons() {
     buildButtonsRaw();
@@ -557,10 +579,23 @@ void Game::buildButtonsRaw() {
             float mw = g_sim.miniNukeWait(g_sim.humanPlayer);
             snprintf(tip, sizeof tip, "Launch Mini Nuke  [K]  A bunker's own missile, a fifth of a full warhead (%.1f tile radius, same strength per spot, leaves radiation). Needs no power or ramp; one per bunker every %d s%s", NUKE_RADIUS * std::sqrt(MINI_NUKE_SCALE), (int)MINI_NUKE_COOLDOWN, mw > 0 ? "  (reloading)" : "");
             add(BK_MININUKE, 0, g_sim.miniNukesReady(g_sim.humanPlayer) > 0, "Mini Nuke", tip);
-            snprintf(tip, sizeof tip, "Unload  [U]  Everybody climbs out onto the ground (%d soldiers, %d dozer inside)", g_sim.garrisonInfantry(*b), g_sim.garrisonDozers(*b));
+            snprintf(tip, sizeof tip, "Unload  [U]  Everybody climbs out onto the ground (%d of %d soldiers, %d of %d dozers inside)", g_sim.garrisonInfantry(*b), BUNKER_INF_CAP, g_sim.garrisonDozers(*b), BUNKER_DOZER_CAP);
             add(BK_UNLOAD, 0, !b->passengers.empty(), "Unload", tip);
             add(BK_RALLY, 0, true, "Rally", "Set the point soldiers walk to when they climb out (right-click ground while selected)");
             add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
+            if (b->owner != g_sim.humanPlayer) return;
+            for (int u = 0; u < BU_COUNT; u++) {   // this bunker's own upgrades (none of them carries over to another bunker); fitted ones leave the bar
+                const BunkerUpgType& ug = BUNKER_UPGS[u];
+                if (Sim::bunkerHas(*b, u)) continue;
+                if (b->bunkerBusy == u) snprintf(tip, sizeof tip, "%s: fitting (%d%%). %s", ug.name, (int)(b->bunkerProgress * 100), ug.desc);
+                else snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s. For THIS bunker only (%d s to fit, one fitting at a time)%s", ug.name, ug.cost, ug.hotkey, ug.desc, (int)ug.time, b->bunkerBusy >= 0 ? "  (busy fitting another upgrade)" : "");
+                add(BK_BUNKERUPG, u, g_sim.bunkerUpgAvailable(*b, u) && g_sim.canAfford(g_sim.humanPlayer, ug.cost), ug.name, tip);
+            }
+            if (Sim::bunkerHas(*b, BU_PARA)) {
+                float pw = g_sim.bunkerParaWait(*b);
+                snprintf(tip, sizeof tip, "Call Para Backup  [P]  A cargo plane drops %d paratroopers on the spot you pick (%s). Once a minute per bunker%s", BUNKER_PARA_TROOPS, rosterText(g_sim.bunkerParaManifest(g_sim.humanPlayer), 110).c_str(), pw > 0 ? "  (reloading)" : "");
+                add(BK_BUNKERPARA, 0, pw <= 0 && b->disabledUntil <= g_sim.time, "Call Paratroops", tip);
+            }
             return;
         }
         if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY || role == BR_NAVAL) add(BK_RALLY, 0, true, "Rally", role == BR_NAVAL ? "Set the point ships sail to (right-click the lake while the yard is selected)" : "Set rally point (right-click ground while selected)");
@@ -632,7 +667,7 @@ bool Game::launchNuke(Vec2 at) {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; bulkDrag = false; paraBunker = NOREF;
 }
 
 void Game::clickButton(const Button& b) {
@@ -667,6 +702,13 @@ void Game::cmdSelection(int kind, int id) {
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_UPGRADE: if (g_sim.cmdUpgrade(g_sim.humanPlayer, id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_BUNKERUPG: { Entity* b = selectedBuilding(); if (b && g_sim.cmdBunkerUpgrade(g_sim.refOf(*b), id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break; }
+    case BK_BUNKERPARA: {
+        Entity* b = selectedBuilding();
+        if (b && b->bt().role == BR_BUNKER && g_sim.bunkerParaWait(*b) == 0) { Ref r = g_sim.refOf(*b); cancelModes(); dropMode = true; paraBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
+        else g_audio.play(SND_CANT, Vec2(), true);
+        break;
+    }
     case BK_ATTACKMOVE: attackMoveMode = true; forceMode = false; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_FORCE: cancelModes(); forceMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_AREA: areaMode = true; areaDrag = false; placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
@@ -865,7 +907,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) { powerMode = false; forceLatch = false; } }
                 else if (nukeMode) { if (launchNuke(wp)) { nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; forceLatch = false; } }
                 else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
-                else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
+                else if (dropMode) { if (paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, wp) : g_sim.cmdParadrop(g_sim.humanPlayer, wp)) { dropMode = false; paraBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, wp)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, wp)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, wp)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
@@ -889,6 +931,7 @@ void Game::gameEvent(const SDL_Event& e) {
         if (btn == SDL_BUTTON_LEFT) {
             if (placingType >= 0) {
                 int tx = tileOf(w.x) - BUILDS[placingType].w / 2, ty = tileOf(w.y) - BUILDS[placingType].h / 2;
+                if (SDL_GetModState() & KMOD_SHIFT) { bulkDrag = true; bulkTx = tx; bulkTy = ty; return; }   // shift: drag out a line of them, placed when the button comes up
                 Ref dozer;
                 bool way = BUILDS[placingType].role == BR_WAYMAKER;   // (any military dozer places one: it clears its ground by itself)
                 for (auto r : selection) { Entity* d = g_sim.get(r); if (d && d->isUnit() && d->ut().role == UR_DOZER && (way ? !civicDozerType(d->type) : Sim::canRaise(*d, placingType))) { dozer = r; break; } }
@@ -898,7 +941,7 @@ void Game::gameEvent(const SDL_Event& e) {
             }
             if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) { powerMode = false; forceLatch = false; } else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; forceLatch = false; return; }
-            if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (dropMode) { if (paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, w) : g_sim.cmdParadrop(g_sim.humanPlayer, w)) { dropMode = false; paraBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, w)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, w)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, w)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
@@ -924,6 +967,17 @@ void Game::gameEvent(const SDL_Event& e) {
     }
     if (e.type == SDL_MOUSEBUTTONUP) {
         if (e.button.button == SDL_BUTTON_MIDDLE) midDrag = false;
+        if (e.button.button == SDL_BUTTON_LEFT && bulkDrag) {
+            bulkDrag = false;
+            if (placingType >= 0) {
+                std::vector<std::pair<int, int>> spots;
+                bulkSpots(placingType, tileOf(w.x) - BUILDS[placingType].w / 2, tileOf(w.y) - BUILDS[placingType].h / 2, spots);
+                int n = g_sim.cmdBuildLine(selection, placingType, spots);
+                if (n <= 0) g_audio.play(SND_CANT, Vec2(), true);
+                else if (n > 1) { char m[64]; snprintf(m, sizeof m, "%d x %s placed", n, BUILDS[placingType].name); addMessage(m, hudDim()); }
+                if (n > 0 && !(SDL_GetModState() & KMOD_SHIFT) && BUILDS[placingType].role != BR_WAYMAKER) placingType = -1;   // (still holding shift: keep laying lines)
+            }
+        }
         if (e.button.button == SDL_BUTTON_LEFT && areaDrag) {
             float r = areaRadius >= 24 ? areaRadius : AREA_DEFAULT_R;
             applyArea(areaStart, r);
@@ -1031,14 +1085,13 @@ void Game::renderMenu() {
 void Game::drawShroud() {
     Gfx& g = g_gfx;
     if (g_sim.revealed(g_sim.humanPlayer)) {
-        // scan running: no shroud, a faint tint and a sweeping scan line instead
+        // scan running: no shroud and no tint over the picture (it is lit as if by day, see ambientTint), only a thin sweep line, and a
+        // blinking frame for the last ten seconds
         Color ac = hudAccent(g_sim.players[g_sim.humanPlayer].faction);
         float left = g_sim.players[g_sim.humanPlayer].revealUntil - g_sim.time;
-        u8 a = (u8)(left < 5.0f ? 10 + (int)(14 * (0.5f + 0.5f * std::sin(wallTime * 12.0f))) : 18);
-        g.fill(0, 0, SCREEN_W, VIEW_H, Color{ac.r, ac.g, ac.b, a});
-        float sweep = std::fmod(wallTime * 0.45f, 1.0f) * VIEW_H;
-        g.fill(0, (int)sweep, SCREEN_W, 2, Color{ac.r, ac.g, ac.b, 70});
-        g.fill(0, (int)sweep - 6, SCREEN_W, 6, Color{ac.r, ac.g, ac.b, 18});
+        float sweep = std::fmod(wallTime * 0.30f, 1.0f) * VIEW_H;
+        g.fill(0, (int)sweep, SCREEN_W, 1, Color{ac.r, ac.g, ac.b, 60});
+        if (left < 10.0f && ((int)(wallTime * 3.0f) & 1)) { Color fc{ac.r, ac.g, ac.b, 150}; g.fill(0, 0, SCREEN_W, 2, fc); g.fill(0, VIEW_H - 2, SCREEN_W, 2, fc); g.fill(0, 0, 2, VIEW_H, fc); g.fill(SCREEN_W - 2, 0, 2, VIEW_H, fc); }
         return;
     }
     // the fog of war in three levels per tile: never seen, remembered (explored, nobody there now), in sight. The mask is rebuilt (only where it
@@ -1453,19 +1506,27 @@ void Game::drawEntity(Entity& e) {
             }
         } else {
             g.draw(s, p.x, p.y, 0, 1, tint);
+            if (bt.role == BR_BUNKER) for (int u = 0; u < BU_COUNT; u++) {   // its own upgrades, each a part fitted to the apron (the one being fitted fades in as the work goes on)
+                const Sprite& us = g.bunkerUpg[bt.faction][u];
+                if (!us.tex) continue;
+                if (Sim::bunkerHas(e, u)) g.draw(us, p.x, p.y, 0, 1, tint);
+                else if (e.bunkerBusy == u) g.draw(us, p.x, p.y, 0, 1, mix(tint, rgb(255, 226, 150), 0.45f), (u8)clampf(50.0f + 150.0f * e.bunkerProgress + 25.0f * std::sin(wallTime * 6.0f), 0, 255));
+            }
             if (bt.role == BR_BUNKER) {   // the surface hatch: two steel leaves that lie flat; blown off, only a scorched hole remains. Its health shows as the rim light
                 float hf = e.hatchMax > 0 ? e.hatch / e.hatchMax : 0;
                 Vec2 hc = p;
-                if (hf <= 0) { g.fillCircle(hc.x, hc.y, 15.0f, rgb(22, 20, 18)); g.fillCircle(hc.x, hc.y, 11.0f, rgb(8, 8, 8)); g.circle(hc.x, hc.y, 15.0f, rgb(90, 76, 60), 20); }
+                const float R = BUNKER_HATCH_R * bt.w / 3.0f;
+                if (hf <= 0) { g.fillCircle(hc.x, hc.y, R, rgb(22, 20, 18)); g.fillCircle(hc.x, hc.y, R * 0.73f, rgb(8, 8, 8)); g.circle(hc.x, hc.y, R, rgb(90, 76, 60), 24); }
                 else {
                     bool firing = e.cooldown2 > 0;   // the garrison is shooting: the leaves stand open
-                    float open = firing ? 3.0f : 0.0f;
-                    g.fillCircle(hc.x, hc.y, 15.0f, rgb(46, 50, 56));
-                    g.fillCircle(hc.x - open, hc.y, 13.0f, rgb(138, 146, 154)); g.fillCircle(hc.x - open - 1, hc.y - 1, 10.5f, rgb(176, 184, 192));
-                    g.fill((int)(hc.x - 13), (int)(hc.y - 1), 26, 2, rgb(40, 44, 48));
-                    if (open > 0) { g.fill((int)(hc.x - 4), (int)(hc.y - 12), 8, 24, rgb(14, 14, 16)); g.glowAdd(hc.x, hc.y, 12, Color{255, 180, 80, 70}); }
+                    float open = firing ? R * 0.2f : 0.0f;
+                    g.fillCircle(hc.x, hc.y, R, rgb(46, 50, 56));
+                    g.fillCircle(hc.x - open, hc.y, R * 0.87f, rgb(138, 146, 154)); g.fillCircle(hc.x - open - 1, hc.y - 1, R * 0.7f, rgb(176, 184, 192));
+                    for (int k = 0; k < 8; k++) { float an = k * 0.7854f + 0.39f; g.fillCircle(hc.x - open + std::cos(an) * R * 0.78f, hc.y + std::sin(an) * R * 0.78f, 1.2f, rgb(96, 102, 110)); }   // the leaves' bolts
+                    g.fill((int)(hc.x - R * 0.87f), (int)(hc.y - 1), (int)(R * 1.74f), 2, rgb(40, 44, 48));
+                    if (open > 0) { g.fill((int)(hc.x - R * 0.27f), (int)(hc.y - R * 0.8f), (int)(R * 0.54f), (int)(R * 1.6f), rgb(14, 14, 16)); g.glowAdd(hc.x, hc.y, R * 0.8f, Color{255, 180, 80, 70}); }
                     Color rim = hf > 0.6f ? hudAccent(bt.faction) : (hf > 0.3f ? rgb(240, 200, 60) : rgb(230, 70, 60));
-                    g.circle(hc.x, hc.y, 15.0f, rim, 24);
+                    g.circle(hc.x, hc.y, R, rim, 28);
                 }
             }
             if (g.buildingTeam[e.type].tex) { Color tc = e.owner < 0 ? rgb(206, 200, 180) : playerColor(owner); if (disabled) tc = mix(tc, rgb(120, 140, 170), 0.5f); g.draw(g.buildingTeam[e.type], p.x, p.y, 0, 1, tc); }
@@ -1482,8 +1543,39 @@ void Game::drawEntity(Entity& e) {
                     g.fill(mx - 1, my - 3, 3, 3, hudAccent(bt.faction));
                 }
             }
+            if (bt.role == BR_BUNKER && e.constructed) {   // live parts of its upgrades: the laser heads turning, the hospital beacon, the tubes' ready lights, the mast's warning light
+                const float k = bt.w * TILE / 96.0f;
+                if (Sim::bunkerHas(e, BU_LASERS)) {
+                    Color lc = WEAPONS[W_BUNKER_SKYLASER].color;
+                    bool hot = g_sim.time - e.lzFired < 0.22f && !disabled;
+                    for (int i = 0; i < 2; i++) {
+                        Vec2 lp = p + (g_sim.bunkerLaserPos(e, i) - e.pos), d(std::cos(e.lzAng[i]), std::sin(e.lzAng[i])), sd(-d.y, d.x);
+                        g.fillCircle(lp.x + 1.0f, lp.y + 2.0f, 6.5f, rgb(10, 12, 16, 150));
+                        g.fillCircle(lp.x, lp.y, 5.8f, disabled ? rgb(84, 90, 100) : rgb(170, 180, 194));
+                        g.fillCircle(lp.x - 1.0f, lp.y - 1.0f, 3.6f, disabled ? rgb(100, 106, 116) : rgb(212, 220, 230));
+                        for (int b2 = -1; b2 <= 1; b2 += 2) g.thickLine(lp.x + sd.x * 2.1f * b2, lp.y + sd.y * 2.1f * b2, lp.x + sd.x * 2.1f * b2 + d.x * 12.0f, lp.y + sd.y * 2.1f * b2 + d.y * 12.0f, rgb(40, 46, 58), 2.2f);
+                        g.fillCircle(lp.x, lp.y, 1.8f, disabled ? rgb(80, 90, 100) : lc);
+                        if (hot) g.glowAdd(lp.x + d.x * 12.0f, lp.y + d.y * 12.0f, 9.0f, Color{lc.r, lc.g, lc.b, 170});
+                    }
+                }
+                if (Sim::bunkerHas(e, BU_MEDIC) && !disabled) {   // a green beacon breathing over the hospital, and a faint pulse running out to its reach now and then
+                    float br = 0.5f + 0.5f * std::sin(wallTime * 3.0f + e.gen);
+                    Vec2 mp = p + Vec2(0, (BUNKER_MED_Y - 15.0f) * k);   // (the tip of the hospital's mast in artb_bunker.cpp)
+                    g.glowAdd(mp.x, mp.y, 5.0f + 4.0f * br, Color{110, 255, 150, (u8)(90 + 90 * br)});
+                    float ph = std::fmod(wallTime * 0.45f + e.gen * 0.37f, 1.0f);
+                    if (ph < 0.6f) g.circle(p.x, p.y, BUNKER_MED_RADIUS * TILE * ph / 0.6f, Color{120, 255, 160, (u8)(70 * (1.0f - ph / 0.6f))}, 48);
+                }
+                if (Sim::bunkerHas(e, BU_TRIPLE)) {   // a ready light on each tube lid: green when the launch is ready, amber while it reloads
+                    bool rdy = g_sim.time >= e.siloTimer && !disabled;
+                    for (int t = -1; t <= 1; t++) { Vec2 q = p + Vec2(t * BUNKER_SILO_X, BUNKER_SILO_Y) * k; g.fillCircle(q.x + 3.5f, q.y - 3.5f, 1.3f, rdy ? rgb(120, 255, 120) : rgb(255, 176, 60)); }
+                }
+                if (Sim::bunkerHas(e, BU_PARA) && ((int)(wallTime * 1.6f + e.gen) & 1)) {   // the aviation light on the radio mast (and its call is ready: steady white under it)
+                    Vec2 q = p + Vec2(BUNKER_MAST_X * k, -33.5f * k);   // (the top of the radio mast)
+                    g.glowAdd(q.x, q.y, 6.0f, Color{255, 70, 50, 200});
+                }
+            }
             if (bt.role == BR_BUNKER && e.constructed && e.lastDamaged > 0 && g_sim.time - e.lastDamaged < BUNKER_RETALIATE) {   // the rocket pod, raised while the bunker is under attack
-                Vec2 pp = p + Vec2(0, -10.0f), d(std::cos(e.podAng), std::sin(e.podAng)), sd(-d.y, d.x);
+                Vec2 pp = p + Vec2(0, BUNKER_POD_Y), d(std::cos(e.podAng), std::sin(e.podAng)), sd(-d.y, d.x);
                 g.fillCircle(pp.x, pp.y + 2.0f, 8.0f, rgb(10, 12, 16, 150));
                 g.fillCircle(pp.x, pp.y, 7.0f, disabled ? rgb(80, 86, 96) : rgb(96, 104, 92));
                 for (int k = -1; k <= 1; k += 2) g.thickLine(pp.x + sd.x * 3.5f * k, pp.y + sd.y * 3.5f * k, pp.x + sd.x * 3.5f * k + d.x * 11, pp.y + sd.y * 3.5f * k + d.y * 11, rgb(26, 28, 30), 3.5f);
@@ -1830,27 +1922,37 @@ void Game::renderWorld() {
         SDL_SetTextureAlphaMod(w.tex, (u8)(176 + 22 * std::sin(wallTime * 0.6f)));   // the light on the water breathes a little
         // the pattern is laid at twice its size (it repeats every 8 tiles, not 4): each 4x4 block shows one quarter of the texture, scaled up
         const u8 causA = (u8)(176 + 22 * std::sin(wallTime * 0.6f));
-        for (int idx : g_map.waterBlocks) {
+        SDL_SetTextureAlphaMod(w.tex, causA);
+        for (int idx : g_map.waterBlocks) {   // the lake and the rivers
             int tx = idx % MAP_W, ty = idx / MAP_W;
             if (tx + 3 < tx0 || tx > tx1 || ty + 3 < ty0 || ty > ty1) continue;
             if (!rev && !ex[(ty + 1) * MAP_W + tx + 1] && !ex[(ty + 2) * MAP_W + tx + 2]) continue;
-            if (g_map.waterComp[idx] == g_map.oceanComp) {   // on the sea the caustics fade out as the bottom drops away from the shore
-                float k = clampf((9.0f - g_map.shoreDist[(ty + 2) * MAP_W + tx + 2]) / 6.0f, 0.2f, 1.0f);
-                SDL_SetTextureAlphaMod(w.tex, (u8)(causA * k));
-            } else SDL_SetTextureAlphaMod(w.tex, causA);
             SDL_Rect src = { (tx & 4) * 16, (ty & 4) * 16, 64, 64 };
             SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), 4 * TILE, 4 * TILE };
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
-        // the open ocean: a slow swell instead (one 256 px draw per 8x8-tile block, a quarter of the 512 px pattern)
+        // the ocean, all of it, shore to open sea: one slow swell (the 512 px pattern at full size, 16 tiles before it repeats) laid in the
+        // biggest aligned pieces that fit, so there is no seam anywhere; then its shallows get caustics tile by tile, fading out with depth
         const Sprite& sw = g.seaSwell[((int)(wallTime * 1.6f)) & 3];
-        SDL_SetTextureAlphaMod(sw.tex, (u8)(200 + 30 * std::sin(wallTime * 0.4f)));
-        for (int idx : g_map.seaBlocks) {
+        SDL_SetTextureAlphaMod(sw.tex, (u8)(170 + 26 * std::sin(wallTime * 0.4f)));
+        auto swell = [&](int idx, int n) {
             int tx = idx % MAP_W, ty = idx / MAP_W;
-            if (tx + 7 < tx0 || tx > tx1 || ty + 7 < ty0 || ty > ty1) continue;
-            if (!rev && !ex[(ty + 2) * MAP_W + tx + 2] && !ex[(ty + 5) * MAP_W + tx + 5]) continue;
-            SDL_Rect src = { (tx & 8) * 32, (ty & 8) * 32, 256, 256 }, dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), 8 * TILE, 8 * TILE };
+            if (tx + n - 1 < tx0 || tx > tx1 || ty + n - 1 < ty0 || ty > ty1) return;
+            if (!rev && !ex[(ty + n / 2) * MAP_W + tx + n / 2] && !ex[ty * MAP_W + tx] && !ex[(ty + n - 1) * MAP_W + tx + n - 1]) return;
+            SDL_Rect src = { (tx & 15) * 32, (ty & 15) * 32, n * 32, n * 32 }, dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), n * TILE, n * TILE };
             SDL_RenderCopy(g.ren, sw.tex, &src, &dst);
+        };
+        for (int idx : g_map.seaBlocks) swell(idx, 8);
+        for (int idx : g_map.seaQuads) swell(idx, 4);
+        for (int idx : g_map.seaTiles) swell(idx, 1);
+        for (int idx : g_map.seaShallow) {
+            int tx = idx % MAP_W, ty = idx / MAP_W;
+            if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1 || (!rev && !ex[idx])) continue;
+            float k = clampf((Map::SEA_CAUSTIC_REACH + 1.0f - g_map.shoreDist[idx]) / (float)Map::SEA_CAUSTIC_REACH, 0.0f, 1.0f);
+            SDL_SetTextureAlphaMod(w.tex, (u8)(causA * k * k));
+            SDL_Rect src = { (tx & 7) * 16, (ty & 7) * 16, 16, 16 };
+            SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), TILE, TILE };
+            SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
         SDL_SetTextureAlphaMod(w.tex, causA);
         for (int idx : g_map.waterTiles) {
@@ -1865,6 +1967,28 @@ void Game::renderWorld() {
     drawSeaLife();
     drawGroundFx();
     // placement ghost
+    if (placingType >= 0 && bulkDrag) {   // a shift-dragged line: every footprint of it, green where it goes up, red where it cannot (or the money runs out)
+        Vec2 w = screenToWorld(mouseX, mouseY);
+        const BuildType& bt = BUILDS[placingType];
+        std::vector<std::pair<int, int>> spots;
+        bulkSpots(placingType, tileOf(w.x) - bt.w / 2, tileOf(w.y) - bt.h / 2, spots);
+        int money = g_sim.players[g_sim.humanPlayer].money, n = 0, cost = 0;
+        for (auto& s : spots) {
+            bool ok = g_sim.canPlace(g_sim.humanPlayer, placingType, s.first, s.second);
+            bool paid = ok && money - cost >= bt.cost;
+            if (paid) { n++; cost += bt.cost; }
+            Vec2 c = worldToScreen(g_sim.buildingCenter(placingType, s.first, s.second));
+            Color gt = paid ? rgb(160, 255, 160) : (ok ? rgb(255, 200, 110) : rgb(255, 120, 120));
+            g.draw(g.building[placingType], c.x, c.y, 0, 1, gt, 130);
+            int sx = (int)(s.first * TILE - cam.x), sy = (int)(s.second * TILE - cam.y);
+            g.fill(sx, sy, bt.w * TILE, bt.h * TILE, paid ? rgb(80, 255, 80, 46) : (ok ? rgb(255, 190, 80, 60) : rgb(255, 60, 60, 70)));
+            g.box(sx, sy, bt.w * TILE, bt.h * TILE, paid ? rgb(150, 255, 150, 170) : rgb(255, 140, 120, 170));
+        }
+        char lb[96];
+        snprintf(lb, sizeof lb, "%d x %s   $%d%s", n, bt.name, cost, n < (int)spots.size() ? "   (red: blocked or no money)" : "");
+        g.text(mouseX + 14, mouseY + 10, lb, rgb(230, 250, 220));
+        g.text(mouseX + 14, mouseY + 22, "release to place   right-click / Esc: cancel", hudDim());
+    } else
     if (placingType >= 0) {
         Vec2 w = screenToWorld(mouseX, mouseY);
         const BuildType& bt = BUILDS[placingType];
@@ -1883,17 +2007,24 @@ void Game::renderWorld() {
         }
         { Color gt = ok ? rgb(160, 255, 160) : rgb(255, 120, 120); g.draw(g.building[placingType], c.x, c.y, 0, 1, gt, 150); if (g.buildingTeam[placingType].tex) g.draw(g.buildingTeam[placingType], c.x, c.y, 0, 1, gt, 150); }
         bool tilesOk = true;
-        if (bt.role == BR_WAYMAKER) {   // what it will clear (orange), open ground it only grades (green), and what it cannot touch (red)
-            int rough = 0;
+        if (bt.role == BR_WAYMAKER) {   // what it will clear (orange), open ground it only grades (green), and what it leaves alone (structures, water, piles: blue)
+            int rough = 0, kept = 0;
             for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
-                bool t = g_map.wayTile(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
-                bool r = t && (g_map.blocked[(ty + j) * MAP_W + tx + i] & 1);
-                tilesOk = tilesOk && t; rough += r;
-                g.fill((int)((tx + i) * TILE - cam.x), (int)((ty + j) * TILE - cam.y), TILE, TILE, !t ? rgb(255, 60, 60, 90) : (r ? rgb(255, 176, 70, 92) : rgb(80, 255, 80, 50)));
+                int x = tx + i, y = ty + j;
+                bool seen = inMap(x, y) && g_sim.explored(g_sim.humanPlayer, x, y);
+                bool t = seen && g_map.wayTile(x, y);
+                bool r = g_sim.waymakerClears(g_sim.humanPlayer, x, y);
+                rough += r; kept += seen && !t;
+                int sx = (int)(x * TILE - cam.x), sy = (int)(y * TILE - cam.y);
+                g.fill(sx, sy, TILE, TILE, !seen ? rgb(40, 40, 40, 90) : (!t ? rgb(90, 170, 255, 64) : (r ? rgb(255, 176, 70, 92) : rgb(80, 255, 80, 50))));
+                if (seen && !t) g.box(sx + 2, sy + 2, TILE - 4, TILE - 4, rgb(150, 210, 255, 150));   // (kept as it is)
             }
-            const char* why = !tilesOk ? "Waymaker: not on water, bridges, structures or supply piles" : (rough == 0 ? "Waymaker: nothing to clear here" : nullptr);
+            const char* why = rough == 0 ? "Waymaker: nothing to clear here" : (!ok ? "Waymaker: another Waymaker is already clearing this" : nullptr);
             if (why) g.text((int)c.x - g.textW(why) / 2, (int)c.y - bt.h * TILE / 2 - 16, why, rgb(255, 180, 140));
-            else { const char* hint = "Clears trees and rock into open ground  (Esc to stop)"; g.text((int)c.x - g.textW(hint) / 2, (int)c.y - bt.h * TILE / 2 - 16, hint, rgb(230, 240, 210)); }
+            else {
+                const char* hint = kept > 0 ? "Clears only the trees and rock: your structures, water and piles (blue) stay" : "Clears trees and rock into open ground  (shift-drag: a road, Esc to stop)";
+                g.text((int)c.x - g.textW(hint) / 2, (int)c.y - bt.h * TILE / 2 - 16, hint, rgb(230, 240, 210));
+            }
         } else
         for (int j = 0; j < bt.h; j++) for (int i = 0; i < bt.w; i++) {
             bool t = g_map.buildable(tx + i, ty + j) && g_sim.explored(g_sim.humanPlayer, clampi(tx + i, 0, MAP_W - 1), clampi(ty + j, 0, MAP_H - 1));
@@ -2358,17 +2489,24 @@ void Game::renderHud() {
                 const BuildType& bt = e->bt();
                 if (bt.power != 0) { snprintf(buf, sizeof buf, "Power %+d", bt.power); g.text(INFO_X + 86, hy + 58, buf, hudDim()); }
                 if (bt.role == BR_BUNKER && e->constructed) {
-                    snprintf(buf, sizeof buf, "Garrison %d / %d soldiers   Dozer %s", g_sim.garrisonInfantry(*e), BUNKER_INF_CAP, g_sim.garrisonDozers(*e) ? "inside" : "none"); g.text(INFO_X + 86, hy + 58, buf, rgb(240, 205, 90));
+                    snprintf(buf, sizeof buf, "Garrison %d / %d soldiers   Dozers %d / %d", g_sim.garrisonInfantry(*e), BUNKER_INF_CAP, g_sim.garrisonDozers(*e), BUNKER_DOZER_CAP); g.text(INFO_X + 86, hy + 58, buf, rgb(240, 205, 90));
                     if (e->hatch > 0) snprintf(buf, sizeof buf, "Hatch %d / %d: the garrison fires from it", (int)e->hatch, (int)e->hatchMax);
-                    else snprintf(buf, sizeof buf, "HATCH DESTROYED: the garrison cannot fire (a dozer inside or beside the bunker patches it)");
+                    else snprintf(buf, sizeof buf, "HATCH DOWN: garrison silent until it is refitted");
                     g.text(INFO_X + 86, hy + 70, buf, e->hatch > 0 ? hudDim() : rgb(255, 140, 120));
-                    g.text(INFO_X + 86, hy + 84, "STEALTH: only an enemy spy drone finds it. Nukes cannot destroy it", rgb(150, 220, 255));
+                    if (e->bunkerBusy >= 0) snprintf(buf, sizeof buf, "Fitting %s: %d%%", BUNKER_UPGS[e->bunkerBusy].name, (int)(e->bunkerProgress * 100));
+                    else snprintf(buf, sizeof buf, "Nuke-hardened (%d%% a hit), radiation-proof", (int)(BUNKER_NUKE_SHARE * 100 * (Sim::bunkerHas(*e, BU_SHELL) ? BUNKER_SHELL_NUKE : 1.0f) + 0.5f));
+                    g.text(INFO_X + 86, hy + 84, buf, e->bunkerBusy >= 0 ? rgb(255, 226, 150) : rgb(150, 220, 255));
                     float mw = std::max(0.0f, e->siloTimer - g_sim.time);
-                    if (mw > 0) snprintf(buf, sizeof buf, "Mini nuke loading: %d:%02d", (int)mw / 60, (int)mw % 60); else snprintf(buf, sizeof buf, "MINI NUKE READY  (K to launch)");
+                    const char* tubes = Sim::bunkerHas(*e, BU_TRIPLE) ? "Triple nuke" : "Mini nuke";
+                    if (mw > 0) snprintf(buf, sizeof buf, "%s %d:%02d", tubes, (int)mw / 60, (int)mw % 60); else snprintf(buf, sizeof buf, "%s READY (K)", tubes);
+                    if (Sim::bunkerHas(*e, BU_PARA)) { float pw = g_sim.bunkerParaWait(*e); size_t l = strlen(buf); if (pw > 0) snprintf(buf + l, sizeof buf - l, "   Paras %ds", (int)std::ceil(pw)); else snprintf(buf + l, sizeof buf - l, "   Paras READY (P)"); }
                     g.text(INFO_X + 86, hy + 96, buf, mw > 0 ? rgb(255, 200, 120) : rgb(255, 110, 90));
-                    snprintf(buf, sizeof buf, "Income $%d / %ds   2 miniguns   self-repair", (int)(BUNKER_INCOME * pl.econMul()), (int)BUNKER_INCOME_INTERVAL); g.text(INFO_X + 86, hy + 108, buf, rgb(240, 220, 130));
+                    std::string fit;
+                    for (int u = 0; u < BU_COUNT; u++) if (Sim::bunkerHas(*e, u)) { if (!fit.empty()) fit += " "; fit += BUNKER_UPGS[u].tag; }
+                    if (!fit.empty()) { fit = "Fitted: " + fit; g.text(INFO_X + 86, hy + 108, fit.c_str(), accent); }
+                    else { snprintf(buf, sizeof buf, "Income $%d / %ds   no upgrades fitted yet", (int)(BUNKER_INCOME * pl.econMul()), (int)BUNKER_INCOME_INTERVAL); g.text(INFO_X + 86, hy + 108, buf, rgb(240, 220, 130)); }
                 }
-                if (e->owner >= 0 && e->constructed) {   // structure upgrades of its army
+                if (e->owner >= 0 && e->constructed && bt.role != BR_BUNKER) {   // structure upgrades of its army (a bunker's line shows its garrison)
                     const Player& op = g_sim.players[e->owner];
                     std::string ups;
                     for (int u = 0; u < UPG_COUNT; u++) if (op.upg[u]) { if (!ups.empty()) ups += "  "; ups += UPGRADES[op.faction][u].name; }
@@ -2481,7 +2619,7 @@ void Game::renderHud() {
         g.text(INFO_X + 10, hy + 52, "A: attack-move   S: stop   Tab: select army on screen   Ctrl+#: group", hudDim());
         g.text(INFO_X + 10, hy + 64, "Arrows/edge/middle-drag/wheel: scroll   Home: base   Space: pause   +/-: speed", hudDim());
         g.text(INFO_X + 10, hy + 76, "Select a Dozer to build structures; select a structure to train units", hudDim());
-        g.text(INFO_X + 10, hy + 88, "Shift+click while placing: place several   Del: sell   F2: mute   F1: help", hudDim());
+        g.text(INFO_X + 10, hy + 88, "Shift+drag while placing: a whole line   Del: sell   F2: mute   F1: help", hudDim());
         g.text(INFO_X + 10, hy + 100, "Win by destroying every enemy unit and structure.", hudDim());
     }
     // command grid
@@ -2553,7 +2691,7 @@ void Game::renderHud() {
             "Click a turret or battery  shows the area it covers (hover any defense to see its reach)",
             "Ctrl + 0-9 / 0-9           assign / recall control group (Alt+#: jump to it)",
             "Arrows, screen edge, middle-drag, wheel: scroll     Home: your base",
-            "Dozer selected             build menu; click the ground to place, Shift for several",
+            "Dozer selected             build menu; click the ground to place, Shift+drag for a whole line",
             "Structure selected         train units; right-click ground for rally; Del sells",
             "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
