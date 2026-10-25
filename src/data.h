@@ -63,7 +63,7 @@ enum UnitTypeId {
     U_C_JEEP, U_K_JEEP,     // jeeps: fast open-top transports that carry seven infantry who shoot from inside
     U_C_DESTROYER, U_K_DESTROYER,   // warships of the lake (built at a Naval Yard on the shore)
     U_C_CRUISER, U_K_CRUISER,       // missile ships
-    U_C_STRIKEJET, U_K_STRIKEJET,   // the two fighters a Hotline Strike brings: never built, they leave again when the run is over
+    U_C_STRIKEJET, U_K_STRIKEJET,   // the Air Strike's fighters: never built, one bombing pass each, then they leave the map (see STRIKE_*)
     U_C_CIVDOZER, U_K_CIVDOZER,     // civilian dozers: they raise the town (houses, shops, towers, the town hall), never military structures
     U_C_SBOMBER, U_K_SBOMBER,       // Supersonic Bomber: a very fast nuclear bomber with one compact nuclear bomb (see SBOMBER_* and nukeBomb)
     U_C_RADTRUCK, U_K_RADTRUCK,     // Anti-Radiation Truck: an unarmed support vehicle whose decontamination field scrubs nuclear fallout
@@ -71,6 +71,9 @@ enum UnitTypeId {
     U_C_NUKEBOMBER, U_K_NUKEBOMBER, // the strategic bomber of a Nuclear Bomber call-in: never built, it crosses the map once, drops a mid-sized nuke and leaves
     U_C_PATROL, U_K_PATROL,         // the cheap patrol boat of the Naval Yard: small, fast and fragile, its gun and rockets hit aircraft, ships, troops and shore structures
     U_RIOTER, U_FIREBOMBER,         // civilian rioters (owned by RIOT_PLAYER, never built): an old rifle / petrol bombs (see Sim::updateRiots)
+    U_C_CARRIER, U_K_CARRIER,       // aircraft carriers (Naval Yard + tech structure): a floating airbase whose own wing of jets flies from its deck
+    U_C_CARGOSHIP, U_K_CARGOSHIP,   // military cargo ships: carry a whole battalion (vehicles, dozers, infantry) over the sea and land it on any shore
+    U_C_CARRIERJET, U_K_CARRIERJET, // a carrier's jets: never built, they take off from their carrier, fight round it and land on it again (Sim::carrierJetRun)
     U_COUNT
 };
 
@@ -135,7 +138,7 @@ struct UnitType {
     float detect;       // tiles: how far this unit finds stealthy enemies (0 = it finds none)
     int detectMask;     // which StealthClass es it finds (DET_SPOTTER / DET_DRONE bits)
     int cargoCap;       // transport: cargo slots (an infantryman takes one, see cargoSize)
-    int naval;          // 1 = ship: lives and moves on water only (the lake), see Map::findNavalPath
+    int naval;          // 1 = ship: lives and moves on water only (the lake or the ocean, whichever it was launched on), see Map::findNavalPath
     float evade;        // 0..1: the share of weapon hits that miss it (the Hotline Strike fighters are very hard to shoot down)
     int temp;           // 1 = a loan from a support power: cannot be built, selected or commanded, and leaves the map when its run is over
     int drones;         // protector drones it flies with (see Sim::droneCount): they shoot down rockets and shells aimed at it
@@ -264,13 +267,14 @@ static const float SELF_REPAIR_HOT = 0.25f;   // ... and the share of that rate 
 static const float SELF_REPAIR_DELAY = 3.0f;  // seconds after the last hit before full-rate repair resumes
 static const int   W_JEEP_MG = 33;                        // the pintle gun of a jeep (WEAPONS index)
 static const int   W_DESTROYER_C = 34, W_DESTROYER_K = 35, W_CRUISER_C = 36, W_CRUISER_K = 37;   // the ships' guns and rocket salvos
-static const int   W_STRIKE_C = 38, W_STRIKE_K = 39;      // the rockets of the Hotline Strike fighters
+static const int   W_STRIKE_C = 38, W_STRIKE_K = 39;      // the rockets of the Air Strike fighters
 static const int   W_DEFENSE_LASER = 29, W_DEFENSE_MG = 30;   // the roof guns of the Defense Guns upgrade (Cyber laser, Clanker machine gun)
 static const int   W_SBOMBER_GUN = 43;   // the Supersonic Bomber's defensive tail cannon (WEAPONS index)
 static const int   W_NUKE_BOMB = 44;     // the compact nuclear bomb it drops (PJ_BOMB: handled by Sim::bombImpact, never fired like a gun)
 static const int   W_FIGHTER_C = 45, W_FIGHTER_K = 46;   // the plain fighters' missiles and cannon
 static const int   W_PATROL_C = 47, W_PATROL_K = 48;     // the patrol boats' autocannon and rocket pod (one mount that hits everything)
 static const int   W_RIOT_RIFLE = 49, W_MOLOTOV = 50;     // the rioters' hunting rifles and petrol bombs
+static const int   W_CARRIER_CIWS = 51;                   // an aircraft carrier's close-in guns (aircraft, missiles' launchers, boats that come close)
 // Supersonic Bomber: a small fixed-wing nuclear bomber of both armies, built at the airfield with a tech structure. It is the fastest
 // aircraft in the game while its one bomb is aboard; after the drop it holds the dash just long enough to clear its own fireball, then
 // slows right down and is easy prey for anti-air. Its bomb is a compact casing (drawn small) holding a silver warhead: the damage is an
@@ -284,7 +288,7 @@ static const float SBOMBER_BOMB_FALL = 0.9f;      // seconds the compact bomb ta
 // target at altitude, drops one mid-sized nuclear bomb and flies on off the map. It is not an army unit (nobody commands it); strong anti-air
 // (Patriots, Rocket Batteries, Anti-Nuke Lasers' point defence, Anti-Rocket walls, fighters) can bring it down before the drop.
 static const float NUKEBOMBER_SCALE = 0.55f;      // share of a full warhead's blast area: between a bunker missile and a Nuke Ramp
-static const float NUKEBOMBER_COOLDOWN = 150.0f;  // seconds, per tech structure
+static const float NUKEBOMBER_COOLDOWN = 210.0f;  // seconds, per tech structure
 static const float NUKEBOMBER_OPEN = 240.0f;      // seconds into the match before the first call can be made
 static const float NUKEBOMBER_FALL = 1.4f;        // seconds the bomb falls from the bomber to the ground
 static const float NUKEBOMBER_LIFE = 45.0f;       // seconds after which a bomber still on the map is withdrawn
@@ -321,27 +325,26 @@ extern const DropTierType DROP_TIERS[DTI_COUNT];
 // and each still appears only if the army can field it, which is what puts the snipers in the drop the moment the tech structure unlocks them.
 static const int DROP_SUPPORT[DTI_COUNT][4] = { { 1, 1, 0, 0 }, { 1, 2, 0, 1 }, { 2, 2, 1, 1 } };
 
-// Phone Strike ("hotline"): the tech structure's other support power. One call, and a strike package of helicopters, jets and drones
-// crosses the map to a spot of your choice and tears up whatever stands there, then it goes home. Free of charge, once per cooldown per
-// tech structure (more Data Centers / Arms Labs: more calls), and what answers the phone grows with the army the same way a drop does.
-static const float STRIKE_COOLDOWN = 180.0f;    // seconds, per tech structure
-static const float STRIKE_X = 3.5f;             // tiles: how far to either side of the target the package is spread when it comes in
-static const int   STRIKE_MAX = 16;             // hard cap on aircraft in one package
+// Air Strike (the tech structure's strike power, key I): a flight of light-grey strike fighters comes in low from the open sea behind the caller's
+// base, in waves of V formations a couple of seconds apart, each wave crossing the called spot on a different heading so the whole area is worked
+// over. Every fighter makes ONE pass: a pair of rockets at whatever stands in the circle on the run-in, then a stick of bombs laid along its own
+// lane across the spot. Then it breaks hard - a barrel roll, a jink, a spray of flares - and runs on out to the edge of the map, where it fades into
+// the haze over the ocean. They are not the army's aircraft: nobody commands them and none come home. Free of charge, once per STRIKE_COOLDOWN per
+// tech structure (more Data Centers / Arms Labs: more calls); the flight grows with the army's drop tier.
+static const float STRIKE_COOLDOWN = 240.0f;    // seconds, per tech structure
+static const int   STRIKE_FLIGHT[DTI_COUNT] = { 10, 14, 18 };   // fighters in one call, by drop tier
+static const int   STRIKE_WAVE = 6;             // fighters in one V formation
+static const float STRIKE_WAVE_GAP = 2.4f;      // seconds between two waves
+static const float STRIKE_TURN = 0.6f;          // radians between the headings of two successive waves (the second comes in from one side, the third the other)
+static const int   STRIKE_BOMBS = 6;            // bombs in each fighter's stick
+static const float STRIKE_BOMB_GAP = 34.0f;     // px between two bombs of a stick on the ground
+static const int   STRIKE_ROCKETS = 2;          // rockets each fighter fires on its run-in
+static const float STRIKE_SPREAD = 4.0f;        // tiles: the flight's lanes cover this far either side of the called spot
+static const float STRIKE_LIFE = 50.0f;         // seconds after which a strike fighter still on the map is withdrawn
+static const float STRIKE_FADE = 360.0f;        // px from the map edge over which a departing fighter fades out
+static const int   W_STRIKE_BOMB = 52;          // their bombs (WEAPONS index)
 struct StrikeType { const char* name; const char* desc; };
 extern const StrikeType STRIKES[F_COUNT];
-// How many aircraft answer a call at each drop tier: gunships, bombers, jets, scout drones. The swarm is a support power like the airdrop,
-// so it grows with the same ladder - a fresh tech structure sends a swarm, a finished arms race sends a bigger one. Every tier brings all
-// three kinds the power promises (helicopters, jets and a drone), so a strike called early is a real swarm too.
-static const int STRIKE_LOAD[DTI_COUNT][4] = { { 4, 2, 2, 1 }, { 5, 3, 3, 1 }, { 6, 4, 4, 2 } };
-
-// Hotline Strike fighters: with every call two special fighters (U_C_STRIKEJET / U_K_STRIKEJET) join the swarm. They are never built: a call
-// lends them to the army for one run. They cross the map at STRIKE_JET_SPEED, make STRIKE_PASSES passes over the called spot, fire a
-// salvo of STRIKE_SALVO unguided rockets on each, and leave. Very tough, and most hits on them miss (UnitType.evade).
-static const int   STRIKE_JETS = 2;
-static const int   STRIKE_PASSES = 3;
-static const int   STRIKE_SALVO = 12;
-static const float STRIKE_SPREAD = 2.4f;       // tiles: the radius of the circle a salvo is scattered over
-static const float STRIKE_LIFE = 60.0f;        // seconds after which a strike fighter that is still around is withdrawn
 
 // Jeeps: fast open-top transports. Up to JEEP_SEATS infantry ride inside and shoot from it with their own weapons; a jeep is also a gun.
 static const int   JEEP_SEATS = 7;
@@ -359,8 +362,24 @@ static const int   DRONE_SHOTS = 2;
 static const float DRONE_GAP = 0.25f;
 static const float DRONE_CHANCE = 0.85f;
 
-// The lake: ships live on it and a Naval Yard must touch it (a body of at least NAVAL_WATER_MIN connected water tiles).
+// The seas: ships live on the lake or on the ocean and a Naval Yard must touch one of them (a body of at least NAVAL_WATER_MIN connected water tiles).
+// A ship stays on the sea it was launched on: the lake and the ocean never meet.
 static const int   NAVAL_WATER_MIN = 60;
+// Aircraft carrier: a floating airbase. Its wing of CARRIER_WING jets waits on deck; whenever the carrier or its allies see an enemy within
+// CARRIER_RANGE of it, jets launch one after another and attack (air first, then ships, vehicles, troops and structures near the shore), come back
+// to land when their missiles are spent or nothing is left to fight, and wait CARRIER_REARM on deck. A jet that is shot down is replaced on deck
+// after CARRIER_REPLACE seconds. The jets belong to the carrier: nobody commands them, and if the carrier sinks the ones in the air fly off the map.
+static const int   CARRIER_WING = 6;
+static const float CARRIER_RANGE = 22.0f;      // tiles from the carrier
+static const float CARRIER_LAUNCH_GAP = 1.2f;  // seconds between two launches
+static const float CARRIER_REARM = 8.0f;       // seconds a jet spends on deck between sorties
+static const float CARRIER_REPLACE = 30.0f;    // seconds to ready a replacement for a jet that was lost
+// Cargo ship: an unarmed transport of CARGOSHIP_CAP cargo places (an infantryman 1, a light vehicle 4, a tank 6, a super-heavy 10). Units board it from
+// a shore it lies beside (right-click it with units selected) and it lands them on any shore: "unload here" lets them out onto the nearest land,
+// "unload at" sails it to the water nearest the spot first. If it sinks, everyone aboard is lost.
+static const int   CARGOSHIP_CAP = 120;
+static const float CARGOSHIP_REACH = 3.0f;     // tiles from the hull a boarding unit may stand
+static const float CARGOSHIP_LAND = 5.0f;      // tiles: how close land must be to let people out
 
 // Anti-nuke defences (Anti-Nuke Laser for Cyber, Anti-Nuke Missiles for Clanker): small structures that watch the sky over their area and shoot
 // down a warhead heading for it. Each one has its own chance of getting the warhead (the more of them, the likelier it is stopped); one that
@@ -413,7 +432,7 @@ static const float BUNKER_HATCH_REFIT = 30.0f;   // a blown-off hatch is refitte
 static const int   BUNKER_GUNS = 2;               // miniguns on the hatch (they stop when the hatch is blown off, like the garrison)
 static const int   W_BUNKER_MINIGUN = 32;         // WEAPONS index of those miniguns
 static const float MINI_NUKE_SCALE = 0.2f;        // a bunker's missile: a fifth of the blast area (radius NUKE_RADIUS * sqrt(scale)), same strength per spot
-static const float MINI_NUKE_COOLDOWN = 65.0f;    // seconds between two launches of one bunker
+static const float MINI_NUKE_COOLDOWN = 90.0f;    // seconds between two launches of one bunker
 static const float MINI_NUKE_ARM = 30.0f;         // seconds after a bunker is finished before its first missile is ready
 static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch is announced to the enemy (the missile climbs out of its hatch); the bunker itself is always visible
 static const int   MINI_NUKE_SALVO = 2;           // missiles per launch: the same warhead twice, one after the other ...
@@ -476,7 +495,7 @@ static const float ISLAND_NUKE_SCALE = UNUKE_SCALE * 4.0f;   // share of a full 
 static const float ISLAND_NUKE_DAMAGE = 3.0f;        // damage multiplier over a ramp's warhead (an Underground Nuke's is UNUKE_DAMAGE)
 static const float ISLAND_NUKE_FLIGHT = 2.6f;        // seconds from launch to impact (Sim::NUKE_FLIGHT for every other warhead)
 static const float ISLAND_NUKE_INTERCEPT_RESIST = UNUKE_INTERCEPT_RESIST / 5.0f;   // each laser's chance to shoot it down, as a share of its usual chance
-static const float ISLAND_NUKE_COOLDOWN = 30.0f;     // seconds between two launches of one launcher
+static const float ISLAND_NUKE_COOLDOWN = 75.0f;     // seconds between two launches of one launcher
 static const float ISLAND_NUKE_FALLOUT_R = 0.45f;    // its fallout zone's radius, as a share of the blast radius (the outer blast is a pressure wave, not a crater)
 static const Color ISLAND_NUKE_GLOW = rgb(255, 120, 210);   // the magenta-white of its warhead, fireball and radiation
 // Civilian areas: the towns and cities round the lake (Map::districts). Every one starts neutral; an infiltrator of any army takes the WHOLE area
@@ -516,7 +535,7 @@ static const int START_CASH = 10000;
 static const int SUPPLY_PER_TRIP = 300;
 static const float HARVEST_TIME = 3.0f;   // seconds at pile
 static const float UNLOAD_TIME = 1.0f;
-static const float NUKE_COOLDOWN = 300.0f;    // seconds between launches, per Nuke Ramp
+static const float NUKE_COOLDOWN = 360.0f;    // seconds between launches, per Nuke Ramp (and Underground Nuke)
 static const float NUKE_RADIUS = 11.0f;        // tiles
 static const float INCOME_INTERVAL = 5.0f;    // seconds between payouts of an income structure
 static const int   INCOME_CYBER = 450;        // credits per payout of a Bitcoin Datacenter

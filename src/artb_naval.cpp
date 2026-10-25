@@ -1,6 +1,6 @@
 #include "bld.h"
 
-// Structure art for the Naval Yards (3x3 tiles: a quay slab with a covered slipway shed, a gantry crane straddling it, a control tower,
+// Structure art for the Naval Yards (5x4 tiles: a quay slab with a covered slipway shed, a gantry crane straddling it, a control tower,
 // hull sections and tanks) and the anti-nuke defences (2x2 tiles: an energy tower on a hex plinth, a missile silo). Painted with the Bld
 // painter from bld.h, like artb.cpp. A Naval Yard looks the same from any side: the quay runs all round and the renderer adds the pier.
 namespace {
@@ -50,7 +50,9 @@ void hullSection(Bld& b, float x, float y, float w, float h, float ht, Color dec
 // ================================================================= NAVAL YARD
 // Cyber: the Nano Drydock, pale composite hulls under robotic welding gantries with cyan arcs and clean roofs.
 // Clanker: the Shipyard, a riveted girder crane, corrugated sheds, a chimney with smoke staining and rusty hull ribs on stocks.
-// Layout: rails along the north and south quays, the shed in the middle, the bridge straddling it on the rails, the hull on the south quay.
+// Layout (160 x 128 design px, 5 x 4 tiles): the covered drydock shed fills the middle with its bay doors on the south wall, a slipway runs
+// from the bay down onto the berth on the south quay where a hull lies, the gantry bridge straddles the shed from rail to rail, the control
+// tower and fuel tanks stand on the east side and stacked containers on the south-west quay.
 void navalYard(Bld& b, bool cy) {
     int W = b.W, H = b.H;
     const Color pad = cy ? C_PAD : K_PAD, seam = cy ? C_SEAM : K_SEAM;
@@ -60,13 +62,16 @@ void navalYard(Bld& b, bool cy) {
     const Color hull = cy ? N_CERAM : rgb(122, 110, 90), hullD = cy ? N_CERAM_D : rgb(70, 62, 50);   // Clanker hulls: weathered steel, rust-streaked
     const Color win = cy ? C_CYAN : rgb(255, 214, 120);
     const Color tank = cy ? C_ROOF : K_STEEL, tankSide = cy ? C_HULL : K_RUST;
+    const Color contA = cy ? C_HULL : K_OLIVE, contB = cy ? C_ROOF2 : K_KHAKI;
 
     b.pad(pad, seam, cy ? 0.08f : 0.18f, 4);
-    if (!cy) b.rust(3, 3, W - 3.0f, H - 3.0f, 18, 50);
-    // quay: rubber fenders along all four edges, bollards on the west and east quays
-    b.a.rect(10, 1.2f, W - 20.0f, 2.2f, 1.0f, dark, 1.0f, 0.4f); b.a.rect(10, H - 3.4f, W - 20.0f, 2.2f, 1.0f, dark, 1.0f, 0.4f);
+    if (!cy) b.rust(3, 3, W - 3.0f, H - 3.0f, 22, 50);
+    // quay edges: rubber fenders along the north and both side quays, a fender bar and bollards on the south berth
+    b.a.rect(10, 1.2f, W - 20.0f, 2.2f, 1.0f, dark, 1.0f, 0.4f);
     b.a.rect(1.2f, 10, 2.2f, H - 20.0f, 1.0f, dark, 1.0f, 0.4f); b.a.rect(W - 3.4f, 10, 2.2f, H - 20.0f, 1.0f, dark, 1.0f, 0.4f);
-    for (float y = 22; y < H - 14; y += 20) { bollard(b, 6.5f, y, steel); bollard(b, W - 6.5f, y, steel); }
+    b.a.rect(14, H - 19.5f, W - 28.0f, 2.2f, 1.0f, dark, 1.0f, 0.4f);
+    for (float x = 20; x < W - 14; x += 16) bollard(b, x, H - 15.0f, steel);
+    for (float y = 20; y < H - 30; y += 22) bollard(b, 6.5f, y, steel);
     // gantry rails along the north and south quays, with sleepers
     auto rail = [&](float y) {
         b.a.line(4, y - 1.4f, W - 4.0f, y - 1.4f, 0.9f, steel); b.a.line(4, y + 1.4f, W - 4.0f, y + 1.4f, 0.9f, steel);
@@ -74,83 +79,86 @@ void navalYard(Bld& b, bool cy) {
     };
     rail(6.0f); rail(H - 6.0f);
 
-    // control tower (north-east): drawn first, the shed roof covers its foot
-    Roof tw = b.block(62, 12, 20, 14, 24, towerRoof, towerWall);
-    b.wallSeams(tw, 24, 7);
-    b.windows(tw, 24, 4, win, 0.6f);
+    // control tower (east side): drawn first, its foot is clear of the shed
+    Roof tw = b.block(130, 32, 24, 26, 26, towerRoof, towerWall);
+    b.wallSeams(tw, 26, 8);
+    b.windows(tw, 26, 4, win, 0.6f);
     b.mark(tw.x + 3, tw.y + tw.h - 5.0f, tw.w - 6, 3.2f);
     if (cy) {
-        b.dishTop(68, tw.y + 4, 4.4f, C_ROOF2, rgb(30, 40, 56));            // fixed link dish and a mast
-        b.antenna(78, tw.y + 4, 12, C_RED);
+        b.dishTop(138, tw.y + 4, 4.6f, C_ROOF2, rgb(30, 40, 56));            // fixed link dish and a mast
+        b.antenna(147, tw.y + 4, 12, C_RED);
     } else {
-        P top = b.cyl(74, tw.y + 9, 3.4f, 16, K_STEEL, K_RUST);            // chimney rising from the roof
-        b.a.ell(72, tw.y + 9, 5.0f, 2.2f, rgba(BLACK, 70), 1, 0);          // soft soot stain round its foot
-        b.a.ell(79, top.y - 2.5f, 6.0f, 3.0f, rgba(rgb(92, 88, 82), 70), 1, 0);   // smoke drifting north-east
-        b.a.ell(85, top.y - 5.0f, 4.0f, 2.2f, rgba(rgb(92, 88, 82), 45), 1, 0);
+        P top = b.cyl(144, tw.y + 12, 3.4f, 18, K_STEEL, K_RUST);            // chimney rising from the roof
+        b.a.ell(142, tw.y + 12, 5.0f, 2.2f, rgba(BLACK, 70), 1, 0);          // soft soot stain round its foot
+        b.a.ell(149, top.y - 2.5f, 6.0f, 3.0f, rgba(rgb(92, 88, 82), 70), 1, 0);   // smoke drifting north-east
+        b.a.ell(155, top.y - 5.0f, 4.0f, 2.2f, rgba(rgb(92, 88, 82), 45), 1, 0);
         b.a.ring(top.x, top.y, 3.4f, 0.9f, K_DARK, 0.6f, 0.2f);
     }
-    // north gantry leg, standing on the north rail behind the shed
-    b.block(42, 2, 12, 10, 24, steel, dark);
-    // covered slipway shed: a long ridged roof with its big bay doors on the south face
-    Roof sh = b.block(10, 30, 76, 36, 16, shedRoof, shedWall);
+    // covered slipway shed: a long ridged roof over the drydock, its big bay doors on the south wall
+    Roof sh = b.block(12, 30, 112, 56, 18, shedRoof, shedWall);
     if (cy) {
-        b.skylights(sh, 8, C_GLASS, C_STEEL);
+        b.skylights(sh, 12, C_GLASS, C_STEEL);
         b.a.line(sh.x + 3, sh.y + sh.h * 0.5f, sh.x + sh.w - 3, sh.y + sh.h * 0.5f, 1.0f, rgba(C_WHITE, 110));   // ridge
     } else {
         for (float y = sh.y + 4; y < sh.y + sh.h - 2; y += 4.6f) b.a.line(sh.x + 3, y, sh.x + sh.w - 3, y, 0.7f, rgba(K_DARK, 90));   // corrugated roof ribs
-        b.rust(sh.x, sh.y, sh.x + sh.w, sh.y + sh.h, 8, 60);
+        b.rust(sh.x, sh.y, sh.x + sh.w, sh.y + sh.h, 12, 60);
     }
     b.mark(sh.x + sh.w - 24, sh.y + 3, 18, 3.4f);
-    b.wallSeams(sh, 16, 9, 90);
-    b.door(48, sh.y + sh.h, 46, 14, cy ? C_STEEL : K_DARK, rgb(8, 14, 20));
-    b.a.ell(48, 62, 16, 3, shade(hull, 0.85f), 1.2f, 0.5f);                       // a hull lying inside the bay
-    for (float x = 36; x < 60; x += 6) b.a.line(x, 58.5f, x, 62.5f, 0.5f, rgba(hullD, 160));
-    b.a.rect(24, sh.y + sh.h - 16, 3, 17, 0.6f, steel, 1.0f, 0.4f); b.a.rect(69, sh.y + sh.h - 16, 3, 17, 0.6f, steel, 1.0f, 0.4f);   // bay pillars
-    if (cy) { b.stripe(12, 64.5f, 84, 64.5f, 0.8f, C_CYAN, 70); b.stripe(26, 65.6f, 70, 65.6f, 0.7f, C_CYAN, 80); }
-    else b.hazard(12, sh.y + sh.h + 0.8f, 74, 2.6f);
+    b.wallSeams(sh, 18, 14, 90);
+    b.door(64, sh.y + sh.h + 18, 60, 14, cy ? C_STEEL : K_DARK, rgb(8, 14, 20));
+    if (cy) { b.stripe(12, 88.4f, 124, 88.4f, 0.8f, C_CYAN, 70); b.stripe(34, 89.6f, 94, 89.6f, 0.7f, C_CYAN, 80); }
+    else b.hazard(12, sh.y + sh.h + 18.8f, 112, 2.2f);
 
-    // gantry bridge: a long girder straddling the shed from rail to rail; the trolley rides it and the hook drops to the hull
-    Roof br = b.block(44, 6, 8, 84, 24, cy ? C_ROOF2 : steel, cy ? C_HULL_D : dark);
+    // slipway: a concrete ramp down from the bay doors to the berth, with two rails and sleepers
+    b.a.rect(56, 86, 16, 22, 0.6f, cy ? C_PAD2 : K_PAD2, 1.4f, 0.5f);
+    b.a.line(60, 86, 60, 108, 0.9f, steel); b.a.line(68, 86, 68, 108, 0.9f, steel);
+    for (float y = 88; y < 108; y += 4.0f) b.a.line(56, y, 72, y, 0.6f, rgba(dark, 170));
+
+    // the gantry: a north leg on the north rail, the bridge straddling the shed from rail to rail and a south leg on the south rail
+    Roof br = b.block(84, 4, 8, 118, 16, cy ? C_ROOF2 : steel, cy ? C_HULL_D : dark);
     if (cy) b.stripe(br.x + 4, br.y + 3, br.x + 4, br.y + br.h - 3, 0.8f, C_CYAN, 70);
     else for (float y = br.y + 2; y < br.y + br.h - 5; y += 6) {
         b.a.line(br.x + 1, y, br.x + br.w - 1, y + 5, 0.5f, rgba(dark, 170)); b.a.line(br.x + br.w - 1, y, br.x + 1, y + 5, 0.5f, rgba(dark, 170));   // lattice bracing
         b.a.dot(br.x + 1.6f, y, 0.4f, rgba(WHITE, 140)); b.a.dot(br.x + br.w - 1.6f, y, 0.4f, rgba(WHITE, 140));                             // rivets
     }
-    // hull section on its stocks on the south quay (Cyber: composite plates with welding arms; Clanker: rusty ribs on timber stocks)
-    b.a.rect(10, 80, 32, 2.6f, 0.6f, K_OLIVE_D, 1.0f, 0.4f);
-    hullSection(b, 12, 72, 30, 9, 6, hull, hullD);
+    b.block(78, 0, 20, 10, 22, steel, dark);
+    b.block(78, 114, 20, 10, 22, steel, dark);
+
+    // the berth on the south quay: a cradle under a hull section lying along the quay, bow to the east
+    b.a.rect(34, 106, 90, 2.6f, 0.6f, K_OLIVE_D, 1.0f, 0.4f);
+    hullSection(b, 36, 96, 88, 10, 6, hull, hullD);
     if (cy) {
-        for (float x : { 18.0f, 34.0f }) {   // robotic welding heads on posts, arcing onto the hull
-            b.a.cap(x, 83, x, 75, 0.9f, C_STEEL, 0.8f, 0.4f); b.a.dot(x, 74.5f, 1.2f, C_STEEL);
-            b.a.glow(x, 72, 6, rgba(C_CYAN, 120)); b.a.dot(x, 71.5f, 0.9f, C_WHITE);
-            b.a.line(x - 2, 70.5f, x + 1, 69.0f, 0.5f, C_CYAN); b.a.line(x + 1, 69.0f, x + 2.5f, 70.5f, 0.5f, C_CYAN);
+        for (float x : { 50.0f, 70.0f, 90.0f, 110.0f }) {   // robotic welding heads on posts, arcing onto the hull
+            b.a.cap(x, 112, x, 103, 0.9f, C_STEEL, 0.8f, 0.4f); b.a.dot(x, 102.5f, 1.2f, C_STEEL);
+            b.a.glow(x, 100, 6, rgba(C_CYAN, 120)); b.a.dot(x, 99.5f, 0.9f, C_WHITE);
+            b.a.line(x - 2, 98.5f, x + 1, 97.0f, 0.5f, C_CYAN); b.a.line(x + 1, 97.0f, x + 2.5f, 98.5f, 0.5f, C_CYAN);
         }
     } else {
-        b.rust(14, 73, 38, 80, 6, 70);
-        for (float x = 16; x < 40; x += 8) b.a.line(x, 80, x, 83, 1.2f, K_RUST_D);   // stock legs
+        b.rust(40, 96, 124, 106, 8, 70);
+        for (float x = 42; x < 124; x += 14) b.a.line(x, 108.6f, x, 111.0f, 1.2f, K_RUST_D);   // stock legs
     }
     // the hook and cable, carried by the trolley that rides the bridge
-    Roof tr = b.block(37, 40, 22, 14, 7, steel, dark);
-    b.a.line(48, tr.y + tr.h, 48, 64, 0.8f, rgba(dark, 220));
-    b.a.ring(48, 65.5f, 2.2f, 0.7f, steel, 0.6f, 0.3f);
-    // south gantry leg, standing on the south rail in front of the hull
-    b.block(42, 80, 12, 10, 24, steel, dark);
+    Roof tr = b.block(74, 48, 28, 12, 6, steel, dark);
+    b.a.line(88, tr.y + tr.h, 88, 94, 0.8f, rgba(dark, 220));
+    b.a.ring(88, 95.5f, 2.2f, 0.7f, steel, 0.6f, 0.3f);
 
-    // hull plates and containers stacked on the south-east quay
-    hullSection(b, 56, 70, 22, 10, 8, hull, hullD);
-    b.container(58, 84, 16, 4, cy ? C_HULL : K_OLIVE);
-    b.container(74, 84, 6, 4, cy ? C_ROOF2 : K_KHAKI);
-    // fuel tank and its pipe to the shed corner, mooring winch on the south-west quay
-    b.cyl(86, 84, 5.6f, 12, tank, tankSide);
-    b.pipe(82, 76, 88, 68, 1.2f, steel);
-    b.block(14, 84, 12, 5, 5, steel, dark);
-    b.a.cap(20, 86.5f, 6.5f, 86.5f, 0.6f, rgba(dark, 220), 1, 0.2f);   // mooring line to the bollard
-    b.barrel(28, 86, 2.4f, cy ? C_ROOF2 : K_RUST);
-    if (!cy) b.sandbags(3.5f, 66, 3.5f, 80, 2);                                 // sandbags at the south-west corner of the shed
-    lampPost(b, 90, 44, 14, steel, cy ? C_CYAN : K_YEL);
-    lampPost(b, 4, 56, 14, steel, cy ? C_CYAN : K_YEL);
-    // team mark on the south quay wall and the shed roof
-    b.mark(56, sh.y + sh.h + 2.0f, 12, 2.6f);
+    // south-west quay: two stacks of containers, the top box a little offset from the one under it
+    b.container(14, 92, 18, 5, contA);
+    b.container(15, 92.6f, 16, 4, contB);
+    b.container(14, 100, 18, 5, contB);
+    b.container(15, 100.6f, 16, 4, contA);
+    // east quay: a stack of containers on the south-east corner, and the fuel tanks by the shed with a pipe to its corner
+    b.container(128, 116, 22, 5, contA);
+    b.container(130, 116.6f, 18, 4, contB);
+    b.cyl(138, 86, 6.0f, 14, tank, tankSide);
+    b.cyl(152, 86, 6.0f, 14, tank, tankSide);
+    b.pipe(124, 80, 134, 82, 1.2f, steel);
+    b.barrel(34, 22, 2.4f, cy ? C_ROOF2 : K_RUST);
+    if (!cy) b.sandbags(3.5f, 28, 3.5f, 44, 2);                                 // sandbags at the north-west corner of the shed
+    lampPost(b, 4, 52, 14, steel, cy ? C_CYAN : K_YEL);
+    lampPost(b, 156, 104, 14, steel, cy ? C_CYAN : K_YEL);
+    // team mark on the shed's south wall
+    b.mark(20, sh.y + sh.h + 4.0f, 14, 2.6f);
     b.a.grain(0, 0, (float)W, (float)H, cy ? 0.05f : 0.10f, cy ? 103u : 107u);
 }
 

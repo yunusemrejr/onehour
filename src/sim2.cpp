@@ -1,4 +1,4 @@
-// One Hour - simulation of the newer subsystems: jeeps (seats that shoot), protector drones, ships, anti-nuke defences and the Hotline Strike fighters.
+// One Hour - simulation of the newer subsystems: jeeps (seats that shoot), protector drones, ships, anti-nuke defences, the Air Strike fighters and the aircraft carriers.
 // The rest of the simulation is in sim.cpp; the two files share the Sim class.
 #include "sim.h"
 
@@ -78,7 +78,7 @@ void Sim::updateJeep(Entity& j) {
     }
     if (j.unloading) updateCarrierUnload(j);
     if (j.passengers.empty()) { j.unloading = false; return; }
-    if (!j.unloading && (tick + j.gen) % 2 == 0) passengersFire(j, 12.5f);
+    if (!j.unloading && !j.ut().naval && (tick + j.gen) % 2 == 0) passengersFire(j, 12.5f);   // (a cargo ship's load rides below decks)
 }
 
 // ------------------------------------------------------------ protector drones
@@ -213,22 +213,36 @@ void Sim::moveShip(Entity& e, float speed) {
     }
 }
 
-Vec2 Sim::navalExit(const Entity& yard) const { return g_map.nearestWater(yard.pos, 10, true); }   // (always the lake: a ship put into a cut-off river could never get out)
+Vec2 Sim::navalExit(const Entity& yard) const { return g_map.nearestWater(yard.pos, 12, true); }   // (always the lake or the ocean: a ship put into a cut-off river could never get out)
 
 // The legal spot nearest to 'near' for a structure that must touch the lake (a Naval Yard): scans the whole shore the player has explored.
 bool Sim::shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const {
     const BuildType& b = BUILDS[buildType];
-    float best = 1e18f; bool found = false;
-    for (int y = 1; y < MAP_H - b.h; y++) for (int x = 1; x < MAP_W - b.w; x++) {
-        if (!canPlace(player, buildType, x, y)) continue;
-        bool roadFree = true;   // never plug a road (the ring road runs right along the beach)
-        for (int j = y - 1; j <= y + b.h && roadFree; j++) for (int i = x - 1; i <= x + b.w; i++) if (inMap(i, j) && (g_map.tile(i, j) == T_ROAD || g_map.bridge[j * MAP_W + i])) { roadFree = false; break; }
-        if (!roadFree) continue;
-        bool gapOk = true;   // keep the one-tile lane around the structure open, as the computer commander does for everything it builds
-        for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++) if (inMap(i, j) && (g_map.blocked[j * MAP_W + i] & 2)) { gapOk = false; break; }
-        if (!gapOk) continue;
-        float d = dist(buildingCenter(buildType, x, y), near);
-        if (d < best) { best = d; tx = x; ty = y; found = true; }
+    // Rings outward from 'near' (the sea map has hundreds of tiles of coast, and every full placement test is costly): the nearest legal site of the
+    // first ring that has one, compared with the next ring's (a footprint's centre one ring further out can still be a little closer)
+    const int cx = tileOf(near.x) - b.w / 2, cy = tileOf(near.y) - b.h / 2;
+    float best = 1e18f; bool found = false; int lastRing = MAP_W;
+    for (int r = 0; r <= MAP_W && r <= lastRing; r++) {
+        for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+            if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+            int x = cx + dx, y = cy + dy;
+            if (x < 1 || y < 1 || x >= MAP_W - b.w || y >= MAP_H - b.h) continue;
+            float d = dist(buildingCenter(buildType, x, y), near);
+            if (d >= best) continue;
+            bool wet = false;   // (cheap tests first)
+            for (int i = x - 1; i <= x + b.w && !wet; i++) wet = g_map.bigWater(i, y - 1) || g_map.bigWater(i, y + b.h);
+            for (int j = y; j < y + b.h && !wet; j++) wet = g_map.bigWater(x - 1, j) || g_map.bigWater(x + b.w, j);
+            if (!wet) continue;
+            bool roadFree = true;   // never plug a road (the ring road runs right along the beach)
+            for (int j = y - 1; j <= y + b.h && roadFree; j++) for (int i = x - 1; i <= x + b.w; i++) if (inMap(i, j) && (g_map.tile(i, j) == T_ROAD || g_map.bridge[j * MAP_W + i])) { roadFree = false; break; }
+            if (!roadFree) continue;
+            bool gapOk = true;   // keep the one-tile lane around the structure open, as the computer commander does for everything it builds
+            for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++) if (inMap(i, j) && (g_map.blocked[j * MAP_W + i] & 2)) { gapOk = false; break; }
+            if (!gapOk || !canPlace(player, buildType, x, y)) continue;
+            best = d; tx = x; ty = y;
+            if (!found) lastRing = r + 1;
+            found = true;
+        }
     }
     return found;
 }
@@ -407,14 +421,43 @@ void Sim::updateInterceptors() {
     interceptors.erase(std::remove_if(interceptors.begin(), interceptors.end(), [&](const Interceptor& it) { return time > it.launchT + it.dur + 0.6f; }), interceptors.end());
 }
 
-// ------------------------------------------------------------ the Hotline Strike fighters
-// A fighter on loan for one run: it crosses the map at full speed, lines up on the called spot and lets a salvo of unguided rockets go on a pass,
-// flies on, comes round, and does it again STRIKE_PASSES times; then it leaves over the nearest edge (or is withdrawn if its time is up).
+// ------------------------------------------------------------ the Air Strike fighters
+// A wave comes in as a V: the leader at the apex flies the middle lane over the called spot, the wingmen behind it to either side fly lanes spread
+// across the target circle, so the wave's sticks of bombs carpet a strip. Every wave is put on the map at the edge it comes in over (it was
+// flying out at sea before that).
+void Sim::launchStrikeWave(const StrikeWave& w) {
+    if (w.owner < 0 || w.owner >= numPlayers || !players[w.owner].alive) return;
+    Vec2 dir = w.dir.norm(), perp(-dir.y, dir.x);
+    const float m = 3.0f * TILE, RANK = 58.0f, WING = 46.0f;
+    // back along the heading from the spot to the edge of the map, then in again by the depth of the V so every wingman starts over the map
+    float t = 1e9f;
+    if (dir.x > 1e-4f) t = std::min(t, (w.target.x - m) / dir.x); else if (dir.x < -1e-4f) t = std::min(t, (w.target.x - (WORLD_W - m)) / dir.x);
+    if (dir.y > 1e-4f) t = std::min(t, (w.target.y - m) / dir.y); else if (dir.y < -1e-4f) t = std::min(t, (w.target.y - (WORLD_H - m)) / dir.y);
+    int ranks = (w.n) / 2;
+    Vec2 apex = w.target - dir * std::max(700.0f, t - ranks * RANK);
+    const float lane = STRIKE_SPREAD * TILE / std::max(1, (STRIKE_WAVE) / 2);
+    for (int i = 0; i < w.n; i++) {
+        int rank = (i + 1) / 2, side = (i & 1) ? 1 : -1;
+        Vec2 from = apex - dir * (rank * RANK) + perp * (side * rank * WING);
+        from.x = clampf(from.x, m, WORLD_W - m); from.y = clampf(from.y, m, WORLD_H - m);
+        Ref r = spawnUnit(w.type, w.owner, from);
+        Entity& e = ents[r.idx];
+        const UnitType& ut = e.ut();
+        e.pos = e.prevPos = e.lastPos = from;
+        e.alt = 1; e.airspeed = ut.speed; e.angle = e.turret = std::atan2(dir.y, dir.x);
+        e.order = O_STRIKERUN; e.target = w.target; e.guardPos = w.target + perp * (side * rank * lane); e.runDir = dir;
+        e.strikePass = 0; e.salvoLeft = STRIKE_ROCKETS; e.ammo = ut.ammo; e.bombsLeft = STRIKE_BOMBS; e.bombTimer = 0; e.actionTimer = 0.1f * i;
+        e.jetMode = side > 0 ? 1 : 0; e.jetBreak = 0; e.roll = 0; e.fade = 1; e.lifeUntil = time + STRIKE_LIFE;
+    }
+    emit(EV_SOUND, w.owner, SND_JET, apex);
+}
+
+// A rocket of the run-in: most go for something that stands in the circle, the rest rake the ground between.
 void Sim::fireStrikeRocket(Entity& e) {
     const Weapon& w = WEAPONS[e.ut().weapon];
     float spread = STRIKE_SPREAD * TILE;
     Vec2 dest = e.target + Vec2(rng.f(-1, 1), rng.f(-1, 1)).norm() * (spread * std::sqrt(rng.f()));
-    if (rng.f() < 0.65f) {   // most of the rockets go for something that stands in the circle, the rest rake the ground between
+    if (rng.f() < 0.75f) {
         static std::vector<Vec2> spots; spots.clear();
         forEachNear(e.target, spread * 1.5f, [&](Entity& t) {
             if (t.kind == EK_RESOURCE || !enemies(e.owner, t.owner) || t.isAir() || t.carrier.valid() || t.fall > 0 || !visibleTo(t, e.owner)) return;
@@ -430,34 +473,151 @@ void Sim::fireStrikeRocket(Entity& e) {
     p.vel = dir * w.projSpeed; p.dest = dest; p.life = dist(from, dest) / w.projSpeed + 1.5f;
     projs.push_back(p);
     fx.push_back({FX_FLASH, from, from, 0, 0.1f, w.color, 8});
-    if ((e.ammo & 3) == 0) emit(EV_SOUND, e.owner, SND_ROCKET, from);
+    emit(EV_SOUND, e.owner, SND_ROCKET, from);
 }
 
+// One pass, then away. On the run-in it holds its wave's heading and slides onto its own lane, fires its rockets from long range and lays its stick
+// of bombs centred on its lane point; then it breaks to its side of the V in a hard turn with a full barrel roll and a spray of flares, and runs
+// for the nearest edge ahead of it, fading out over the sea.
 void Sim::strikeJetRun(Entity& e) {
     const UnitType& ut = e.ut();
-    if (e.salvoLeft > 0) {   // the salvo: one rocket every few hundredths of a second, flying dead straight
+    const float top = ut.speed;
+    Vec2 fwd(std::cos(e.angle), std::sin(e.angle));
+    if (e.strikePass == 0) {
+        Vec2 lane = e.guardPos, to = lane - e.pos;
+        float along = to.x * e.runDir.x + to.y * e.runDir.y;   // how far ahead along its heading the lane point still is
+        Vec2 aim = lane - e.runDir * std::max(0.0f, along - 260.0f);   // (a point on its lane line a little ahead: it converges onto the lane, then holds it)
+        float want = along > 80.0f ? std::atan2(aim.y - e.pos.y, aim.x - e.pos.x) : std::atan2(e.runDir.y, e.runDir.x);
+        airSteer(e, want, top, false);
         e.actionTimer -= SIM_DT;
-        while (e.salvoLeft > 0 && e.actionTimer <= 0) { fireStrikeRocket(e); e.salvoLeft--; if (e.ammo > 0) e.ammo--; e.actionTimer += 0.085f; }
-        if (e.salvoLeft == 0) { e.strikePass++; e.jetBreak = 1.0f; }
-        airSteer(e, e.angle, ut.speed);   // (the edge look-ahead still turns it inward near the border: the rockets fly to their own aim points either way)
+        if (e.salvoLeft > 0 && along < 900.0f && along > 420.0f && e.actionTimer <= 0) { fireStrikeRocket(e); e.salvoLeft--; if (e.ammo > 0) e.ammo--; e.actionTimer = 0.22f; }
+        // the stick: a bomb lands 'carry' ahead of the aircraft, the first one half a stick short of the lane point
+        const float carry = top * 0.45f, half = (STRIKE_BOMBS - 1) * STRIKE_BOMB_GAP * 0.5f;
+        Vec2 impact = e.pos + fwd * carry;
+        float lead = (lane.x - impact.x) * e.runDir.x + (lane.y - impact.y) * e.runDir.y;
+        if (e.bombsLeft > 0 && lead <= half + 4.0f) {
+            e.bombTimer -= SIM_DT;
+            if (e.bombTimer <= 0) { dropBomb(e, impact); e.bombsLeft--; e.bombTimer += STRIKE_BOMB_GAP / top; if (e.bombsLeft == STRIKE_BOMBS - 1) emit(EV_SOUND, e.owner, SND_AIR, e.pos); }
+        }
+        if (e.bombsLeft == 0 || along < -400.0f) { e.strikePass = 1; e.jetBreak = 1.3f; e.bombsLeft = 0; emit(EV_SOUND, e.owner, SND_JET, e.pos); }
         return;
     }
-    bool leaving = e.strikePass >= STRIKE_PASSES || e.ammo <= 0 || (e.lifeUntil >= 0 && time >= e.lifeUntil - 10.0f);
-    if (leaving) {   // out over the nearest edge, away from the target
-        Vec2 away = e.pos - e.target;
-        if (away.len2() < 1.0f) away = Vec2(std::cos(e.angle), std::sin(e.angle));
-        float dl = std::min(std::min(e.pos.x, WORLD_W - e.pos.x), std::min(e.pos.y, WORLD_H - e.pos.y));
-        if (e.jetBreak > 0 && dl > 90.0f) { e.jetBreak -= SIM_DT; airSteer(e, e.angle, ut.speed, false); }
-        else airSteer(e, std::atan2(away.y, away.x), ut.speed, false);
-        if (dl < 30.0f) destroy(e, false);   // gone over the edge
+    if (e.strikePass == 1) {   // the break
+        float side = e.jetMode ? 1.0f : -1.0f;
+        e.jetBreak -= SIM_DT;
+        airSteer(e, e.angle + side * 1.4f, top, false);
+        e.roll = side * 6.2832f * clampf(1.0f - e.jetBreak / 1.3f, 0, 1) * 1.15f;   // one full roll and a bit, rolling into the turn
+        if (e.jetBreak > 0.5f && tick % 2 == 0) fx.push_back({FX_SPARK, e.pos - fwd * 18.0f + Vec2(rng.f(-6, 6), rng.f(-6, 6)), Vec2(), 0, 0.7f, rgb(255, 236, 170), 5});   // flares
+        if (e.jetBreak <= 0) { e.strikePass = 2; e.roll = side * 0.6f; }
         return;
     }
-    if (e.jetBreak > 0) { e.jetBreak -= SIM_DT; airSteer(e, e.angle, ut.speed); return; }   // flying on past the target before swinging round
-    Vec2 aim = e.guardPos.len2() > 1.0f ? e.guardPos : e.target;   // each fighter has its own lane across the spot (see cmdPhoneStrike)
-    Vec2 to = aim - e.pos;
-    float D = to.len(), want = std::atan2(to.y, to.x);
-    airSteer(e, want, ut.speed);
-    if (D < 640.0f && D > 220.0f && std::abs(angDelta(e.angle, want)) < 0.12f) { e.salvoLeft = STRIKE_SALVO; e.actionTimer = 0; emit(EV_SOUND, e.owner, SND_JET, e.pos); }   // (a pass begins with the roar of the engines)
+    // out: on ahead, toward the nearest edge in front of it
+    Vec2 edge(e.pos.x < WORLD_W * 0.5f ? -1.0f : 1.0f, 0);
+    if (std::min(e.pos.y, WORLD_H - e.pos.y) < std::min(e.pos.x, WORLD_W - e.pos.x)) edge = Vec2(0, e.pos.y < WORLD_H * 0.5f ? -1.0f : 1.0f);
+    Vec2 away = (Vec2(std::cos(e.angle), std::sin(e.angle)) * 1.2f + e.runDir * 0.6f + edge * 0.9f).norm();
+    leaveMap(e, away);
+}
+
+// A loan on its way out: a lazy weave out to the edge, fading into the haze over the ocean, then gone (no wreck, no loss)
+void Sim::leaveMap(Entity& e, Vec2 away) {
+    float dl = std::min(std::min(e.pos.x, WORLD_W - e.pos.x), std::min(e.pos.y, WORLD_H - e.pos.y));
+    e.fade = clampf((dl - 40.0f) / STRIKE_FADE, 0.0f, 1.0f);
+    if (dl < 40.0f) { destroy(e, false); return; }
+    float weave = std::sin(time * 2.4f + (float)(e.gen % 97));
+    airSteer(e, std::atan2(away.y, away.x) + 0.25f * weave, airTopSpeed(e), false);
+    e.roll = 0.45f * weave;
+}
+
+// ------------------------------------------------------------ cargo ships
+// The beach a cargo ship lands its load on: the free land tile nearest the hull within CARGOSHIP_LAND tiles, leaning toward the spot the player picked
+// (so a ship lying between two shores lands on the one that was meant). False if there is no land within reach.
+bool Sim::shipLanding(const Entity& c, Vec2* land) const {
+    const int R = (int)CARGOSHIP_LAND + 1;
+    int cx = tileOf(c.pos.x), cy = tileOf(c.pos.y);
+    Vec2 aim = c.unloadSpot.len2() > 1.0f ? c.unloadSpot : c.pos;
+    float best = 1e18f; int bx = -1, by = -1;
+    for (int y = cy - R; y <= cy + R; y++) for (int x = cx - R; x <= cx + R; x++) {
+        if (!g_map.passable(x, y)) continue;
+        float d = dist(tileCenter(x, y), c.pos);
+        if (d > c.radius() + CARGOSHIP_LAND * TILE) continue;
+        float sc = d + dist(tileCenter(x, y), aim) * 0.25f;
+        if (sc < best) { best = sc; bx = x; by = y; }
+    }
+    if (bx < 0) return false;
+    if (land) *land = tileCenter(bx, by);
+    return true;
+}
+
+// ------------------------------------------------------------ aircraft carriers
+static inline bool isCarrierType(int t) { return t == U_C_CARRIER || t == U_K_CARRIER; }
+
+// The enemy a carrier's jets should go after: aircraft first, then warships, then armed units and the rest, the nearest first, within CARRIER_RANGE of
+// the carrier and seen (never a town: its blocks fight nobody)
+Entity* Sim::carrierTarget(const Entity& c, const Entity* jet) {
+    Entity* best = nullptr; float bd = 1e18f;
+    const float R = CARRIER_RANGE * TILE;
+    forEachNear(c.pos, R, [&](Entity& t) {
+        if (t.kind == EK_RESOURCE || !enemies(c.owner, t.owner) || (t.isBuilding() && t.district >= 0)) return;
+        if (!canTarget(jet ? *jet : c, t)) return;
+        if (!explored(c.owner, clampi(tileOf(t.pos.x), 0, MAP_W - 1), clampi(tileOf(t.pos.y), 0, MAP_H - 1))) return;
+        float d = dist(t.pos, c.pos);
+        if (d > R) return;
+        float score = d - (t.isAir() ? 9.0f * TILE : 0.0f) - (t.isUnit() && !t.isAir() && t.ut().naval ? 5.0f * TILE : 0.0f) - (t.isUnit() && t.weapon() >= 0 ? 2.0f * TILE : 0.0f);
+        if (score < bd) { bd = score; best = &t; }
+    });
+    return best;
+}
+
+// Every quarter second: a lost jet is replaced after CARRIER_REPLACE, and a ready jet takes off (one every CARRIER_LAUNCH_GAP) while there is an
+// enemy to fight near the carrier. (Spawning may grow the entity array: nothing touches 'c' after the launch.)
+void Sim::updateCarrier(Entity& c) {
+    if ((tick + c.gen) % 5 != 0 || c.owner < 0) return;
+    const int jetT = c.type == U_C_CARRIER ? U_C_CARRIERJET : U_K_CARRIERJET;
+    const Ref cr = refOf(c);
+    int up = 0;
+    for (auto& e : ents) if (e.alive && e.isUnit() && e.type == jetT && e.home == cr) up++;
+    if ((int)c.deck.size() + up < CARRIER_WING) {
+        if (c.deckReplace < 0) c.deckReplace = time + CARRIER_REPLACE;
+        else if (time >= c.deckReplace) { c.deck.push_back(time); c.deckReplace = -1; }
+    } else c.deckReplace = -1;
+    if (c.deck.empty() || time < c.deckLaunch || c.disabledUntil > time) return;
+    int ready = -1;
+    for (size_t i = 0; i < c.deck.size(); i++) if (c.deck[i] <= time) { ready = (int)i; break; }
+    if (ready < 0 || !carrierTarget(c, nullptr)) return;
+    c.deck.erase(c.deck.begin() + ready);
+    c.deckLaunch = time + CARRIER_LAUNCH_GAP;
+    const float ang = c.angle;
+    const int owner = c.owner;
+    Vec2 at = c.pos + Vec2(std::cos(ang), std::sin(ang)) * 34.0f;   // off the bow catapults
+    Ref r = spawnUnit(jetT, owner, at);
+    Entity& j = ents[r.idx];
+    j.pos = j.prevPos = j.lastPos = at;
+    j.alt = 1; j.airspeed = UNITS[jetT].speed * 0.55f; j.angle = j.turret = ang;
+    j.home = cr; j.order = O_CARRIERJET; j.ammo = UNITS[jetT].ammo; j.targetEnt = NOREF;
+    emit(EV_SOUND, owner, SND_JET, at);
+}
+
+// A carrier's jet: it fights the carrier's targets while it has missiles, then comes back over the deck and lands (it goes back into the carrier's deck
+// list). If the carrier is gone it has nowhere to land: it flies off the map like a loan.
+void Sim::carrierJetRun(Entity& e) {
+    const UnitType& ut = e.ut();
+    Entity* c = get(e.home);
+    if (!c || !c->alive || !c->isUnit() || !isCarrierType(c->type)) {
+        Vec2 out(e.pos.x < WORLD_W * 0.5f ? -1.0f : 1.0f, e.pos.y < WORLD_H * 0.5f ? -1.0f : 1.0f);
+        leaveMap(e, out.norm());
+        return;
+    }
+    if (e.ammo > 0) {
+        Entity* t = get(e.targetEnt);
+        if (!t || !canTarget(e, *t) || dist(t->pos, c->pos) > CARRIER_RANGE * TILE * 1.35f) {
+            t = carrierTarget(*c, &e);
+            e.targetEnt = t ? refOf(*t) : NOREF; e.jetBreak = 0; e.stuckTimer = 0;
+        }
+        if (t) { jetAttack(e, *t); return; }
+    }
+    Vec2 deck = c->pos - Vec2(std::cos(c->angle), std::sin(c->angle)) * 18.0f;
+    if (dist(e.pos, deck) < 26.0f) { c->deck.push_back(time + CARRIER_REARM); destroy(e, false); return; }   // down on the deck (rearming)
+    flyTo(e, deck, ut.speed);
 }
 
 // ------------------------------------------------------------ indestructible structures and the Island Nuke Launchers
@@ -594,6 +754,12 @@ void Sim::nukeBomberRun(Entity& e) {
 }
 
 void Sim::updateStrikeMarks() {
+    for (size_t i = 0; i < strikeWaves.size();) {   // the waves of an Air Strike come in one after another
+        if (time < strikeWaves[i].at) { i++; continue; }
+        StrikeWave w = strikeWaves[i];
+        strikeWaves.erase(strikeWaves.begin() + i);
+        launchStrikeWave(w);
+    }
     for (size_t i = 0; i < strikeMarks.size();) {
         StrikeMark& m = strikeMarks[i];
         float age = time - m.t0;

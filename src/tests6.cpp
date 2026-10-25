@@ -122,7 +122,7 @@ static bool townTest(Faction me, Faction foe, u64 seed) {
 static bool deepNukeTest(Faction me, Faction foe, u64 seed) {
     scene6(me, foe, seed);
     int bb = firstBuildOf(me), silo = me == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
-    CHECK6(BUILDS[silo].cost == 5000 && BUILDS[silo].role == BR_UNUKE, "an Underground Nuke does not cost $5000");
+    CHECK6(BUILDS[silo].cost == 8000 && BUILDS[silo].role == BR_UNUKE, "an Underground Nuke does not cost $8000");
     (void)bb;
     CHECK6(!g_sim.buildAvailable(0, silo), "an Underground Nuke was available without a Nuke Ramp");
     Vec2 home = g_sim.players[0].basePos;

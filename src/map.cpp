@@ -53,21 +53,47 @@ static void paintRoad(Map& m, float x0, float y0, float x1, float y1, float half
 }
 static bool isGrass(u8 t) { return t == T_GRASS || t == T_GRASS2; }
 
+// How far a tile lies inland from the main island's coast (tiles; <= 0 is sea). The coast follows the old map's square border a few tiles inside it,
+// rounded off at the corners and pushed in and out by noise, so it reads as a coastline with bays and headlands rather than a box.
+float mainIslandInland(int x, int y) {
+    const u32 SEED = 1979;
+    float u = x + 0.5f - ISLE_X0, v = y + 0.5f - ISLE_X0, W = (float)ISLE_W;
+    const float RC = 26.0f;   // corner rounding radius
+    float cu = std::min(u, W - u), cv = std::min(v, W - v), d;
+    if (cu < RC && cv < RC) d = RC - std::sqrt((RC - cu) * (RC - cu) + (RC - cv) * (RC - cv));
+    else d = std::min(cu, cv);
+    // broad bays and headlands (up to about 11 tiles in or 3 out), smaller coves, and a ragged edge (the bases sit 28 tiles in: always dry)
+    float wob = (fbm(x * 0.022f + 300, y * 0.022f + 500, SEED + 401) - 0.5f) * 16.0f + (fbm(x * 0.06f + 40, y * 0.06f + 90, SEED + 403) - 0.5f) * 6.0f
+              + (fbm(x * 0.16f, y * 0.16f, SEED + 402) - 0.5f) * 2.5f;
+    return d - 4.0f + wob;
+}
+// The same for the second island: an ellipse with a wandering coast and a harbour bay biting into its east side (roughly in tiles)
+float seaIslandInland(int x, int y) {
+    const u32 SEED = 1979;
+    float dx = (x + 0.5f - SEA_ISLE_X) / SEA_ISLE_RX, dy = (y + 0.5f - MAP_H * 0.5f) / SEA_ISLE_RY;
+    float e = std::sqrt(dx * dx + dy * dy);
+    float wob = (fbm(x * 0.08f + 11, y * 0.08f + 23, SEED + 420) - 0.5f) * 0.30f;
+    float inland = (1.0f + wob - e) * SEA_ISLE_RX;
+    float bx = x + 0.5f - (SEA_ISLE_X + SEA_ISLE_RX * 0.8f), by = y + 0.5f - (MAP_H * 0.5f + 7.0f);
+    return std::min(inland, std::sqrt(bx * bx + by * by) - 6.0f);   // (the bay)
+}
+
 void Map::generate() {
     const u32 SEED = 1979;
     regionDirty = true;
-    // The arena's routes scale with the map; structures, road widths and unit
-    // silhouettes stay at their original readable size.
-    const float G = MAP_W / 104.0f;
-    const float S = MAP_W / 80.0f;
-    const float C = MAP_W * 0.5f;   // map centre, tile units
+    // The arena's routes scale with the main island (the old map, ISLE_W tiles square, centred in the sea); structures, road widths and unit
+    // silhouettes stay at their original readable size. Mirrors and rotations about the map centre are mirrors about the island's centre too.
+    const float G = ISLE_W / 104.0f;
+    const float S = ISLE_W / 80.0f;
+    const float C = MAP_W * 0.5f;   // map centre = the island's centre, tile units
+    const int O = ISLE_X0;          // the island's first tile: layout coordinates of the old map are offset by it
     // The lake country (the lake, its beach and islands, the ring road round it, the shore supply piles, the pools and the old strongholds between
     // the lake and the ring road's corners) is scaled up by LAKE_K about the centre on top of the map's own scale: the lake has twice the water of
     // the 146x146 map while the bases, ridges and woods keep their place in the corners.
     const float LAKE_K = 1.17f, GL = G * LAKE_K;
     const float ISL = GL / (146.0f / 104.0f);   // island sizes and offsets were laid out for the 146 map's lake
     auto inner = [&](float v104) { return C + (v104 - 52.0f) * GL; };   // a lake-country coordinate of the 104-tile layout, in tiles
-    auto sc = [&](int v) { return (int)std::lround(v * S); };
+    auto sc = [&](int v) { return O + (int)std::lround(v * S); };
     roads.clear();
     // Base terrain from noise: grass with dirt patches, sand near center
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
@@ -108,17 +134,17 @@ void Map::generate() {
         }
     };
     const int tip = (int)(C - 26 * GL);   // ridge ends stop under the ring road (its discs paint over the last tiles), leaving a shore corridor inside the ring with the supply piles in it
-    ridge(sc(38), sc(41), 1, tip, true, sc(10), sc(14));
-    ridge(sc(38), sc(41), MAP_H - 1 - tip, sc(78), true, sc(65), sc(69));
-    ridge(1, tip, sc(38), sc(41), false, sc(10), sc(14));
-    ridge(MAP_W - 1 - tip, sc(78), sc(38), sc(41), false, sc(65), sc(69));
+    ridge(sc(38), sc(41), O, tip, true, sc(10), sc(14));   // (from the old border: the coast below cuts them off as cliffs over the sea)
+    ridge(sc(38), sc(41), MAP_H - 1 - tip, sc(80) - 1, true, sc(65), sc(69));
+    ridge(O, tip, sc(38), sc(41), false, sc(10), sc(14));
+    ridge(MAP_W - 1 - tip, sc(80) - 1, sc(38), sc(41), false, sc(65), sc(69));
     // A Mountain Fortress is set into each ridge, in the long stretch of mountain between the map edge and the pass: the ridge rock is cut back
     // round the fortress so each of the two armies on either side of the ridge has a doorstep onto it, but the fortress itself still closes
     // the ridge (it is no second pass).
     std::vector<LandmarkSpot> forts;
     {
         const int FW = 5, FH = 4;   // BUILDS[B_C_FORTRESS] footprint
-        int axis = (sc(38) + sc(41)) / 2, segA = 2, segB = sc(10) - 1;   // the ridge stretch between the map edge and the pass
+        int axis = (sc(38) + sc(41)) / 2, segA = O + 2, segB = sc(10) - 1;   // the ridge stretch between the map edge and the pass
         int along = (segA + segB) / 2;
         struct F { int x, y; bool vertical; } F4[4] = {
             { axis - FW / 2, along - FH / 2, true }, { axis - FW / 2, (MAP_H - 1) - along - FH / 2, true },
@@ -137,9 +163,6 @@ void Map::generate() {
         paintDisc(*this, C + hx, C + hy, hr, T_ROCK); paintDisc(*this, C - hx, C + hy, hr, T_ROCK);
         paintDisc(*this, C + hx, C - hy, hr, T_ROCK); paintDisc(*this, C - hx, C - hy, hr, T_ROCK);
     }
-    // Map border rocks
-    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++)
-        if (x == 0 || y == 0 || x == MAP_W - 1 || y == MAP_H - 1) tiles[y * MAP_W + x] = T_ROCK;
 
     // Roads: diagonals from bases to the ring road around the lake, plus the ring
     {
@@ -173,7 +196,7 @@ void Map::generate() {
         static const Pt NW0[] = { {32.5f, 35.3f}, {26.5f, 36.2f}, {22, 36.8f}, {18.5f, 34.5f}, {16, 31.5f}, {12.5f, 29.6f}, {8, 30.4f}, {4.5f, 32.4f}, {1, 31.5f} };
         const int N = (int)(sizeof(NW0) / sizeof(NW0[0]));
         Pt NW[16];
-        for (int i = 0; i < N; i++) NW[i] = Pt{ NW0[i].x * S, NW0[i].y * S };
+        for (int i = 0; i < N; i++) NW[i] = Pt{ O + NW0[i].x * S, O + NW0[i].y * S };
         for (int q = 0; q < 4; q++) {
             auto tf = [&](Pt p) { return Pt{ (q & 1) ? (MAP_W - 1) - p.x : p.x, (q & 2) ? (MAP_H - 1) - p.y : p.y }; };
             std::vector<Pt> pts;   // Catmull-Rom through the control points
@@ -238,6 +261,62 @@ void Map::generate() {
     }
     paintDisc(*this, C - 13.0f * ISL, C - 10.0f * ISL, 1.9f, T_ROCK); paintDisc(*this, C - 9.0f * ISL, C + 15.5f * ISL, 1.9f, T_ROCK);   // rocky islets (nothing can be built on them)
     paintDisc(*this, C + 6.0f * ISL, C - 17.0f * ISL, 1.5f, T_ROCK); paintDisc(*this, C - 19.0f * ISL, C + 4.0f * ISL, 1.4f, T_ROCK);   // and two more out in the wider water
+
+    // ---- the sea. The old map is the main island: its coast wanders a few tiles inside the old border (headlands push out a little), the corners
+    // are rounded off, and a beach or a band of cliffs rings it (where the coast is high, and wherever a ridge runs into the sea). The rivers keep
+    // flowing out through the beach: their mouths open into the ocean.
+    auto baseTile = [&](int x, int y) -> u8 {   // the island's ground before anything else is laid on it (the same noise as the first pass)
+        float n = fbm(x * 0.07f, y * 0.07f, SEED);
+        return n > 0.62f ? T_DIRT : (n < 0.40f ? T_GRASS2 : T_GRASS);
+    };
+    auto coastBand = [&](int x, int y, float inland, float beachW, float cliffK) {   // a land tile 'inland' tiles from the water: beach, cliff or as it is
+        u8& t = tiles[y * MAP_W + x];
+        if (inland >= beachW || t == T_WATER || t == T_ROAD) return;   // (a river runs on out to its mouth; no road reaches the beach)
+        bool cliff = t == T_ROCK || fbm(x * 0.06f + 90, y * 0.06f + 40, SEED + 411) > cliffK;
+        t = cliff ? T_ROCK : T_SAND;
+    };
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+        float d = mainIslandInland(x, y);
+        if (d <= 0) { tiles[y * MAP_W + x] = T_WATER; continue; }
+        coastBand(x, y, d, 1.7f + 1.6f * fbm(x * 0.11f + 7, y * 0.11f + 70, SEED + 412), 0.55f);
+    }
+    // The second island off the east coast: far smaller than the main island but many times the lake's islands. A long green ridge of land with beaches
+    // and northern cliffs, a harbour bay biting into its east side, a rocky knoll, woods (the forest pass below), three rich supply piles and three
+    // old strongholds. Nothing drives there: transports, cargo ships and lifters bring armies over, infiltrators swim.
+    seaIslands.clear();
+    {
+        const float SX = SEA_ISLE_X, SY = C, RX = SEA_ISLE_RX, RY = SEA_ISLE_RY;
+        seaIslands.push_back({ SX, SY, RX, RY });
+        for (int y = (int)(SY - RY - 4); y <= (int)(SY + RY + 4); y++) for (int x = (int)(SX - RX - 4); x <= (int)(SX + RX + 4); x++) {
+            if (!inMap(x, y)) continue;
+            float inland = seaIslandInland(x, y);
+            if (inland <= 0) continue;
+            tiles[y * MAP_W + x] = baseTile(x, y);
+            coastBand(x, y, inland, 1.5f + 1.2f * fbm(x * 0.13f + 3, y * 0.13f + 9, SEED + 413), y < SY - RY * 0.55f ? 0.48f : 0.66f);   // (cliffs mostly on the north end)
+        }
+        paintDisc(*this, SX - 3.5f, SY - 9.0f, 2.6f, T_ROCK);   // a rocky knoll (small: a structure may still quarry it)
+    }
+    // Islets scattered round the sea: sand cays with a few trees, bare rock stacks. Kept well off both islands' coasts and the edge of the map.
+    {
+        Rng ir(SEED + 4401);
+        std::vector<Island> got;
+        for (int attempt = 0; attempt < 4000 && got.size() < 22; attempt++) {
+            float x = ir.f(9.0f, MAP_W - 9.0f), y = ir.f(9.0f, MAP_H - 9.0f), r = ir.f(1.6f, 4.4f);
+            if (mainIslandInland((int)x, (int)y) > -9.0f || seaIslandInland((int)x, (int)y) > -9.0f) continue;
+            bool near = false;
+            for (auto& o2 : got) if (std::hypot(o2.cx - x, o2.cy - y) < 17.0f) near = true;
+            if (near) continue;
+            got.push_back({ x, y, r });
+            if (r < 2.2f || ir.f() < 0.25f) { paintDisc(*this, x, y, r * 0.8f, T_ROCK); continue; }   // a bare stack
+            paintDisc(*this, x, y, r, T_SAND);
+            paintDisc(*this, x + ir.f(-0.4f, 0.4f), y + ir.f(-0.4f, 0.4f), r - 1.3f, T_GRASS);
+            for (int k = 0; k < (int)(r * 1.2f); k++) {
+                int tx = (int)(x + ir.f(-r + 1.6f, r - 1.6f)), ty = (int)(y + ir.f(-r + 1.6f, r - 1.6f));
+                if (inMap(tx, ty) && tiles[ty * MAP_W + tx] == T_GRASS) tiles[ty * MAP_W + tx] = T_TREE;
+            }
+        }
+        for (auto& g2 : got) seaIslands.push_back({ g2.cx, g2.cy, g2.r, g2.r });
+    }
     // Tree clusters from noise, kept off roads, bases, and the shore
     for (int y = 2; y < MAP_H - 2; y++) for (int x = 2; x < MAP_W - 2; x++) {
         u8& t = tiles[y * MAP_W + x];
@@ -259,7 +338,7 @@ void Map::generate() {
     {
         static const float BELT[2][2] = { {18, 30}, {36, 22} };   // NW quadrant, tile units
         for (int q = 0; q < 4; q++) for (auto& b : BELT) {
-            float bx = b[0] * G, by = b[1] * G;
+            float bx = O + b[0] * G, by = O + b[1] * G;
             for (int k = 0; k < q; k++) { float t = bx; bx = (MAP_W - 1) - by; by = t; }   // rotate 90 degrees q times
             const float BR = 5.5f * G;
             int x0 = clampi((int)(bx - BR - 1), 1, MAP_W - 2), x1 = clampi((int)(bx + BR + 1), 1, MAP_W - 2);
@@ -290,9 +369,13 @@ void Map::generate() {
     for (size_t k = 0; k < supplies.size(); k++) {
         auto& supply = supplies[k];
         bool shore = k >= 8 && k < 12;   // the four on the lake shore move out with the lake country
-        supply.tx = shore ? (int)std::lround(inner(supply.tx + 0.5f) - 0.5f) : (int)std::lround((supply.tx + 0.5f) * G - 0.5f);
-        supply.ty = shore ? (int)std::lround(inner(supply.ty + 0.5f) - 0.5f) : (int)std::lround((supply.ty + 0.5f) * G - 0.5f);
+        supply.tx = shore ? (int)std::lround(inner(supply.tx + 0.5f) - 0.5f) : O + (int)std::lround((supply.tx + 0.5f) * G - 0.5f);
+        supply.ty = shore ? (int)std::lround(inner(supply.ty + 0.5f) - 0.5f) : O + (int)std::lround((supply.ty + 0.5f) * G - 0.5f);
     }
+    // three rich piles on the second island (nobody's: whoever ships a hauler and a Supply Hub over gets them)
+    supplies.push_back({ (int)SEA_ISLE_X - 3, (int)C - 21, 50000 });
+    supplies.push_back({ (int)SEA_ISLE_X + 3, (int)C - 2, 50000 });
+    supplies.push_back({ (int)SEA_ISLE_X - 4, (int)C + 19, 50000 });
     // Clear the ground around supply piles and bases so nothing important is walled in
     for (auto& s : supplies) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 3.4f, T_DIRT, [](u8 t) { return t == T_TREE || t == T_ROCK || t == T_WATER; });
     for (auto& s : starts) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 11.5f, T_GRASS, [](u8 t) { return t == T_TREE || t == T_ROCK; });
@@ -322,6 +405,41 @@ void Map::generate() {
                 if (comp.size() > 24) sealed = false;
             }
             if (sealed && comp.size() <= 24) for (int c : comp) tiles[c] = T_TREE;
+        }
+    }
+    // Pockets of the main island's ground walled in by the coast's cliffs and the sea (a strip of beach under a cliff, a cliff top) are part of the
+    // cliffs: nothing could ever walk in or out. (The lake's islands are cut off by design, and so is everything out at sea.)
+    {
+        static int labC[MAP_W * MAP_H];
+        memset(labC, 0, sizeof(labC));
+        auto open = [&](int i) { u8 t = tiles[i]; return t != T_WATER && t != T_ROCK && t != T_TREE; };
+        std::vector<int> sizes(1, 0), stack;
+        for (int i = 0; i < MAP_W * MAP_H; i++) {
+            if (labC[i] || !open(i)) continue;
+            int id = (int)sizes.size(); sizes.push_back(0);
+            stack.assign(1, i); labC[i] = id;
+            while (!stack.empty()) {
+                int c = stack.back(); stack.pop_back(); sizes[id]++;
+                int cx = c % MAP_W, cy = c / MAP_W;
+                static const int DX4[4] = {1, -1, 0, 0}, DY4[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++) {
+                    int nx = cx + DX4[k], ny = cy + DY4[k];
+                    if (!inMap(nx, ny)) continue;
+                    int n = ny * MAP_W + nx;
+                    if (!labC[n] && open(n)) { labC[n] = id; stack.push_back(n); }
+                }
+            }
+        }
+        int mainId = labC[starts[0].ty * MAP_W + starts[0].tx];
+        for (int i = 0; i < MAP_W * MAP_H; i++) {
+            int id = labC[i];
+            if (!id || id == mainId || sizes[id] > 160) continue;
+            int x = i % MAP_W, y = i / MAP_W;
+            if (mainIslandInland(x, y) <= 0) continue;   // (out at sea: the second island and the islets)
+            bool lakeIsle = false;
+            for (auto& isl : islands) if ((x - isl.cx) * (x - isl.cx) + (y - isl.cy) * (y - isl.cy) <= (isl.r + 3) * (isl.r + 3)) lakeIsle = true;
+            if (lakeIsle || mainIslandInland(x, y) > 14.0f) continue;   // (only the coast: pockets inland are the forests' business, see above)
+            tiles[i] = T_ROCK;
         }
     }
     // Blocked flags
@@ -376,12 +494,49 @@ void Map::generate() {
             }
         }
     }
-    lakeComp = 0;
-    for (int i = 1; i < (int)waterSize.size(); i++) if (waterSize[i] > waterSize[lakeComp]) lakeComp = i;
-    // Interior water grouped for the caustics pass (see map.h): aligned 4x4 blocks first, then whatever interior tiles remain.
-    waterBlocks.clear(); waterTiles.clear();
+    // the ocean is the biggest body of water; the lake is the body that holds most of the water round the map's centre
+    oceanComp = 0;
+    for (int i = 1; i < (int)waterSize.size(); i++) if (waterSize[i] > waterSize[oceanComp]) oceanComp = i;
+    {
+        std::vector<int> near(waterSize.size(), 0);
+        const float LR = 22.0f * GL;
+        for (int y = (int)(C - LR); y <= (int)(C + LR); y++) for (int x = (int)(C - LR); x <= (int)(C + LR); x++)
+            if (inMap(x, y) && (x - C) * (x - C) + (y - C) * (y - C) <= LR * LR) near[waterComp[y * MAP_W + x]]++;
+        lakeComp = 0;
+        for (int i = 1; i < (int)near.size(); i++) if (i != oceanComp && near[i] > near[lakeComp]) lakeComp = i;
+    }
+    // how far every tile lies from land (0 on land), chamfered 2-3 (so 2 = one tile straight, 3 = one diagonal step) then halved
+    shoreDist.assign((size_t)MAP_W * MAP_H, 0);
+    {
+        std::vector<int> d((size_t)MAP_W * MAP_H);
+        for (int i = 0; i < MAP_W * MAP_H; i++) d[i] = tiles[i] == T_WATER ? 1 << 20 : 0;
+        for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+            int& v = d[(size_t)y * MAP_W + x];
+            if (x > 0) v = std::min(v, d[(size_t)y * MAP_W + x - 1] + 2);
+            if (y > 0) { v = std::min(v, d[(size_t)(y - 1) * MAP_W + x] + 2); if (x > 0) v = std::min(v, d[(size_t)(y - 1) * MAP_W + x - 1] + 3); if (x < MAP_W - 1) v = std::min(v, d[(size_t)(y - 1) * MAP_W + x + 1] + 3); }
+        }
+        for (int y = MAP_H - 1; y >= 0; y--) for (int x = MAP_W - 1; x >= 0; x--) {
+            int& v = d[(size_t)y * MAP_W + x];
+            if (x < MAP_W - 1) v = std::min(v, d[(size_t)y * MAP_W + x + 1] + 2);
+            if (y < MAP_H - 1) { v = std::min(v, d[(size_t)(y + 1) * MAP_W + x] + 2); if (x < MAP_W - 1) v = std::min(v, d[(size_t)(y + 1) * MAP_W + x + 1] + 3); if (x > 0) v = std::min(v, d[(size_t)(y + 1) * MAP_W + x - 1] + 3); }
+        }
+        for (int i = 0; i < MAP_W * MAP_H; i++) shoreDist[i] = (u8)std::min(255, d[i] / 2);
+    }
+    // Interior water grouped for the caustics pass (see map.h): aligned 4x4 blocks first, then whatever interior tiles remain. The ocean only gets
+    // them near a shore; its open water gets the swell blocks instead (the two overlap a little so the change is soft).
+    waterBlocks.clear(); waterTiles.clear(); seaBlocks.clear();
+    for (int by = 0; by + 7 < MAP_H; by += 8) for (int bx = 0; bx + 7 < MAP_W; bx += 8) {
+        int far = 0; bool sea = true;
+        for (int j = 0; j < 8 && sea; j++) for (int i = 0; i < 8; i++) {
+            int k = (by + j) * MAP_W + bx + i;
+            if (waterComp[k] != oceanComp) { sea = false; break; }
+            far = std::max(far, (int)shoreDist[k]);
+        }
+        if (sea && far >= 5) seaBlocks.push_back(by * MAP_W + bx);
+    }
     {
         auto interior = [&](int x, int y) {
+            if (waterComp[y * MAP_W + x] == oceanComp && shoreDist[y * MAP_W + x] > 7) return false;   // (open sea: the swell covers it)
             return tiles[y * MAP_W + x] == T_WATER && tiles[y * MAP_W + x - 1] == T_WATER && tiles[y * MAP_W + x + 1] == T_WATER
                 && tiles[(y - 1) * MAP_W + x] == T_WATER && tiles[(y + 1) * MAP_W + x] == T_WATER;
         };
@@ -453,6 +608,19 @@ void Map::generate() {
         {
             int tx = (int)C - 4, ty = (int)C + 1;
             if (landmarkFits(tx, ty, 2, 2)) { landmarks.push_back({ tx, ty, 2 }); setStructure(tx, ty, 2, 2, true); }
+        }
+        // the second island's old strongholds: a castle over the harbour bay, a watchtower on the cliffs at the north end, a civilian bunker in the south
+        static const struct { int dx, dy, w, h, kind; } SEA[3] = { { -5, 5, 4, 4, 0 }, { -1, -29, 2, 2, 2 }, { -2, 27, 3, 3, 1 } };
+        for (auto& L : SEA) {
+            int tx = (int)SEA_ISLE_X + L.dx, ty = (int)C + L.dy, bx = -1, by = -1;
+            for (int r = 0; r <= 6 && bx < 0; r++) for (int dy = -r; dy <= r && bx < 0; dy++) for (int dx = -r; dx <= r; dx++) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r || !landmarkFits(tx + dx, ty + dy, L.w, L.h)) continue;
+                bx = tx + dx; by = ty + dy; break;
+            }
+            if (bx < 0) continue;
+            landmarks.push_back({ bx, by, L.kind });
+            setStructure(bx, by, L.w, L.h, true);
+            paintDisc(*this, bx + L.w * 0.5f, by + L.h * 0.5f, std::max(L.w, L.h) * 0.5f + 2.0f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2; });
         }
     }
     // Short worn access tracks tie the settlement to its road network. Paint only
@@ -597,48 +765,58 @@ bool Map::wouldPlug(int tx, int ty, int w, int h) const {
         return count;
     };
     if (regions(true) <= regions(false)) return false;
-    // The window saw a split, but two pieces of it may still meet beyond the window's edge (round a wood, a ridge or a lake): that is not a
-    // plug, and refusing it is why a site with plenty of room sometimes would not go down. Confirm on the whole map: label the free ground with
-    // and without the footprint, and count the separate areas the tiles round the footprint belong to. A plug splits one of them in two. A
-    // dead-end nook of a few tiles that gets closed off is harmless and does not count.
-    static int labA[MAP_W * MAP_H], labB[MAP_W * MAP_H], sizeB[MAP_W * MAP_H + 1];
-    static int stackG[MAP_W * MAP_H];
-    auto label = [&](int* lab, int* sizes, bool withFootprint) {
-        for (int i = 0; i < MAP_W * MAP_H; i++) lab[i] = 0;
-        int n = 0;
-        for (int i = 0; i < MAP_W * MAP_H; i++) {
-            int x = i % MAP_W, y = i / MAP_W;
-            bool inF = withFootprint && x >= tx && x < tx + w && y >= ty && y < ty + h;
-            if (lab[i] || blocked[i] != 0 || inF) continue;
-            n++; int sp = 0, cnt = 0; stackG[sp++] = i; lab[i] = n;
-            while (sp > 0) {
-                int c = stackG[--sp], cx = c % MAP_W, cy = c / MAP_W; cnt++;
-                static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
-                for (int k = 0; k < 4; k++) {
-                    int nx = cx + DX[k], ny = cy + DY[k];
-                    if (!inMap(nx, ny)) continue;
-                    int ni = ny * MAP_W + nx;
-                    bool nF = withFootprint && nx >= tx && nx < tx + w && ny >= ty && ny < ty + h;
-                    if (lab[ni] || blocked[ni] != 0 || nF) continue;
-                    lab[ni] = n; stackG[sp++] = ni;
-                }
-            }
-            if (sizes) sizes[n] = cnt;
-        }
-    };
-    label(labA, nullptr, false);
-    label(labB, sizeB, true);
-    std::vector<int> before, after;
+    // The window saw a split, but two pieces of it may still meet beyond the window's edge (round a wood, a ridge, a lake or along the coast): that
+    // is not a plug, and refusing it is why a site with plenty of room sometimes would not go down. Confirm on the whole map. Before the footprint
+    // the free ground is the cached region labelling (Map::region); with it, a flood from one of the tiles round the footprint, the footprint
+    // blocked, has to reach every other tile round it of the same region. It stops as soon as it has (usually a few tiles round the corner), so a
+    // false alarm costs little even on the big sea map. Tiles it cannot reach are a plug unless they are a dead-end nook of six tiles or fewer,
+    // which may be closed off.
+    if (regionDirty) buildRegions();
+    static std::vector<u32> seenG; static u32 genG = 0;
+    if (seenG.size() != (size_t)MAP_W * MAP_H) { seenG.assign((size_t)MAP_W * MAP_H, 0); genG = 0; }
+    static std::vector<int> ring, queueG;
+    ring.clear();
     for (int y = ty - 1; y <= ty + h; y++) for (int x = tx - 1; x <= tx + w; x++) {
         if (!inMap(x, y) || (x >= tx && x < tx + w && y >= ty && y < ty + h)) continue;
-        int i = y * MAP_W + x;
-        if (!labA[i]) continue;
-        before.push_back(labA[i]);
-        if (labB[i] && sizeB[labB[i]] > 6) after.push_back(labB[i]);   // (a nook of six tiles or fewer may be closed off)
+        if (blocked[y * MAP_W + x] == 0) ring.push_back(y * MAP_W + x);
     }
-    std::sort(before.begin(), before.end()); before.erase(std::unique(before.begin(), before.end()), before.end());
-    std::sort(after.begin(), after.end()); after.erase(std::unique(after.begin(), after.end()), after.end());
-    return after.size() > before.size();
+    auto inFoot = [&](int i) { int x = i % MAP_W, y = i / MAP_W; return x >= tx && x < tx + w && y >= ty && y < ty + h; };
+    // Before: one area per region the tiles round the footprint belong to. After: the pieces those tiles fall into with the footprint blocked,
+    // not counting nooks of six tiles or fewer. More pieces after than areas before is a plug. Each piece is flooded only until it has more than six
+    // tiles and has reached every tile round the footprint of its region that is still unaccounted for (usually a few tiles round the corner).
+    static std::vector<u8> assigned;
+    assigned.assign(ring.size(), 0);
+    int before = 0, after = 0;
+    std::vector<u16> regs;
+    for (int i : ring) if (region[i] && std::find(regs.begin(), regs.end(), region[i]) == regs.end()) regs.push_back(region[i]);
+    before = (int)regs.size();
+    for (u16 rg : regs) {
+        for (size_t k = 0; k < ring.size(); k++) {
+            if (region[ring[k]] != rg || assigned[k]) continue;
+            int want = 0;
+            for (size_t j = 0; j < ring.size(); j++) if (region[ring[j]] == rg && !assigned[j]) want++;
+            if (++genG == 0) { std::fill(seenG.begin(), seenG.end(), 0); genG = 1; }
+            queueG.clear(); queueG.push_back(ring[k]); seenG[ring[k]] = genG;
+            int reached = 0; bool done = false;
+            for (size_t q = 0; q < queueG.size() && !done; q++) {
+                int c = queueG[q];
+                for (size_t j = 0; j < ring.size(); j++) if (ring[j] == c && !assigned[j]) { assigned[j] = 2; reached++; }
+                if (reached >= want && queueG.size() > 6) { done = true; break; }
+                int cx = c % MAP_W, cy = c / MAP_W;
+                static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
+                for (int d = 0; d < 4; d++) {
+                    int nx = cx + DX[d], ny = cy + DY[d];
+                    if (!inMap(nx, ny)) continue;
+                    int ni = ny * MAP_W + nx;
+                    if (seenG[ni] == genG || blocked[ni] != 0 || inFoot(ni)) continue;
+                    seenG[ni] = genG; queueG.push_back(ni);
+                }
+            }
+            for (auto& a2 : assigned) if (a2 == 2) a2 = 1;
+            if (queueG.size() > 6) after++;   // (a nook of six tiles or fewer may be closed off)
+        }
+    }
+    return after > before;
 }
 
 void Map::clearForStructure(int x, int y, int w, int h) {
@@ -934,9 +1112,9 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
 }
 
 // ---- the lake
-Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly) const {
+Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly, int comp) const {
     int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
-    if (navOpen(tx, ty) && (!bigOnly || bigWater(tx, ty))) return p;
+    if (navOpen(tx, ty) && (!bigOnly || bigWater(tx, ty)) && (comp == 0 || waterComp[ty * MAP_W + tx] == comp)) return p;
     for (int pass = 0; pass < 2; pass++)   // open water first; a tile with only a narrow channel is the fallback
         for (int r = 1; r <= maxR; r++) {
             float best = 1e18f; int bx = -1, by = -1;
@@ -945,6 +1123,7 @@ Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly) const {
                 int x = tx + dx, y = ty + dy;
                 if (pass == 0 ? !navOpen(x, y) : !navTile(x, y)) continue;
                 if (bigOnly && !bigWater(x, y)) continue;
+                if (comp != 0 && waterComp[y * MAP_W + x] != comp) continue;
                 float d = dist2(tileCenter(x, y), p);
                 if (d < best) { best = d; bx = x; by = y; }
             }
@@ -975,8 +1154,11 @@ static u32 nGen = 1;
 // land (a ship sent to shell a shore target sails to the closest it can get).
 bool Map::findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) const {
     out.clear();
-    Vec2 sf = nearestWater(from, 6), gt = nearestWater(to, 14, true);
-    if (!navTile(tileOf(gt.x), tileOf(gt.y))) gt = nearestWater(to, 60, true);   // a goal far inland: head for the closest point of the lake
+    Vec2 sf = nearestWater(from, 6);
+    int comp = compAt(sf);   // (the goal is moved onto the same body of water: the lake and the ocean do not meet)
+    Vec2 gt = nearestWater(to, 14, true, comp);
+    if (!navTile(tileOf(gt.x), tileOf(gt.y)) || compAt(gt) != comp) gt = nearestWater(to, 60, true, comp);   // a goal far inland: head for the closest point of this sea
+    if (!navTile(tileOf(gt.x), tileOf(gt.y)) || compAt(gt) != comp) gt = nearestWater(to, 150, true, comp);
     int sx = clampi(tileOf(sf.x), 0, MAP_W - 1), sy = clampi(tileOf(sf.y), 0, MAP_H - 1);
     int gx = clampi(tileOf(gt.x), 0, MAP_W - 1), gy = clampi(tileOf(gt.y), 0, MAP_H - 1);
     if (!navTile(sx, sy) || !navTile(gx, gy)) return false;

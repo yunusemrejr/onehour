@@ -62,6 +62,9 @@ static int unitLocal(int type) {
     if (type == U_C_NUKEBOMBER || type == U_K_NUKEBOMBER) return 26;    // the call-in strategic bombers (art_jet.cpp)
     if (type == U_C_PATROL || type == U_K_PATROL) return 27;            // the patrol boats (art_ship.cpp)
     if (type == U_RIOTER || type == U_FIREBOMBER) return 28;            // the civilian rioters (art_riot.cpp)
+    if (type == U_C_CARRIER || type == U_K_CARRIER) return 29;          // aircraft carriers (art_ocean.cpp, 128 px canvas)
+    if (type == U_C_CARGOSHIP || type == U_K_CARGOSHIP) return 30;      // cargo ships (art_ocean.cpp, 128 px canvas)
+    if (type == U_C_CARRIERJET || type == U_K_CARRIERJET) return 31;    // carrier jets (art_ocean.cpp)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -1174,6 +1177,7 @@ void enhance(Canvas& c, float amount) {
 }  // namespace
 
 // ---------------------------------------------------------------- public entry points
+int artCanvas(int type) { int l = unitLocal(type); return l == 29 || l == 30 ? ART_BIG : ART_SIZE; }
 void artUnitBody(Canvas& c, int type, Color team, int frame) {
     setTone(type);
     Art A(c, team);
@@ -1199,11 +1203,14 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 18: artJeepBody(c, team, cy, frame); break;           // the jeeps, ships and strike fighters have their own files (art_jeep.cpp, art_ship.cpp, art_jet.cpp)
     case 19: artShipBody(c, team, cy, false); break;
     case 20: artShipBody(c, team, cy, true); break;
-    case 21: artStrikeJetBody(c, team, cy); break;
+    case 21: artAirstrikeJetBody(c, team, cy); break;        // the air strike's light-grey fighters (art_ocean.cpp)
     case 23: artSupersonicBomberBody(c, team, cy); break;   // Supersonic Bomber (art_jet.cpp)
     case 25: artFighterBody(c, team, cy); break;            // plain fighter (art_jet.cpp)
     case 26: artNukeBomberBody(c, team, cy); break;         // call-in strategic bomber (art_jet.cpp)
     case 27: artPatrolBoatBody(c, team, cy); break;         // patrol boat (art_ship.cpp)
+    case 29: artCarrierBody(c, team, cy); break;            // aircraft carrier (art_ocean.cpp)
+    case 30: artCargoShipBody(c, team, cy); break;          // cargo ship (art_ocean.cpp)
+    case 31: artCarrierJetBody(c, team, cy); break;         // carrier jet (art_ocean.cpp)
     case 28: artRioterBody(c, team, type == U_FIREBOMBER ? 1 : 0, frame); break;   // civilian rioters (art_riot.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
@@ -1581,6 +1588,9 @@ float artScale(int type) {
     if (local == 25) return 1.22f;   // plain fighters
     if (local == 26) return 2.1f;    // the call-in strategic bombers: the biggest thing in the sky
     if (local == 27) return 1.2f;    // patrol boats: well under half a destroyer's length
+    if (local == 29) return 4.6f;    // aircraft carriers: about two and a half destroyers long (128 px canvas: see artCanvas)
+    if (local == 30) return 4.0f;    // cargo ships
+    if (local == 31) return 1.16f;   // carrier jets: a little smaller than the plain fighters
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

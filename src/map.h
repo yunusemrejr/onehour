@@ -17,6 +17,11 @@ struct RoadSeg { float x0, y0, x1, y1, halfW; };
 struct DistrictBlock { int kind, tx, ty; };
 struct DistrictSpot { const char* name; bool city; float cx, cy; std::vector<DistrictBlock> blocks; };   // tile units; kept so the baked terrain can paint centre lines
 
+// The second island off the main island's east coast (Map::seaIslands[0]): an ellipse RX x RY tiles round (SEA_ISLE_X, the map's middle row)
+static const float SEA_ISLE_X = ISLE_X0 + ISLE_W + 23.0f, SEA_ISLE_RX = 15.0f, SEA_ISLE_RY = 38.0f;
+float mainIslandInland(int x, int y);   // tiles inland from the main island's coast (<= 0: the sea)
+float seaIslandInland(int x, int y);    // ... from the second island's coast
+
 struct Map {
     u8 tiles[MAP_W * MAP_H];
     u8 blocked[MAP_W * MAP_H];      // bit0 terrain, bit1 structure, bit2 resource pile
@@ -26,18 +31,25 @@ struct Map {
     u8 clearable[MAP_W * MAP_H];    // vegetation a structure may be built over (it is cleared away): 1 a tree, 2 a small rock outcrop (not a ridge)
     std::vector<int> cleared;       // footprint tiles of structures placed since the renderer last repainted the baked ground: tile | kind << 24 (1 footprint, 2 quarried rock), each footprint closed by -1
     std::vector<int> waterSize;     // tiles of each body of water, indexed by waterComp (the central lake is by far the biggest)
-    int lakeComp = 0;               // waterComp id of the central lake (the largest body of water)
+    int lakeComp = 0;               // waterComp id of the central lake on the main island
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
     std::vector<SupplySpot> supplies;
     std::vector<LandmarkSpot> landmarks;   // neutral civilian castles / bunkers / watchtowers, 4 rotated copies of each kind, the ridge fortresses and island launchers
     std::vector<DistrictSpot> districts;   // the civilian areas round the lake (four: either side of the north and south shore piles)
     struct Island { float cx, cy, r; };    // the lake's islands (tile units): [0] the big one in the middle, [1] the small one off the east shore
     std::vector<Island> islands;
+    struct SeaIsland { float cx, cy, rx, ry; };   // out in the ocean: [0] the second island, then the islets (tile units)
+    std::vector<SeaIsland> seaIslands;
+    int oceanComp = 0;              // waterComp id of the ocean round the islands (the largest body of water)
     std::vector<RoadSeg> roads;
     // Interior water (water with water on all four sides), pre-grouped for the animated-caustics pass: origins of aligned 4x4
     // all-interior blocks (one 128 px draw each) and every interior tile no block covers. Filled by generate().
     std::vector<int> waterBlocks;
     std::vector<int> waterTiles;
+    // On the open ocean caustics would read as a repeating grid (they belong to shallow water): there the renderer lays a slow swell instead, one
+    // 256 px draw per aligned 8x8-tile block of open sea (origins in seaBlocks). shoreDist: tiles from the nearest land (chamfered, capped at 255).
+    std::vector<int> seaBlocks;
+    std::vector<u8> shoreDist;
 
     void generate();
     u8 tile(int x, int y) const { return tiles[y * MAP_W + x]; }
@@ -99,9 +111,15 @@ struct Map {
     // river to ships); a tile is "open" if it and its four neighbours are sailable, which leaves room for a hull between the shores.
     bool navTile(int x, int y) const { return inMap(x, y) && tiles[y * MAP_W + x] == T_WATER && (blocked[y * MAP_W + x] & ~1) == 0; }
     bool navOpen(int x, int y) const { return navTile(x, y) && navTile(x + 1, y) && navTile(x - 1, y) && navTile(x, y + 1) && navTile(x, y - 1); }
-    bool bigWater(int x, int y) const { return inMap(x, y) && waterComp[y * MAP_W + x] == lakeComp && lakeComp != 0 && waterSize[lakeComp] >= NAVAL_WATER_MIN; }   // the lake itself, not a wide stretch of river cut off by a bridge
-    Vec2 nearestWater(Vec2 p, int maxR = 12, bool bigOnly = false) const;       // centre of the nearest open water tile (p itself when it already is one); bigOnly: in the lake, not in a pond or a cut-off river
-    bool findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 4000) const;   // like findPath for ships; the goal is moved to the nearest open water
+    // the lake or the ocean (the two seas ships sail), not a pond or a stretch of river cut off by a bridge
+    bool seaComp(int c) const { return c != 0 && (c == lakeComp || c == oceanComp) && waterSize[c] >= NAVAL_WATER_MIN; }
+    bool bigWater(int x, int y) const { return inMap(x, y) && seaComp(waterComp[y * MAP_W + x]); }
+    // centre of the nearest open water tile (p itself when it already is one); bigOnly: on the lake or the ocean, not in a pond or a cut-off river;
+    // comp: only in that body of water (a ship on the ocean cannot be sent onto the lake)
+    Vec2 nearestWater(Vec2 p, int maxR = 12, bool bigOnly = false, int comp = 0) const;
+    int compAt(Vec2 p) const { int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1); return waterComp[ty * MAP_W + tx]; }
+    // like findPath for ships; the goal is moved to the nearest open water of the body the ship is on (the ocean's routes round the islands are long)
+    bool findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 40000) const;
     bool navLineClear(Vec2 a, Vec2 b) const;                                     // straight line over open water
 };
 

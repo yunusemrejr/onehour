@@ -41,7 +41,7 @@ static std::vector<Entity*> ofRole(BuildRole r) {
 
 // ---- the map
 static bool mapTest() {
-    CHECK12(MAP_W == 208 && MAP_H == 208, "the map is not 208x208 (it grew again: see --superupdatetest)");
+    CHECK12(ISLE_W == 208 && MAP_W == 320 && MAP_H == 320, "the main island is not 208 tiles in a 320x320 sea (the map changed again: see --oceantest)");
     CHECK12(g_map.islands.size() == 2, "the lake does not have two islands");
     int lake = g_map.waterSize[g_map.lakeComp];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "lake: %d water tiles\n", lake);

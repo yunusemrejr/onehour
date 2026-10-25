@@ -47,7 +47,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
     spawnMapLandmarks();   // the map's neutral civilian strongholds: empty until somebody garrisons them
     for (int p = 0; p < numPlayers; p++) { players[p].powerReady = 120.0f; players[p].scanReady = 90.0f; players[p].dropReady = 150.0f; } // powers unlock a couple of minutes in (and need the tech structure)
     rebuildGrid();
-    updateVision();
+    updateVision(); updateSight();
     updatePower();
 }
 
@@ -65,7 +65,7 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e = Entity();
     e.gen = gen; e.alive = true; e.kind = EK_UNIT; e.type = type; e.owner = owner;
     const UnitType& t = UNITS[type];
-    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 60, true) : g_map.nearestFree(pos));   // (a ship is always put on the lake, however far it is from where it was asked for)
+    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 60, true) : g_map.nearestFree(pos));   // (a ship is always put on the lake or the ocean, however far it is from where it was asked for)
     e.lastPos = e.pos; e.prevPos = e.pos;
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
@@ -73,7 +73,8 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     if (t.role == UR_SCOUT) e.autoHoldUntil = time + 18.0f;   // wait briefly at spawn for player orders before autonomous swarm search (spawnFromQueue sets 2.5s)
     e.angle = rng.f(0, 6.28f);
     e.turret = e.angle;
-    if (owner >= 0) players[owner].unitsBuilt++;
+    if (type == U_C_CARRIER || type == U_K_CARRIER) e.deck.assign(CARRIER_WING, time);   // a new carrier comes with its whole wing on deck
+    if (owner >= 0 && !t.temp) players[owner].unitsBuilt++;   // (the loans and a carrier's jets taking off again are not the army's production)
     return refOf(i);
 }
 
@@ -369,7 +370,8 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         if (e.ut().role == UR_DOZER) { keepSite(e); e.autoHoldUntil = time + DOZER_MANUAL_HOLD; }   // (it goes back to an unfinished site once there; no mending rounds for a while)
         e.zoneR = 0; e.leashed = false; takeOrder(e); e.forceTarget = NOREF;
         Vec2 dd(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE));
-        Vec2 d = e.ut().naval ? g_map.nearestWater(dd, 14) : g_map.nearestFree(dd, 6);   // ships sail to the nearest open water
+        Vec2 d = e.ut().naval ? g_map.nearestWater(dd, 14, true, g_map.compAt(e.pos)) : g_map.nearestFree(dd, 6);   // ships sail to the nearest open water of their sea
+        if (e.ut().naval && g_map.compAt(d) != g_map.compAt(e.pos)) d = g_map.nearestWater(dd, 90, true, g_map.compAt(e.pos));   // (sent onto the other sea, or far inland: as close as its own sea goes)
         e.order = attackMove && e.weapon() >= 0 ? O_ATTACKMOVE : O_MOVE;
         e.postOrder = O_IDLE;
         e.target = d; e.targetEnt = NOREF; e.engaged = NOREF; e.actionTimer = 0;
@@ -486,7 +488,7 @@ void Sim::cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius) {
             e.guardPos = slot;
             e.order = (e.ammo <= 0 && e.ut().ammo > 0) ? O_REARM : O_GUARDAREA;
         } else {
-            slot = e.ut().naval ? g_map.nearestWater(slot, 8) : g_map.nearestFree(slot, 6);   // a ship holds a slot on the water
+            slot = e.ut().naval ? g_map.nearestWater(slot, 8, true, g_map.compAt(e.pos)) : g_map.nearestFree(slot, 6);   // a ship holds a slot on the water
             e.guardPos = slot; e.order = O_GUARDAREA;
             requestPath(e, slot);
         }
@@ -960,11 +962,10 @@ void Sim::updateAirlifts() {
     }
 }
 
-// ------------------------------------------------------------ phone strike
-// The tech structure's other support power: one call and a strike package crosses the map to a spot of your choice. Unlike the powers that
-// resolve on the spot (an EMP burst, a shell storm), this puts real aircraft in the air over the target for a while: the swarm flies in
-// from beyond the map edge the way a cargo plane would, rakes whatever stands at the called spot, and then breaks off and goes home the
-// way any aircraft sent somewhere does. Losing a structure the package needs simply means fewer kinds answer the phone (see strikeManifest).
+// ------------------------------------------------------------ air strike
+// The tech structure's strike power: one call and a flight of strike fighters comes in from the open sea behind the caller's base, wave after wave
+// of V formations, each fighter making one bombing pass over the called spot before it breaks away and leaves the map for good (see STRIKE_* and
+// strikeJetRun). They are real aircraft in the air, so anti-air can claw at them, but they are hard to hit and nobody commands them.
 int Sim::strikesReady(int player) const {
     if (player < 0 || player >= numPlayers || time < players[player].dropReady) return 0;
     int n = 0;
@@ -981,28 +982,13 @@ float Sim::strikeWait(int player) const {
     return best;
 }
 
-// The package the army can put over a target right now: gunships first (they hover and stay on the spot), then the bombers and jets, then a
-// scout drone to find what is hiding there. The size follows the army's drop tier, so the same Data Center / Arms Lab that sends a small
-// package when it opens sends a swarm once the Advanced Program and the structure upgrades are in. Anything the army has not unlocked falls
-// back to the best armed aircraft it has, so a strike called early is still a strike - just a smaller, plainer one.
+// The flight that would answer a call now: the army's strike fighter, as many as its drop tier sends (the same Data Center / Arms Lab sends a bigger
+// flight once the Advanced Program and the structure upgrades are in).
 std::vector<int> Sim::strikeManifest(int player) const {
     std::vector<int> out;
     if (player < 0 || player >= numPlayers) return out;
-    Faction f = players[player].faction;
-    int tier = dropTier(player);
-    int heli = f == F_CYBER ? U_C_HELI : U_K_AIR;      // the hovers-and-stays gunship
-    int bomb = f == F_CYBER ? U_C_AIR : U_K_AIR;       // the cheap bomber (the Clanker cheap aircraft is itself a gunship)
-    int jet = f == F_CYBER ? U_C_JET : U_K_JET;
-    int scout = f == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
-    int fallback = -1;
-    for (int t = 0; t < U_COUNT; t++)   // (unit ids are not contiguous per faction: medics, snipers and drones sit after both blocks)
-        if (UNITS[t].faction == f && UNITS[t].kind == UK_AIR && UNITS[t].weapon >= 0 && unitAvailable(player, t)) { fallback = t; break; }
-    if (fallback < 0) return out;
-    auto add = [&](int t, int n) {
-        int u = unitAvailable(player, t) ? t : fallback;
-        for (int k = 0; k < n && (int)out.size() < STRIKE_MAX; k++) out.push_back(u);
-    };
-    add(heli, STRIKE_LOAD[tier][0]); add(bomb, STRIKE_LOAD[tier][1]); add(jet, STRIKE_LOAD[tier][2]); add(scout, STRIKE_LOAD[tier][3]);
+    int jet = players[player].faction == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
+    out.assign(STRIKE_FLIGHT[dropTier(player)], jet);
     return out;
 }
 
@@ -1017,50 +1003,22 @@ bool Sim::cmdPhoneStrike(int player, Vec2 pos) {
     if (load.empty()) return false;
     pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
     tech->strikeTimer = time + STRIKE_COOLDOWN;
-    // the package flies the same track a cargo plane would, but it is made of real aircraft: they come in as units and can be fought off
+    // the waves: the first straight in along the line from the caller's base, the next ones swung to either side of it, so the spot is crossed
+    // on three headings
     Vec2 start; Vec2 dir = flightTrack(pl.basePos, pos, start);
-    Vec2 perp(-dir.y, dir.x);
-    const float m = 3.0f * TILE;
-    Vec2 entry = start;
-    for (int s = 0; s < 80; s++) {   // walk the track in from beyond the edge to the first point inside the map
-        Vec2 p = start + dir * (60.0f * s);
-        entry = p;
-        if (p.x >= m && p.y >= m && p.x <= WORLD_W - m && p.y <= WORLD_H - m) break;
-    }
+    float base = std::atan2(dir.y, dir.x);
     int n = (int)load.size();
-    for (int k = 0; k < n; k++) {
-        int type = load[k];
-        const UnitType& ut = UNITS[type];
-        Vec2 from = entry + perp * (((k % 5) - 2) * (STRIKE_X * TILE))   // line abreast across the approach
-                         - dir * ((float)(k / 5) * 46.0f);              // and echeloned back in ranks so they come in as a swarm, not a stack
-        from.x = clampf(from.x, m, WORLD_W - m); from.y = clampf(from.y, m, WORLD_H - m);
-        Ref r = spawnUnit(type, player, from);
-        Entity& e = ents[r.idx];
-        e.pos = e.prevPos = e.lastPos = from;
-        e.alt = 1; e.airspeed = ut.speed * 0.6f;
-        Vec2 d = pos - from;
-        e.angle = e.turret = d.len() > 1.0f ? std::atan2(d.y, d.x) : 0.0f;
-        Entity* h = findAirfield(e);
-        if (h) e.home = refOf(*h);
-        cmdMove({r}, pos, true);   // attack-move: they engage what they pass and then work the called spot before heading home
-    }
-    // ... and the two special fighters: far faster than the swarm, they arrive first and work the spot over three rocket passes
-    int jetType = pl.faction == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
-    for (int k = 0; k < STRIKE_JETS; k++) {
-        Vec2 from = entry + perp * ((k * 2 - 1) * 2.4f * TILE);
-        from.x = clampf(from.x, m, WORLD_W - m); from.y = clampf(from.y, m, WORLD_H - m);
-        Ref r = spawnUnit(jetType, player, from);
-        Entity& e = ents[r.idx];
-        e.pos = e.prevPos = e.lastPos = from;
-        e.alt = 1; e.airspeed = UNITS[jetType].speed * 0.9f;
-        Vec2 d = pos - from;
-        e.angle = e.turret = d.len() > 1.0f ? std::atan2(d.y, d.x) : 0.0f;
-        e.guardPos = pos + perp * ((k * 2 - 1) * 1.7f * TILE);   // two lanes, a few tiles apart, across the called spot
-        e.order = O_STRIKERUN; e.target = pos; e.ammo = UNITS[jetType].ammo; e.lifeUntil = time + STRIKE_LIFE; e.strikePass = 0; e.salvoLeft = 0; e.jetBreak = 0;
+    for (int w = 0, k = 0; k < n; w++) {
+        StrikeWave sw;
+        float turn = w == 0 ? 0.0f : ((w & 1) ? 1.0f : -1.0f) * STRIKE_TURN * ((w + 1) / 2);
+        sw.owner = player; sw.type = load[0]; sw.n = std::min(STRIKE_WAVE, n - k); sw.target = pos;
+        sw.dir = Vec2(std::cos(base + turn), std::sin(base + turn)); sw.at = time + w * STRIKE_WAVE_GAP;
+        strikeWaves.push_back(sw);
+        k += sw.n;
     }
     strikeMarks.push_back({pos, player, time});
-    emit(EV_SOUND, player, SND_AIR, entry);
-    emit(EV_MSG, player, SND_NONE, pos, (std::string(STRIKES[pl.faction].name) + " inbound: the swarm and two " + UNITS[jetType].name + " strike fighters").c_str());
+    emit(EV_SOUND, player, SND_JET, pos);
+    emit(EV_MSG, player, SND_NONE, pos, (std::string(STRIKES[pl.faction].name) + " inbound: " + std::to_string(n) + " " + UNITS[load[0]].name + " strike fighters").c_str());
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY AIR STRIKE INBOUND");
     return true;
 }
@@ -1468,6 +1426,7 @@ bool Sim::cmdScan(int player) {
     const ScanType& sc = SCANS[pl.faction];
     pl.scanReady = time + sc.cooldown;
     pl.revealUntil = time + sc.duration;
+    if (!pl.isAI) std::fill(pl.explored.begin(), pl.explored.end(), 1);   // the satellite pass charts the whole map for good (its live picture lasts SCANS[].duration)
     fx.push_back({FX_EMP, pl.basePos, pl.basePos, 0, 1.6f, pl.faction == F_CYBER ? rgb(110, 230, 255) : rgb(222, 178, 60), (float)WORLD_W * 0.6f});
     emit(EV_SOUND, player, SND_AIR, pl.basePos);
     emit(EV_MSG, player, SND_NONE, pl.basePos, (std::string(sc.name) + ": the whole map is visible").c_str());
@@ -2011,9 +1970,23 @@ static bool predPile(const Entity& e, void* ctx) { return e.kind == EK_RESOURCE 
 static bool predAirfield(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.alive && e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_AIRFIELD; }   // (alive: never the ruins of a destroyed pad)
 
 Entity* Sim::findSupplyBuilding(Entity& h) { int o = h.owner; return nearestEntity(h.pos, 1e9f, predSupply, &o); }
+// The nearest pile a hauler can drive to: one with free ground beside it in the hauler's own region (the second island's piles are only worked by
+// haulers shipped over there), clean ones first; only radioactive ones left is still better than standing idle.
 Entity* Sim::findPile(Entity& h, float maxDist) {
-    Entity* p = nearestEntity(h.pos, maxDist, predPile, this);
-    return p ? p : nearestEntity(h.pos, maxDist, predPile, nullptr);   // only radioactive piles left: better than standing idle
+    if (g_map.regionDirty) g_map.buildRegions();
+    u16 rg = g_map.region[clampi(tileOf(h.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(h.pos.x), 0, MAP_W - 1)];
+    Entity* best = nullptr; float bd = maxDist * maxDist; bool bestHot = true;
+    for (auto& e : ents) {
+        if (!e.alive || !predPile(e, nullptr)) continue;
+        float d = dist2(e.pos, h.pos);
+        bool hot = inFallout(e.pos, TILE * 0.5f);
+        if (d > maxDist * maxDist || (hot && !bestHot) || (hot == bestHot && d >= bd)) continue;
+        bool reach = rg == 0;
+        for (int j = -1; j <= 1 && !reach; j++) for (int i = -1; i <= 1; i++) { int x = e.tx + i, y = e.ty + j; if (inMap(x, y) && g_map.region[y * MAP_W + x] == rg) { reach = true; break; } }
+        if (!reach) continue;
+        best = &e; bd = d; bestHot = hot;
+    }
+    return best;
 }
 Entity* Sim::findZonePile(Entity& h) {
     Entity* best = nullptr; float bd = 1e18f;
@@ -2110,7 +2083,9 @@ void Sim::airSteer(Entity& e, float want, float wantSpeed, bool keepOnMap) {
     else if (e.airspeed < wantSpeed) e.airspeed = std::min(wantSpeed, e.airspeed + top * 1.1f * SIM_DT);   // throttle up
     else e.airspeed = std::max(wantSpeed, e.airspeed - top * 1.6f * SIM_DT);                            // airbrakes
     float turn = airTurnRate(e) * SIM_DT;
-    e.angle = wrapAngle(e.angle + clampf(angDiff(e.angle, want), -turn, turn));
+    float da = clampf(angDiff(e.angle, want), -turn, turn);
+    e.angle = wrapAngle(e.angle + da);
+    if (!ut.heli) e.roll += (clampf(da / std::max(1e-4f, turn), -1.0f, 1.0f) * 0.9f - e.roll) * std::min(1.0f, 5.0f * SIM_DT);   // banks into its turns
     e.pos += Vec2(std::cos(e.angle), std::sin(e.angle)) * (e.airspeed * SIM_DT);
     e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);
 }
@@ -2317,7 +2292,7 @@ void Sim::dropBomb(Entity& e, Vec2 at) {
         p.arcT = 0; p.life = p.arcLen + 0.3f;
         e.slowAt = time + std::max(SBOMBER_CLEAR, SBOMBER_BOMB_FALL + 0.15f);
     } else {
-        p.weapon = e.ut().faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER;
+        p.weapon = e.order == O_STRIKERUN ? W_STRIKE_BOMB : (e.ut().faction == F_CYBER ? W_BOMB_CYBER : W_BOMB_CLANKER);
         p.arcLen = 0.62f; p.arcT = 0; p.life = p.arcLen + 0.3f;
     }
     projs.push_back(p);
@@ -2342,16 +2317,19 @@ void Sim::bombImpact(Projectile& p) {
     float R = w.splash * TILE;
     splashDamage(at, w.splash, w.dmg, p.owner, p.shooter, w, NOREF, p.forced);
     bool cy = p.weapon == W_BOMB_CYBER;
+    const bool carpet = p.weapon == W_STRIKE_BOMB;   // an Air Strike's hundred bombs: lighter smoke each (Vec2(0, -1) marks it for the renderer), or the spot drowns in it
     Color fire = cy ? rgb(190, 235, 255) : rgb(255, 210, 140), hot = cy ? rgb(120, 220, 255) : rgb(255, 150, 60);
-    fx.push_back({FX_EXPLODE, at, at, 0, 0.75f, fire, R * 1.25f});
+    fx.push_back({FX_EXPLODE, at, at, 0, 0.75f, fire, R * 1.25f, carpet ? Vec2(0, -1) : Vec2()});
     fx.push_back({FX_RING, at, at, 0, 0.8f, hot, R * 2.3f});
     fx.push_back({FX_RING, at, at, -0.1f, 0.6f, fire, R * 1.4f});
-    for (int k = 0; k < 4; k++) {
+    for (int k = 0; k < (carpet ? 2 : 4); k++) {
         float a = rng.f(0, 6.283f), r = R * rng.f(0.35f, 0.95f); Vec2 q = at + Vec2(std::cos(a) * r, std::sin(a) * r * 0.8f);
-        fx.push_back({FX_EXPLODE, q, q, -rng.f(0.05f, 0.4f), 0.65f, hot, R * rng.f(0.5f, 0.85f)});
+        fx.push_back({FX_EXPLODE, q, q, -rng.f(0.05f, 0.4f), 0.65f, hot, R * rng.f(0.5f, 0.85f), carpet ? Vec2(0, -1) : Vec2()});
     }
-    for (int k = 0; k < 3; k++) fx.push_back({FX_SMOKE, at, at, -rng.f(0.0f, 0.5f), 3.6f, rgb(54, 50, 48), R * rng.f(0.55f, 0.85f), Vec2(rng.f(-12, 12), -rng.f(26, 48))});
-    for (int k = 0; k < 12; k++) fx.push_back({FX_DEBRIS, at, at, 0, rng.f(0.6f, 1.3f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-210, 210), rng.f(-300, -60))});
+    // (an Air Strike lays a hundred bombs on one spot: every bomb's own smoke column would pile up into a black blot, so each of those leaves one
+    // thinner, paler wisp, and the wind carries the lot off together)
+    for (int k = 0; k < (carpet ? (rng.f() < 0.3f ? 1 : 0) : 3); k++) fx.push_back({FX_SMOKE, at, at, -rng.f(0.0f, 0.5f), carpet ? 2.6f : 3.6f, carpet ? rgb(92, 86, 80) : rgb(54, 50, 48), R * rng.f(0.55f, 0.85f) * (carpet ? 0.7f : 1.0f), Vec2(rng.f(-12, 12) + (carpet ? 18.0f : 0.0f), -rng.f(26, 48))});
+    for (int k = 0; k < (carpet ? 6 : 12); k++) fx.push_back({FX_DEBRIS, at, at, 0, rng.f(0.6f, 1.3f), rgb(80, 76, 72), rng.f(2, 5), Vec2(rng.f(-210, 210), rng.f(-300, -60))});
     for (int k = 0; k < 5; k++) fx.push_back({FX_SPARK, at, at, 0, rng.f(0.2f, 0.5f), fire, rng.f(3, 6)});
     emit(EV_SOUND, -1, SND_EXPLODE_L, at);
 }
@@ -2425,7 +2403,7 @@ void Sim::autoEngage(Entity& e, Entity& t) {
 void Sim::moveAside(Entity& e, Vec2 dest, float holdFor) {
     keepSite(e);   // (a dozer that ducks out of danger goes back to its site afterwards)
     dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
-    if (!e.isAir()) dest = e.ut().naval ? g_map.nearestWater(dest, 10) : g_map.nearestFree(dest, 6);
+    if (!e.isAir()) dest = e.ut().naval ? g_map.nearestWater(dest, 10, true, g_map.compAt(e.pos)) : g_map.nearestFree(dest, 6);
     e.order = O_MOVE; e.target = dest; e.engaged = NOREF; e.autoTask = true; e.leashed = false; e.postOrder = O_IDLE; e.actionTimer = 0;
     e.evadeUntil = time + holdFor;
     if (!e.isAir()) requestPath(e, dest);
@@ -2444,7 +2422,7 @@ bool Sim::escapeDestination(const Entity& e, Vec2 threat, float tiles, Vec2& des
     for (float off : offsets) {
         Vec2 p = e.pos + Vec2(std::cos(angle + off), std::sin(angle + off)) * (tiles * TILE);
         p = Vec2(clampf(p.x, TILE, WORLD_W - TILE), clampf(p.y, TILE, WORLD_H - TILE));
-        if (!e.isAir()) p = e.ut().naval ? g_map.nearestWater(p, 3) : g_map.nearestFree(p, 3);
+        if (!e.isAir()) p = e.ut().naval ? g_map.nearestWater(p, 3, true, g_map.compAt(e.pos)) : g_map.nearestFree(p, 3);
         float gain = dist(p, threat) - l;
         if (gain < TILE * 0.4f || inFallout(p)) continue;
         bool direct = e.isAir() || (e.ut().naval ? g_map.navLineClear(e.pos, p) : g_map.lineClear(e.pos, p));
@@ -2669,8 +2647,8 @@ void Sim::updateUnit(Entity& e) {
         if (ut.cargoCap > 0 && e.unloading) updateCarrierUnload(e);
     }
 
-    // bombers: the stick being released leaves the aircraft one bomb at a time
-    if (e.bombsLeft > 0) {
+    // bombers: the stick being released leaves the aircraft one bomb at a time (an Air Strike fighter lays its own stick: see strikeJetRun)
+    if (e.bombsLeft > 0 && e.order != O_STRIKERUN) {
         e.bombTimer -= SIM_DT;
         if (e.bombTimer <= 0) {
             if (e.ammo > 0) { dropBomb(e, e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * (airTopSpeed(e) * 0.42f)); e.ammo--; }
@@ -3183,11 +3161,12 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     case O_ENTER: {   // walk to a cargo chopper / bunker and climb aboard
         Entity* c = get(e.targetEnt);
         if (!c || !canBoard(e, *c)) { e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); break; }
-        float reach = c->isBuilding() ? 40.0f : c->radius() + 44.0f;   // (a crowd cannot all stand at the door: whoever is close enough climbs in)
+        const bool ship = c->isUnit() && c->ut().naval;   // a cargo ship lies off the beach: they board from the shore beside it
+        float reach = c->isBuilding() ? 40.0f : c->radius() + (ship ? CARGOSHIP_REACH * TILE : 44.0f);   // (a crowd cannot all stand at the door: whoever is close enough climbs in)
         bool open = c->isBuilding() ? (c->constructed && !c->unloading) : ((c->ut().kind == UK_VEH ? dist(c->pos, c->prevPos) < 1.2f : c->order == O_IDLE) && !c->unloading && c->disabledUntil <= time);   // a lifter takes people while it hovers in place, a jeep while it is stopped
         if (distToEntity(e.pos, *c) <= reach && open) { board(e, *c); break; }
         Vec2 toMe = (e.pos - c->pos).norm();   // each soldier heads for the side of the door it is on, so a crowd spreads around the bunker instead of jamming on one face
-        Vec2 goal = c->isBuilding() ? g_map.nearestFree(c->pos + toMe * (std::max(c->bt().w, c->bt().h) * TILE * 0.5f + 22.0f), 6) : g_map.nearestFree(c->pos + toMe * (c->radius() * 0.5f), 6);
+        Vec2 goal = c->isBuilding() ? g_map.nearestFree(c->pos + toMe * (std::max(c->bt().w, c->bt().h) * TILE * 0.5f + 22.0f), 6) : g_map.nearestFree(c->pos + toMe * (c->radius() * 0.5f), ship ? 9 : 6);
         if (e.pathIdx >= e.path.size() || (e.repathTimer <= 0 && dist(e.path.back(), goal) > TILE * 0.8f)) requestPath(e, goal);
         Vec2 before = e.pos;
         moveAlong(e, ut.speed);
@@ -3225,6 +3204,16 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         break;
     }
     case O_UNLOAD: {   // transport: fly over to the drop spot, set down and let everybody out
+        if (ut.naval) {   // a cargo ship sails to the water off the chosen beach, then lands its load
+            if (e.pathIdx >= e.path.size() && dist(e.pos, e.target) > 1.5f * TILE) requestPath(e, e.target);
+            moveAlong(e, ut.speed);
+            if (dist(e.pos, e.target) <= 1.5f * TILE || (e.pathIdx >= e.path.size() && e.airspeed < 2.0f)) {
+                e.order = O_IDLE; e.path.clear();
+                if (shipLanding(e)) { e.unloading = true; e.unloadTimer = 0.3f; }
+                else emit(EV_MSG, e.owner, SND_CANT, e.pos, "No beach within reach of the ship: nobody landed");
+            }
+            break;
+        }
         Vec2 d = e.target - e.pos;
         if (d.len() > 10.0f) { e.pos += d.norm() * std::min(d.len(), ut.speed * SIM_DT); e.angle = std::atan2(d.y, d.x); }
         else { e.unloading = true; e.unloadTimer = 0.4f; e.order = O_IDLE; }
@@ -3232,6 +3221,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_STRIKERUN: strikeJetRun(e); break;
     case O_NUKERUN: nukeBomberRun(e); break;
+    case O_CARRIERJET: carrierJetRun(e); break;
     case O_REARM: {
         Entity* h = get(e.home);
         if (!h) { h = findAirfield(e); if (h) e.home = refOf(*h); }
@@ -3298,7 +3288,11 @@ void Sim::spawnFromQueue(Entity& b) {
         Entity* p = findPile(u, 60 * TILE);
         if (p) cmdHarvest({r}, refOf(*p));
     } else if (hasRally) cmdMove({r}, rally, false);
-    else if (ut.naval) { Vec2 lake(WORLD_W * 0.5f, WORLD_H * 0.5f), out = (u.pos - lake).norm(); cmdMove({r}, lake + out * (5.5f * TILE) + Vec2(rng.f(-30, 30), rng.f(-30, 30)), false); }   // out into the lake
+    else if (ut.naval) {   // out from the slipway into open water on whichever sea the yard stands by
+        Vec2 yardPos = get(bref) ? get(bref)->pos : u.pos, out = (u.pos - yardPos).norm();
+        if (out.len2() < 0.5f) out = Vec2(1, 0);
+        cmdMove({r}, u.pos + out * (4.0f * TILE) + Vec2(rng.f(-30, 30), rng.f(-30, 30)), false);
+    }
     else cmdMove({r}, rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
     emit(EV_UNIT_READY, owner, SND_UNIT_READY, u.pos, ut.name);
 }
@@ -3459,8 +3453,8 @@ bool Sim::canBoard(const Entity& u, const Entity& c) const {
         return false;
     }
     if (u.owner != c.owner) return false;
-    if (!c.isUnit() || c.ut().cargoCap <= 0 || u.ut().temp) return false;
-    if (c.ut().kind == UK_VEH && u.ut().kind != UK_INF) return false;   // a jeep seats soldiers, nothing else
+    if (!c.isUnit() || c.ut().cargoCap <= 0 || u.ut().temp || u.ut().naval) return false;
+    if (c.ut().kind == UK_VEH && !c.ut().naval && u.ut().kind != UK_INF) return false;   // a jeep seats soldiers, nothing else (a cargo ship takes vehicles too)
     if (!u.passengers.empty()) return false;                            // a loaded jeep is not itself lifted (no loads inside loads)
     int sz = cargoSize(u.ut());
     return sz > 0 && cargoUsed(c) + sz <= c.ut().cargoCap;
@@ -3511,7 +3505,7 @@ void Sim::ejectOne(Entity& c, Entity& u, int slot) {
 void Sim::ejectAll(Entity& c, bool lost) {
     std::vector<Ref> list = c.passengers;
     c.passengers.clear();
-    bool crash = lost && c.isAir() && c.alt > 0.4f;
+    bool crash = lost && ((c.isAir() && c.alt > 0.4f) || (c.isUnit() && c.ut().naval));   // (a ship that goes down takes everyone aboard with it)
     int slot = 0;
     for (Ref r : list) {
         Entity* u = get(r);
@@ -3528,6 +3522,15 @@ void Sim::cmdUnload(Ref carrier, bool atSpot, Vec2 spot) {
     if (!c || c->passengers.empty()) return;
     if (c->isBuilding()) { if ((c->bt().role == BR_BUNKER || c->bt().role == BR_STRONGHOLD) && c->constructed) { c->unloading = true; c->unloadTimer = 0; } return; }
     if (!c->isUnit() || c->ut().cargoCap <= 0) return;
+    if (c->ut().naval) {   // a cargo ship: here (onto the nearest shore) or at a spot (it sails to the water nearest it first)
+        c->postOrder = O_IDLE; c->targetEnt = NOREF; c->engaged = NOREF;
+        if (atSpot) {
+            Vec2 at = g_map.nearestWater(Vec2(clampf(spot.x, TILE, WORLD_W - TILE), clampf(spot.y, TILE, WORLD_H - TILE)), 14, true, g_map.compAt(c->pos));
+            c->unloading = false; c->order = O_UNLOAD; c->target = at; c->unloadSpot = spot; requestPath(*c, at);
+        } else if (shipLanding(*c)) { c->order = O_IDLE; c->path.clear(); c->unloading = true; c->unloadTimer = 0.3f; }
+        else emit(EV_MSG, c->owner, SND_CANT, c->pos, "Too far from the shore to land anyone: take the ship to a beach");
+        return;
+    }
     if (c->ut().kind == UK_VEH) {   // a jeep stops and the crew climbs out onto the ground around it
         c->unloading = true; c->unloadTimer = 0.1f;
         c->order = O_IDLE; c->postOrder = O_IDLE; c->path.clear(); c->pathIdx = 0; c->targetEnt = NOREF;
@@ -3550,6 +3553,17 @@ void Sim::updateCarrierUnload(Entity& c) {
     for (size_t i = 0; i < c.passengers.size(); i++) { Entity* u = get(c.passengers[i]); if (u && u->ut().kind == UK_INF) { pick = i; break; } }
     Entity* u = get(c.passengers[pick]);
     c.passengers.erase(c.passengers.begin() + pick);
+    if (c.isUnit() && c.ut().naval) {   // down the ramp onto the beach: the land nearest the ship, toward where the player pointed
+        Vec2 land;
+        if (!shipLanding(c, &land)) { c.passengers.insert(c.passengers.begin() + pick, refOf(*u)); c.unloading = false; return; }
+        u->carrier = NOREF;
+        float a = rng.f(0, 6.2832f);
+        u->pos = g_map.nearestFree(land + Vec2(std::cos(a), std::sin(a)) * rng.f(0, 1.6f * TILE), 6); u->prevPos = u->pos; u->guardPos = u->pos;
+        u->order = O_IDLE; u->postOrder = O_IDLE; u->targetEnt = NOREF; u->engaged = NOREF; u->path.clear(); u->pathIdx = 0; u->angle = a; u->turret = a; u->repathTimer = 0; u->autoTask = false; u->cooldown = 0.2f;
+        c.unloadTimer = u->ut().kind == UK_INF ? 0.12f : 0.45f;
+        if (c.passengers.empty()) c.unloading = false;
+        return;
+    }
     if (c.isAir()) {   // out of the rear ramp
         float a = c.angle + 3.14159f + rng.f(-0.5f, 0.5f);
         u->carrier = NOREF;
@@ -4144,6 +4158,46 @@ void Sim::updateVision() {
     }
 }
 
+void Sim::updateSight() {
+    if (humanPlayer < 0 || humanPlayer >= numPlayers) return;
+    inSight.assign((size_t)MAP_W * MAP_H, 0);
+    const int team = players[humanPlayer].team;
+    for (auto& e : ents) {
+        if (!e.alive || e.owner < 0 || e.owner >= numPlayers || e.carrier.valid() || players[e.owner].team != team) continue;
+        if (e.isBuilding() && !e.constructed && e.progress <= 0) continue;
+        int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y);
+        float sgt = e.sight();
+        int r = (int)std::ceil(sgt);
+        float s2 = sgt * sgt;
+        for (int dy = -r; dy <= r; dy++) {
+            int y = cy + dy; if (y < 0 || y >= MAP_H) continue;
+            u8* row = &inSight[(size_t)y * MAP_W];
+            for (int dx = -r; dx <= r; dx++) {
+                int x = cx + dx; if (x < 0 || x >= MAP_W) continue;
+                if (dx * dx + dy * dy <= s2) row[x] = 1;
+            }
+        }
+    }
+    sightGen++;
+}
+
+bool Sim::shownToHuman(const Entity& e) const {
+    const int hp = humanPlayer;
+    if (e.owner == hp || revealed(hp)) return true;
+    if (e.owner >= 0 && e.owner < numPlayers && players[e.owner].team == players[hp].team) return true;   // an ally's: shared vision
+    int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
+    if (e.kind == EK_RESOURCE || e.isBuilding()) return explored(hp, tx, ty);   // the lie of the land and what stands on it is remembered
+    if (e.isBuilding() == false && e.isUnit() && !e.isAir()) {   // a ship or a ground unit: only while one of yours sees it
+        float r = e.radius() * 0.5f;   // (a big hull half in sight shows)
+        for (int k = 0; k < 5; k++) {
+            int qx = clampi(tileOf(e.pos.x + (k == 1 ? r : k == 2 ? -r : 0)), 0, MAP_W - 1), qy = clampi(tileOf(e.pos.y + (k == 3 ? r : k == 4 ? -r : 0)), 0, MAP_H - 1);
+            if (seenNow(qx, qy)) return true;
+        }
+        return false;
+    }
+    return seenNow(tx, ty);
+}
+
 void Sim::separateUnits() {
     // what the pair test needs, packed per entity once a tick (walking the full Entity and its type table for every neighbour pair was a tenth
     // of a crowded tick); positions are kept current as units are pushed
@@ -4247,7 +4301,10 @@ void Sim::step() {
             e.prevPos = e.pos;
             continue;
         }
-        if (e.isUnit()) updateUnit(e);
+        if (e.isUnit()) {
+            updateUnit(e);
+            if (ents[i].alive && (ents[i].type == U_C_CARRIER || ents[i].type == U_K_CARRIER) && ents[i].isUnit()) updateCarrier(ents[i]);   // (after the unit's own update: a launch may grow the array)
+        }
         else if (e.isBuilding()) updateBuilding(e);
     }
     updateProjectiles();
@@ -4260,7 +4317,7 @@ void Sim::step() {
     updateFallout();
     separateUnits();
     updateFx();
-    if (tick % 4 == 0) updateVision();
+    if (tick % 4 == 0) { updateVision(); updateSight(); }
     if (tick % 10 == 0) updatePower();
     if (tick % 5 == 0) updateResearch();
     if (tick % 20 == 0) checkVictory();

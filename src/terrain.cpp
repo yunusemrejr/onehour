@@ -87,8 +87,23 @@ const F3 ASPHALT = f3(66, 67, 72), GRAVEL = f3(138, 130, 112);
 const F3 FOREST_A = f3(46, 74, 36), FOREST_B = f3(80, 66, 42);
 const F3 ROCK_A = f3(124, 116, 102), ROCK_B = f3(90, 84, 76), MOSS = f3(78, 102, 52), SCREE = f3(158, 148, 128);
 const F3 WATER_SHALLOW = f3(56, 160, 170), WATER_MID = f3(27, 102, 150), WATER_DEEP = f3(13, 52, 102), WEED = f3(40, 104, 80);
+const F3 OCEAN_ABYSS = f3(8, 34, 76);   // the open sea far from any shore
+const float SEA_OPEN = 7.5f;            // tiles from land beyond which water is open sea: no sand bars, weed or caustics, only waves and depth
 
-F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float depth) {
+// Open sea, far from land: what K_WATER below works out to there (depth 1: the bars, weed and caustics are gone), done with a third of the work
+F3 openSeaColor(float x, float y, const Noise& nz, float sea) {
+    float d = clampf(1.0f + (nz.v(x * 0.045f + 17, y * 0.045f + 28) - 0.5f) * 0.14f + (nz.v(x * 0.35f, y * 0.35f) - 0.5f) * 0.03f, 0, 1);
+    F3 col = d < 0.45f ? lerp3(WATER_SHALLOW, WATER_MID, d / 0.45f) : lerp3(WATER_MID, WATER_DEEP, (d - 0.45f) / 0.55f);
+    col = lerp3(col, OCEAN_ABYSS, sstep(SEA_OPEN, 22.0f, sea) * 0.85f);
+    float n2 = nz.v(x * 0.17f + 5, y * 0.17f + 9);
+    float wave = std::sin((x * 0.09f + 5.0f * nz.fbm(x * 0.01f, y * 0.01f)) + y * 0.05f);
+    col = mul3(col, 0.95f + 0.06f * wave + 0.06f * (n2 - 0.5f));
+    float glit = clampf(1.0f - std::abs((x - y) * 0.7071f - 140.0f * std::sin(x * 0.0009f)) / 1000.0f, 0, 1);
+    if (nz.v(x * 1.3f + 13, y * 1.3f + 7) > 0.994f - 0.012f * glit) col = add3(col, mul3(f3(90, 110, 104), 0.35f + 0.65f * glit));
+    return col;
+}
+
+F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float depth, float sea = 0) {
     float n1 = nz.v(x * 0.045f, y * 0.045f), n2 = nz.v(x * 0.17f + 5, y * 0.17f + 9), n3 = nz.v(x * 0.9f + y * 0.3f, y * 1.3f);
     float n4 = nz.v(x * 0.55f + 71, y * 0.55f + 13);
     switch (c) {
@@ -156,16 +171,17 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
         float d = clampf(depth + (nz.v(x * 0.045f + 17, y * 0.045f + 28) - 0.5f) * 0.14f + (nz.v(x * 0.35f, y * 0.35f) - 0.5f) * 0.03f, 0, 1);   // dithered depth: no contour rings on a big lake bed
         // three-stop depth ramp: pale teal over the sand, a clear mid blue, then a deep navy bed (the old two-stop ramp banded)
         F3 col = d < 0.45f ? lerp3(WATER_SHALLOW, WATER_MID, d / 0.45f) : lerp3(WATER_MID, WATER_DEEP, (d - 0.45f) / 0.55f);
+        float open = sstep(SEA_OPEN - 2.0f, SEA_OPEN, sea);   // (fades the shallows' detail out toward the open sea, see openSeaColor)
         // sand bars and weed beds show through the shallows
         float bar = sstep(0.62f, 0.8f, nz.v(x * 0.016f + 44, y * 0.016f + 2));
-        col = lerp3(col, lerp3(SAND_B, WATER_SHALLOW, 0.45f), bar * (1.0f - d) * 0.5f);
+        col = lerp3(col, lerp3(SAND_B, WATER_SHALLOW, 0.45f), bar * (1.0f - d) * 0.5f * (1.0f - open));
         float weed = sstep(0.6f, 0.82f, nz.v(x * 0.03f + 8, y * 0.03f + 51));
-        col = lerp3(col, WEED, weed * clampf(1.0f - d * 1.6f, 0, 1) * 0.45f);
+        col = lerp3(col, WEED, weed * clampf(1.0f - d * 1.6f, 0, 1) * 0.45f * (1.0f - open));
         float wave = std::sin((x * 0.09f + 5.0f * nz.fbm(x * 0.01f, y * 0.01f)) + y * 0.05f);
         col = mul3(col, 0.95f + 0.06f * wave + 0.06f * (n2 - 0.5f));
         float c1 = 1.0f - std::abs(2.0f * nz.v(x * 0.09f + 3, y * 0.09f + 11) - 1.0f), c2 = 1.0f - std::abs(2.0f * nz.v(x * 0.065f + 40 + y * 0.02f, y * 0.065f + 7) - 1.0f);
         float caus = std::pow(c1 * c2, 6.0f);                                        // finer caustic light networks in the shallows
-        col = add3(col, mul3(f3(56, 84, 76), (1.0f - d * 0.8f) * clampf(caus * 2.0f, 0, 1)));
+        col = add3(col, mul3(f3(56, 84, 76), (1.0f - d * 0.8f) * clampf(caus * 2.0f, 0, 1) * (1.0f - open)));
         // sun glitter: a broken diagonal path of sparkles running away from the north-west light, denser in open water
         float glit = clampf(1.0f - std::abs((x - y) * 0.7071f - 140.0f * std::sin(x * 0.0009f)) / 1000.0f, 0, 1);
         float th = 0.994f - 0.012f * glit;   // (sparse: a big lake sprinkled evenly read as noise)
@@ -178,6 +194,14 @@ F3 groundColor(int c, float x, float y, const Noise& nz, float macro, float dept
 
 // ---------------------------------------------------------------- trees and props
 inline bool inMapPx(int x, int y) { return x >= 0 && y >= 0 && x < WORLD_W && y < WORLD_H; }
+// a tile within two tiles of the ocean (beach and cliff country: no reeds, cattails or lily pads)
+inline bool seaShore(int tx, int ty) {
+    for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) {
+        int x = tx + i, y = ty + j;
+        if (inMap(x, y) && g_map.waterComp[y * MAP_W + x] == g_map.oceanComp && g_map.oceanComp != 0) return true;
+    }
+    return false;
+}
 // Decor counts are per tile, not fixed: a count tuned for the 176x176 map scales with the map's area (so a bigger map keeps its density)
 inline int decorCount(int base) { return (int)(base * ((float)(MAP_W * MAP_H) / (176.0f * 176.0f)) + 0.5f); }
 Canvas downsample2(const Canvas& big) {
@@ -594,7 +618,15 @@ struct Tree { float x, y, r; int kind; u32 seed; int tile = -1; };   // tile: th
 // What the bake leaves behind for local repaints (see terrainRepaint): the world as it was before the trees were drawn, every tree and bush,
 // and the tree sprites. A structure placed over trees then only has to recompose a small rectangle.
 struct Kept {
-    std::vector<u16> preTree;   // RGB565: half the memory of the 32-bit world (the GPU world texture is 565 anyway)
+    // RGB565 (half the memory of the 32-bit world), kept in PRE_CHUNK px squares and only where there is land within a tile of the square: trees,
+    // bushes and quarried rock never stand out at sea, so the ocean's share of the map keeps no copy at all
+    static const int PRE_CHUNK = 256;
+    std::vector<std::vector<u16>> preTree;
+    int preCols = 0;
+    u16* pre(int x, int y) {
+        std::vector<u16>& c = preTree[(size_t)(y / PRE_CHUNK) * preCols + x / PRE_CHUNK];
+        return c.empty() ? nullptr : &c[(size_t)(y % PRE_CHUNK) * PRE_CHUNK + x % PRE_CHUNK];
+    }
     std::vector<Tree> trees;
     std::vector<Canvas> sprites[T_KINDS];
     bool ok = false;
@@ -768,11 +800,40 @@ void terrainBake(Canvas& world) {
     }
     auto hsamp = [&](float hx, float hy) { return samp(hmap, HW, HH, hx, hy); };
 
+    // ---- distance from land over the water (tiles, chamfered): the open sea gets darker and cheaper to paint the further out it lies
+    std::vector<float> seaD((size_t)MAP_W * MAP_H, 0.0f);
+    {
+        for (int i = 0; i < MAP_W * MAP_H; i++) seaD[i] = g_map.tiles[i] == T_WATER ? 1e6f : 0.0f;
+        const float D1 = 1.0f, D2 = 1.4142f;
+        for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+            float& v = seaD[(size_t)y * MAP_W + x];
+            if (x > 0) v = std::min(v, seaD[(size_t)y * MAP_W + x - 1] + D1);
+            if (y > 0) { v = std::min(v, seaD[(size_t)(y - 1) * MAP_W + x] + D1); if (x > 0) v = std::min(v, seaD[(size_t)(y - 1) * MAP_W + x - 1] + D2); if (x < MAP_W - 1) v = std::min(v, seaD[(size_t)(y - 1) * MAP_W + x + 1] + D2); }
+        }
+        for (int y = MAP_H - 1; y >= 0; y--) for (int x = MAP_W - 1; x >= 0; x--) {
+            float& v = seaD[(size_t)y * MAP_W + x];
+            if (x < MAP_W - 1) v = std::min(v, seaD[(size_t)y * MAP_W + x + 1] + D1);
+            if (y < MAP_H - 1) { v = std::min(v, seaD[(size_t)(y + 1) * MAP_W + x] + D1); if (x < MAP_W - 1) v = std::min(v, seaD[(size_t)(y + 1) * MAP_W + x + 1] + D2); if (x > 0) v = std::min(v, seaD[(size_t)(y + 1) * MAP_W + x - 1] + D2); }
+        }
+    }
+
     // ---- per-pixel ground
     parallelRows(H, [&](int y0, int y1) {
         for (int y = y0; y < y1; y++) for (int x = 0; x < W; x++) {
             int tx = x >> 5, ty = y >> 5;
             u8 bits = present[(size_t)ty * MAP_W + tx];
+            float sea = bits == (1 << K_WATER) ? samp(seaD, MAP_W, MAP_H, x / (float)TILE - 0.5f, y / (float)TILE - 0.5f) : 0.0f;
+            if (sea >= SEA_OPEN) {   // open sea: nothing else reaches it, no relief, and the shallows' detail has faded out (see groundColor)
+                F3 col = mul3(openSeaColor((float)x, (float)y, nz, sea), 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
+                float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
+                auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
+                vr = curve(vr); vg = curve(vg); vb = curve(vb);
+                float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+                vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
+                float warm = (lum - 0.5f) * 0.045f;
+                world.px[(size_t)y * W + x] = Canvas::pack(Color{ (u8)clampf((vr + warm) * 255.0f, 0, 255), (u8)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (u8)clampf((vb - warm) * 255.0f, 0, 255), 255 });
+                continue;
+            }
             float wox, woy; warpAt((float)x, (float)y, wox, woy);
             float fx = (x + wox) / CELL - 0.5f, fy = (y + woy) / CELL - 0.5f;
             float w[K_N]; float sum = 0, bestV = -1; int best = 0;
@@ -791,7 +852,7 @@ void terrainBake(Canvas& world) {
             if (w[K_WATER] > 0) depth = sstep(0.5f, 0.95f, samp(wide, CW, CH, fx, fy));
             F3 col{0, 0, 0};
             float inv = 1.0f / sum;
-            for (int c = 0; c < K_N; c++) if (w[c] > 0.003f) col = add3(col, mul3(groundColor(c, (float)x, (float)y, nz, macro, depth), w[c] * inv));
+            for (int c = 0; c < K_N; c++) if (w[c] > 0.003f) col = add3(col, mul3(groundColor(c, (float)x, (float)y, nz, macro, depth, sea), w[c] * inv));
             float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wSand = w[K_SAND] * inv, wRock = w[K_ROCK] * inv;
             // scree aprons: pale rubble shed at the foot of every cliff, strongest where rock coverage is just giving out
             if (wRock > 0.03f && wRock < 0.5f && wWater < 0.05f) col = lerp3(col, SCREE, (0.5f - wRock) * 0.6f * (0.65f + 0.35f * nz.v(x * 0.4f + 3, y * 0.4f + 8)));
@@ -892,7 +953,7 @@ void terrainBake(Canvas& world) {
     for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
         if (g_map.tile(tx, ty) != T_SAND) continue;
         bool shore = g_map.tile(tx + 1, ty) == T_WATER || g_map.tile(tx - 1, ty) == T_WATER || g_map.tile(tx, ty + 1) == T_WATER || g_map.tile(tx, ty - 1) == T_WATER;
-        if (!shore) continue;
+        if (!shore || seaShore(tx, ty)) continue;   // (reeds grow by fresh water, not on the sea's beaches)
         for (int k = 0; k < 10; k++) {   // reeds: twice as thick
             float x = tx * TILE + r.f(2, TILE - 2), y = ty * TILE + r.f(2, TILE - 2);
             int h = r.range(5, 10);
@@ -1055,6 +1116,7 @@ void terrainBake(Canvas& world) {
             if (tileAt(x, y) != T_WATER || tileAt(x + 12, y) != T_WATER || tileAt(x - 12, y) != T_WATER || tileAt(x, y + 12) != T_WATER || tileAt(x, y - 12) != T_WATER) continue;
             {   // not out on the open lake: only its shallows next to the shore (rivers and pools anywhere)
                 int ptx = clampi(tileOf(x), 0, MAP_W - 1), pty = clampi(tileOf(y), 0, MAP_H - 1);
+                if (g_map.waterComp[pty * MAP_W + ptx] == g_map.oceanComp) continue;   // (salt water: none on the sea)
                 if (g_map.waterComp[pty * MAP_W + ptx] == g_map.lakeComp) {
                     bool shore = false;
                     for (int j = -2; j <= 2 && !shore; j++) for (int i = -2; i <= 2; i++) if (inMap(ptx + i, pty + j) && g_map.tile(ptx + i, pty + j) != T_WATER) { shore = true; break; }
@@ -1084,7 +1146,7 @@ void terrainBake(Canvas& world) {
             {24, 17, 0}, {30, 8.5f, 1}, {8, 22, 2}, {25, 31, 2}, {19, 47, 0}, {6.5f, 54, 1}
         };
         for (int q = 0; q < 4; q++) for (const Site& st : SITES) {
-            float sx = st.tx * (MAP_W / 80.0f), sy = st.ty * (MAP_H / 80.0f);   // sites were placed for the old 80x80 map
+            float sx = ISLE_X0 + st.tx * (ISLE_W / 80.0f), sy = ISLE_X0 + st.ty * (ISLE_W / 80.0f);   // sites were placed for the old 80x80 map (now the main island)
             float tx = (q & 1) ? (MAP_W - 1) - sx : sx, ty = (q & 2) ? (MAP_H - 1) - sy : sy, cx = tx * TILE, cy = ty * TILE;
             if (!clearOf(cx, cy, 8, 80)) continue;
             Rng sr((u64)(q * 977 + st.tx * 31 + st.ty * 7));
@@ -1156,7 +1218,7 @@ void terrainBake(Canvas& world) {
                 [&](float x, float y) { put(driftwood[mr.range(0, 2)], x, y); });
         scatter(decorCount(12000), decorCount(10), 150, [&](float x, float y) { return tileAt(x, y) == T_SAND && onLand(x, y, 1) && nearTile(x, y, T_WATER, 2) && apart(x, y); },
                 [&](float x, float y) { put(boats[mr.range(0, 2)], x, y); });
-        scatter(decorCount(30000), decorCount(240), 18, [&](float x, float y) { return dry(tileAt(x, y)) && nearTile(x, y, T_WATER, 1) && apart(x, y); },
+        scatter(decorCount(30000), decorCount(240), 18, [&](float x, float y) { return dry(tileAt(x, y)) && nearTile(x, y, T_WATER, 1) && !seaShore(tileOf(x), tileOf(y)) && apart(x, y); },
                 [&](float x, float y) { put(cattails[mr.range(0, 3)], x, y); });
         scatter(decorCount(20000), decorCount(60), 60, [&](float x, float y) { return grassAt(x, y) && flat(x, y) && nearTile(x, y, T_TREE, 2) && apart(x, y); },
                 [&](float x, float y) { put(rings[mr.range(0, 2)], x, y); });
@@ -1189,8 +1251,19 @@ void terrainBake(Canvas& world) {
     {
         Kept& K = kept();
         if (K.sprites[0].empty()) for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) K.sprites[k].push_back(makeTree(k, spriteBase(k) + v * 0.6f, 5000u + k * 97u + v * 13u));
-        K.preTree.resize(world.px.size());
-        for (size_t i = 0; i < world.px.size(); i++) K.preTree[i] = to565(Canvas::unpack(world.px[i]));
+        const int PC = Kept::PRE_CHUNK, cols = (W + PC - 1) / PC, rows = (H + PC - 1) / PC, TPC = PC / TILE;
+        K.preCols = cols;
+        K.preTree.assign((size_t)cols * rows, std::vector<u16>());
+        for (int cy = 0; cy < rows; cy++) for (int cx = 0; cx < cols; cx++) {
+            bool land = false;
+            for (int ty = cy * TPC - 1; ty <= (cy + 1) * TPC && !land; ty++) for (int tx = cx * TPC - 1; tx <= (cx + 1) * TPC; tx++)
+                if (inMap(tx, ty) && g_map.tile(tx, ty) != T_WATER) { land = true; break; }
+            if (!land) continue;
+            std::vector<u16>& c = K.preTree[(size_t)cy * cols + cx];
+            c.assign((size_t)PC * PC, 0);
+            for (int y = 0; y < PC && cy * PC + y < H; y++) for (int x = 0; x < PC && cx * PC + x < W; x++)
+                c[(size_t)y * PC + x] = to565(Canvas::unpack(world.px[(size_t)(cy * PC + y) * W + cx * PC + x]));
+        }
         K.trees = trees;
         K.ok = true;
         for (auto& t : trees) drawTree(world, t, 0, 0);
@@ -1236,7 +1309,9 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
             F3 dirt = groundColor(K_DIRT, (float)x, (float)y, nz, macro, 0);
             dirt = lerp3(dirt, SCREE, 0.25f * nz.v(x * 0.2f + 4, y * 0.2f + 9));   // rubble left by the quarrying
             dirt = gradeGround(dirt, (float)x, (float)y, nz);
-            u16& d = K.preTree[(size_t)y * WORLD_W + x];
+            u16* dp = K.pre(x, y);
+            if (!dp) continue;   // (open sea: nothing is quarried there)
+            u16& d = *dp;
             Color o = from565(d);
             d = to565(Color{ (u8)clampf(o.r + (dirt.r - o.r) * w, 0, 255), (u8)clampf(o.g + (dirt.g - o.g) * w, 0, 255), (u8)clampf(o.b + (dirt.b - o.b) * w, 0, 255), 255 });
         }
@@ -1247,7 +1322,8 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     rx = x0; ry = y0; rw = x1 - x0; rh = y1 - y0;
     // recompose: the ground before the trees, then every tree that reaches into the rectangle, back to front
     Canvas patch(rw, rh);
-    for (int y = 0; y < rh; y++) for (int x = 0; x < rw; x++) patch.px[(size_t)y * rw + x] = Canvas::pack(from565(K.preTree[(size_t)(ry + y) * WORLD_W + rx + x]));
+    for (int y = 0; y < rh; y++) for (int x = 0; x < rw; x++) { const u16* q = K.pre(rx + x, ry + y); patch.px[(size_t)y * rw + x] = q ? Canvas::pack(from565(*q)) : 0; }
+    if (std::any_of(patch.px.begin(), patch.px.end(), [](u32 v) { return v == 0; })) return false;   // (a patch reaching open sea has nothing kept to repaint from: leave it)
     for (auto& t : K.trees) {
         int a, b, c, d; treeRect(t, a, b, c, d);
         if (c < rx || a > rx + rw || d < ry || b > ry + rh) continue;

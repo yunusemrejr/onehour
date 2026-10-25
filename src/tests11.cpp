@@ -61,6 +61,7 @@ bool placementTest(u64 seed) {
         for(int y=std::max(0,ty-7);y<std::min(MAP_H,ty+h+7);y++)
             for(int x=std::max(0,tx-7);x<std::min(MAP_W,tx+w+7);x++)
                 if(r.range(0,99)<trial%55) m.blocked[y*MAP_W+x]=(u8)(1<<r.range(0,2));
+        m.touch();   // (blocked was written directly: the region labelling wouldPlug confirms with must be rebuilt)
         if(m.wouldPlug(tx,ty,w,h)!=plugReference(m,tx,ty,w,h)) {
             fprintf(stderr,"placementtest: mismatch at trial %d (%d,%d %dx%d)\n",trial,tx,ty,w,h); return false;
         }
@@ -76,6 +77,7 @@ bool placementTest(u64 seed) {
         for(int y=ty-1;y<=ty+12;y++) m.blocked[y*MAP_W+tx-12]=1;
         for(int y=ty;y<ty+3;y++) for(int x=tx;x<tx+3;x++) m.blocked[y*MAP_W+x]=0;
         for(int x=tx+3;x<=tx+14;x++) m.blocked[(ty+3)*MAP_W+x]=1;              // a second wall east, so the site is a cork between the wood and it
+        m.touch();
         bool windowSplit=plugReference(m,tx,ty,3,3);
         if(m.wouldPlug(tx,ty,3,3)!=windowSplit) { fprintf(stderr,"placementtest: the wood-and-rock site disagrees with the oracle\n"); return false; }
     }
@@ -114,11 +116,11 @@ static void scene11(u64 seed, bool commander = true) {
 
 bool frontierMapTest(u64 seed) {
     scene11(seed,false);
-    VERIFY11(MAP_W==208 && MAP_H==208,"unexpected map scale");
-    VERIFY11(g_map.supplies.size()==20,"supply count changed");
-    VERIFY11(g_map.landmarks.size()==29,"a quadrant lost a settlement building");
+    VERIFY11(ISLE_W==208 && MAP_W==320 && MAP_H==320,"unexpected map scale");
+    VERIFY11(g_map.supplies.size()==23,"supply count changed");
+    VERIFY11(g_map.landmarks.size()==32,"a quadrant lost a settlement building");   // (29 on the main island, three on the second island)
     int kinds[7]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<7,"invalid landmark kind");kinds[l.kind]++; }
-    VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4 && kinds[5]==4 && kinds[6]==4,"settlements are not distributed fairly");
+    VERIFY11(kinds[0]==5 && kinds[1]==5 && kinds[2]==6 && kinds[3]==4 && kinds[4]==4 && kinds[5]==4 && kinds[6]==4,"settlements are not distributed fairly");
     // Flood-fill real occupancy after HQs, resources and all landmarks are present.
     Vec2 start=g_map.nearestFree(g_sim.players[0].basePos+Vec2(0,6*TILE),10);
     std::vector<u8> seen(MAP_W*MAP_H);std::vector<int> q;
@@ -141,10 +143,11 @@ bool frontierMapTest(u64 seed) {
         VERIFY11(g_map.findPath(start,to,path),"default-budget pathfinding cannot cross the map");
         for(Vec2 p:path) VERIFY11(g_map.passable(tileOf(p.x),tileOf(p.y)),"a path waypoint crosses an obstacle");
     }
-    for(auto s:g_map.supplies) VERIFY11(reached(s.tx,s.ty,1,1),"a supply pile is unreachable");
+    for(auto s:g_map.supplies) if(mainIslandInland(s.tx,s.ty)>0) VERIFY11(reached(s.tx,s.ty,1,1),"a supply pile is unreachable");   // (the second island's are out at sea)
     for(auto& e:g_sim.ents) if(e.alive && e.isBuilding() && e.bt().role==BR_STRONGHOLD) {
         bool island=false;
         for(auto& isl:g_map.islands) if(dist(e.pos,Vec2(isl.cx*TILE,isl.cy*TILE))<isl.r*TILE) island=true;
+        if(mainIslandInland(e.tx,e.ty)<=0) island=true;   // (the second island's strongholds are reached by sea)
         VERIFY11(island || reached(e.tx,e.ty,e.bt().w,e.bt().h),"a mainland landmark cannot be entered");
         for(int y=e.ty;y<e.ty+e.bt().h;y++) for(int x=e.tx;x<e.tx+e.bt().w;x++)
             VERIFY11(g_map.terrainPassable(x,y) && !g_map.bridge[y*MAP_W+x],"a landmark overlaps terrain or a bridge");
@@ -180,7 +183,7 @@ bool frontierMapTest(u64 seed) {
     Map m;memset(m.blocked,1,sizeof m.blocked);memset(m.tiles,T_ROCK,sizeof m.tiles);
     VERIFY11(!m.findPath(Vec2(-999,-999),Vec2(WORLD_W+999,WORLD_H+999),path) && path.empty(),"blocked out-of-world path was accepted");
     VERIFY11(!m.findPath(Vec2(std::numeric_limits<float>::quiet_NaN(),0),c,path),"NaN path input was accepted");
-    printf("frontiermaptest: 208x208, 20 supplies, 29 landmarks (4 ridge fortresses, 4 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
+    printf("frontiermaptest: 208-tile island in a 320x320 sea, 23 supplies, 32 landmarks (4 ridge fortresses, 4 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
     return true;
 }
 

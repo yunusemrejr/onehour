@@ -73,17 +73,18 @@ static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
     for (Vec2 q : np) CHECK3(g_map.navTile(tileOf(q.x), tileOf(q.y)), "a naval waypoint is not water");
     // a Naval Yard must touch the open lake
     int yardT = me == F_CYBER ? B_C_NAVAL : B_K_NAVAL, facT = firstBuildOf(me) + BR_FACTORY, techT = firstBuildOf(me) + BR_TECH;
-    CHECK3(!g_sim.canPlace(0, yardT, 8, 8), "a Naval Yard may stand on dry land away from the lake");
+    const int YW = BUILDS[yardT].w, YH = BUILDS[yardT].h;   // (the yard grew to 5x4 for the sea)
+    CHECK3(!g_sim.canPlace(0, yardT, ISLE_X0 + 8, ISLE_X0 + 8), "a Naval Yard may stand on dry land away from the lake");
     {   // a buildable footprint whose edge touches river water but not the lake: still refused (found by scanning, so this
         // holds wherever the rivers run)
         bool found = false, refused = false;
         for (int ty = 1; ty < MAP_H - 4 && !found; ty++) for (int tx = 1; tx < MAP_W - 4 && !found; tx++) {
             bool foot = true;
-            for (int j = 0; j < 3 && foot; j++) for (int i = 0; i < 3; i++) if (!g_map.buildable(tx + i, ty + j)) foot = false;
+            for (int j = 0; j < YH && foot; j++) for (int i = 0; i < YW; i++) if (!g_map.buildable(tx + i, ty + j)) foot = false;
             if (!foot) continue;
             bool river = false, lake = false;
-            for (int j = ty - 1; j <= ty + 3; j++) for (int i = tx - 1; i <= tx + 3; i++) {
-                bool inside = i >= tx && i < tx + 3 && j >= ty && j < ty + 3, corner = (i < tx || i >= tx + 3) && (j < ty || j >= ty + 3);
+            for (int j = ty - 1; j <= ty + YH; j++) for (int i = tx - 1; i <= tx + YW; i++) {
+                bool inside = i >= tx && i < tx + YW && j >= ty && j < ty + YH, corner = (i < tx || i >= tx + YW) && (j < ty || j >= ty + YH);
                 if (inside || corner || !inMap(i, j) || g_map.tile(i, j) != T_WATER) continue;
                 if (g_map.bigWater(i, j)) lake = true; else river = true;
             }
@@ -96,7 +97,7 @@ static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
     CHECK3(g_sim.shoreSite(0, yardT, g_sim.players[0].basePos, tx, ty), "no shore site for a Naval Yard");
     {   // the site touches the lake along one of its edges
         bool touch = false;
-        for (int j = ty - 1; j <= ty + 3; j++) for (int i = tx - 1; i <= tx + 3; i++) { bool inside = i >= tx && i < tx + 3 && j >= ty && j < ty + 3, corner = (i < tx || i >= tx + 3) && (j < ty || j >= ty + 3); if (!inside && !corner && g_map.bigWater(i, j)) touch = true; }
+        for (int j = ty - 1; j <= ty + YH; j++) for (int i = tx - 1; i <= tx + YW; i++) { bool inside = i >= tx && i < tx + YW && j >= ty && j < ty + YH, corner = (i < tx || i >= tx + YW) && (j < ty || j >= ty + YH); if (!inside && !corner && g_map.bigWater(i, j)) touch = true; }
         CHECK3(touch, "the shore site does not touch the lake");
     }
     // it needs the Assembly Plant / War Factory first
@@ -115,8 +116,8 @@ static bool lakeAndShips(Faction me, Faction foe, u64 seed) {
     CHECK3(g_sim.countUnits(0, destroyer) + g_sim.countUnits(0, cruiser) == before + 2, "the yard did not build both ships");
     for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.ut().naval) {
         CHECK3(onWater(e), "a ship came out of the yard onto land");
-        if (dist(e.pos, lakePoint(0, 0)) >= 20 * TILE) fprintf(stderr, "ship %s at %.0f,%.0f tile %d,%d order %d target %.0f,%.0f path %zu/%zu airspeed %.1f\n", e.ut().name, e.pos.x, e.pos.y, tileOf(e.pos.x), tileOf(e.pos.y), (int)e.order, e.target.x, e.target.y, e.pathIdx, e.path.size(), e.airspeed);
-        CHECK3(dist(e.pos, lakePoint(0, 0)) < 20 * TILE, "a new ship did not head out into the lake");
+        CHECK3(g_map.compAt(e.pos) == g_map.compAt(g_sim.navalExit(*g_sim.get(yard))), "a new ship is not on its yard's sea");
+        CHECK3(dist(e.pos, g_sim.get(yard)->pos) > 3.5f * TILE, "a new ship did not head out from the slipway");
     }
     // and it sails where it is sent, over water the whole way, turning like a ship
     Ref sh = ship3(destroyer, 0, lakePoint(-8, 0));
@@ -234,11 +235,12 @@ static bool mapConnectivity() {
     }
     int main = 1; for (int i = 1; i <= ncomp; i++) if (size[i] > size[main]) main = i;
     for (auto& st : g_map.starts) CHECK3(comp[st.ty * MAP_W + st.tx] == main, "a base start is cut off from the rest of the land");
-    for (auto& sp : g_map.supplies) CHECK3(comp[sp.ty * MAP_W + sp.tx] == main, "a supply pile is cut off from the rest of the land");
+    for (auto& sp : g_map.supplies) if (mainIslandInland(sp.tx, sp.ty) > 0) CHECK3(comp[sp.ty * MAP_W + sp.tx] == main, "a supply pile is cut off from the rest of the land");   // (the second island's piles are out at sea by design)
     int island = comp[(MAP_H / 2) * MAP_W + MAP_W / 2];   // the lake's island is cut off by design (reached by airlift, not by road)
     CHECK3(island != 0 && island != main, "the island in the middle of the lake is not an island");
     std::vector<int> islandComps{ island };   // (both lake islands are cut off by design)
     for (auto& isl : g_map.islands) islandComps.push_back(comp[(int)isl.cy * MAP_W + (int)isl.cx]);
+    for (int t = 0; t < MAP_W * MAP_H; t++) if (comp[t] && mainIslandInland(t % MAP_W, t / MAP_W) <= 0 && std::find(islandComps.begin(), islandComps.end(), comp[t]) == islandComps.end()) islandComps.push_back(comp[t]);   // (and the second island and the islets out at sea)
     int stray = 0; for (int i = 1; i <= ncomp; i++) if (i != main && std::find(islandComps.begin(), islandComps.end(), i) == islandComps.end()) stray += size[i];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "map: main land %d tiles, island %d, %d tiles in small pockets\n", size[main], size[island], stray);
     if (getenv("ONEHOUR_DEBUG")) for (int i = 1; i <= ncomp; i++) if (i != main && std::find(islandComps.begin(), islandComps.end(), i) == islandComps.end())
@@ -409,7 +411,7 @@ bool droneTest(u64 seed) {
     return g_ok3;
 }
 
-// ---------------------------------------------------------------------------------------------------------------- Hotline Strike fighters
+// ---------------------------------------------------------------------------------------------------------------- Air Strike fighters
 bool strikeJetTest(u64 seed) {
     g_name3 = "strikejettest"; g_ok3 = true;
     for (int fi = 0; fi < 2; fi++) {
@@ -427,29 +429,49 @@ bool strikeJetTest(u64 seed) {
         std::vector<Ref> victims;
         for (int i = 0; i < 6; i++) { Ref r = g_sim.spawnUnit(firstUnitOf(foe) + 5, 1, spot + Vec2((i % 3 - 1) * 40.0f, (i / 3 - 0.5f) * 40.0f)); g_sim.get(r)->disabledUntil = 1e9f; victims.push_back(r); }
         float h0 = 0; for (Ref r : victims) h0 += hp3(r);
+        int airBefore = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.isAir() && e.owner == 0) airBefore++;
+        int flight = (int)g_sim.strikeManifest(0).size();
+        CHECK3(flight >= 10, "an Air Strike sends fewer than ten fighters");
         CHECK3(g_sim.cmdPhoneStrike(0, spot), "the strike call was refused");
-        int jets = g_sim.countUnits(0, jetT);
-        CHECK3(jets == STRIKE_JETS, "a strike call did not bring exactly two special fighters");
-        std::vector<Ref> jetRefs;
-        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == jetT) { jetRefs.push_back(g_sim.refOf(e)); CHECK3(e.order == O_STRIKERUN, "a fighter is not on its strike run"); CHECK3(e.pos.x > 0 && e.pos.y > 0 && e.pos.x < WORLD_W && e.pos.y < WORLD_H, "a fighter spawned off the map"); }
-        // they take no orders and cannot be picked as a unit group
-        g_sim.cmdMove(jetRefs, g_sim.players[0].basePos, false); g_sim.cmdStop(jetRefs); g_sim.cmdAttack(jetRefs, victims[0]);
-        for (Ref r : jetRefs) CHECK3(g_sim.get(r)->order == O_STRIKERUN, "a strike fighter obeyed an order");
-        // the run: three passes of rockets over the spot, then they are gone
-        float fastest = 0; int rockets = 0;
+        // the waves come in one after another; every fighter takes no orders, makes one pass and leaves
+        std::vector<Ref> seen; std::vector<int> dropped; float fastest = 0, minFade = 1.0f; int rockets = 0, bombs = 0, maxUp = 0; bool obeyed = false, offMap = false;
         for (int t = 0; t < 20 * 40; t++) {
             g_sim.step(); g_sim.events.clear();
-            for (Ref r : jetRefs) if (Entity* e = g_sim.get(r)) fastest = std::max(fastest, e->airspeed);
+            int up = 0;
+            for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == jetT) {
+                Ref r = g_sim.refOf(e); up++;
+                if (std::find(seen.begin(), seen.end(), r) == seen.end()) {
+                    seen.push_back(r);
+                    if (e.order != O_STRIKERUN) obeyed = true;
+                    if (e.pos.x <= 0 || e.pos.y <= 0 || e.pos.x >= WORLD_W || e.pos.y >= WORLD_H) offMap = true;
+                    g_sim.cmdMove({r}, g_sim.players[0].basePos, false); g_sim.cmdStop({r}); g_sim.cmdAttack({r}, victims[0]);
+                    if (e.order != O_STRIKERUN) obeyed = true;
+                }
+                fastest = std::max(fastest, e.airspeed); minFade = std::min(minFade, e.fade);
+                size_t k = std::find(seen.begin(), seen.end(), r) - seen.begin();
+                if (k >= dropped.size()) dropped.resize(k + 1, 0);
+                dropped[k] = std::max(dropped[k], STRIKE_BOMBS - (int)e.bombsLeft);
+            }
+            maxUp = std::max(maxUp, up);
             for (auto& p : g_sim.projs) if (p.weapon == W_STRIKE_C || p.weapon == W_STRIKE_K) rockets++;
         }
+        for (int d : dropped) bombs += d;
         float h1 = 0; for (Ref r : victims) h1 += std::max(0.0f, hp3(r));
-        CHECK3(fastest > 800.0f, "the strike fighters are not very fast");
-        CHECK3(rockets > 20, "the strike fighters fired no rockets");
-        CHECK3(h1 < h0 * 0.35f, "the two fighters' rockets did not do big damage to what stood at the spot");
+        CHECK3((int)seen.size() == flight, "the strike did not bring the whole flight");
+        CHECK3(maxUp > STRIKE_WAVE && maxUp <= flight, "the waves did not overlap in the air");
+        CHECK3(!obeyed, "a strike fighter obeyed an order");
+        CHECK3(!offMap, "a fighter spawned off the map");
+        CHECK3(fastest > 600.0f, "the strike fighters are not fast");
+        CHECK3(rockets > 0, "the strike fighters fired no rockets");
+        CHECK3(bombs >= flight * STRIKE_BOMBS / 2, "the strike fighters dropped few bombs");
+        CHECK3(h1 < h0 * 0.35f, "the strike did not do big damage to what stood at the spot");
+        CHECK3(minFade < 0.5f, "the fighters did not fade out over the sea");
         run3(30);
         CHECK3(g_sim.countUnits(0, jetT) == 0, "the strike fighters never left");
+        int airAfter = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.isAir() && e.owner == 0) airAfter++;
+        CHECK3(airAfter == airBefore, "the strike left aircraft behind with the army");
         CHECK3(g_sim.players[0].alive, "the army was counted out");
-        // very hard to shoot down: two Patriot / Rocket batteries and a wall of guns at the target do not bring them down
+        // hard to shoot down: two Patriot / Rocket batteries at the target take few of them
         lakeScene(me, foe, seed + 4 + fi);
         placeNear3(techT, 0, g_sim.players[0].basePos + Vec2(8 * TILE, 8 * TILE));
         givePower3(1);
@@ -460,15 +482,17 @@ bool strikeJetTest(u64 seed) {
         g_sim.updatePowerPublic();
         CHECK3(g_sim.get(aa1) && g_sim.get(aa2), "no anti-air for the test");
         CHECK3(g_sim.cmdPhoneStrike(0, spot), "the second strike call was refused");
-        float worst = 1.0f; int guns = 0;
-        for (int t = 0; t < 20 * 24; t++) {
-            g_sim.step(); g_sim.events.clear();
-            for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == jetT) worst = std::min(worst, e.hp / e.maxHp);
+        int shotDown = 0; std::vector<Ref> up2;
+        for (int t = 0; t < 20 * 40; t++) {
+            g_sim.step();
+            for (auto& ev : g_sim.events) (void)ev;
+            g_sim.events.clear();
+            for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == jetT && std::find(up2.begin(), up2.end(), g_sim.refOf(e)) == up2.end()) up2.push_back(g_sim.refOf(e));
         }
-        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_AATURRET && e.owner == 1) guns++;
-        CHECK3(worst > 0.25f, "two anti-air batteries brought a strike fighter close to falling");
-        printf("strike fighters %s: ok (two on every call, %.0f px/s, %d rockets in flight over three passes, the target cluster %.0f%% destroyed, they left; worst hit fighter at %d%% health under flak)\n", FACTION_NAME[me], fastest, rockets, 100.0f * (1.0f - h1 / h0), (int)(worst * 100));
-        (void)guns;
+        for (Ref r : up2) { Entity* e = g_sim.get(r); (void)e; }
+        shotDown = g_sim.players[0].unitsLost;
+        CHECK3(shotDown * 3 < (int)up2.size(), "two anti-air batteries shot down a third of the flight");
+        printf("strike fighters %s: ok (%d on the call in waves of %d, %.0f px/s, %d rockets and %d bombs, the target cluster %.0f%% destroyed, they faded out over the sea; %d of %d lost to two batteries)\n", FACTION_NAME[me], flight, STRIKE_WAVE, fastest, rockets, bombs, 100.0f * (1.0f - h1 / h0), shotDown, (int)up2.size());
     }
     printf("strikejettest: ok\n");
     return g_ok3;

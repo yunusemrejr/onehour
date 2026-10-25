@@ -190,6 +190,25 @@ void Gfx::buildEffects() {
         }
         waterFx[f] = fromCanvasAdd(c, 0, 0);
     }
+    // the open ocean's swell (512 px: 16 tiles before it repeats): long crests running before a north-westerly wind (integer frequencies again, so it tiles), sharpened into bright
+    // ridges with a sparkle of whitecaps on the highest of them; four frames that loop as the crests roll on
+    for (int f = 0; f < 4; f++) {
+        const int N = 512;
+        Canvas c(N, N);
+        static const int A[8] = { 3, 4, 5, 2, 7, 6, 9, 11 }, B[8] = { 4, 3, 6, 5, 5, 8, 7, 9 };
+        static const float W[8] = { 1.0f, 0.8f, 0.6f, 0.55f, 0.4f, 0.35f, 0.25f, 0.2f };
+        for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
+            float w = 0;
+            for (int k = 0; k < 8; k++) w += W[k] * std::sin(6.2831853f * (A[k] * x + B[k] * y) / (float)N + 1.1f * k + f * 1.5707963f * (k & 1 ? 1 : -1));
+            float crest = clampf((w - 0.7f) / 1.9f, 0, 1);
+            float chop = 0.5f + 0.5f * std::sin(6.2831853f * (23 * x - 13 * y) / (float)N + f * 3.1415926f);
+            float a = crest * crest * (0.6f + 0.4f * chop);
+            u32 h = (u32)(x * 73856093u) ^ (u32)(y * 19349663u) ^ (u32)(f * 83492791u); h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+            if (crest > 0.65f && (h & 255) < 8) a = 0.9f;   // whitecaps
+            c.px[y * N + x] = Canvas::pack(Color{214, 236, 248, (u8)(clampf(a, 0, 1) * 60)});
+        }
+        seaSwell[f] = fromCanvasAdd(c, 0, 0);
+    }
 }
 
 // ================================================================= particles
@@ -221,17 +240,18 @@ void Game::spawnFromFx() {
         switch (f.type) {
         case FX_EXPLODE: {
             const float sc = f.size;
+            const bool light = f.vel.y < -0.5f;   // one bomb of an Air Strike's carpet: a fraction of the smoke and scorch (a hundred of them land on one spot)
             float s = std::min(sc, 520.0f);   // (an Underground Nuke's fireball is wider than a ramp's, its smoke and chunks are not: their overdraw grows with the square)
             int chunks = 2 + (int)(s / 9), sparks = 4 + (int)(s / 3.5f);
             for (int i = 0; i < chunks; i++) { float an = r.f(0, 6.283f), sp = r.f(50, 70 + s * 3.2f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.7f - r.f(60, 150), r.f(0.5f, 1.0f), r.f(0.7f, 1.2f), r.f(0.7f, 1.2f), shade(rgb(96, 90, 82), r.f(0.6f, 1.2f)), PK_DEBRIS, (u8)r.range(0, 3), 420, 0, r.f(0, 6), r.f(-14, 14)); }
             for (int i = 0; i < sparks; i++) { float an = r.f(0, 6.283f), sp = r.f(80, 140 + s * 4.0f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp, r.f(0.25f, 0.6f), r.f(1.0f, 1.8f), 0.4f, rgb(255, 214, 120), PK_SPARK, 0, 120, 3.0f); }
-            int puffs = 1 + (int)(s / 12);
+            int puffs = light ? (r.f() < 0.4f ? 1 : 0) : 1 + (int)(s / 12);
             for (int i = 0; i < puffs; i++) emitP(f.a.x + r.f(-s * 0.3f, s * 0.3f), f.a.y + r.f(-s * 0.3f, s * 0.3f), r.f(-10, 10), r.f(-30, -12), r.f(1.8f, 3.2f), s * r.f(0.35f, 0.55f), s * r.f(0.9f, 1.4f), rgb(52, 50, 48), PK_SMOKE, (u8)r.range(0, 3), 0, 0.6f, r.f(0, 6), r.f(-0.4f, 0.4f));
             if (s >= 20) emitP(f.a.x, f.a.y, 0, 0, 0.6f, s * 0.35f, s * 2.2f, rgb(255, 196, 130), PK_RING);
             if (s >= 55 && s < 150) {   // heavy bomb: a rolling dust ring, a fire column and a plume of smoke climbing from the crater
                 for (int i = 0; i < 12; i++) { float an = i * 0.5236f + r.f(-0.15f, 0.15f), sp = r.f(110, 190) * (s / 70.0f + 0.4f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.5f, r.f(0.7f, 1.2f), s * 0.12f, s * 0.42f, rgb(150, 132, 108, 170), PK_DUST, (u8)r.range(0, 2), 0, 3.4f, r.f(0, 6), r.f(-0.5f, 0.5f)); }
                 for (int i = 0; i < 7; i++) emitP(f.a.x + r.f(-s * 0.15f, s * 0.15f), f.a.y - i * s * 0.1f, r.f(-8, 8), -r.f(70, 150), r.f(0.5f, 0.9f), s * r.f(0.2f, 0.34f), s * 0.08f, rgb(255, 170 + r.range(0, 60), 80), PK_FLAME, (u8)r.range(0, 2), -40, 1.2f);
-                for (int i = 0; i < 5; i++) emitP(f.a.x + r.f(-s * 0.2f, s * 0.2f), f.a.y - r.f(0, s * 0.3f), r.f(-10, 10), -r.f(36, 90), r.f(2.2f, 3.6f), s * r.f(0.28f, 0.4f), s * r.f(0.8f, 1.15f), rgb(70, 66, 62, 150), PK_SMOKE, (u8)r.range(0, 3), 0, 0.5f, r.f(0, 6), r.f(-0.3f, 0.3f));
+                for (int i = 0; i < (light ? 1 : 5); i++) emitP(f.a.x + r.f(-s * 0.2f, s * 0.2f), f.a.y - r.f(0, s * 0.3f), r.f(-10, 10), -r.f(36, 90), r.f(2.2f, 3.6f), s * r.f(0.28f, 0.4f), s * r.f(0.8f, 1.15f), light ? rgb(110, 104, 96, 110) : rgb(70, 66, 62, 150), PK_SMOKE, (u8)r.range(0, 3), 0, 0.5f, r.f(0, 6), r.f(-0.3f, 0.3f));
                 for (int i = 0; i < 16; i++) { float an = r.f(0, 6.283f), sp = r.f(160, 300); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.8f - r.f(50, 140), r.f(0.3f, 0.7f), r.f(1.2f, 2.2f), 0.4f, rgb(255, 224, 150), PK_SPARK, 0, 160, 2.6f); }
             }
             if (s >= 150) {   // tactical nuke: a rising stem, an opening cap, a dust ring, a huge scorch and a flash
@@ -242,7 +262,7 @@ void Game::spawnFromFx() {
                 decals.push_back(Decal{ f.a.x, f.a.y, sc * 1.5f, 0.0f, 0, 90.0f, 1 });   // (not rotated: a rotated blit this big costs a quarter of a second a frame on the software renderer)
                 nukeFlash = 0.55f;
             }
-            if (s >= 15 && s < 150 && decals.size() < 56) decals.push_back(Decal{ f.a.x, f.a.y, s * r.f(1.0f, 1.25f), r.f(0, 6.28f), 0, r.f(32, 46), (u8)r.range(0, 2) });   // (a nuke has its own scorch above)
+            if (s >= 15 && s < 150 && decals.size() < 56 && (!light || r.f() < 0.25f)) decals.push_back(Decal{ f.a.x, f.a.y, s * (light ? r.f(0.4f, 0.55f) : r.f(1.0f, 1.25f)), r.f(0, 6.28f), 0, r.f(32, 46), (u8)r.range(0, 2) });   // (a nuke has its own scorch above; a carpet bomb's is small, or a hundred of them blacken the spot)
             break;
         }
         case FX_WRECK: if (f.vel.y > 0.5f && f.vel.y < 1.5f) for (int i = 0; i < 2; i++) emitP(f.a.x + r.f(-3, 3), f.a.y + r.f(-3, 3), r.f(-10, 10), r.f(-12, 4), r.f(0.5f, 0.8f), 3, 9, rgb(150, 126, 100, 150), PK_DUST, (u8)r.range(0, 2), 0, 1.6f); break;

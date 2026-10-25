@@ -108,13 +108,20 @@ struct Gfx {
     // baked effect sprites: smoke and dust puffs, fireball frames, flame tongues, muzzle stars, sparks, shock rings, beams, debris, scorch decals
     struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], tread[2], missile, missileK, cloud[3], billow[4]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead
     Sprite waterFx[4];              // seamless animated caustics laid over open water
+    Sprite seaSwell[4];             // seamless animated swell over the open ocean (512x512: a quarter per aligned 8x8-tile block)
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
     static const int FLAG_W = 24, FLAG_H = 15;
     Sprite minimapTerrain;
-    Sprite worldTerrain;            // whole map baked into one texture (organic, noise-blended transitions)
+    // The baked ground (organic, noise-blended transitions), cut into WORLD_CHUNK px square textures: a 10240 px world is bigger than many GPUs'
+    // largest texture. drawWorld blits a world rectangle from however many chunks it spans.
+    static const int WORLD_CHUNK = 1024;
+    std::vector<SDL_Texture*> worldChunks;
+    int worldCols = 0, worldRows = 0;
+    void drawWorld(int wx, int wy, int w, int h, int dx, int dy);
     static const int SHROUD_SS = 4;     // shroud mask cells per tile
+    SDL_Texture* miniFog = nullptr;     // the minimap's fog (MAP_W/2 x MAP_H/2 cells, see Game::drawMinimap)
     SDL_Texture* shroudTex = nullptr;   // (MAP_W*SS) x (MAP_H*SS) alpha mask, bilinear-scaled; the edge is displaced by noise so it drifts like cloud
-    void updateShroud(const std::vector<u8>& explored);
+    void updateShroud(const std::vector<u8>& fog, bool force = false);   // fog per tile: 0 never seen, 1 remembered (explored, out of sight), 2 in sight; force: rebuild it all
     void rebakeTerrain();           // a new match on a map whose baked ground was edited by the last one: bake it afresh
     void refreshTerrain();          // structures cleared trees / rocks (Map::cleared): repaint and re-upload just that part of the baked world
     bool terrainEdited = false;
@@ -137,11 +144,12 @@ struct Gfx {
     void fillCircle(float cx, float cy, float r, Color c);
     void glowAdd(float cx, float cy, float r, Color c);   // additive light blob
     void drawSized(const Sprite& s, float cx, float cy, float w, float h, float angle, Color mod = rgb(255, 255, 255), u8 alpha = 255);   // centred, any aspect, rotated about its centre
+    // an aircraft rolling about its long axis: the sprite foreshortened across the wings by |cos roll| and mirrored while it is belly-up
+    void drawRolled(const Sprite& s, float x, float y, float angle, float roll, float scale = 1, Color mod = rgb(255, 255, 255), u8 alpha = 255);
     void discFill(float cx, float cy, float r, Color c);  // flat translucent disc with a soft edge
     void dashedCircle(float cx, float cy, float r, Color c, float phase, float dash = 9, float gap = 6);
     Sprite fromCanvasSmooth(Canvas& c, float ox, float oy);   // bilinear-filtered texture (supersampled sprites)
     Sprite fromCanvasAdd(Canvas& c, float ox, float oy);      // bilinear + additive blending
-    Sprite fromCanvas565(Canvas& c, float ox, float oy);      // opaque RGB565 texture with ordered dithering (half the memory and blit bandwidth; the baked world)
     void bevelPanel(int x, int y, int w, int h, Color base, bool raised = true);
     void drawFlag(float poleX, float poleY, int player, float scale, float phase);   // mast standing at (poleX, poleY), flag waving
     void present();

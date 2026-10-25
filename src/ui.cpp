@@ -249,7 +249,7 @@ Entity* Game::pickEntity(Vec2 w, bool ownOnly) {
         if (!e.alive) continue;
         if (ownOnly && e.owner != g_sim.humanPlayer) continue;
         if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier, or hidden (stealth)
-        if (e.owner != g_sim.humanPlayer && e.kind != EK_RESOURCE && !g_sim.explored(g_sim.humanPlayer, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+        if (!g_sim.shownToHuman(e)) continue;   // unexplored ground, or an enemy unit nobody of yours can see right now
         float d;
         if (e.isBuilding()) {
             if (g_sim.distToEntity(w, e) <= 0) d = dist(w, e.pos) * 0.1f;
@@ -576,8 +576,13 @@ void Game::buildButtonsRaw() {
         return;
     }
     bool combat = false, lifter = false, jeep = false;
-    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; if (e && e->isUnit() && e->ut().cargoCap > 0) (e->ut().kind == UK_AIR ? lifter : jeep) = true; }
-    if (lifter) {
+    bool cargoShip = false;
+    for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && e->weapon() >= 0) combat = true; if (e && e->isUnit() && e->ut().cargoCap > 0) (e->ut().kind == UK_AIR ? lifter : (e->ut().naval ? cargoShip : jeep)) = true; }
+    if (cargoShip) {
+        bool aboard = false; for (auto r : selection) { Entity* e = g_sim.get(r); if (e && !e->passengers.empty()) aboard = true; }
+        add(BK_UNLOAD, 0, aboard, "Land Here", "Land Here  [U]  Everybody aboard goes ashore onto the nearest beach (it must lie within a few tiles). Load the ship by bringing it beside a shore and right-clicking it with units selected");
+        add(BK_DROPOFF, 0, aboard, "Land At", "Land At  [D]  Pick a beach: the ship sails to the water off it and lands everybody there");
+    } else if (lifter) {
         add(BK_UNLOAD, 0, true, "Unload", "Unload  [U]  Set down where it hovers and let everybody out. Load a lifter by right-clicking it with soldiers or vehicles selected");
         add(BK_DROPOFF, 0, true, "Drop Off", "Drop Off  [D]  Pick a spot: the lifter flies there, sets down and unloads");
     } else if (jeep) {
@@ -948,9 +953,8 @@ void Game::renderMenu() {
     g.beginFrame(rgb(18, 22, 28));
     // backdrop: a slice of the baked map
     {
-        int sw = std::min(SCREEN_W, WORLD_W - 400), sh = std::min(SCREEN_H, WORLD_H - 640);
-        SDL_Rect src = { 400, 640, sw, sh }, dst = { 0, 0, sw, sh };
-        SDL_RenderCopy(g.ren, g.worldTerrain.tex, &src, &dst);
+        const int mx = ISLE_X0 * TILE + 400, my = ISLE_X0 * TILE + 640;   // (a corner of the main island)
+        g.drawWorld(mx, my, std::min(SCREEN_W, WORLD_W - mx), std::min(SCREEN_H, WORLD_H - my), 0, 0);
     }
     g.fill(0, 0, SCREEN_W, SCREEN_H, rgb(10, 14, 20, 170));
     Color accent = hudAccent(menu.playerFaction);
@@ -1028,12 +1032,21 @@ void Game::drawShroud() {
         g.fill(0, (int)sweep - 6, SCREEN_W, 6, Color{ac.r, ac.g, ac.b, 18});
         return;
     }
-    static u32 lastStamp = 0; static const void* lastPtr = nullptr;
-    const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
-    // refresh the mask when the exploration changed (cheap hash of the array)
-    u32 h = 2166136261u; for (size_t i = 0; i < ex.size(); i += 3) h = (h ^ ex[i]) * 16777619u;
-    static float nextShroud = 0;   // the cloudy edge costs a few ms to rebuild: refresh at most about 8 times a second while units uncover ground
-    if ((h != lastStamp && wallTime >= nextShroud) || lastPtr != ex.data()) { g.updateShroud(ex); lastStamp = h; lastPtr = ex.data(); nextShroud = wallTime + 0.12f; }
+    // the fog of war in three levels per tile: never seen, remembered (explored, nobody there now), in sight. The mask is rebuilt (only where it
+    // changed) when the sight was refreshed, at most about 8 times a second: the cloudy edge costs a few ms
+    static u32 lastGen = ~0u; static int lastPlayer = -1;
+    static float nextShroud = 0, lastSimTime = 1e30f;
+    const bool newMatch = g_sim.time < lastSimTime;   // (the clock ran back: another match on the same map)
+    lastSimTime = g_sim.time;
+    if ((g_sim.sightGen != lastGen && wallTime >= nextShroud) || lastPlayer != g_sim.humanPlayer || newMatch) {
+        const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
+        static std::vector<u8> fog;
+        fog.resize((size_t)MAP_W * MAP_H);
+        const bool sight = !g_sim.inSight.empty();
+        for (size_t i = 0; i < fog.size(); i++) fog[i] = !ex[i] ? 0 : (sight && g_sim.inSight[i] ? 2 : 1);
+        g.updateShroud(fog, newMatch || lastPlayer != g_sim.humanPlayer);
+        lastGen = g_sim.sightGen; lastPlayer = g_sim.humanPlayer; nextShroud = wallTime + 0.12f;
+    }
     int tx0 = std::max(0, tileOf(cam.x)), ty0 = std::max(0, tileOf(cam.y));
     int tx1 = std::min(MAP_W - 1, tileOf(cam.x + SCREEN_W)), ty1 = std::min(MAP_H - 1, tileOf(cam.y + VIEW_H));
     const int SS = Gfx::SHROUD_SS;
@@ -1538,10 +1551,10 @@ void Game::drawEntity(Entity& e) {
     }
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
     if (air || fallK > 0) { Color t = ambientTint(); mod = rgb(mod.r * t.r / 255, mod.g * t.g / 255, mod.b * t.b / 255); }   // (aircraft are drawn after the world's light pass: they take the hour's light themselves)
-    const u8 ghost = Sim::stealthOf(e) ? (u8)150 : (u8)255;   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near)
+    const u8 ghost = (u8)((Sim::stealthOf(e) ? 150 : 255) * clampf(e.fade, 0, 1));   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near); a departing Air Strike fighter fades out
     if (air) {
         // shadow: the aircraft's own silhouette, thrown to the south-east and sliding closer as it settles onto the pad
-        g.draw(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, 1, rgb(0, 0, 0), (u8)(70 + 40 * (1 - alt)));
+        g.drawRolled(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, e.roll, 1, rgb(0, 0, 0), (u8)((70 + 40 * (1 - alt)) * clampf(e.fade, 0, 1)));
         p.y -= 14 * alt;   // altitude
     } else {
         if (ut.naval) {   // a hull on the water: the wake round it and a soft dark patch under it
@@ -1631,7 +1644,7 @@ void Game::drawEntity(Entity& e) {
             float wy = alt > 0.5f ? 1.0f : 0.0f; (void)wy;
             emitP(e.pos.x - std::cos(th) * 18, e.pos.y - std::sin(th) * 18 - 14 * alt, 0, 0, fxRng.f(1.1f, 1.7f), 2.4f, 7.5f, rgb(238, 244, 248, 150), PK_CONTRAIL, (u8)fxRng.range(0, 3), 0, 0.3f, fxRng.f(0, 6), 0.1f);
         }
-        if (ut.temp && !disabled) {   // a Hotline Strike fighter: twin afterburner cores, a shock cone of vapour round the airframe, wingtip vortices and a long hot contrail
+        if (ut.temp && !disabled && e.order == O_STRIKERUN && e.fade > 0.3f) {   // an Air Strike fighter: twin afterburner cores, a shock cone of vapour round the airframe, wingtip vortices and a long hot contrail
             Vec2 f(std::cos(th), std::sin(th)), sd(-f.y, f.x);
             float wing = 24.0f * UNIT_SCALE * jsc;
             Color hot = cyj ? rgb(190, 240, 255) : rgb(255, 214, 150);
@@ -1663,9 +1676,10 @@ void Game::drawEntity(Entity& e) {
             }
         }
     }
-    g.draw(*bs, p.x, p.y, drawAng, 1, mod, ghost);
+    if (air && std::abs(e.roll) > 0.02f) g.drawRolled(*bs, p.x, p.y, drawAng, e.roll, 1, mod, ghost);   // banking into a turn, or a barrel roll
+    else g.draw(*bs, p.x, p.y, drawAng, 1, mod, ghost);
     if (ut.naval) drawShipMounts(e, p, mod);
-    if (ut.kind == UK_VEH && ut.cargoCap > 0) drawJeepCrew(e, p);
+    if (ut.kind == UK_VEH && ut.cargoCap > 0 && !ut.naval) drawJeepCrew(e, p);
     const Sprite& tur = g.unitTurret[e.type][slotOf(owner)];
     if (tur.tex && !ut.naval) {
         // the barrel kicks back for a moment after every shot
@@ -1739,7 +1753,12 @@ void Game::drawEntity(Entity& e) {
         const Entity* tb = g_sim.get(e.targetEnt);
         if (tb) hpBar(g, p.x - 14, p.y - e.radius() - 12, 28, e.actionTimer / g_sim.captureTime(*tb));
     }
-    if (ut.cargoCap > 0 && ut.kind == UK_VEH && e.owner == g_sim.humanPlayer && (selected || !e.passengers.empty())) {   // a jeep: one pip per seat
+    if (ut.cargoCap > 0 && ut.naval && (selected || !e.passengers.empty())) {   // how full a cargo ship is: a bar of its places
+        float k = g_sim.cargoUsed(e) / (float)ut.cargoCap;
+        g.fill((int)p.x - 30, (int)(p.y - e.radius() - 14), 60, 4, rgb(50, 54, 60));
+        g.fill((int)p.x - 30, (int)(p.y - e.radius() - 14), (int)(60 * k), 4, rgb(240, 205, 90));
+    }
+    if (ut.cargoCap > 0 && ut.kind == UK_VEH && !ut.naval && e.owner == g_sim.humanPlayer && (selected || !e.passengers.empty())) {   // a jeep: one pip per seat
         for (int k = 0; k < JEEP_SEATS; k++) g.fill((int)p.x - JEEP_SEATS * 2 + k * 4, (int)(p.y - e.radius() - 12), 3, 3, k < (int)e.passengers.size() ? rgb(240, 205, 90) : rgb(70, 74, 80));
     }
     if (ut.cargoCap > 0 && ut.kind == UK_AIR && (selected || !e.passengers.empty())) {   // how full a lifter is: one pip per five places
@@ -1772,9 +1791,7 @@ void Game::renderWorld() {
     {
         int sx0 = clampi((int)cam.x, 0, WORLD_W - 1), sy0 = clampi((int)cam.y, 0, WORLD_H - 1);
         int sw = std::min(SCREEN_W + 1, WORLD_W - sx0), sh = std::min(VIEW_H + 1, WORLD_H - sy0);
-        SDL_Rect src = { sx0, sy0, sw, sh }, dst = { sx0 - (int)cam.x, sy0 - (int)cam.y, sw, sh };
-        SDL_SetTextureColorMod(g.worldTerrain.tex, 255, 255, 255); SDL_SetTextureAlphaMod(g.worldTerrain.tex, 255);
-        SDL_RenderCopy(g.ren, g.worldTerrain.tex, &src, &dst);
+        g.drawWorld(sx0, sy0, sw, sh, sx0 - (int)cam.x, sy0 - (int)cam.y);
     }
     // water: seamless animated caustics over open water. Interior water is pre-grouped by the map into aligned 4x4 blocks
     // (one 128 px draw each) plus the leftover shore-side tiles, so a lake filling the screen costs dozens of draws, not hundreds.
@@ -1784,14 +1801,30 @@ void Game::renderWorld() {
         SDL_SetTextureColorMod(w.tex, 255, 255, 255);
         SDL_SetTextureAlphaMod(w.tex, (u8)(176 + 22 * std::sin(wallTime * 0.6f)));   // the light on the water breathes a little
         // the pattern is laid at twice its size (it repeats every 8 tiles, not 4): each 4x4 block shows one quarter of the texture, scaled up
+        const u8 causA = (u8)(176 + 22 * std::sin(wallTime * 0.6f));
         for (int idx : g_map.waterBlocks) {
             int tx = idx % MAP_W, ty = idx / MAP_W;
             if (tx + 3 < tx0 || tx > tx1 || ty + 3 < ty0 || ty > ty1) continue;
             if (!rev && !ex[(ty + 1) * MAP_W + tx + 1] && !ex[(ty + 2) * MAP_W + tx + 2]) continue;
+            if (g_map.waterComp[idx] == g_map.oceanComp) {   // on the sea the caustics fade out as the bottom drops away from the shore
+                float k = clampf((9.0f - g_map.shoreDist[(ty + 2) * MAP_W + tx + 2]) / 6.0f, 0.2f, 1.0f);
+                SDL_SetTextureAlphaMod(w.tex, (u8)(causA * k));
+            } else SDL_SetTextureAlphaMod(w.tex, causA);
             SDL_Rect src = { (tx & 4) * 16, (ty & 4) * 16, 64, 64 };
             SDL_Rect dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), 4 * TILE, 4 * TILE };
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
+        // the open ocean: a slow swell instead (one 256 px draw per 8x8-tile block, a quarter of the 512 px pattern)
+        const Sprite& sw = g.seaSwell[((int)(wallTime * 1.6f)) & 3];
+        SDL_SetTextureAlphaMod(sw.tex, (u8)(200 + 30 * std::sin(wallTime * 0.4f)));
+        for (int idx : g_map.seaBlocks) {
+            int tx = idx % MAP_W, ty = idx / MAP_W;
+            if (tx + 7 < tx0 || tx > tx1 || ty + 7 < ty0 || ty > ty1) continue;
+            if (!rev && !ex[(ty + 2) * MAP_W + tx + 2] && !ex[(ty + 5) * MAP_W + tx + 5]) continue;
+            SDL_Rect src = { (tx & 8) * 32, (ty & 8) * 32, 256, 256 }, dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), 8 * TILE, 8 * TILE };
+            SDL_RenderCopy(g.ren, sw.tex, &src, &dst);
+        }
+        SDL_SetTextureAlphaMod(w.tex, causA);
         for (int idx : g_map.waterTiles) {
             int tx = idx % MAP_W, ty = idx / MAP_W;
             if (tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) continue;
@@ -1812,13 +1845,13 @@ void Game::renderWorld() {
         Vec2 c = worldToScreen(g_sim.buildingCenter(placingType, tx, ty));
         if (bt.weapon >= 0) rangeRing(c, WEAPONS[bt.weapon].range * TILE + std::max(bt.w, bt.h) * TILE * 0.5f, bt.weapon, bt.name, true, false, false);
         if (bt.role == BR_ANTINUKE) drawCoverRing(c, (bt.faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE, hudAccent(bt.faction), true, "Anti-nuke cover");
-        if (bt.role == BR_NAVAL) {   // a Naval Yard must touch the lake: the open water around the footprint is outlined, and a hint says what is wrong
+        if (bt.role == BR_NAVAL) {   // a Naval Yard must touch the ocean or the lake: the open water around the footprint is outlined, and a hint says what is wrong
             for (int j = ty - 1; j <= ty + bt.h; j++) for (int i = tx - 1; i <= tx + bt.w; i++) {
                 bool inside = i >= tx && i < tx + bt.w && j >= ty && j < ty + bt.h, corner = (i < tx || i >= tx + bt.w) && (j < ty || j >= ty + bt.h);
                 if (inside || corner || !g_map.bigWater(i, j) || !g_map.navTile(i, j)) continue;
                 g.fill((int)(i * TILE - cam.x), (int)(j * TILE - cam.y), TILE, TILE, rgb(90, 200, 255, 70));
             }
-            if (!ok) g.text((int)c.x - 90, (int)c.y - bt.h * TILE / 2 - 16, "Naval Yard: must touch the open lake", rgb(255, 170, 130));
+            if (!ok) g.text((int)c.x - 90, (int)c.y - bt.h * TILE / 2 - 16, "Naval Yard: its edge must touch the open sea or the lake", rgb(255, 170, 130));
         }
         { Color gt = ok ? rgb(160, 255, 160) : rgb(255, 120, 120); g.draw(g.building[placingType], c.x, c.y, 0, 1, gt, 150); if (g.buildingTeam[placingType].tex) g.draw(g.buildingTeam[placingType], c.x, c.y, 0, 1, gt, 150); }
         bool tilesOk = true;
@@ -1925,13 +1958,21 @@ void Game::renderWorld() {
         for (int k = 0; k < 4; k++) { float a = k * 1.5708f + 0.7854f; g.line(m.x + std::cos(a) * (Rr * 0.4f), m.y + std::sin(a) * (Rr * 0.4f), m.x + std::cos(a) * (Rr + 8), m.y + std::sin(a) * (Rr + 8), rgb(255, 130, 100)); }
         Vec2 base = g_sim.players[g_sim.humanPlayer].basePos;
         Vec2 dir = (wp - base).len() > 6.0f * TILE ? (wp - base).norm() : (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - wp).norm();
-        Vec2 perp(-dir.y, dir.x);
-        Vec2 sp = worldToScreen(wp - dir * (R + 260.0f));
-        g.line(m.x, m.y, sp.x, sp.y, Color{ac.r, ac.g, ac.b, 150});
-        for (int side = -1; side <= 1; side += 2) { Vec2 a = worldToScreen(wp - dir * (R + 260.0f) + perp * (side * STRIKE_X * TILE)); g.line(m.x + perp.x * side * STRIKE_X * TILE * 0.5f, m.y + perp.y * side * STRIKE_X * TILE * 0.5f, a.x, a.y, Color{ac.r, ac.g, ac.b, 70}); }
-        // the two strike fighters on their lane, ahead of the swarm
+        // the three headings the waves come in on, and the first wave's V on its run-in
         int jt = sf == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
-        for (int k = 0; k < STRIKE_JETS; k++) { Vec2 q = worldToScreen(wp - dir * (R + 200.0f) + perp * ((k * 2 - 1) * 2.4f * TILE)); g.draw(g.unitBody[jt][slotOf(g_sim.humanPlayer)], q.x, q.y, std::atan2(dir.y, dir.x), 0.9f, rgb(255, 255, 255), 170); }
+        float base0 = std::atan2(dir.y, dir.x);
+        for (int w = 0; w < 3; w++) {
+            float a = base0 + (w == 0 ? 0.0f : (w == 1 ? 1.0f : -1.0f) * STRIKE_TURN);
+            Vec2 d(std::cos(a), std::sin(a)), pp(-d.y, d.x);
+            Vec2 sp = worldToScreen(wp - d * (R + 300.0f)), ep = worldToScreen(wp + d * (R + 120.0f));
+            g.line(sp.x, sp.y, ep.x, ep.y, Color{ac.r, ac.g, ac.b, (u8)(w == 0 ? 150 : 80)});
+            if (w != 0) continue;
+            for (int i = 0; i < STRIKE_WAVE; i++) {
+                int rank = (i + 1) / 2, side = (i & 1) ? 1 : -1;
+                Vec2 q = worldToScreen(wp - d * (R + 200.0f + rank * 58.0f) + pp * (side * rank * 46.0f));
+                g.draw(g.unitBody[jt][slotOf(g_sim.humanPlayer)], q.x, q.y, a, 0.9f, rgb(255, 255, 255), 150);
+            }
+        }
     }
     drawZones();
     drawRangeRings();
@@ -1943,7 +1984,7 @@ void Game::renderWorld() {
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
-        if (!rev && e.owner != g_sim.humanPlayer && !ex[clampi(tileOf(e.pos.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(e.pos.x), 0, MAP_W - 1)]) continue;
+        if (!g_sim.shownToHuman(e)) continue;   // never seen, or an enemy unit out of sight (remembered ground shows its structures only)
         if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier / hidden by stealth
         if (e.kind == EK_RESOURCE || e.isBuilding()) drawEntity(e);
         else if (e.isAir() || e.fall > 0) air.push_back(&e);
@@ -2049,7 +2090,7 @@ void Game::renderWorld() {
         int nd = g_sim.antiNukeCovering(wp, g_sim.humanPlayer, true, NUKEBOMBER_SCALE, false);
         if (nd > 0) { char ab[200]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the bomb is shot down", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true, NUKEBOMBER_SCALE, false) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
     }
-    else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d aircraft and %d strike fighters to the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size(), STRIKE_JETS); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
+    else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d strike fighters bomb the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size()); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (aidMode) {
         int who[MAX_PLAYERS]; int n = g_sim.aidCandidates(g_sim.humanPlayer, screenToWorld(mouseX, mouseY), who);
@@ -2086,19 +2127,29 @@ void Game::drawMinimap(int x, int y, int size) {
     g.drawRect(g.minimapTerrain, x, y, size, size);
     float sc = size / (float)MAP_W;
     const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
-    SDL_SetRenderDrawColor(g.ren, 4, 6, 10, 255);
-    // shroud in 2x2 tile blocks (cheap)
+    // the fog over it: a small texture of 2x2-tile cells (never seen: dark; remembered: dimmed; in sight: clear), refreshed with the sight
     const bool rev = g_sim.revealed(g_sim.humanPlayer);
-    for (int ty = 0; ty < MAP_H && !rev; ty += 2) for (int tx = 0; tx < MAP_W; tx += 2) {
-        if (ex[ty * MAP_W + tx] || ex[ty * MAP_W + tx + 1] || ex[(ty + 1) * MAP_W + tx] || ex[(ty + 1) * MAP_W + tx + 1]) continue;
-        SDL_Rect r = { (int)(x + tx * sc), (int)(y + ty * sc), (int)std::ceil(2 * sc), (int)std::ceil(2 * sc) };
-        SDL_RenderFillRect(g.ren, &r);
+    if (!rev) {
+        const int FW = MAP_W / 2, FH = MAP_H / 2;
+        static u32 lastGen = ~0u; static float nextAt = 0;
+        if (!g.miniFog) { g.miniFog = SDL_CreateTexture(g.ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, FW, FH); if (g.miniFog) SDL_SetTextureBlendMode(g.miniFog, SDL_BLENDMODE_BLEND); lastGen = ~0u; }
+        if (g.miniFog && lastGen != g_sim.sightGen && wallTime >= nextAt) {
+            static std::vector<u32> px; px.resize((size_t)FW * FH);
+            for (int cy = 0; cy < FH; cy++) for (int cx = 0; cx < FW; cx++) {
+                int k = cy * 2 * MAP_W + cx * 2, seen = 0, known = 0;
+                for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) { int q = k + j * MAP_W + i; known |= ex[q]; seen |= g_sim.inSight.empty() ? 0 : g_sim.inSight[q]; }
+                px[(size_t)cy * FW + cx] = seen ? 0u : (known ? (110u << 24 | 30u << 16 | 20u << 8 | 12u) : (255u << 24 | 12u << 16 | 8u << 8 | 5u));
+            }
+            SDL_UpdateTexture(g.miniFog, nullptr, px.data(), FW * 4);
+            lastGen = g_sim.sightGen; nextAt = wallTime + 0.25f;
+        }
+        if (g.miniFog) { SDL_Rect r = { x, y, size, size }; SDL_RenderCopy(g.ren, g.miniFog, nullptr, &r); }
     }
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
         int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
         if (e.kind == EK_RESOURCE) { if (rev || ex[ty * MAP_W + tx]) g.fill((int)(x + tx * sc), (int)(y + ty * sc), 2, 2, rgb(230, 200, 90)); continue; }
-        if (!rev && e.owner != g_sim.humanPlayer && !ex[ty * MAP_W + tx]) continue;
+        if (!g_sim.shownToHuman(e)) continue;
         if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
         Color c = e.owner < 0 ? rgb(198, 190, 170) : playerColor(e.owner);
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
@@ -2237,6 +2288,14 @@ void Game::renderHud() {
                     g.text(INFO_X + 86, hy + 70, buf, zones ? rgb(150, 240, 180) : hudDim());
                 }
                 if (ut.cargoCap > 0) { snprintf(buf, sizeof buf, "Cargo %d / %d places   %d aboard   (right-click it with units selected to load)", g_sim.cargoUsed(*e), ut.cargoCap, (int)e->passengers.size()); g.text(INFO_X + 86, hy + 70, buf, rgb(240, 205, 90)); }
+                if (e->type == U_C_CARRIER || e->type == U_K_CARRIER) {   // the wing: ready on deck, rearming, in the air, and a replacement on its way
+                    int ready = 0, rearm = 0, up = 0; Ref cr = g_sim.refOf(*e);
+                    for (float t : e->deck) (t <= g_sim.time ? ready : rearm)++;
+                    for (auto& j : g_sim.ents) if (j.alive && j.isUnit() && j.home == cr && (j.type == U_C_CARRIERJET || j.type == U_K_CARRIERJET)) up++;
+                    if (e->deckReplace >= 0) snprintf(buf, sizeof buf, "Wing: %d ready on deck, %d rearming, %d in the air   (a replacement jet in %ds)", ready, rearm, up, (int)std::ceil(e->deckReplace - g_sim.time));
+                    else snprintf(buf, sizeof buf, "Wing: %d ready on deck, %d rearming, %d in the air   (they launch at enemies within %d tiles)", ready, rearm, up, (int)CARRIER_RANGE);
+                    g.text(INFO_X + 86, hy + 70, buf, rgb(240, 205, 90));
+                }
                 if (ut.role == UR_SPY) g.text(INFO_X + 86, hy + 70, "Right-click an enemy or neutral structure to take it (swims to islands)", rgb(240, 205, 90));
                 if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
                 else if (ut.kind == UK_INF && ut.weapon >= 0) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
@@ -2502,8 +2561,6 @@ void Game::renderHud() {
 // The paradrop cargo plane: a big transport crossing the map, high above everything else, with the drop zone marked on the ground for as long as it is still releasing
 void Game::drawAirlifts() {
     Gfx& g = g_gfx;
-    const std::vector<u8>& ex = g_sim.players[g_sim.humanPlayer].explored;
-    const bool rev = g_sim.revealed(g_sim.humanPlayer);
     for (auto& a : g_sim.airlifts) {
         Faction fac = g_sim.players[a.owner].faction;
         Color tc = playerColor(a.owner);
@@ -2516,7 +2573,7 @@ void Game::drawAirlifts() {
             g.text((int)(tgt.x - g.textW(lb) / 2), (int)(tgt.y - 4), lb, rgb(255, 235, 210));
         }
         Vec2 w = a.prevPos + (a.pos - a.prevPos) * renderAlpha;
-        if (!rev && a.owner != g_sim.humanPlayer && !ex[clampi(tileOf(w.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(w.x), 0, MAP_W - 1)]) continue;
+        if (a.owner != g_sim.humanPlayer && !g_sim.seenNow(clampi(tileOf(w.x), 0, MAP_W - 1), clampi(tileOf(w.y), 0, MAP_H - 1))) continue;
         Vec2 p = worldToScreen(w);
         if (p.x < -140 || p.y < -160 || p.x > SCREEN_W + 140 || p.y > VIEW_H + 160) continue;
         float ang = std::atan2(a.dir.y, a.dir.x);

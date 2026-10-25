@@ -460,9 +460,9 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
         if (std::string(STRIKES[me].name) == b.label) {
             sawStrike = true;
             CHECK(b.enabled, "the phone strike button is not ready at a fresh tech structure");
-            CHECK(b.tip.find(UNITS[heliT].name) != std::string::npos, "the strike tooltip does not name its helicopters");
-            CHECK(b.tip.find(UNITS[jetT].name) != std::string::npos, "the strike tooltip does not name its jets");
-            CHECK(b.tip.find(UNITS[droneT].name) != std::string::npos, "the strike tooltip does not name its drone");
+            int strikeT = me == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
+            CHECK(b.tip.find(UNITS[strikeT].name) != std::string::npos, "the strike tooltip does not name its strike fighters");
+            (void)heliT; (void)jetT; (void)droneT;
         }
     }
     CHECK(sawDrop && sawStrike, "the tech structure panel has no airdrop / phone strike button");
@@ -476,6 +476,7 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
     SDL_Event ev2; memset(&ev2, 0, sizeof ev2); ev2.type = SDL_MOUSEBUTTONDOWN; ev2.button.button = SDL_BUTTON_LEFT;
     g_game.gameEvent(ev2);
     CHECK(!g_game.strikeMode, "clicking the ground did not call the phone strike in");
+    for (int t = 0; t < 4; t++) { g_sim.step(); g_sim.events.clear(); }   // (the first wave comes in over the edge on the next tick)
     int air1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) air1++;
     CHECK(air1 > air0, "the phone strike put no aircraft in the air");
     g_game.selection.clear();

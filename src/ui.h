@@ -107,8 +107,28 @@ struct Game {
         bool forced = false;                 // ONEHOUR_WEATHER fixed the sky (screenshots): it never changes
         Rng rng{ 0x5EA5 };
     } weather;
-    struct SeaBeast { int kind; Vec2 pos, goal; float ang, speed, timer, upFor; bool up; };   // kind 0 whale, 1 dolphin, 2 shark
+    // The sea life (weather.cpp): whales, dolphin pods, sharks and fish schools swim the open water of the big bodies of water and never leave
+    // the one they spawned in. The big animals are shaded body pieces bent along a spine (drawSeaLife); the fish are boids.
+    struct SeaBody { int id; std::vector<int> open; };   // a body of water of 400+ tiles, and the tiles of it with water all round
+    struct SeaBeast {                // kind 0 whale, 1 dolphin, 2 shark
+        u8 kind = 0, st = 0;         // whales and dolphins: 0 under, 1 rising, 2 at the surface, 3 diving; sharks: 0 cruise, 1 burst
+        u16 bi = 0;                  // index into seaBodies: the body it swims in
+        int lead = -1;               // dolphins: the index in sea of the pod's leader (-1 for a leader)
+        Vec2 pos, goal, off;         // off: a pod member's place, in the leader's frame
+        float ang = 0, speed = 0, bend = 0, len = 0, wide = 0;   // heading, cruise speed, body flex from turning, length and half width (px)
+        float phase = 0, t = 0, dur = 1, e = 0;                 // undulation phase, time left in this state, its length, progress through it (0..1)
+        float surf = 0, fluke = 0, roll = 0;                    // how far it shows above the water, the fluke raised, the back rolling forward
+    };
+    struct SeaFish { Vec2 pos, vel; float ph = 0; };   // a fish of a school (its place in seaFish is first + k)
+    struct SeaSchool { int first = 0, n = 0, bi = 0; Vec2 goal, cen; float t = 0, speed = 24, glintT = 0, glint = 0, fleeT = 0; };   // glint: the silver wave's progress (0 = none)
+    std::vector<SeaBody> seaBodies;
     std::vector<SeaBeast> sea;
+    std::vector<SeaFish> seaFish;
+    std::vector<SeaSchool> seaSchools;
+    int seaTick = 0;                 // updates so far (the schools out of view update every fourth tick)
+    bool seaFree(Vec2 p, int bi) const;   // the 5x5 tiles round p are water of body bi (the showcase places animals with it)
+    void seaUpdate(float dt);                // one step of the sea life (updateWeather)
+    void seaBreach(const SeaBeast& b);       // a whale's spray or a dolphin's splash as it breaks the surface
     void commandBarCheck(bool& onScreen, bool& fwall, bool& way);   // (tests) lays the command bar out for the selection: every button inside the screen? a Bastion Wall / Waymaker button?
     void initWeather();                       // a new match: a random point in the day, maybe rain, and the lake's wildlife
     void updateWeather();                     // once a frame (follows the simulation clock: pausing stops the sky too)

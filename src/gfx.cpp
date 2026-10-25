@@ -93,31 +93,6 @@ Sprite Gfx::fromCanvas(Canvas& c, float ox, float oy) {
     return s;
 }
 
-// The baked world as RGB565: half the texture memory and half the blit bandwidth of the 32-bit original, which is what
-// pays for a map with 69% more ground. A 4x4 Bayer dither spreads the quantization error into the terrain's own grain.
-Sprite Gfx::fromCanvas565(Canvas& c, float ox, float oy) {
-    Sprite s;
-    s.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STATIC, c.w, c.h);
-    if (!s.tex) return fromCanvas(c, ox, oy);
-    static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
-    std::vector<u16> row((size_t)c.w);   // converted and uploaded a row at a time: no second full-size buffer at startup
-    for (int y = 0; y < c.h; y++) {
-        for (int x = 0; x < c.w; x++) {
-            Color col = Canvas::unpack(c.px[(size_t)y * c.w + x]);
-            int dth = BAYER[(y & 3) * 4 + (x & 3)] - 8;   // -8..+7 in 1/32 steps of each channel's quantum
-            int r = clampi((int)col.r + dth / 4, 0, 255) >> 3;          // 5-bit channels: quantum 8, dither +-2
-            int g = clampi((int)col.g + dth / 8, 0, 255) >> 2;          // 6-bit green: quantum 4, dither +-1
-            int b = clampi((int)col.b + dth / 4, 0, 255) >> 3;
-            row[x] = (u16)((r << 11) | (g << 5) | b);
-        }
-        SDL_Rect rect = { 0, y, c.w, 1 };
-        SDL_UpdateTexture(s.tex, &rect, row.data(), c.w * 2);
-    }
-    SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_BLEND);
-    s.w = c.w; s.h = c.h; s.ox = ox; s.oy = oy;
-    return s;
-}
-
 Sprite Gfx::fromCanvasAdd(Canvas& c, float ox, float oy) {
     Sprite s = fromCanvasSmooth(c, ox, oy);
     SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_ADD);
@@ -141,6 +116,17 @@ void Gfx::draw(const Sprite& s, float x, float y, float angle, float scale, Colo
     SDL_SetTextureAlphaMod(s.tex, alpha);
     if (angle == 0) SDL_RenderCopy(ren, s.tex, nullptr, &dst);
     else SDL_RenderCopyEx(ren, s.tex, nullptr, &dst, angle * 57.29578f, &c, SDL_FLIP_NONE);
+}
+void Gfx::drawRolled(const Sprite& s, float x, float y, float angle, float roll, float scale, Color mod, u8 alpha) {
+    if (!s.tex) return;
+    float c = std::cos(roll), k = std::max(0.22f, std::abs(c));
+    scale *= s.dscale;
+    SDL_FRect dst = { x - s.ox * scale, y - s.oy * scale * k, s.w * scale, s.h * scale * k };
+    SDL_FPoint pc = { s.ox * scale, s.oy * scale * k };
+    float shade = c < 0 ? 0.72f : 1.0f;   // (the belly is in its own shadow)
+    SDL_SetTextureColorMod(s.tex, (u8)(mod.r * shade), (u8)(mod.g * shade), (u8)(mod.b * shade));
+    SDL_SetTextureAlphaMod(s.tex, alpha);
+    SDL_RenderCopyExF(ren, s.tex, nullptr, &dst, angle * 57.29578f, &pc, c < 0 ? SDL_FLIP_VERTICAL : SDL_FLIP_NONE);
 }
 void Gfx::drawRect(const Sprite& s, int x, int y, int w, int h, u8 alpha) {
     SDL_Rect dst = { x, y, w, h };
@@ -271,9 +257,43 @@ void Gfx::bakeTerrain() {
     terrainBake(c);
     // On a GPU the world is RGB565 (half the memory and sampling bandwidth, dithered so nothing bands). The software
     // renderer has no fast 565-to-display blit (measured +11 ms a frame), so there it stays 32-bit and memcpy-fast.
-    worldTerrain = softwareRenderer ? fromCanvas(c, 0, 0) : fromCanvas565(c, 0, 0);
+    // On a GPU every chunk is RGB565 (half the memory and sampling bandwidth, dithered on world coordinates so nothing bands or seams). The
+    // software renderer has no fast 565-to-display blit (measured +11 ms a frame), so there they stay 32-bit and memcpy-fast.
+    worldCols = (WORLD_W + WORLD_CHUNK - 1) / WORLD_CHUNK; worldRows = (WORLD_H + WORLD_CHUNK - 1) / WORLD_CHUNK;
+    worldChunks.assign((size_t)worldCols * worldRows, nullptr);
+    {
+        static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+        std::vector<u16> row;
+        for (int cy = 0; cy < worldRows; cy++) for (int cx = 0; cx < worldCols; cx++) {
+            int x0 = cx * WORLD_CHUNK, y0 = cy * WORLD_CHUNK, w = std::min(WORLD_CHUNK, WORLD_W - x0), h = std::min(WORLD_CHUNK, WORLD_H - y0);
+            SDL_Texture* t = softwareRenderer ? nullptr : SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STATIC, w, h);
+            if (t) {
+                row.resize((size_t)w);
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        Color col = Canvas::unpack(c.px[(size_t)(y0 + y) * c.w + x0 + x]);
+                        int dth = BAYER[((y0 + y) & 3) * 4 + ((x0 + x) & 3)] - 8;
+                        int r = clampi((int)col.r + dth / 4, 0, 255) >> 3, gg = clampi((int)col.g + dth / 8, 0, 255) >> 2, b = clampi((int)col.b + dth / 4, 0, 255) >> 3;
+                        row[x] = (u16)((r << 11) | (gg << 5) | b);
+                    }
+                    SDL_Rect rr = { 0, y, w, 1 };
+                    SDL_UpdateTexture(t, &rr, row.data(), w * 2);
+                }
+            } else {
+                t = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
+                if (t) SDL_UpdateTexture(t, nullptr, &c.px[(size_t)y0 * c.w + x0], c.w * 4);
+            }
+            if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+            worldChunks[(size_t)cy * worldCols + cx] = t;
+        }
+    }
     if (const char* wp = getenv("ONEHOUR_WORLDBMP")) {   // debugging: dump the baked ground (ONEHOUR_WORLDBMP=file.bmp)
         if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(c.px.data(), c.w, c.h, 32, c.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, wp); SDL_FreeSurface(sf); }
+    }
+    if (const char* op = getenv("ONEHOUR_OVERVIEW")) {   // debugging: the whole baked map shrunk to 960x960 (ONEHOUR_OVERVIEW=file.bmp)
+        Canvas big(960, 960);
+        terrainOverview(c, big);
+        if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(big.px.data(), big.w, big.h, 32, big.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, op); SDL_FreeSurface(sf); }
     }
     Canvas mini(232, 232);
     terrainOverview(c, mini);
@@ -286,10 +306,11 @@ void Gfx::bakeTerrain() {
 }
 
 void Gfx::rebakeTerrain() {
-    if (worldTerrain.tex) SDL_DestroyTexture(worldTerrain.tex);
+    for (auto* t : worldChunks) if (t) SDL_DestroyTexture(t);
+    worldChunks.clear();
     if (minimapTerrain.tex) SDL_DestroyTexture(minimapTerrain.tex);
     if (shroudTex) SDL_DestroyTexture(shroudTex);
-    worldTerrain = Sprite(); minimapTerrain = Sprite(); shroudTex = nullptr;
+    minimapTerrain = Sprite(); shroudTex = nullptr;
     bakeTerrain();
     terrainEdited = false;
 }
@@ -309,26 +330,49 @@ void Gfx::refreshTerrain() {
 void Gfx::uploadTerrainPatch(const std::vector<int>& group) {
     int x = 0, y = 0, w = 0, h = 0; std::vector<u32> px;
     bool ok = terrainRepaint(group, x, y, w, h, px);
-    if (!ok || !worldTerrain.tex) return;
+    if (!ok || worldChunks.empty()) return;
     terrainEdited = true;
-    SDL_Rect r = { x, y, w, h };
-    Uint32 fmt = 0; SDL_QueryTexture(worldTerrain.tex, &fmt, nullptr, nullptr, nullptr);
-    if (fmt != SDL_PIXELFORMAT_RGB565) { SDL_UpdateTexture(worldTerrain.tex, &r, px.data(), w * 4); return; }
-    static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };   // (the same dither as fromCanvas565, on world coordinates)
-    std::vector<u16> out((size_t)w * h);
-    for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
-        Color col = Canvas::unpack(px[(size_t)j * w + i]);
-        int dth = BAYER[((y + j) & 3) * 4 + ((x + i) & 3)] - 8;
-        int rr = clampi((int)col.r + dth / 4, 0, 255) >> 3, gg = clampi((int)col.g + dth / 8, 0, 255) >> 2, bb = clampi((int)col.b + dth / 4, 0, 255) >> 3;
-        out[(size_t)j * w + i] = (u16)((rr << 11) | (gg << 5) | bb);
+    static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };   // (the same dither as the bake, on world coordinates)
+    std::vector<u16> out;
+    for (int cy = y / WORLD_CHUNK; cy <= (y + h - 1) / WORLD_CHUNK && cy < worldRows; cy++) for (int cx = x / WORLD_CHUNK; cx <= (x + w - 1) / WORLD_CHUNK && cx < worldCols; cx++) {
+        SDL_Texture* t = worldChunks[(size_t)cy * worldCols + cx];
+        if (!t) continue;
+        int ax = std::max(x, cx * WORLD_CHUNK), ay = std::max(y, cy * WORLD_CHUNK);   // the part of the patch in this chunk (world px)
+        int bx = std::min(x + w, (cx + 1) * WORLD_CHUNK), by = std::min(y + h, (cy + 1) * WORLD_CHUNK);
+        if (bx <= ax || by <= ay) continue;
+        SDL_Rect r = { ax - cx * WORLD_CHUNK, ay - cy * WORLD_CHUNK, bx - ax, by - ay };
+        Uint32 fmt = 0; SDL_QueryTexture(t, &fmt, nullptr, nullptr, nullptr);
+        if (fmt != SDL_PIXELFORMAT_RGB565) { SDL_UpdateTexture(t, &r, &px[(size_t)(ay - y) * w + (ax - x)], w * 4); continue; }
+        out.resize((size_t)r.w * r.h);
+        for (int j = 0; j < r.h; j++) for (int i = 0; i < r.w; i++) {
+            Color col = Canvas::unpack(px[(size_t)(ay - y + j) * w + (ax - x + i)]);
+            int dth = BAYER[((ay + j) & 3) * 4 + ((ax + i) & 3)] - 8;
+            int rr = clampi((int)col.r + dth / 4, 0, 255) >> 3, gg = clampi((int)col.g + dth / 8, 0, 255) >> 2, bb = clampi((int)col.b + dth / 4, 0, 255) >> 3;
+            out[(size_t)j * r.w + i] = (u16)((rr << 11) | (gg << 5) | bb);
+        }
+        SDL_UpdateTexture(t, &r, out.data(), r.w * 2);
     }
-    SDL_UpdateTexture(worldTerrain.tex, &r, out.data(), w * 2);
 }
 
-void Gfx::updateShroud(const std::vector<u8>& ex) {
+void Gfx::drawWorld(int wx, int wy, int w, int h, int dx, int dy) {
+    if (worldChunks.empty() || w <= 0 || h <= 0) return;
+    int x1 = std::min(WORLD_W, wx + w), y1 = std::min(WORLD_H, wy + h);
+    dx += std::max(0, wx) - wx; dy += std::max(0, wy) - wy;
+    wx = std::max(0, wx); wy = std::max(0, wy);
+    for (int cy = wy / WORLD_CHUNK; cy < worldRows && cy * WORLD_CHUNK < y1; cy++) for (int cx = wx / WORLD_CHUNK; cx < worldCols && cx * WORLD_CHUNK < x1; cx++) {
+        SDL_Texture* t = worldChunks[(size_t)cy * worldCols + cx];
+        if (!t) continue;
+        int ax = std::max(wx, cx * WORLD_CHUNK), ay = std::max(wy, cy * WORLD_CHUNK), bx = std::min(x1, (cx + 1) * WORLD_CHUNK), by = std::min(y1, (cy + 1) * WORLD_CHUNK);
+        SDL_Rect src = { ax - cx * WORLD_CHUNK, ay - cy * WORLD_CHUNK, bx - ax, by - ay }, dst = { dx + (ax - wx), dy + (ay - wy), bx - ax, by - ay };
+        SDL_RenderCopy(ren, t, &src, &dst);
+    }
+}
+
+void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
     if (!shroudTex) return;
-    // 0 = explored, 255 = never seen. The binary map is upsampled with bilinear weights and the edge is pushed around by value noise, so
-    // the boundary of what you have seen is a ragged, cloudy fringe instead of a staircase of tiles; the unseen area carries faint mottling.
+    // Three levels: ground never seen is covered completely (a mottled near-black, fully opaque: nothing shows through it), remembered ground lies
+    // under a cool grey veil (its terrain and structures show, its people do not), ground in sight is clear. The tile levels are upsampled with
+    // bilinear weights and the boundaries pushed around by value noise, so they are ragged, cloudy fringes instead of a staircase of tiles.
     const int SS = SHROUD_SS, W2 = MAP_W * SS, H2 = MAP_H * SS;
     static std::vector<u32> buf; static std::vector<float> noise;
     static std::vector<u8> mottle; static std::vector<float> edgeN;   // the mottling and the fringe displacement are fixed per pixel: baked once, looked up per refresh
@@ -341,42 +385,56 @@ void Gfx::updateShroud(const std::vector<u8>& ex) {
     if ((int)mottle.size() != W2 * H2) {
         mottle.assign((size_t)W2 * H2, 0); edgeN.assign((size_t)W2 * H2, 0);
         for (int y = 0; y < H2; y++) for (int x = 0; x < W2; x++) {
-            mottle[(size_t)y * W2 + x] = (u8)(238 + (int)(vn(x * 0.35f, y * 0.35f) * 14));
+            mottle[(size_t)y * W2 + x] = (u8)(vn(x * 0.35f, y * 0.35f) * 10);
             edgeN[(size_t)y * W2 + x] = vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f;
         }
     }
-    // Only the blocks of BLK x BLK tiles where the exploration changed (and their neighbours, which the bilinear fringe reaches into) are
-    // rebuilt and re-uploaded: units uncovering ground in a big match used to rebuild and upload the whole mask several times a second.
+    // Only the blocks of BLK x BLK tiles where the fog changed (and their neighbours, which the bilinear fringe reaches into) are rebuilt and
+    // re-uploaded: units moving about change a few blocks at a time.
+    // A new texture (a rebaked map) or a new match starts from nothing: the whole mask is rebuilt. (Patching only what changed since the last
+    // refresh left the previous match's explored ground clear in the new texture, so the map showed through the fog.)
     static std::vector<u8> last;
+    static SDL_Texture* lastTex = nullptr;
     const int BLK = 8, BW = (MAP_W + BLK - 1) / BLK, BH = (MAP_H + BLK - 1) / BLK;
     static std::vector<u8> dirty;
     dirty.assign((size_t)BW * BH, 0);
-    bool full = (int)buf.size() != W2 * H2 || last.size() != ex.size();
+    bool full = force || shroudTex != lastTex || (int)buf.size() != W2 * H2 || last.size() != fog.size();
+    lastTex = shroudTex;
     if (full) { buf.assign((size_t)W2 * H2, 0); std::fill(dirty.begin(), dirty.end(), 1); }
     else {
         bool any = false;
-        for (int i = 0; i < MAP_W * MAP_H; i++) if (ex[i] != last[i]) {
+        for (int i = 0; i < MAP_W * MAP_H; i++) if (fog[i] != last[i]) {
             int bx = (i % MAP_W) / BLK, by = (i / MAP_W) / BLK; any = true;
             for (int j = -1; j <= 1; j++) for (int k = -1; k <= 1; k++) { int X = bx + k, Y = by + j; if (X >= 0 && Y >= 0 && X < BW && Y < BH) dirty[(size_t)Y * BW + X] = 1; }
         }
         if (!any) return;
     }
-    last = ex;
-    auto E = [&](int a, int b) { return ex[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)] ? 1.0f : 0.0f; };
+    last = fog;
+    static const float LV[3] = { 0.0f, 0.5f, 1.0f };
+    const float DIM = 118.0f;   // the remembered veil's opacity
+    auto E = [&](int a, int b) { return LV[fog[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)]]; };
+    auto pack = [](float a, int r, int g, int b) { return (u32)clampi((int)a, 0, 255) << 24 | (u32)b << 16 | (u32)g << 8 | (u32)r; };
     for (int by = 0; by < BH; by++) for (int bx = 0; bx < BW; bx++) {
         if (!dirty[(size_t)by * BW + bx]) continue;
         int px0 = bx * BLK * SS, py0 = by * BLK * SS, px1 = std::min(W2, (bx + 1) * BLK * SS), py1 = std::min(H2, (by + 1) * BLK * SS);
         for (int y = py0; y < py1; y++) for (int x = px0; x < px1; x++) {
             float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
             int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx = fx - x0, ty = fy - y0;
-            float v = lerpf(lerpf(E(x0, y0), E(x0 + 1, y0), tx), lerpf(E(x0, y0 + 1), E(x0 + 1, y0 + 1), tx), ty);
+            float a00 = E(x0, y0), a10 = E(x0 + 1, y0), a01 = E(x0, y0 + 1), a11 = E(x0 + 1, y0 + 1);
+            float v = lerpf(lerpf(a00, a10, tx), lerpf(a01, a11, tx), ty);
             u32& o = buf[(size_t)y * W2 + x];
-            if (v <= 0.0f) { o = (u32)mottle[(size_t)y * W2 + x] << 24 | 12u << 16 | 8u << 8 | 5u; continue; }   // unseen: mottled dark
-            if (v >= 1.0f) { o = 0; continue; }                                                                     // seen: clear
-            float n = edgeN[(size_t)y * W2 + x];
-            float sm = clampf((v - 0.5f) * 1.6f + (n - 0.5f) * 0.9f + 0.5f, 0, 1);
-            sm = sm * sm * (3 - 2 * sm);
-            o = (u32)((1.0f - sm) * 242) << 24 | 12u << 16 | 8u << 8 | 5u;
+            int m = mottle[(size_t)y * W2 + x];
+            bool flat = a00 == a10 && a00 == a01 && a00 == a11;   // inside one level: no fringe to displace
+            if (!flat) v = clampf(v + (edgeN[(size_t)y * W2 + x] - 0.5f) * 0.34f, 0.0f, 1.0f);
+            if (v <= 0.0f) { o = pack(255, 5 + m / 3, 8 + m / 3, 12 + m / 2); continue; }   // never seen: opaque, faintly mottled
+            if (v >= 1.0f) { o = 0; continue; }                                               // in sight: clear
+            if (v < 0.5f) {   // the edge of the unknown: from opaque to the veil
+                float k = v / 0.5f; k = k * k * (3 - 2 * k);
+                o = pack(lerpf(255.0f, DIM, k), (int)lerpf(5, 14, k), (int)lerpf(8, 20, k), (int)lerpf(12, 30, k));
+            } else {          // the edge of sight: from the veil to clear
+                float k = (v - 0.5f) / 0.5f; k = k * k * (3 - 2 * k);
+                o = pack(lerpf(DIM, 0.0f, k), 14, 20, 30);
+            }
         }
         if (!full) { SDL_Rect r = { px0, py0, px1 - px0, py1 - py0 }; SDL_UpdateTexture(shroudTex, &r, &buf[(size_t)py0 * W2 + px0], W2 * 4); }
     }
@@ -415,10 +473,11 @@ void Gfx::buildUnits() {
             const UnitType& u = UNITS[t];
             for (int f = 0; f < 3; f++) {
                 if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
-                Canvas c(ART_SIZE, ART_SIZE);
+                const int cs = artCanvas(t);   // (the big ships are painted at twice the detail on a bigger canvas)
+                Canvas c(cs, cs);
                 artUnitBody(c, t, team, f);
                 gradeArt(c, 977u + (u32)t, 0.10f, 0.07f);
-                Sprite s = cropToSprite(*this, c, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t));
+                Sprite s = cropToSprite(*this, c, cs / 2, cs / 2, UNIT_SCALE * artScale(t) * ART_SIZE / (float)cs);
                 if (f == 0) unitBody[t][p] = s; else unitAnim[t][p][f - 1] = s;
             }
             if (u.kind == UK_AIR) { unitAnim[t][p][0] = unitBody[t][p]; unitAnim[t][p][1] = unitBody[t][p]; }

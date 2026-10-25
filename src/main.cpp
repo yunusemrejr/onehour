@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -540,10 +540,10 @@ static bool econTest(u64 seed) {
         if (!g_sim.get(far)) return fail("nuke hit a unit far outside the blast radius");
         if (!g_sim.cmdNuke(0, tgt)) return fail("second ramp refused");
         if (g_sim.cmdNuke(0, tgt)) return fail("nuke fired with no ramp ready");
-        for (int t = 0; t < 20 * 285 && !g_sim.gameOver; t++) { g_sim.step(); g_sim.events.clear(); }
-        if (g_sim.nukesReady(0) != 0) return fail("ramp reloaded before five minutes");
+        for (int t = 0; t < (int)(20 * (NUKE_COOLDOWN - 15.0f)) && !g_sim.gameOver; t++) { g_sim.step(); g_sim.events.clear(); }
+        if (g_sim.nukesReady(0) != 0) return fail("ramp reloaded before its cooldown");
         for (int t = 0; t < 20 * 25; t++) { g_sim.step(); g_sim.events.clear(); }
-        if (g_sim.nukesReady(0) != 2) return fail("ramps did not reload after five minutes");
+        if (g_sim.nukesReady(0) != 2) return fail("ramps did not reload after their cooldown");
         // aircraft rally: a spawned aircraft flies to the airfield's rally point and waits there
         Vec2 sa = spot(bb + BR_AIRFIELD, 4); Ref af = g_sim.placeBuilding(bb + BR_AIRFIELD, 0, (int)sa.x, (int)sa.y, true);
         Vec2 rp = g_map.nearestFree(g_sim.get(af)->pos + Vec2(0, 9 * TILE), 30);
@@ -650,6 +650,7 @@ bool radiationTest(u64 seed); // tests9.cpp: the Anti-Radiation Truck (scrubbing
 bool fortTest(u64 seed);     // tests10.cpp: the map's neutral civilian strongholds (claim, garrison, fire, durability)
 bool lakeUpdateTest(u64 seed);   // tests13.cpp: infiltrators swim to the island launchers, Waymakers, the patrol boat, the bigger lake, weather
 bool civilTest(u64 seed);        // tests15.cpp: the towns round the lake, the riots, the newer commander, difficulty raised mid-match
+bool oceanTest(u64 seed);        // tests16.cpp: the island map in the sea, the navy on the ocean, cargo ships, aircraft carriers
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
@@ -849,7 +850,7 @@ static bool autoTest(u64 seed) {
         }
         // ---- an incoming nuke: a human army's tanks drive out of the circle, an army nobody commands stays and burns
         {
-            Vec2 gz = freeAt(Vec2(28 * TILE, 20 * TILE));   // open meadow between the NW base and the lake
+            Vec2 gz = freeAt(Vec2((ISLE_X0 + 28) * TILE, (ISLE_X0 + 20) * TILE));   // open meadow between the NW base and the lake
             std::vector<Ref> mine, theirs;
             for (int i = 0; i < 4; i++) {
                 float a = i * 1.5708f;
@@ -1473,9 +1474,8 @@ static bool dropTest(u64 seed) {
     return true;
 }
 
-// The Phone Strike: the tech structure's other support power. One call takes a swarm of real aircraft (helicopters, bombers and jets, with
-// a scout drone) across the map to a spot you pick; they attack what stands there and then go home. Needs a tech structure, one call per
-// cooldown per structure, and the package grows with the army like a drop does.
+// The Air Strike: the tech structure's other support power. One call sends waves of strike fighters over a spot you pick; each makes one bombing
+// pass and leaves the map. Needs a tech structure, one call per cooldown per structure, and the flight grows with the army like a drop does.
 static bool strikeTest(u64 seed) {
     auto fail = [](const char* m) { fprintf(stderr, "striketest: %s\n", m); return false; };
     auto run = [](float sec) { for (int t = 0; t < (int)(20 * sec); t++) { g_sim.step(); g_sim.events.clear(); } };
@@ -1495,51 +1495,37 @@ static bool strikeTest(u64 seed) {
         if (g_sim.cmdPhoneStrike(0, line)) return fail("a strike worked before the support powers open up");
         pl.dropReady = 0;
         if (g_sim.strikesReady(0) != 1) return fail("one tech structure should take one call");
-        // the first tier is already a swarm of all three kinds (R7: helicopters, jets and drones, whatever the army has learned so far)
+        // the first tier is already a full flight; every one of them is the army's strike fighter, a loan nobody commands
         if (g_sim.dropTier(0) != 0) return fail("a fresh tech structure is not at the first tier");
         std::vector<int> weak = g_sim.strikeManifest(0);
-        int wh = 0, wj = 0, wd = 0;
-        for (int t : weak) { const UnitType& u = UNITS[t]; if (u.role == UR_SCOUT || (!u.heli && u.bomber)) wd++; else if (u.jet) wj++; else wh++; }
-        if (!wh || !wj || !wd || (int)weak.size() < 8) { fprintf(stderr, "striketest: the first-tier package is %d aircraft (%d helicopters, %d jets, %d drones)\n", (int)weak.size(), wh, wj, wd); return false; }
-        // what answers the phone: the army's own armed aircraft only, and a real mix of helicopters, jets and drones
+        int jetT = fac[0] == F_CYBER ? U_C_STRIKEJET : U_K_STRIKEJET;
+        if ((int)weak.size() != STRIKE_FLIGHT[0]) { fprintf(stderr, "striketest: the first-tier flight is %d fighters\n", (int)weak.size()); return false; }
         pl.advTech = true;
         std::vector<int> swarm = g_sim.strikeManifest(0);
-        if (swarm.size() <= weak.size()) { fprintf(stderr, "striketest: %d aircraft after the Advanced Program, %d before\n", (int)swarm.size(), (int)weak.size()); return false; }
-        int heli = 0, jet = 0, drone = 0, armed = 0;
-        for (int t : swarm) {
-            const UnitType& u = UNITS[t];
-            if (u.kind != UK_AIR || u.faction != fac[0] || (u.role != UR_COMBAT && u.role != UR_SCOUT)) { fprintf(stderr, "striketest: type %d '%s' (kind %d, weapon %d, faction %d, role %d) answered a %s army's call\n", t, u.name, (int)u.kind, u.weapon, (int)u.faction, (int)u.role, FACTION_NAME[fac[0]]); return false; }
-            if (u.weapon >= 0) armed++;
-            // the game's own flags: 'heli' means it hovers (the recon drone hovers too), 'jet' is the supersonic one, the rest are the cheap
-            // bomber drones - so tell a gunship from a jet from a drone the way the aircraft themselves behave
-            if (u.role == UR_SCOUT || (!u.heli && u.bomber)) drone++;
-            else if (u.jet) jet++;
-            else heli++;
-        }
-        if ((int)swarm.size() < 6) { fprintf(stderr, "striketest: %d aircraft in a strike package\n", (int)swarm.size()); return false; }
-        if (!heli || !jet || !drone) { fprintf(stderr, "striketest: %d helicopters, %d jets, %d drones\n", heli, jet, drone); return false; }
-        if (armed < 5) { fprintf(stderr, "striketest: only %d of %d aircraft in the package carry a weapon\n", armed, (int)swarm.size()); return false; }
+        if (swarm.size() <= weak.size()) { fprintf(stderr, "striketest: %d fighters after the Advanced Program, %d before\n", (int)swarm.size(), (int)weak.size()); return false; }
+        for (int t : swarm) if (t != jetT || !UNITS[t].temp || UNITS[t].builtBy != BR_NONE) { fprintf(stderr, "striketest: type %d '%s' answered a %s army's call\n", t, UNITS[t].name, FACTION_NAME[fac[0]]); return false; }
         // an enemy line drawn up right where the call goes
         int foeInf = firstUnitOf(fac[1]) + 2, foeVeh = firstUnitOf(fac[1]) + 5;
         std::vector<Ref> foes;
         for (int k = 0; k < 6; k++) foes.push_back(g_sim.spawnUnit(k % 2 ? foeVeh : foeInf, 1, line + Vec2((k - 3) * 40.0f, (k % 3 - 1) * 30.0f)));
         float foeHp0 = 0; for (auto r : foes) if (Entity* e = g_sim.get(r)) foeHp0 += e->hp;
-        int beforeAir = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) beforeAir++;
         if (!g_sim.cmdPhoneStrike(0, line)) return fail("the strike was refused");
         if (g_sim.cmdPhoneStrike(0, line)) return fail("the strike ignored its cooldown");
         if (std::abs(g_sim.strikeWait(0) - STRIKE_COOLDOWN) > 0.5f) return fail("wrong strike cooldown");
-        // the swarm really does come in and close on the called spot
-        int spawned = 0; float closest = 1e9f; bool closed = false;
+        // the flight really does come in, wave after wave, and closes on the called spot
+        std::vector<Ref> seen; float closest = 1e9f;
         for (int t = 0; t < 20 * 40; t++) {
             g_sim.step(); g_sim.events.clear();
-            spawned = 0; closest = 1e9f;
-            for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.isAir()) { spawned++; closest = std::min(closest, dist(e.pos, line)); }
-            if (spawned == beforeAir + (int)swarm.size() && closest < 12.0f * TILE) { closed = true; break; }
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.type == jetT) {
+                if (std::find(seen.begin(), seen.end(), g_sim.refOf(e)) == seen.end()) seen.push_back(g_sim.refOf(e));
+                closest = std::min(closest, dist(e.pos, line));
+            }
         }
-        if (spawned != beforeAir + (int)swarm.size()) { fprintf(stderr, "striketest: %d aircraft answered the phone, wanted %d\n", spawned - beforeAir, (int)swarm.size()); return false; }
-        if (!closed) { fprintf(stderr, "striketest: the swarm never closed on the called spot (closest %.0f px)\n", closest); return false; }
-        // and it attacks what stands there, rather than just flying past
-        run(20);
+        if ((int)seen.size() != (int)swarm.size()) { fprintf(stderr, "striketest: %d fighters answered the call, wanted %d\n", (int)seen.size(), (int)swarm.size()); return false; }
+        if (closest > 5.0f * TILE) { fprintf(stderr, "striketest: the flight never crossed the called spot (closest %.0f px)\n", closest); return false; }
+        int heli = 0, jet = (int)swarm.size(), drone = 0;
+        // and it hit what stood there
+        run(5);
         float foeHp1 = 0; for (auto r : foes) if (Entity* e = g_sim.get(r)) foeHp1 += e->hp;
         if (foeHp1 >= foeHp0 * 0.6f) { fprintf(stderr, "striketest: the enemy line took only %.0f of %.0f damage\n", foeHp0 - foeHp1, foeHp0); return false; }
         // the top tier sends a bigger swarm still: the same tech structure grows with the army's unlocks
@@ -1560,7 +1546,8 @@ static bool strikeTest(u64 seed) {
         // the cooldown does come back
         for (int t = 0; t < (int)((STRIKE_COOLDOWN + 2.0f) * 20) && g_sim.strikesReady(0) < 2; t++) { g_sim.step(); g_sim.events.clear(); }
         if (g_sim.strikesReady(0) != 2) return fail("the calls did not come back after the cooldown");
-        printf("striketest %s: ok (a swarm of %d aircraft grew %d -> %d -> %d with the army's unlocks: %d helicopters, %d jets, %d drones at the middle tier; the enemy line was left at %.0f%% of its health)\n", FACTION_NAME[fac[0]], (int)swarm.size(), (int)weak.size(), (int)swarm.size(), big, heli, jet, drone, 100.0f * foeHp1 / std::max(1.0f, foeHp0));
+        printf("striketest %s: ok (a flight of %d strike fighters, grown %d -> %d -> %d with the army's unlocks; the enemy line was left at %.0f%% of its health)\n", FACTION_NAME[fac[0]], (int)swarm.size(), (int)weak.size(), (int)swarm.size(), big, 100.0f * foeHp1 / std::max(1.0f, foeHp0));
+        (void)heli; (void)jet; (void)drone;
     }
     return true;
 }
@@ -2653,7 +2640,33 @@ bool determinismTest(u64 seed, int seconds);
 bool placementTest(u64 seed);
 bool placementBench(u64 seed);
 
+// ONEHOUR_ARTSHEET=<file.bmp>: headless preview of the sea art (the carrier, the cargo ship and the two carrier jets) for both armies, each in
+// its owner's colour (Cyber PLAYER_COLOR[0], Clanker PLAYER_COLOR[1]), at 2x over sea blue. The big ships are on the top row, the jets below.
+static void writeArtSheet(const char* path) {
+    const int S = 2, GAP = 8, M = 8, bigW = ART_BIG * S, smW = ART_SIZE * S;
+    Canvas out(M * 2 + 4 * bigW + 3 * GAP, M * 2 + bigW + GAP + smW);
+    for (u32& p : out.px) p = Canvas::pack(rgb(30, 90, 140));
+    auto put2x = [&](const Canvas& src, int x0, int y0) {   // nearest-neighbour 2x, alpha-blended onto the sheet
+        for (int y = 0; y < src.h * S; y++) for (int x = 0; x < src.w * S; x++) out.set(x0 + x, y0 + y, Canvas::unpack(src.px[(y / S) * src.w + x / S]));
+    };
+    for (int f = 0; f < 2; f++) {   // f 0: Cyber, f 1: Clanker
+        bool cy = f == 0;
+        Canvas car(ART_BIG, ART_BIG), crg(ART_BIG, ART_BIG), cj(ART_SIZE, ART_SIZE), aj(ART_SIZE, ART_SIZE);
+        artCarrierBody(car, PLAYER_COLOR[f], cy);
+        artCargoShipBody(crg, PLAYER_COLOR[f], cy);
+        artCarrierJetBody(cj, PLAYER_COLOR[f], cy);
+        artAirstrikeJetBody(aj, PLAYER_COLOR[f], cy);
+        put2x(car, M + f * (bigW + GAP), M);
+        put2x(crg, M + (2 + f) * (bigW + GAP), M);
+        put2x(cj, M + f * (bigW + GAP) + (bigW - smW) / 2, M + bigW + GAP);
+        put2x(aj, M + (2 + f) * (bigW + GAP) + (bigW - smW) / 2, M + bigW + GAP);
+    }
+    if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(out.px.data(), out.w, out.h, 32, out.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, path); SDL_FreeSurface(sf); }
+    printf("wrote %s\n", path);
+}
+
 int main(int argc, char** argv) {
+    if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0;
     for (int i = 1; i < argc; i++) {   // the headless scene tests check one mechanic each in scenes that run for minutes: no riots in them (full matches - the game,
@@ -2723,6 +2736,7 @@ int main(int argc, char** argv) {
         else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
+        else if (a == "--oceantest") { g_map.generate(); return oceanTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -3300,7 +3314,24 @@ int main(int argc, char** argv) {
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 printf("drop showcase: %zu planes in the air, %d units, %zu in the manifest (tier %d of %d)\n", g_sim.airlifts.size(), g_sim.countUnits(0), g_sim.dropManifest(0).size(), g_sim.dropTier(0) + 1, DTI_COUNT);
             }
-            if (getenv("ONEHOUR_STRIKE")) {   // showcase: the Hotline Strike swarm over an enemy line (ONEHOUR_STRIKE=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera up the approach)
+            if (getenv("ONEHOUR_OCEAN")) {   // showcase: a carrier group off the main island's west coast with a loaded cargo ship, an enemy warship and gunships coming at it (ONEHOUR_OCEAN=N ticks)
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction;
+                bool cy = f0 == F_CYBER, cy1 = f1 == F_CYBER;
+                Vec2 sea = g_map.nearestWater(Vec2((ISLE_X0 - 14) * TILE, WORLD_H * 0.5f), 12, true, g_map.oceanComp);
+                Ref car = g_sim.spawnUnit(cy ? U_C_CARRIER : U_K_CARRIER, 0, sea);
+                g_sim.get(car)->angle = -1.2f;
+                Ref cargo = g_sim.spawnUnit(cy ? U_C_CARGOSHIP : U_K_CARGOSHIP, 0, g_map.nearestWater(sea + Vec2(6 * TILE, 5 * TILE), 8, true, g_map.oceanComp));
+                for (int k = 0; k < 2; k++) g_sim.spawnUnit(cy ? U_C_DESTROYER : U_K_DESTROYER, 0, g_map.nearestWater(sea + Vec2((k ? -5 : 4) * TILE, -6 * TILE), 8, true, g_map.oceanComp));
+                for (int k = 0; k < 8; k++) { Ref u = g_sim.spawnUnit(firstUnitOf(f0) + (k < 4 ? 5 : 2), 0, g_sim.get(cargo)->pos); g_sim.boardPublic(*g_sim.get(u), *g_sim.get(cargo)); }
+                g_sim.spawnUnit(cy1 ? U_C_DESTROYER : U_K_DESTROYER, 1, g_map.nearestWater(sea + Vec2(-4 * TILE, 16 * TILE), 10, true, g_map.oceanComp));
+                for (int k = 0; k < 3; k++) g_sim.spawnUnit(cy1 ? U_C_HELI : U_K_AIR, 1, sea + Vec2((k - 1) * 3 * TILE, -15 * TILE));
+                int n = atoi(getenv("ONEHOUR_OCEAN")); if (n < 1) n = 60;
+                g_game.cam = Vec2(clampf(sea.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(sea.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                if (getenv("ONEHOUR_OCEANSEL")) g_game.selection = { std::string(getenv("ONEHOUR_OCEANSEL")) == "cargo" ? cargo : car };
+            }
+            if (getenv("ONEHOUR_STRIKE")) {   // showcase: the Air Strike's waves over an enemy line (ONEHOUR_STRIKE=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera up the approach)
                 for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
                 Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction;
                 int bb0 = firstBuildOf(f0);
@@ -3369,12 +3400,36 @@ int main(int argc, char** argv) {
                 for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
                 auto camOn = [&](Vec2 p) { g_game.cam = Vec2(clampf(p.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(p.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); };
                 auto frames = [&](int n, bool sim) { for (int k = 0; k < n; k++) { if (sim) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); } g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; g_game.render(); g_game.updateParticles(SIM_DT); } };
-                if (m == "sea") {   // the lake's wildlife gathered in one view, all at the surface
+                if (m == "sea") {   // the lake's wildlife gathered in one view: the big animals in a grid, every other one at the surface (the rest under it), a school below them
                     Vec2 c = g_game.sea.empty() ? Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) : g_game.sea[0].pos;
+                    auto nearOpen = [&](Vec2 p, int bi) {   // the nearest spot of body bi with water all round, searching outwards from p
+                        for (int rr = 0; rr <= 24; rr++) for (int dy = -rr; dy <= rr; dy++) for (int dx = -rr; dx <= rr; dx++) {
+                            if (std::max(std::abs(dx), std::abs(dy)) != rr) continue;
+                            Vec2 q = p + Vec2((float)(dx * TILE), (float)(dy * TILE));
+                            if (g_game.seaFree(q, bi)) return q;
+                        }
+                        return p;
+                    };
                     for (size_t i = 0; i < g_game.sea.size(); i++) {
                         auto& b = g_game.sea[i];
+                        if (b.lead >= 0) continue;   // a pod member follows its leader below
                         Vec2 want = c + Vec2((float)((int)(i % 4) - 1.5f) * 150.0f, (float)((int)(i / 4) - 0.5f) * 170.0f);
-                        b.pos = g_map.bigWater(tileOf(want.x), tileOf(want.y)) ? want : b.pos; b.up = true; b.timer = b.upFor * (i == 1 ? 0.15f : 0.5f);
+                        b.pos = nearOpen(want, b.bi);
+                        bool up = i % 2 == 0;
+                        b.st = up ? 2 : 0; b.surf = up ? 1.0f : 0.0f; b.roll = up ? 0.5f : 0.0f; b.fluke = up ? 0.0f : 0.15f;
+                    }
+                    for (size_t i = 0; i < g_game.sea.size(); i++) {   // the pod members keep their places beside their leaders
+                        auto& b = g_game.sea[i];
+                        if (b.lead < 0) continue;
+                        const auto& L = g_game.sea[b.lead];
+                        b.pos = L.pos + Vec2(b.off.x * std::cos(L.ang) - b.off.y * std::sin(L.ang), b.off.x * std::sin(L.ang) + b.off.y * std::cos(L.ang));
+                        b.st = 2; b.surf = 1.0f; b.roll = 0.5f; b.fluke = 0.0f;
+                    }
+                    for (size_t k = 0; k < g_game.seaSchools.size() && k < 2; k++) {   // two schools below the animals, their fish gathered round a spot
+                        auto& S = g_game.seaSchools[k];
+                        Vec2 spot = nearOpen(c + Vec2(k ? 240.0f : -240.0f, 210.0f), S.bi);
+                        S.cen = spot;
+                        for (int j = 0; j < S.n; j++) g_game.seaFish[S.first + j].pos = spot + Vec2(g_game.weather.rng.f(-16, 16), g_game.weather.rng.f(-16, 16));
                     }
                     camOn(c);
                     frames(24, false);

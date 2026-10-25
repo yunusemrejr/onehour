@@ -98,7 +98,7 @@ static bool swimCaptureTest() {
 
 // ---- the lake grew: about twice the 146 map's 2,419 water tiles
 static bool lakeTest() {
-    CHECK13(MAP_W == 208 && MAP_H == 208, "the map is not 208x208 (it grew again: see --superupdatetest)");
+    CHECK13(ISLE_W == 208 && MAP_W == 320 && MAP_H == 320, "the main island is not 208 tiles in a 320x320 sea (see --oceantest)");
     int lake = g_map.waterSize[g_map.lakeComp];
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "lake: %d water tiles\n", lake);
     CHECK13(lake >= 2 * 2419 - 300, "the central lake is not about twice the 146 map's");

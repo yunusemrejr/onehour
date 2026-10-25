@@ -10,8 +10,9 @@ enum Order : u8 { O_IDLE = 0, O_MOVE, O_ATTACKMOVE, O_ATTACK, O_HARVEST, O_RETUR
                   O_ENTER,      // walk to a transport / bunker (targetEnt) and climb aboard
                   O_CAPTURE,    // spy: take the enemy structure targetEnt
                   O_UNLOAD,     // transport: fly to 'target' and let the passengers out there
-                  O_STRIKERUN,  // Hotline Strike fighter: rocket passes over 'target', then it leaves the map (see Sim::strikeJetRun)
-                  O_NUKERUN };  // Nuclear Bomber call-in: straight over 'target', one bomb, on off the map (see Sim::nukeBomberRun)
+                  O_STRIKERUN,  // Air Strike fighter: one bombing pass over 'target', a hard break, then off the map (see Sim::strikeJetRun)
+                  O_NUKERUN,    // Nuclear Bomber call-in: straight over 'target', one bomb, on off the map (see Sim::nukeBomberRun)
+                  O_CARRIERJET };   // a carrier's jet: fights near its carrier ('home') and lands on it again (see Sim::carrierJetRun)
 
 struct Ref {
     i32 idx = -1; u32 gen = 0;
@@ -122,8 +123,15 @@ struct Entity {
     u16 kills = 0;
     float droneAt[3] = {0, 0, 0};     // protector drones (jeeps, ships): sim time each one can fire again (see Sim::droneCount) ...
     u8 droneLoad[3] = {0, 0, 0};      // ... and the interceptors it has left (0 once the reload has run out means a full magazine)
-    u8 strikePass = 0;                // Hotline Strike fighter: passes made over the target so far
-    u8 salvoLeft = 0;                 // ... rockets still to fire from the salvo of the pass in progress
+    u8 strikePass = 0;                // Air Strike fighter: 0 on the run-in, 1 breaking away, 2 leaving the map
+    u8 salvoLeft = 0;                 // ... rockets still to fire on the run-in
+    Vec2 runDir;                      // ... the heading of its wave across the called spot
+    float roll = 0;                   // aircraft: bank / roll angle of a manoeuvre (radians; drawn as the sprite foreshortening and flipping)
+    float fade = 1;                   // drawn opacity: a departing Air Strike fighter fades out over the ocean before it is gone
+    Vec2 unloadSpot;                  // cargo ship: where the player pointed when it was sent to land its load (it uses the beach nearest it)
+    std::vector<float> deck;          // aircraft carrier: one entry per jet on deck, the sim time it is rearmed and ready to launch
+    float deckReplace = -1;           // ... when the next replacement for a lost jet arrives (-1: none under way)
+    float deckLaunch = 0;             // ... earliest time of the next launch
     float lifeUntil = -1;             // a loan (UnitType.temp): sim time at which it is withdrawn whatever it is doing (-1 = never)
     float autoHoldUntil = -1;         // dozer: a direct move / target order keeps it from wandering off to mend things on its own until then
     std::vector<Ref> siteQueue;       // dozer: construction sites it was pulled away from before they were finished (resumed once it is idle)
@@ -331,6 +339,9 @@ struct Sim {
     // work on and everybody can see it coming
     struct StrikeMark { Vec2 pos; int owner = -1; float t0 = 0; };
     std::vector<StrikeMark> strikeMarks;
+    // the waves of an Air Strike still to come in (each a V formation launched at 'at' from the map edge on its own heading)
+    struct StrikeWave { int owner = -1, type = 0, n = 0; Vec2 target, dir; float at = 0; };
+    std::vector<StrikeWave> strikeWaves;
     static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
@@ -458,7 +469,7 @@ struct Sim {
     bool cmdPhoneStrike(int player, Vec2 pos);   // tech structure: call in a strike package on a spot of your choice (see PhoneStrike)
     int strikesReady(int player) const;          // tech structures that can take a call right now
     float strikeWait(int player) const;          // seconds until the soonest one is ready (0 = ready, -1 = no tech structure)
-    std::vector<int> strikeManifest(int player) const;   // the aircraft that would answer the phone now
+    std::vector<int> strikeManifest(int player) const;   // the fighters that would answer the call now
     int dropsReady(int player) const;         // tech structures that can send a paradrop right now (after the opening delay)
     float dropWait(int player) const;         // seconds until the soonest paradrop is ready (0 = ready, -1 = no tech structure)
     bool cmdAidDrop(int player, Vec2 pos);    // tech structure, human players only: a relief flight drops $20000 and a dozer to the army nearest pos
@@ -488,7 +499,9 @@ struct Sim {
     void nukeBlastPublic(const Nuke& n) { nukeBlast(n); }   // (test scenes: detonate a warhead directly)
     void boardQuiet(Entity& u, Entity& c) { board(u, c, true); }   // put a soldier aboard a carrier at once (test scenes; the game walks them in with cmdEnter)
     Vec2 navalExit(const Entity& yard) const;                // where a ship leaves the yard into the water
-    bool shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const;   // a legal spot for a structure that must touch the lake, nearest to 'near' (false: none known)
+    bool shipLanding(const Entity& c, Vec2* land = nullptr) const;   // a cargo ship near enough a shore to land its load: the free land tile to use
+    void boardPublic(Entity& u, Entity& c) { board(u, c, true); }    // (test scenes: put a unit aboard directly)
+    bool shoreSite(int player, int buildType, Vec2 near, int& tx, int& ty) const;   // a legal spot for a structure that must touch the lake or the ocean, nearest to 'near' (false: none known)
     int nukesReady(int player) const;         // ramps that can launch right now
     float nukeWait(int player) const;         // seconds until the soonest ramp is ready (0 = ready, -1 = no ramp)
     int miniNukesReady(int player) const;     // bunkers whose missile is ready
@@ -561,6 +574,14 @@ struct Sim {
     bool explored(int player, int tx, int ty) const { return time < players[player].revealUntil || players[player].explored[ty * MAP_W + tx] != 0; }
     bool exploredRaw(int player, int tx, int ty) const { return players[player].explored[ty * MAP_W + tx] != 0; }
     bool revealed(int player) const { return time < players[player].revealUntil; }
+    // What the human player's side can see right now (the view's fog of war; the simulation and the computer commanders go by 'explored'):
+    // ground in sight of a unit or structure of the human's team, refreshed with the vision. Explored ground out of sight is remembered terrain and
+    // structures, but enemy units are only shown in sight (or during a scan). sightGen counts the refreshes, so the view knows when to redraw its fog.
+    std::vector<u8> inSight;
+    u32 sightGen = 0;
+    bool seenNow(int tx, int ty) const { return revealed(humanPlayer) || (!inSight.empty() && inSight[ty * MAP_W + tx] != 0); }
+    bool shownToHuman(const Entity& e) const;   // whether the human's view may show e now (own and allied always; see inSight)
+    void updateSight();
     Vec2 buildingCenter(int type, int tx, int ty) const { return Vec2(tx * TILE + BUILDS[type].w * TILE * 0.5f, ty * TILE + BUILDS[type].h * TILE * 0.5f); }
     float distToEntity(Vec2 p, const Entity& e) const {   // edge distance in px
         if (e.kind == EK_BUILDING) {
@@ -596,7 +617,12 @@ private:
     void updateJeep(Entity& jeep);                       // the crew mends, climbs out when told to, and fires from the seats
     bool passengersFire(Entity& host, float reachTiles); // every passenger shoots its own weapon at the best target it can hit from the host; true if anybody fired
     void moveShip(Entity& e, float speed);              // a ship's drive: it turns at a limited rate and builds up speed (the lake has no corners to slip round)
-    void strikeJetRun(Entity& e);                        // Hotline Strike fighter: line up, salvo of rockets on the called spot, break away, come round again, then leave
+    void strikeJetRun(Entity& e);                        // Air Strike fighter: rockets and a stick of bombs on one pass, a hard break, then off the map
+    void launchStrikeWave(const StrikeWave& w);
+    void updateCarrier(Entity& c);                       // aircraft carrier: replaces lost jets, launches ready ones at enemies near it
+    void carrierJetRun(Entity& e);                       // a carrier's jet: fight near the carrier, land on it to rearm
+    Entity* carrierTarget(const Entity& c, const Entity* jet);   // the enemy a carrier's jet should go for (nullptr: nothing near)
+    void leaveMap(Entity& e, Vec2 away);                 // a loan flies off: straight out to the nearest edge, fading over the ocean, then gone
     void nukeBomberRun(Entity& e);                       // Nuclear Bomber: hold the line to the target, release, fly on and leave the map
     void updateIslandNuke(Entity& b);                    // an island launcher: keeps its clock, cools down, flares its laser chamber
     void updateHealAntenna(Entity& b);                   // a Healing Antenna mends everything friendly round it (see HEALANT_*)

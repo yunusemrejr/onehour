@@ -539,6 +539,9 @@ void AiPlayer::think() {
     if (S.time < nextThink) return;
     float cadence = pl.difficulty >= 3 ? 0.35f : (pl.difficulty == 2 ? 0.5f : (pl.difficulty == 1 ? 0.8f : 1.3f));
     nextThink = S.time + cadence;
+    // The survey below keeps plain pointers into the entity array (hq, yards, factories, ...) and the orders it gives may place construction
+    // sites: room for them up front, so a site placed mid-think can never move the array under those pointers.
+    if (S.ents.capacity() < S.ents.size() + 256) S.ents.reserve(S.ents.size() + 1024);
     int base = firstBuildOf(pl.faction);
     int ubase = firstUnitOf(pl.faction);
     float minutes = S.time / 60.0f;
@@ -926,12 +929,11 @@ void AiPlayer::think() {
             Vec2 spot = pl.basePos + Vec2(std::cos(ang), std::sin(ang) * 0.85f) * rad;
             built = tryBuild(wallType, spot, 12);
         }
-        // a Naval Yard on the lake shore nearest to the base, once money is piling up (the dozer drives out to it)
+        // a Naval Yard on the shore nearest to the base (the ocean behind it, as a rule), once money is piling up (the dozer drives out to it)
         if (!built && on(FEAT_NAVY) && pl.difficulty >= 1 && yards.empty() && !factories.empty() && powerPlants > 0 && !threat && tm > (pl.difficulty >= 2 ? 7.5f : 10.5f) && pl.money > 5200 && S.time >= nextYardTry && S.countRole(player, BR_NAVAL, false) == 0) {
             nextYardTry = S.time + 20.0f;
             int yardType = pl.faction == F_CYBER ? B_C_NAVAL : B_K_NAVAL, tx, ty;
-            Vec2 lake(WORLD_W * 0.5f, WORLD_H * 0.5f);
-            if (S.buildAvailable(player, yardType) && S.shoreSite(player, yardType, lake + (pl.basePos - lake) * 0.5f, tx, ty)) built = S.cmdBuild(S.refOf(*dz), yardType, tx, ty);
+            if (S.buildAvailable(player, yardType) && S.shoreSite(player, yardType, pl.basePos, tx, ty)) built = S.cmdBuild(S.refOf(*dz), yardType, tx, ty);
         }
         // repair
         if (!built && !damaged.empty() && dz->order != O_BUILD) {   // (a dozer already mending something keeps at it; the job picker spreads the others)
@@ -1042,9 +1044,13 @@ void AiPlayer::think() {
     // ships: a yard keeps its slipway busy while there is money to spare - destroyers for the fight on the lake, a few missile cruisers for the shore
     if (on(FEAT_NAVY) && !yards.empty()) {
         int cruiserT = pl.faction == F_CYBER ? U_C_CRUISER : U_K_CRUISER, destroyerT = pl.faction == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, patrolT = pl.faction == F_CYBER ? U_C_PATROL : U_K_PATROL;
-        int queuedShips = 0, destroyers = 0, cruisers = 0, patrols = 0;
-        for (auto* y : yards) queuedShips += (int)y->queue.size();
-        for (auto r : fleet) if (Entity* e = S.get(r)) (e->type == cruiserT ? cruisers : (e->type == patrolT ? patrols : destroyers))++;
+        int carrierT = pl.faction == F_CYBER ? U_C_CARRIER : U_K_CARRIER;
+        int queuedShips = 0, destroyers = 0, cruisers = 0, patrols = 0, carriers = 0;
+        for (auto* y : yards) { queuedShips += (int)y->queue.size(); for (int q : y->queue) if (q == carrierT) carriers++; }
+        for (auto r : fleet) if (Entity* e = S.get(r)) { if (e->type == carrierT) carriers++; else (e->type == cruiserT ? cruisers : (e->type == patrolT ? patrols : destroyers))++; }
+        // a carrier for a rich Hard or Brutal commander once a few warships escort it: its wing does the rest
+        if (pl.difficulty >= 2 && carriers == 0 && destroyers + cruisers >= 2 && pl.money - reserve > UNITS[carrierT].cost + 3000 && S.unitAvailable(player, carrierT))
+            for (auto* y : yards) if (y->constructed && y->queue.empty()) { if (S.cmdTrain(S.refOf(*y), carrierT)) { queuedShips++; break; } }
         int fleetCap = 3 + pl.difficulty + (enemyShips > 0 ? 2 : 0) + (pl.money > 9000 ? 1 : 0) + patrols / 2;   // (patrol boats are small: two take one berth)
         for (auto* y : yards) if (y->constructed && y->queue.empty() && (int)fleet.size() + queuedShips < fleetCap && pl.money - reserve > 800) {
             bool rich = pl.money - reserve > 2600;
@@ -1053,7 +1059,7 @@ void AiPlayer::think() {
             if (!rich || patrols * 2 < destroyers + cruisers) want = patrolT;   // cheap patrol boats fill the gaps: one for every two warships, and all of it when money is short
             if (S.cmdTrain(S.refOf(*y), want)) queuedShips++;
         }
-        for (auto* y : yards) if (y->constructed) S.cmdSetRally(S.refOf(*y), g_map.nearestWater(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) + (pl.basePos - Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f)).norm() * (6.0f * TILE), 12, true));
+        for (auto* y : yards) if (y->constructed) { Vec2 ex = S.navalExit(*y); S.cmdSetRally(S.refOf(*y), g_map.nearestWater(ex + (ex - y->pos).norm() * (5.0f * TILE), 12, true, g_map.compAt(ex))); }   // (out from the slipway onto its own sea)
     }
     // jeeps take soldiers aboard: idle infantry near a jeep that is standing still climb in (the anti-armour troopers first), so the army rolls out with its infantry riding
     if (on(FEAT_NAVY) && !jeeps.empty() && S.time - lastJeepLoad > 2.5f) {
@@ -1457,22 +1463,27 @@ void AiPlayer::think() {
             if (!idle.empty()) S.cmdCapture(idle, S.refOf(*best));
         }
     }
-    // the fleet keeps the lake: it fights enemy ships first, shells what stands near the shore that it can beat, and falls back to a post on its own side of the lake
+    // the fleet keeps its sea (the ocean, or the lake if that is where its yard stands): it fights enemy ships on it first, shells what stands near
+    // its shores that it can beat, and falls back to a post off its own yard
     if (on(FEAT_NAVY) && !fleet.empty()) {
-        Vec2 lake(WORLD_W * 0.5f, WORLD_H * 0.5f);
-        Vec2 post = g_map.nearestWater(lake + (pl.basePos - lake).norm() * (5.0f * TILE), 12, true);
         Vec2 cen; int nShips = 0;
         for (auto r : fleet) if (Entity* e = S.get(r)) { cen += e->pos; nShips++; }
         cen = cen * (1.0f / std::max(1, nShips));
+        int sea = 0;
+        for (auto r : fleet) if (Entity* e = S.get(r)) { sea = g_map.compAt(e->pos); if (sea) break; }
+        Vec2 home = pl.basePos;
+        for (auto* y : yards) if (g_map.compAt(S.navalExit(*y)) == sea) { home = S.navalExit(*y); break; }
+        Vec2 post = g_map.nearestWater(home + (home - pl.basePos).norm() * (5.0f * TILE), 14, true, sea);
         Entity* ftgt = nullptr; float fbd = 1e18f;
         for (auto& e : S.ents) {
             if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.carrier.valid()) continue;
             if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             bool ship = e.isUnit() && e.ut().naval;
-            if (!ship) {   // a land target must be within reach of the lake
+            if (ship && g_map.compAt(e.pos) != sea) continue;   // (on the other sea: out of reach)
+            if (!ship) {   // a land target must be within reach of the fleet's sea
                 if (e.isAir()) continue;
-                Vec2 w = g_map.nearestWater(e.pos, 13, true);
-                if (!g_map.navTile(tileOf(w.x), tileOf(w.y)) || dist(w, e.pos) > 12.0f * TILE) continue;
+                Vec2 w = g_map.nearestWater(e.pos, 13, true, sea);
+                if (!g_map.navTile(tileOf(w.x), tileOf(w.y)) || g_map.compAt(w) != sea || dist(w, e.pos) > 12.0f * TILE) continue;
                 if (enemyStrengthNear(e.pos, 8) > fleetValue * 1.3f + 600.0f) continue;   // not into a wall of guns
                 if (e.isBuilding() && e.bt().role == BR_AATURRET) continue;
             }

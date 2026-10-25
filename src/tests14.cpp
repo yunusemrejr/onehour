@@ -1,6 +1,6 @@
 // One Hour - headless tests for the super update (--superupdatetest)
 //  * the map: 208x208 (40% more ground than 176x176), two Island Nuke Launchers on each island, every footprint on dry land
-//  * the Super Nuke an island launcher fires: twice an Underground Nuke's blast radius, much faster, a 30 s reload; bunkers and interceptor
+//  * the Super Nuke an island launcher fires: twice an Underground Nuke's blast radius, much faster, a 75 s reload; bunkers and interceptor
 //    missiles never touch it, and a laser's chance is a fifth of its chance against an Underground Nuke
 //  * a human's infiltrator takes over an ally's structure; a computer army's infiltrator never does
 //  * the Healing Antenna: cheap, unlimited, fragile; it mends friendly units, aircraft and structures round it (antennas do not stack), never an
@@ -56,7 +56,7 @@ static Ref placeNear14(int player, int type, Vec2 at) {
 
 // ---- the map and its launchers
 static bool mapTest14() {
-    CHECK14(MAP_W == 208 && MAP_H == 208, "the map is not 208x208");
+    CHECK14(ISLE_W == 208 && MAP_W == 320 && MAP_H == 320, "the main island is not 208 tiles in a 320x320 sea");
     CHECK14(g_map.islands.size() == 2, "the lake does not have two islands");
     auto launchers = ofRole14(BR_ISLANDNUKE);
     CHECK14(launchers.size() == 4, "there are not four Island Nuke Launchers");
@@ -91,14 +91,14 @@ static bool superNukeTest() {
     Sim::Nuke deep; deep.scale = UNUKE_SCALE; deep.deep = true;
     CHECK14(std::abs(Sim::nukeRadius(n) - 2.0f * Sim::nukeRadius(deep)) < 1.0f, "a Super Nuke's blast radius is not twice an Underground Nuke's");
     CHECK14(Sim::flightOf(n) < Sim::NUKE_FLIGHT * 0.5f, "a Super Nuke is not much faster than other warheads");
-    CHECK14(std::abs(g_sim.islandNukeWait(0) - 30.0f) < 0.2f, "an island launcher does not reload in 30 s");
+    CHECK14(std::abs(g_sim.islandNukeWait(0) - ISLAND_NUKE_COOLDOWN) < 0.2f, "an island launcher does not reload in its cooldown");
     l = g_sim.get(L);
     CHECK14(l, "the launcher vanished");
     run14(Sim::flightOf(n) + 0.2f);
     CHECK14(g_sim.nukes.empty(), "a Super Nuke was still in the air after its flight time");
     g_sim.fallouts.clear();
-    run14(30.0f);
-    CHECK14(g_sim.islandNukesReady(0) == 1, "an island launcher was not ready again 30 s after a launch");
+    run14(ISLAND_NUKE_COOLDOWN);
+    CHECK14(g_sim.islandNukesReady(0) == 1, "an island launcher was not ready again a cooldown after a launch");
     return true;
 }
 

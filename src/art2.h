@@ -51,3 +51,19 @@ void artNukeBomberBody(Canvas& c, Color team, bool cyber);
 // The civilian rioters (no army's soldiers): kind 0 "Rioter" is a hoodie-clad civilian with an old hunting rifle, kind 1 "Firebomber" carries a
 // lit bottle and a canvas bag of them. Both are 64x64 canvas, facing +x, centred at (32,32), with the walk cycle in frame 0 / 1 / 2 as the soldiers.
 void artRioterBody(Canvas& c, Color team, int kind, int frame);
+
+// Sea art (art_ocean.cpp). The big ships are 128x128 (ART_BIG), the hull lies along x with the bow at +x, centred at (64,64).
+static const int ART_BIG = 128;
+// The Aircraft Carrier: about 120 px long, a 34 px flight deck with an angled landing deck to port, the island on the starboard side (y > 64)
+// with its mast and radar, two catapult tracks at the bow, elevators, jets parked on deck and CIWS guns at bow and stern. Cyber: pale grey
+// composite with cyan deck lights; Clanker: darker steel with a rust-red waterline and yellow markings.
+void artCarrierBody(Canvas& c, Color team, bool cyber);
+// The military cargo ship (roll-on/roll-off): about 112 px long and 30 px beam, an accommodation block aft with its funnel, a long open vehicle
+// deck carrying painted tanks, trucks and containers in rows, a bow ramp, two cranes and the team's pennant. Same faction palettes as the carrier.
+void artCargoShipBody(Canvas& c, Color team, bool cyber);
+// The carrier jet: a compact naval multirole fighter (F/A-18 style twin tails, LEX wings), naval grey with a team-colour fin stripe. 64x64 canvas,
+// nose +x, about 40 px long, wingspan about 30. Clanker's has canards and darker grey. Afterburner and contrails are added live by the renderer.
+void artCarrierJetBody(Canvas& c, Color team, bool cyber);
+// The airstrike jet: a strike fighter (F-15E / Su-34 like) in light grey, twin engines and bombs / missiles on pylons, with a small team-colour
+// tail flash. 64x64 canvas, nose +x, about 50 px long, wingspan about 38. Clanker's has canards and shorter fins. Both armies use this grey.
+void artAirstrikeJetBody(Canvas& c, Color team, bool cyber);
