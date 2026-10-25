@@ -295,5 +295,10 @@ const StrikeType STRIKES[F_COUNT] = {
     { "Air Strike", "One call to the battery: waves of light-grey Warhawk strike fighters come in from the sea in V formations, each fires two rockets and lays a stick of bombs across the spot you pick, then breaks away and vanishes over the ocean. 10 fighters, 14 with the Advanced Program, 18 with the structure upgrades. Needs an Arms Lab; one call per 4 min per Arms Lab" },
 };
 
+const FleetType FLEETS[F_COUNT] = {
+    { "Fleet Call", "Cyber Command sends a battle fleet from the open sea: ten Pulse Skiffs, three destroyers, three missile cruisers and a Horizon Carrier with its full wing. They come out of the haze at the map border nearest the spot you pick on the ocean, sail in and form up round it, then they are yours to command. Needs a Data Center; one fleet per paradrop cooldown per Data Center" },
+    { "Fleet Call", "The admiralty sends a battle fleet from the open sea: ten Gunboats, three destroyers, three missile cruisers and a Leviathan Carrier with its full wing. They come out of the haze at the map border nearest the spot you pick on the ocean, sail in and form up round it, then they are yours to command. Needs an Arms Lab; one fleet per paradrop cooldown per Arms Lab" },
+};
+
 int firstUnitOf(Faction f) { return f == F_CYBER ? U_C_DOZER : U_K_DOZER; }
 int firstBuildOf(Faction f) { return f == F_CYBER ? B_C_HQ : B_K_HQ; }

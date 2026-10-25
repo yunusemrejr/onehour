@@ -1,4 +1,5 @@
 #include "ai.h"
+#include <chrono>
 // Evaluation showed the learned wave gate loses to the plain heuristic (17-33 over 64 games) while the learned
 // unit-choice model wins (31-21), so wave gating is opt-in: ONEHOUR_WAVEMODEL=1. ONEHOUR_ABLATE=u disables the unit model.
 static int ablate() { static int v = -1; if (v < 0) { const char* e = getenv("ONEHOUR_ABLATE"); v = (e && e[0] == 'u') ? 2 : (getenv("ONEHOUR_WAVEMODEL") ? 0 : 1); } return v; }   // 1 = no wave model, 2 = no unit model
@@ -66,6 +67,27 @@ void AiManager::init(u64 seed) {
         if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].brain = brainOverride[p] ? brainOverride[p] : &g_brain; ais[p].feat = featMask[p] & ~featOff(); ais[p].init(p, seed + p * 7919); }
     }
 }
+// ONEHOUR_AIPROF=ms: report any think() that takes longer than that, section by section (each mark names the section that just ended; a profiling
+// aid that costs nothing when unset)
+namespace {
+inline u64 profNow() { return (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+struct ThinkProf {
+    static int limit() { static int v = getenv("ONEHOUR_AIPROF") ? atoi(getenv("ONEHOUR_AIPROF")) : -1; return v; }
+    u64 t0 = 0, last = 0; const char* names[48]; double ms[48]; int n = 0; int player = 0;
+    explicit ThinkProf(int p) : player(p) { if (limit() >= 0) t0 = last = profNow(); }
+    void mark(const char* name) { if (limit() < 0 || n >= 48) return; u64 now = profNow(); names[n] = name; ms[n++] = (now - last) * 1e-6; last = now; }
+    ~ThinkProf() {
+        if (limit() < 0) return;
+        mark("rest");
+        double tot = (profNow() - t0) * 1e-6;
+        if (tot < limit()) return;
+        fprintf(stderr, "[aiprof p%d t=%.1f] %.1f ms:", player, g_sim.time, tot);
+        for (int i = 0; i < n; i++) if (ms[i] >= 0.5) fprintf(stderr, " %s %.1f", names[i], ms[i]);
+        fprintf(stderr, "\n");
+    }
+};
+}
+
 void AiManager::update() {
     updateTeamFocus();
     for (int p = 0; p < MAX_PLAYERS; p++) if (ais[p].player >= 0 && g_sim.players[p].alive) { ais[p].dodgeNukes(); ais[p].think(); }
@@ -388,9 +410,11 @@ Entity* AiPlayer::pickAttackTarget() {
     Entity* best = nullptr; float bs = 1e18f;
     Entity* lastResort = nullptr; float lastResortScore = 1e18f;
     Vec2 base = g_sim.players[player].basePos;
+    const int home = g_map.landNear(base, 2);
     for (auto& e : g_sim.ents) {
         if (!e.alive || e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner)) continue;
         if (Sim::invulnerable(e)) continue;   // an island launcher or a Bastion Wall is taken by a spy, never by a wave
+        if (home && g_map.landNear(e.pos, e.isBuilding() ? std::max(e.bt().w, e.bt().h) / 2 + 1 : 2) != home) continue;   // (on another island: the wave walks, it cannot get there - the fleet and the air force can)
         if (Sim::districtRuin(e) || e.owner == RIOT_PLAYER) continue;   // (a razed town block is rubble; rioters are met on the way, never an objective)
         if (!(g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) continue;
         float s = dist(e.pos, hasFront ? humanFront : base) / TILE;   // (with a teammate's push under way, near their front rather than near home)
@@ -512,8 +536,8 @@ void AiPlayer::dodgeNukes() {
     Sim& S = g_sim;
     if (!smart || S.nukes.empty()) return;
     Player& pl = S.players[player];
-    if (pl.difficulty < 1 || (S.tick & 3) != (u32)(player & 3)) return;
-    float notice = pl.difficulty >= 3 ? 0.3f : (pl.difficulty == 2 ? 2.0f : 4.5f);   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
+    if ((pl.difficulty < 1 && !on(FEAT_EASYWIT)) || (S.tick & 3) != (u32)(player & 3)) return;
+    float notice = pl.difficulty >= 3 ? 0.3f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 4.5f : 6.5f));   // (an Easy army notices last)   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
     for (auto& n : S.nukes) {
         bool hurts = S.nukeHurts(n, player);   // (a human ally's nuke hurts us too: get out of the way, never hit back)
         if (!hurts || n.super || n.t < notice || n.t > Sim::flightOf(n) - 0.5f) continue;   // (nothing outruns a Super Nuke)
@@ -537,8 +561,10 @@ void AiPlayer::think() {
     Sim& S = g_sim;
     Player& pl = S.players[player];
     if (S.time < nextThink) return;
+    ThinkProf prof(player);
     float cadence = pl.difficulty >= 3 ? 0.35f : (pl.difficulty == 2 ? 0.5f : (pl.difficulty == 1 ? 0.8f : 1.3f));
     nextThink = S.time + cadence;
+    const bool wits = pl.difficulty >= 1 || on(FEAT_EASYWIT);   // sensible play (not economy): Normal and up, and Easy with FEAT_EASYWIT
     // The survey below keeps plain pointers into the entity array (hq, yards, factories, ...) and the orders it gives may place construction
     // sites: room for them up front, so a site placed mid-think can never move the array under those pointers.
     if (S.ents.capacity() < S.ents.size() + 256) S.ents.reserve(S.ents.size() + 1024);
@@ -566,6 +592,7 @@ void AiPlayer::think() {
         incomeAt = inc; incomeT = S.time;
     }
 
+    prof.mark("setup");
     // ---------- survey
     int dozers = 0, civDozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0, fleetValue = 0;
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps, decon;
@@ -664,7 +691,7 @@ void AiPlayer::think() {
 
     // allies: enemy fighters closing on a teammate's structures call for help (a computer ally defends the human's base too)
     Entity* allyThreat = nullptr;
-    if (smart && !threat && pl.difficulty >= 1 && S.time > 120.0f) {
+    if (smart && !threat && wits && S.time > 120.0f) {
         std::vector<Entity*> allyBuildings;
         for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner >= 0 && e.owner != player && S.players[e.owner].team == pl.team) allyBuildings.push_back(&e);
         float best = 1e18f;
@@ -679,7 +706,7 @@ void AiPlayer::think() {
     // a human teammate's push: where their fighters are out in the field and what they are up against
     hasFront = false;
     Entity* frontTarget = nullptr; int frontHuman = -1;
-    if (on(FEAT_ALLY) && pl.difficulty >= 1) {
+    if (on(FEAT_ALLY) && wits) {
         Vec2 sum; int n = 0;
         for (auto& e : S.ents) {
             if (!e.alive || !e.isUnit() || e.isAir() || e.owner < 0 || e.owner == player || S.players[e.owner].isAI || S.players[e.owner].team != pl.team || e.ut().role != UR_COMBAT || e.weapon() < 0) continue;
@@ -711,7 +738,7 @@ void AiPlayer::think() {
     rally = g_map.nearestFree(pl.basePos + enemyDir * (9 * TILE), 6);
     if (smart) for (auto& f : S.fallouts) if (f.t < f.life - 10.0f && dist(rally, f.pos) < f.r + 2 * TILE) rally = g_map.nearestFree(pl.basePos + enemyDir * (3 * TILE), 6);   // never muster inside radiation
     // radiation: whatever is not part of an attack wave walks out of a fallout zone and stays out of it
-    if (smart && pl.difficulty >= 1 && !S.fallouts.empty()) {
+    if (smart && wits && !S.fallouts.empty()) {
         for (auto& f : S.fallouts) {
             if (f.t > f.life - 8.0f) continue;
             for (auto& e : S.ents) {
@@ -745,6 +772,7 @@ void AiPlayer::think() {
         }
     }
 
+    prof.mark("survey");
     // ---------- economy
     int hubs = (int)supplyHubs.size();
     int wantHarv = pl.brutal() ? std::min(8, hubs * 4) : std::min(6, hubs * 3);
@@ -759,6 +787,7 @@ void AiPlayer::think() {
     if (on(FEAT_MACRO) && pl.difficulty >= 1) wantDozers += (pl.money > 6000 ? 1 : 0) + (pl.money > 14000 && pl.difficulty >= 2 ? 1 : 0);   // a rich army builds on several fronts at once
     int queuedDozer = 0;
     if (hq) for (int t : hq->queue) if (UNITS[t].role == UR_DOZER && !civicDozerType(t)) queuedDozer++;
+    prof.mark("economy");
     // ---------- recovery: most of the base is gone (a Command structure and at least one more core piece, or two pieces): rebuilding comes before
     // everything else as soon as there is a dozer and money for it (a relief drop, the bunker's trickle, what haulers still bring in)
     {
@@ -775,6 +804,7 @@ void AiPlayer::think() {
     if (recovering) wantDozers = std::max(wantDozers, 3);
     if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200 || (recovering && pl.money >= UNITS[ubase].cost))) S.cmdTrain(S.refOf(*hq), ubase + 0);
 
+    prof.mark("recovery");
     // ---------- supply areas: every hub gets a gather circle around the piles near it; haulers are spread across them
     struct Mine { Vec2 c; float r; int workers; };
     std::vector<Mine> mines;
@@ -797,6 +827,7 @@ void AiPlayer::think() {
         else if (e->order == O_IDLE) { Entity* pile = S.findPile(*e, 60 * TILE); if (pile) S.cmdHarvest({r}, S.refOf(*pile)); }   // nothing near a hub: fall back to the nearest pile anywhere
     }
 
+    prof.mark("supply");
     // ---------- construction (one decision per think, with a reserve for economy; in recovery every free dozer gets the next core piece first)
     if (recovering) recoverBase(dozers, hq != nullptr);
     Entity* dz = idleDozer();
@@ -949,6 +980,7 @@ void AiPlayer::think() {
             }
     }
 
+    prof.mark("construction");
     // ---------- the town: once the base runs (hub, power, barracks, factory) a civilian dozer raises civilian structures behind it, the best
     // income for the money first, while the treasury can spare it. They pay on their own and send out free dozers; the base's defences cover them.
     if (on(FEAT_CIVIC) && pl.difficulty >= 1 && !recovering && hq && hq->constructed && hubs > 0 && powerPlants > 0 && !barracks.empty() && !factories.empty() && tm > (pl.difficulty >= 2 ? 9.0f : 11.0f)) {
@@ -971,12 +1003,14 @@ void AiPlayer::think() {
             if (pick >= 0 && findSpot(pick, behind, 18, tx, ty)) S.cmdBuild(S.refOf(*cz), pick, tx, ty);
         }
     }
+    prof.mark("town");
     // ---------- the Underground Nuke: a commander rolling in money that already runs a Nuke Ramp sinks a silo far behind its base
     if (on(FEAT_DEEPNUKE) && pl.difficulty >= 1 && ramps > 0 && !threat && silos < (pl.difficulty >= 3 ? 2 : 1)) {
         int siloType = pl.faction == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
         if (pl.money > BUILDS[siloType].cost + 3000 && idleDozer()) tryBuild(siloType, pl.basePos - enemyDir * 120, 20);
     }
 
+    prof.mark("deep_nuke");
     // ---------- production
     int reserve = (hubs == 0 || pl.powerMade < pl.powerUsed) ? 1600 : 0;
     if (!hq && dozers > 0 && S.countRole(player, BR_HQ, false) == 0) reserve = std::max(reserve, BUILDS[base + BR_HQ].cost + 200);   // bank the price of a new Command Core
@@ -1015,7 +1049,7 @@ void AiPlayer::think() {
             for (auto* f : factories) if (f->constructed && f->queue.empty() && S.cmdTrain(S.refOf(*f), medicType)) { medicsBuilt++; break; }
     }
     // anti-radiation trucks: once enemy warheads are falling (or a cloud is already down), keep a couple to scrub the base clean
-    if (smart && pl.difficulty >= 1 && (nukesSeen > 0 || !S.fallouts.empty()) && pl.money - reserve > 1400) {
+    if (smart && wits && (nukesSeen > 0 || !S.fallouts.empty()) && pl.money - reserve > 1400) {
         int rt = pl.faction == F_CYBER ? U_C_RADTRUCK : U_K_RADTRUCK, queuedDec = 0;
         for (auto* f : factories) for (int t : f->queue) if (t == rt) queuedDec++;
         int wantDec = 1 + (nukesSeen > 2 ? 1 : 0) + (pl.difficulty >= 3 ? 1 : 0);
@@ -1086,6 +1120,7 @@ void AiPlayer::think() {
     for (auto* b : barracks) S.cmdSetRally(S.refOf(*b), rally);
     for (auto* f : factories) S.cmdSetRally(S.refOf(*f), rally);
 
+    prof.mark("production");
     // ---------- tech structure: the Advanced Program, a map scan when nothing is known about the enemy, and the strike
     if (techs > 0 && S.programAvailable(player) && tm > (pl.difficulty >= 2 ? 6.0f : 9.0f) && pl.money > PROGRAMS[pl.faction].cost + 1200) S.cmdResearch(player);
     // structure upgrades once the economy carries them: self-repair first, then the roof guns, then the rugged armour (easy skips the last two)
@@ -1119,6 +1154,7 @@ void AiPlayer::think() {
         if (bestScore >= (pl.faction == F_CYBER ? 2500.0f : 1800.0f)) S.cmdPower(player, bestPos);
     }
 
+    prof.mark("tech");
     // ---------- nukes
     // a warhead kills ground units and small structures in the blast and wrecks the big ones: aim at whatever it would cost the enemy most
     auto nukeSpot = [&](float R, float& bestScore, float* rawOut = nullptr, bool deep = false) {
@@ -1185,8 +1221,9 @@ void AiPlayer::think() {
         if (bestScore >= nukeBar * 0.4f) S.cmdMiniNuke(player, bestPos);
     }
 
+    prof.mark("nukes");
     // ---------- paradrop: reinforce a base under attack, or land on the objective of a wave that is under way (never into a wall of flak)
-    if (techs > 0 && pl.difficulty >= 1 && S.dropsReady(player) > 0 && S.time > 150.0f) {
+    if (techs > 0 && wits && S.dropsReady(player) > 0 && S.time > (pl.difficulty >= 1 ? 150.0f : 300.0f)) {
         Vec2 at; bool go = false;
         if (threat && threatCount >= 3 && dist(threat->pos, pl.basePos) < 26 * TILE) {
             Vec2 d = threat->pos - pl.basePos; float l = std::max(1.0f, d.len());
@@ -1201,8 +1238,27 @@ void AiPlayer::think() {
         if (go && S.cmdParadrop(player, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] PARADROP at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
     }
 
+    // ---------- Fleet Call (FEAT_FLEETCALL): a battle fleet from the open sea, free once per paradrop cooldown per tech structure. It is sent where the
+    // ocean touches the war: onto an enemy fleet off our coast first, else just off the main enemy's shore when its base lies near the sea, else off
+    // our own coast as a guard. From then on the fleet is part of the commander's navy (see the fleet orders below); an Easy commander waits longer
+    if (on(FEAT_FLEETCALL) && techs > 0 && S.time >= nextFleetCall && S.fleetsReady(player) > 0) {
+        nextFleetCall = S.time + (pl.difficulty == 0 ? 90.0f : (pl.difficulty == 1 ? 25.0f : 8.0f));
+        const int ocean = g_map.oceanComp;
+        Vec2 at; bool go = false;
+        Entity* foeShip = nullptr; float fd = 40.0f * TILE;
+        for (auto* e : enemyUnits) if (e->ut().naval && g_map.compAt(e->pos) == ocean && S.visibleTo(*e, player)) { float d = dist(e->pos, pl.basePos); if (d < fd) { fd = d; foeShip = e; } }
+        if (foeShip) { at = foeShip->pos; go = true; }
+        else if (mainEnemy >= 0) {
+            Vec2 eb = S.players[mainEnemy].basePos, w = g_map.nearestWater(eb, 40, true, ocean);
+            if (g_map.compAt(w) == ocean && dist(w, eb) < 34.0f * TILE) { at = w + (w - eb).norm() * (4.0f * TILE); go = true; }   // a little off the enemy's shore
+        }
+        if (!go) { Vec2 w = g_map.nearestWater(pl.basePos, 40, true, ocean); if (g_map.compAt(w) == ocean) { at = w + (w - pl.basePos).norm() * (5.0f * TILE); go = true; } }
+        if (go && S.cmdFleetCall(player, at) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] FLEET CALL to %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
+    }
+
+    prof.mark("paradrop_fleet");
     // ---------- phone strike: the strike power's louder cousin - instead of resolving on the spot it puts a swarm of aircraft over it
-    if (techs > 0 && pl.difficulty >= 1 && S.time > 150.0f && S.strikesReady(player) > 0 && !enemyUnits.empty()) {
+    if (techs > 0 && wits && S.time > (pl.difficulty >= 1 ? 150.0f : 300.0f) && S.strikesReady(player) > 0 && !enemyUnits.empty()) {
         const float R = 6.0f * TILE;   // the package works a spot about this wide
         Vec2 at; float best = 0;
         for (auto* e : enemyUnits) {
@@ -1223,6 +1279,7 @@ void AiPlayer::think() {
         if (best >= (pl.faction == F_CYBER ? 1800.0f : 1500.0f) && S.cmdPhoneStrike(player, at) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] PHONE STRIKE at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
     }
 
+    prof.mark("air_strike");
     // ---------- army
     float waveThreshold = 3200.0f + minutes * 320.0f;
     if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.6f;
@@ -1262,6 +1319,7 @@ void AiPlayer::think() {
         if (S.time - lastAllyNote > 20.0f) { lastAllyNote = S.time; S.emit(EV_MSG, frontHuman, SND_NONE, frontTarget->pos, "Ally: joining your attack"); }
     }
 
+    prof.mark("army_team");
     // defense has priority
     if (threat && threatCount > 0 && S.time - lastDefend > 3.0f) {
         lastDefend = S.time;
@@ -1270,7 +1328,16 @@ void AiPlayer::think() {
         for (auto r : army) { Entity* e = S.get(r); if (!e) continue; if (!attacking || dist(e->pos, pl.basePos) < 22 * TILE) defenders.push_back(r); }
         // a base under real attack outranks a wave in progress (the wave resumes once the threat is gone)
         if (attacking && threatCount >= 4) defenders = army;
-        if (!defenders.empty()) S.cmdMove(defenders, threat->pos, true);
+        if (on(FEAT_HOLD)) {   // whoever is already fighting at the spot, or already on the way to it, keeps at it: no new route, no broken-off fight
+            const Vec2 tp = threat->pos;
+            defenders.erase(std::remove_if(defenders.begin(), defenders.end(), [&](Ref r) {
+                const Entity* e = S.get(r);
+                if (!e) return true;
+                if ((e->order == O_MOVE || e->order == O_ATTACKMOVE) && dist(e->target, tp) < 6.0f * TILE) return true;
+                return e->engaged.valid() && dist(e->pos, tp) < 12.0f * TILE;
+            }), defenders.end());
+        }
+        prof.mark("defend_pick"); if (!defenders.empty()) S.cmdMove(defenders, threat->pos, true); prof.mark("defend_move");
         for (auto r : aircraft) { Entity* a = S.get(r); if (a && (a->ammo > 0 || a->ut().ammo <= 0) && a->order == O_IDLE) S.cmdAttack({r}, S.refOf(*threat)); }   // (helicopters that never run dry answer too)
         if (attacking && armyValue < waveValue * 0.5f) { endWave(armyValue); attacking = false; wave.clear(); }
     } else if (attacking) {
@@ -1280,10 +1347,17 @@ void AiPlayer::think() {
         for (auto r : wave) waveNow += unitValue(*S.get(r));
         Entity* tgt = S.get(attackTarget);
         if (tgt && (Sim::districtRuin(*tgt) || !S.enemies(player, tgt->owner))) tgt = nullptr;   // (a town block razed or taken over: on to the next objective)
-        if (!tgt) { tgt = pickAttackTarget(); attackTarget = tgt ? S.refOf(*tgt) : NOREF; if (tgt) S.cmdMove(wave, tgt->pos, true); }
-        bool exhausted = waveNow < waveValue * 0.5f || wave.empty();
+        if (!tgt) {
+            tgt = pickAttackTarget(); attackTarget = tgt ? S.refOf(*tgt) : NOREF;
+            if (tgt) {   // on to the next objective; units still in a fight finish it first (the idle ones are sent on below every few seconds)
+                std::vector<Ref> go;
+                for (Ref r : wave) { const Entity* e = S.get(r); if (e && !(on(FEAT_HOLD) && e->engaged.valid())) go.push_back(r); }
+                if (!go.empty()) S.cmdMove(go, tgt->pos, true);
+            }
+        }
+        prof.mark("wave_retarget"); bool exhausted = waveNow < waveValue * 0.5f || wave.empty();
         bool stale = S.time - attackStarted > 240.0f;
-        if (smart && pl.difficulty >= 1 && !exhausted) {
+        if (smart && wits && !exhausted) {
             // outgunned? compare what is fighting around the wave with what stands around it; two bad readings in a row break the attack off
             Vec2 cen; int n = 0; for (auto r : wave) { Entity* e = S.get(r); if (e) { cen += e->pos; n++; } }
             cen = cen * (1.0f / std::max(1, n));
@@ -1295,7 +1369,7 @@ void AiPlayer::think() {
         }
         // a target that radiation has made deadly is not worth marching into
         if (smart && tgt) for (auto& f : S.fallouts) if (f.t < f.life - 15.0f && dist(tgt->pos, f.pos) < f.r) { attackTarget = NOREF; break; }
-        if (exhausted || stale || !tgt) {
+        prof.mark("wave_votes"); if (exhausted || stale || !tgt) {
             if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] %s value=%.0f/%.0f units=%d\n", player, S.time, exhausted ? "RETREAT" : "REGROUP", waveNow, waveValue, (int)wave.size());
             endWave(waveNow);
             attacking = false; regroupUntil = S.time + (exhausted ? 40.0f : 10.0f);
@@ -1306,9 +1380,17 @@ void AiPlayer::think() {
             if (S.time > nextOrderTime) {
                 nextOrderTime = S.time + 6;
                 std::vector<Ref> idle;
-                for (auto r : wave) { Entity* e = S.get(r); if (e && e->order == O_IDLE) idle.push_back(r); }
+                for (auto r : wave) {
+                    Entity* e = S.get(r);
+                    if (!e) continue;
+                    // idle, or stalled: its route ran out short of the objective and it is not fighting (a route planned through a crowd or a gap
+                    // since closed) - it gets a fresh one
+                    bool stalled = on(FEAT_HOLD) && !e->isAir() && (e->order == O_ATTACKMOVE || e->order == O_MOVE) && e->pathIdx >= e->path.size() && !e->engaged.valid() && dist(e->pos, tgt->pos) > 6.0f * TILE;
+                    if (e->order == O_IDLE || stalled) idle.push_back(r);
+                }
                 if (!idle.empty()) S.cmdMove(idle, tgt->pos, true);
             }
+            prof.mark("wave_idle");
             // reinforcements mass at the rally and join as a second wave once they are worth it
             std::vector<Ref> reserveUnits; float reserveValue = 0;
             for (auto r : army) if (std::find(wave.begin(), wave.end(), r) == wave.end()) { reserveUnits.push_back(r); reserveValue += unitValue(*S.get(r)); }
@@ -1345,12 +1427,12 @@ void AiPlayer::think() {
                 if (!pick.empty()) S.cmdGuardArea(pick, m.c, std::max(m.r + 2 * TILE, 6.0f * TILE));
             }
         }
-        bool overwhelming = armyValue > enemyArmyValue * 1.6f + 1500 && armyCount >= 6;
+        prof.mark("idle_guard"); bool overwhelming = armyValue > enemyArmyValue * 1.6f + 1500 && armyCount >= 6;
         bool eligible = (armyValue >= waveThreshold * (on(FEAT_LAUNCH) ? 0.7f : 1.0f) || (overwhelming && minutes > 6)) && !recovering;   // (a recovering army keeps its last units home)
         bool waveModel = useBrain && ablate() != 1;
         bool joined = !helpingAlly && S.time > regroupUntil && S.time > firstWaveAt * 0.7f && teamJoin(army, armyValue, waveThreshold);   // a teammate's attack under way: go in beside it
-        if (!joined && S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
-            Entity* tgt = pickAttackTarget();
+        prof.mark("team_join"); if (!joined && S.time > regroupUntil && S.time > firstWaveAt && eligible && mainEnemy >= 0) {
+            Entity* tgt = pickAttackTarget(); prof.mark("wave_target");
             float defense = tgt ? enemyStrengthNear(tgt->pos, 11) : 0;
             float x[WAVE_F]; Brain::waveFeatures(armyValue, defense, enemyArmyValue, minutes, armyCount, x);
             bool go = true;
@@ -1378,7 +1460,7 @@ void AiPlayer::think() {
                     go = !(armyValue < need && armyCount < armyCap);
                 }
             }
-            if (tgt && go) {
+            prof.mark("launch_rule"); if (tgt && go) {
                 attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*tgt);
                 wave = army;
                 // a home guard stays behind: the commander's own habit (an Iron Wall keeps a quarter home), and more of it while order at home is low
@@ -1399,6 +1481,21 @@ void AiPlayer::think() {
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d (home guard %d) -> %s at %d,%d\n", player, S.time, waveValue, (int)wave.size(), (int)(army.size() - wave.size()), tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
                 S.cmdMove(wave, tgt->pos, true);
                 nextOrderTime = S.time + 6;
+                if (on(FEAT_COMBO) && pl.difficulty >= 2 && S.strikesReady(player) > 0) {   // combined arms: the Air Strike goes in on the objective's guns as the wave sets off
+                    Vec2 c; float w = 0;
+                    for (auto& o : S.ents) {
+                        if (!o.alive || o.kind == EK_RESOURCE || !S.enemies(player, o.owner) || o.isAir() || dist(o.pos, tgt->pos) > 9.0f * TILE) continue;
+                        float v = o.isBuilding() ? (o.constructed && o.bt().weapon >= 0 && o.bt().role != BR_BUNKER && o.district < 0 ? BUILDS[o.type].cost * 1.4f : 0.0f)
+                                                 : (o.ut().role == UR_COMBAT ? (float)UNITS[o.type].cost : 0.0f);
+                        if (v > 0) { c += o.pos * v; w += v; }
+                    }
+                    if (w >= 1200.0f) {
+                        c = c * (1.0f / w);
+                        bool clear = true;   // (never onto our own people: the fighters bomb whatever stands there)
+                        for (auto& o : S.ents) if (o.alive && o.kind != EK_RESOURCE && o.owner >= 0 && !S.enemies(player, o.owner) && dist(o.pos, c) < 6.0f * TILE) { clear = false; break; }
+                        if (clear && S.cmdPhoneStrike(player, c) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] COMBINED ARMS: air strike on the objective's defences at %d,%d\n", player, S.time, tileOf(c.x), tileOf(c.y));
+                    }
+                }
                 if (on(FEAT_TEAM) && S.time - lastAnnounce > 45.0f && tgt->owner >= 0) {   // a human teammate hears the plan and where to join it
                     lastAnnounce = S.time;
                     char m[160]; snprintf(m, sizeof m, "attacking the %s of the %s with %d units - join in!", tgt->isUnit() ? tgt->ut().name : tgt->bt().name, FACTION_NAME[S.players[tgt->owner].faction], (int)wave.size());
@@ -1406,6 +1503,7 @@ void AiPlayer::think() {
                 }
             }
         }
+        prof.mark("launch");
         // only the enemy's hidden things are left (a bunker, snipers, spy drones): nothing is in sight to attack, so the army sweeps the ground around its
         // base, where the spy drones trailing it find what hides there. Without this the match would stall with the army idle at home
         if (hunting && !helpingAlly && armyCount > 0 && mainEnemy >= 0 && S.time > huntAt) {
@@ -1428,6 +1526,7 @@ void AiPlayer::think() {
             }
         }
     }
+    prof.mark("army_waves");
     // spy drones coordinate autonomously as an intelligent swarm (updateScoutSwarm in Sim);
     // only pull a badly damaged drone back over a friendly medic if one exists
     for (auto r : scouts) {
@@ -1435,6 +1534,7 @@ void AiPlayer::think() {
         if (!d || d->hp > d->maxHp * 0.45f || medics.empty()) continue;
         if (Entity* m = S.get(medics[0])) if (dist(d->pos, m->pos) > 4.0f * TILE) S.cmdMove({r}, m->pos, false);
     }
+    prof.mark("scouts");
     // spies go for the structure that is worth most and guarded least (nothing armed within six tiles), and the second one tags along
     if (!spies.empty() && S.time - lastSpyOrder > 5.0f) {
         lastSpyOrder = S.time;
@@ -1463,6 +1563,7 @@ void AiPlayer::think() {
             if (!idle.empty()) S.cmdCapture(idle, S.refOf(*best));
         }
     }
+    prof.mark("spies");
     // the fleet keeps its sea (the ocean, or the lake if that is where its yard stands): it fights enemy ships on it first, shells what stands near
     // its shores that it can beat, and falls back to a post off its own yard
     if (on(FEAT_NAVY) && !fleet.empty()) {
@@ -1474,34 +1575,75 @@ void AiPlayer::think() {
         Vec2 home = pl.basePos;
         for (auto* y : yards) if (g_map.compAt(S.navalExit(*y)) == sea) { home = S.navalExit(*y); break; }
         Vec2 post = g_map.nearestWater(home + (home - pl.basePos).norm() * (5.0f * TILE), 14, true, sea);
-        Entity* ftgt = nullptr; float fbd = 1e18f;
-        for (auto& e : S.ents) {
-            if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.carrier.valid()) continue;
-            if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
-            bool ship = e.isUnit() && e.ut().naval;
-            if (ship && g_map.compAt(e.pos) != sea) continue;   // (on the other sea: out of reach)
-            if (!ship) {   // a land target must be within reach of the fleet's sea
-                if (e.isAir()) continue;
-                Vec2 w = g_map.nearestWater(e.pos, 13, true, sea);
-                if (!g_map.navTile(tileOf(w.x), tileOf(w.y)) || g_map.compAt(w) != sea || dist(w, e.pos) > 12.0f * TILE) continue;
-                if (enemyStrengthNear(e.pos, 8) > fleetValue * 1.3f + 600.0f) continue;   // not into a wall of guns
-                if (e.isBuilding() && e.bt().role == BR_AATURRET) continue;
-            }
-            float d = dist(e.pos, cen) / TILE;
-            if (ship) d -= 7.0f;
-            else if (e.isUnit() && e.ut().role == UR_COMBAT) d -= 2.0f;
-            else if (e.isBuilding() && (e.bt().role == BR_NAVAL || e.bt().role == BR_NUKE || e.bt().role == BR_SUPPLY)) d -= 4.0f;
-            if (d < fbd) { fbd = d; ftgt = &e; }
-        }
         Entity* yardHurt = nullptr;
         for (auto* y : yards) if (S.time - y->lastDamaged < 6.0f) yardHurt = y;
         if (S.time - lastFleetOrder > 5.0f) {
             lastFleetOrder = S.time;
-            if (yardHurt) S.cmdMove(fleet, yardHurt->pos, true);
-            else if (ftgt && (nShips >= 2 || ftgt->isBuilding() == false)) S.cmdMove(fleet, ftgt->pos, true);
+            // the target (only worked out when an order is due): the nearest by score, ships first. The cheap tests go over every enemy; the search
+            // for water within reach of a land target and the guns round it are only paid for the best candidates, in score order (it used to be
+            // every enemy on every think: tens of milliseconds late in a match)
+            Entity* ftgt = nullptr;
+            if (!yardHurt) {
+                std::vector<std::pair<float, Entity*>> cand;
+                for (auto& e : S.ents) {
+                    if (!e.alive || e.kind == EK_RESOURCE || !S.enemies(player, e.owner) || e.carrier.valid()) continue;
+                    if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
+                    bool ship = e.isUnit() && e.ut().naval;
+                    if (ship && g_map.compAt(e.pos) != sea) continue;   // (on the other sea: out of reach)
+                    if (!ship) {
+                        if (e.isAir() || (e.isBuilding() && e.bt().role == BR_AATURRET)) continue;
+                        int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);
+                        if (g_map.waterDist[ty * MAP_W + tx] > 14) continue;   // (far inland: no water within reach)
+                    }
+                    float d = dist(e.pos, cen) / TILE;
+                    if (ship) d -= 7.0f;
+                    else if (e.isUnit() && e.ut().role == UR_COMBAT) d -= 2.0f;
+                    else if (e.isBuilding() && (e.bt().role == BR_NAVAL || e.bt().role == BR_NUKE || e.bt().role == BR_SUPPLY)) d -= 4.0f;
+                    cand.push_back({d, &e});
+                }
+                std::stable_sort(cand.begin(), cand.end(), [](const std::pair<float, Entity*>& a, const std::pair<float, Entity*>& b) { return a.first < b.first; });
+                int tries = 0;
+                for (auto& c : cand) {
+                    Entity& e = *c.second;
+                    if (!(e.isUnit() && e.ut().naval)) {   // a land target must be within reach of the fleet's sea, and not under a wall of guns
+                        if (++tries > 40) break;
+                        Vec2 w = g_map.nearestWater(e.pos, 13, true, sea);
+                        if (!g_map.navTile(tileOf(w.x), tileOf(w.y)) || g_map.compAt(w) != sea || dist(w, e.pos) > 12.0f * TILE) continue;
+                        if (enemyStrengthNear(e.pos, 8) > fleetValue * 1.3f + 600.0f) continue;
+                    }
+                    ftgt = &e; break;
+                }
+            }
+            Vec2 goal; bool have = false;
+            if (yardHurt) { goal = yardHurt->pos; have = true; }
+            else if (ftgt && (nShips >= 2 || ftgt->isBuilding() == false)) { goal = ftgt->pos; have = true; }
+            if (have) {
+                // ships already on their way there, or already fighting near it, keep what they are doing (re-planning a whole fleet's routes every five
+                // seconds cost a lot and broke off fights); a carrier stands off: its jets do the fighting, the hull stays out of the guns' reach
+                std::vector<Ref> go;
+                for (auto r : fleet) {
+                    Entity* e = S.get(r);
+                    if (!e) continue;
+                    if (on(FEAT_FLEET2) && (e->type == U_C_CARRIER || e->type == U_K_CARRIER)) {
+                        float dg = dist(e->pos, goal);
+                        if (dg > 8.0f * TILE && dg < 17.0f * TILE) continue;
+                        Vec2 back = goal + (cen - goal).norm() * (12.0f * TILE);
+                        if ((cen - goal).len2() < 1.0f) back = goal + (home - goal).norm() * (12.0f * TILE);
+                        S.cmdMove({r}, g_map.nearestWater(back, 14, true, sea), false);
+                        continue;
+                    }
+                    if (on(FEAT_FLEET2)) {
+                        if ((e->order == O_MOVE || e->order == O_ATTACKMOVE) && dist(e->target, goal) < 6.0f * TILE) continue;
+                        if (e->engaged.valid() && dist(e->pos, goal) < 10.0f * TILE) continue;
+                    }
+                    go.push_back(r);
+                }
+                if (!go.empty()) S.cmdMove(go, goal, true);
+            }
             else if (dist(cen, post) > 7.0f * TILE) { std::vector<Ref> idleShips; for (auto r : fleet) { Entity* e = S.get(r); if (e && (e->order == O_IDLE || e->order == O_GUARDPOS)) idleShips.push_back(r); } if (!idleShips.empty()) S.cmdMove(idleShips, post, true); }
         }
     }
+    prof.mark("fleet");
     // bombers (smart): wait until a flight is loaded, then go together for what hurts most and sits under the least flak:
     // a structure the enemy cannot do without (nuke ramps, income, supply, power), worth a bombing run, or a cluster of units a stick of bombs will catch
     if (smart) {
@@ -1542,6 +1684,7 @@ void AiPlayer::think() {
             }
         }
     }
+    prof.mark("bombers");
     // aircraft strike on their own cadence: hit the juiciest known target
     for (auto r : aircraft) {
         Entity* a = S.get(r);
@@ -1564,14 +1707,18 @@ void AiPlayer::think() {
         }
         if (best && (attacking || threat || bs < 30)) S.cmdAttack({r}, S.refOf(*best));
     }
+    prof.mark("aircraft");
     // artillery micro: keep long-range units from leading the charge when idle at rally
     for (auto r : army) {
         Entity* e = S.get(r);
         if (!e || e->weapon() < 0) continue;
         if (e->hp < e->maxHp * 0.22f && e->ut().kind == UK_VEH && !attacking && dist(e->pos, pl.basePos) > 12 * TILE && e->order != O_MOVE) S.cmdMove({r}, pl.basePos, false);
     }
+    prof.mark("artillery");
     if (!threat && !attacking) garrisonStrongholds();
+    prof.mark("garrison");
     civilAffairs(army, spies, threat != nullptr, dozers);   // the towns round the lake (FEAT_TOWNS, ai_civil.cpp)
+    prof.mark("civil");
     // riots: once crowds have risen against us and order is still shaky, the softest spot of the economy (the hub or income structure with the
     // fewest guns round it) gets a turret of its own
     if (on(FEAT_RIOT) && S.riotsRaised[player] > 0 && S.control[player] < 0.6f && !threat && !recovering && S.time > nextSoftTurret && pl.money > 2500 + reserve && idleDozer()) {
@@ -1585,5 +1732,6 @@ void AiPlayer::think() {
         }
         if (soft && fewest < 2) tryBuild(base + BR_TURRET, soft->pos, 10);
     }
+    prof.mark("riots");
     if (on(FEAT_FRONTIER)) frontier();
 }

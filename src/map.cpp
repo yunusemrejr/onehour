@@ -494,6 +494,27 @@ void Map::generate() {
             }
         }
     }
+    // landmasses (4-connected land, bridges included): the main island, the second island, each islet. Structures and trees do not split them
+    landComp.assign((size_t)MAP_W * MAP_H, 0);
+    {
+        int id = 0;
+        for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+            if (tiles[y * MAP_W + x] == T_WATER || landComp[y * MAP_W + x]) continue;
+            id++;
+            std::vector<int> stack{ y * MAP_W + x };
+            landComp[y * MAP_W + x] = (u16)id;
+            while (!stack.empty()) {
+                int i = stack.back(); stack.pop_back();
+                int ix = i % MAP_W, iy = i / MAP_W;
+                static const int DX4[4] = {1, -1, 0, 0}, DY4[4] = {0, 0, 1, -1};
+                for (int k = 0; k < 4; k++) {
+                    int nx = ix + DX4[k], ny = iy + DY4[k];
+                    if (!inMap(nx, ny) || tiles[ny * MAP_W + nx] == T_WATER || landComp[ny * MAP_W + nx]) continue;
+                    landComp[ny * MAP_W + nx] = (u16)id; stack.push_back(ny * MAP_W + nx);
+                }
+            }
+        }
+    }
     // the ocean is the biggest body of water; the lake is the body that holds most of the water round the map's centre
     oceanComp = 0;
     for (int i = 1; i < (int)waterSize.size(); i++) if (waterSize[i] > waterSize[oceanComp]) oceanComp = i;
@@ -521,6 +542,20 @@ void Map::generate() {
             if (y < MAP_H - 1) { v = std::min(v, d[(size_t)(y + 1) * MAP_W + x] + 2); if (x < MAP_W - 1) v = std::min(v, d[(size_t)(y + 1) * MAP_W + x + 1] + 3); if (x > 0) v = std::min(v, d[(size_t)(y + 1) * MAP_W + x - 1] + 3); }
         }
         for (int i = 0; i < MAP_W * MAP_H; i++) shoreDist[i] = (u8)std::min(255, d[i] / 2);
+        // and the other way round: how far every land tile lies from water (0 on water), for cheap "is this near a shore" tests
+        for (int i = 0; i < MAP_W * MAP_H; i++) d[i] = tiles[i] == T_WATER ? 0 : 1 << 20;
+        for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+            int& v = d[(size_t)y * MAP_W + x];
+            if (x > 0) v = std::min(v, d[(size_t)y * MAP_W + x - 1] + 2);
+            if (y > 0) { v = std::min(v, d[(size_t)(y - 1) * MAP_W + x] + 2); if (x > 0) v = std::min(v, d[(size_t)(y - 1) * MAP_W + x - 1] + 3); if (x < MAP_W - 1) v = std::min(v, d[(size_t)(y - 1) * MAP_W + x + 1] + 3); }
+        }
+        for (int y = MAP_H - 1; y >= 0; y--) for (int x = MAP_W - 1; x >= 0; x--) {
+            int& v = d[(size_t)y * MAP_W + x];
+            if (x < MAP_W - 1) v = std::min(v, d[(size_t)y * MAP_W + x + 1] + 2);
+            if (y < MAP_H - 1) { v = std::min(v, d[(size_t)(y + 1) * MAP_W + x] + 2); if (x < MAP_W - 1) v = std::min(v, d[(size_t)(y + 1) * MAP_W + x + 1] + 3); if (x > 0) v = std::min(v, d[(size_t)(y + 1) * MAP_W + x - 1] + 3); }
+        }
+        waterDist.assign((size_t)MAP_W * MAP_H, 0);
+        for (int i = 0; i < MAP_W * MAP_H; i++) waterDist[i] = (u8)std::min(255, d[i] / 2);
     }
     // Interior water grouped for the caustics pass (see map.h): aligned 4x4 blocks first, then whatever interior tiles remain. The ocean only gets
     // them near a shore; its open water gets the swell blocks instead (the two overlap a little so the change is soft).
@@ -1118,8 +1153,7 @@ Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly, int comp) const {
     for (int pass = 0; pass < 2; pass++)   // open water first; a tile with only a narrow channel is the fallback
         for (int r = 1; r <= maxR; r++) {
             float best = 1e18f; int bx = -1, by = -1;
-            for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
-                if (std::abs(dx) != r && std::abs(dy) != r) continue;
+            for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx += (dy == -r || dy == r) ? 1 : 2 * r) {   // the ring only, in row order (the old full-square scan was O(R^3))
                 int x = tx + dx, y = ty + dy;
                 if (pass == 0 ? !navOpen(x, y) : !navTile(x, y)) continue;
                 if (bigOnly && !bigWater(x, y)) continue;

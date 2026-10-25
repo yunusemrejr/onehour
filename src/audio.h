@@ -17,7 +17,7 @@ struct Audio {
 private:
     struct Clip { std::vector<float> data; };
     struct Voice { int clip = -1; size_t pos = 0; float gainL = 0, gainR = 0; bool loop = false; float startTime = 0; };
-    static const int MAX_VOICES = 24;
+    static constexpr int MAX_VOICES = 24;
     Clip clips[SND_COUNT];
     Voice voices[MAX_VOICES];
     Voice ambient;

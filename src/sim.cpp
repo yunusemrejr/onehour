@@ -9,7 +9,7 @@ static const float EMP_DURATION = 8.0f;
 
 // ------------------------------------------------------------ init
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
-    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); nukeSeq = 0;
+    ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fleetArrivals.clear(); fleetMarks.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); strikeWaves.clear(); nukeSeq = 0;   // (strikeWaves: an Air Strike still coming in when a match ended used to fly into the next one)
     districts.clear(); riots.clear(); riotSeq = 0; riotsOn = riotsDefault && !getenv("ONEHOUR_NORIOTS");   // (ONEHOUR_NORIOTS=1: a match without riots)
     for (int p = 0; p < MAX_PLAYERS; p++) { unrest[p] = 0; control[p] = 1; riotsRaised[p] = 0; lossHeat[p] = 0; basePeak[p] = 0; riotNoteAt[p] = -100; }
     for (auto& c : grid) c.clear();
@@ -220,6 +220,11 @@ void Sim::rebuildGrid() {
     }
     heliList.clear();
     for (int i = 0; i < (int)ents.size(); i++) if (ents[i].alive && ents[i].isUnit() && ents[i].ut().heli) heliList.push_back(i);
+    incoming.assign(ents.size(), 0.0f);
+    for (auto& p : projs) if (p.alive && p.target.idx >= 0 && p.target.idx < (int)ents.size() && ents[p.target.idx].gen == p.target.gen && p.weapon >= 0) {
+        const Entity& t = ents[p.target.idx];
+        if (t.alive && t.kind != EK_RESOURCE) incoming[p.target.idx] += WEAPONS[p.weapon].dmg * WEAPONS[p.weapon].mult[t.armor()];
+    }
 }
 
 Entity* Sim::nearestEntity(Vec2 p, float maxDist, bool (*pred)(const Entity&, void*), void* ctx) {
@@ -363,7 +368,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     // to plan every path in one tick.
     // A route that could not reach its spot is shared too (the spot is walled off, an enemy base or a pocket behind rock): the units round it head for
     // the same closest point instead of each flooding the whole reachable map again in a search that is bound to fail.
-    struct Shared { Vec2 from, to; std::vector<Vec2> path; bool reached; };
+    struct Shared { Vec2 from, to; std::vector<Vec2> path; bool reached; bool naval; int comp; };   // (ships share sea routes on their own sea the same way)
     std::vector<Shared> shared;
     for (size_t i = 0; i < ground.size(); i++) {
         Entity& e = *ground[i];
@@ -376,21 +381,25 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         e.postOrder = O_IDLE;
         e.target = d; e.targetEnt = NOREF; e.engaged = NOREF; e.actionTimer = 0;
         bool reused = false;
-        if (!e.ut().naval && !swimmer(e)) for (auto& sh : shared) {
-            if (dist(sh.from, e.pos) > 2.5f * TILE || dist(sh.to, d) > 4.0f * TILE) continue;
+        const bool naval = e.ut().naval;
+        const int comp = naval ? g_map.compAt(e.pos) : 0;
+        auto clear = [&](Vec2 a, Vec2 b) { return naval ? g_map.navLineClear(a, b) : g_map.lineClear(a, b); };
+        if (!swimmer(e)) for (auto& sh : shared) {
+            if (sh.naval != naval || sh.comp != comp) continue;
+            if (dist(sh.from, e.pos) > (naval ? 4.0f : 2.5f) * TILE || dist(sh.to, d) > (naval ? 6.0f : 4.0f) * TILE) continue;
             if (!sh.reached) {   // the spot cannot be reached from here: the same closest point
-                if (sh.path.empty() || !g_map.lineClear(e.pos, sh.path[0])) continue;
+                if (sh.path.empty() || !clear(e.pos, sh.path[0])) continue;
                 e.path = sh.path; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
                 reused = true; break;
             }
             if (sh.path.size() < 3) continue;
-            if (!g_map.lineClear(e.pos, sh.path[0]) || !g_map.lineClear(sh.path[sh.path.size() - 2], d)) continue;
+            if (!clear(e.pos, sh.path[0]) || !clear(sh.path[sh.path.size() - 2], d)) continue;
             e.path = sh.path; e.path.back() = d; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
             reused = true; break;
         }
         if (!reused) {
             bool reached = requestPath(e, d);
-            if (!e.ut().naval && !swimmer(e) && shared.size() < 64) shared.push_back({e.pos, d, e.path, reached});   // (an infiltrator's route may cross water)
+            if (!swimmer(e) && shared.size() < 64) shared.push_back({e.pos, d, e.path, reached, naval, comp});   // (an infiltrator's route may cross water)
         }
     }
     for (auto* a : air) {
@@ -1146,7 +1155,7 @@ void Sim::updateNukes() {
     // anti-nuke defences and Anti-Rocket walls engage warheads closing in; all of them also take aircraft under fire
     for (auto& b : ents) if (b.alive && b.isBuilding() && b.constructed && (b.bt().role == BR_ANTINUKE || isAntiRocketWall(b))) {
         updateAntiNuke(b);
-        if (time >= b.pdAt) updatePointDefenseAir(b);
+        if (time >= b.pdAt && (tick + b.gen) % 3 == 0) updatePointDefenseAir(b);   // (the sky is searched seven times a second, not every tick: a wall of them was a big share of a late tick)
     }
     for (auto& n : nukes) if (!n.broken && n.killT >= 0 && n.t >= n.killT) breakNuke(n);
     for (size_t i = 0; i < nukes.size();) {
@@ -1566,6 +1575,7 @@ void Sim::moveAlong(Entity& e, float speed) {
 bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
     if (t.fall > 0) return false;   // still under the parachute
+    if (t.fade < 0.5f && t.isUnit() && t.ut().naval) return false;   // a called ship still mostly haze at the map border
     // an island launcher or a Bastion Wall: shooting it does nothing but set it burning (only a spy takes it), so only a player's own order aims at it
     const bool burnOrder = invulnerable(t) && t.constructed && e.forceTarget.valid() && !players[e.owner].isAI && get(e.forceTarget) == &t;
     if (invulnerable(t) && t.constructed && !burnOrder) return false;
@@ -1600,6 +1610,18 @@ float Sim::aaCover(const Entity& t, int owner) {
     return n;
 }
 
+// Sharp fire (Player::sharpFire): no shot is wasted on a dead man walking. A unit picking its own target passes over one that the shells and rockets
+// already on their way will kill (Sim::incoming), so a group spreads its fire instead of a dozen rounds landing on one wreck. Units of every army,
+// the player's included, use it whenever they choose for themselves. (Measured in --duelmatrix: mirrored battles, 224 won to 208 over 432 fights,
+// more value left on every seed set. Also tried and dropped there, because they lost: preferring wounded targets in reach, and preferring the enemy
+// that can hurt the unit most.)
+float Sim::sharpScore(const Entity& e, const Entity& t, float d, const Weapon& wp) const {
+    (void)d; (void)wp;
+    if (e.owner < 0 || e.owner >= MAX_PLAYERS || !players[e.owner].sharpFire || !t.isUnit()) return 0;
+    size_t ti = (size_t)(&t - &ents[0]);
+    return ti < incoming.size() && incoming[ti] >= t.hp ? 4.0f : 0.0f;
+}
+
 Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn) {
     int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return nullptr;
@@ -1617,6 +1639,7 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn) {
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
         if (wpn >= 0 && t.isAir()) score -= 1.0f;                  // a roof gun is there to keep aircraft off the base first
+        score += sharpScore(e, t, d, wp);
         if (e.isAir() && !t.isAir()) {
             if (e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
             if (e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
@@ -1646,6 +1669,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
         float score = d - 2.5f * wp.mult[t.armor()];
         if (t.isUnit() && t.weapon() >= 0) score -= 1.5f;
         if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
+        score += sharpScore(e, t, d, wp);
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;
         if (e.isAir() && !t.isAir() && e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
@@ -2604,6 +2628,7 @@ bool Sim::autonomy(Entity& e) {
 // ------------------------------------------------------------ unit update
 void Sim::updateUnit(Entity& e) {
     const UnitType& ut = e.ut();
+    if (ut.naval && e.fade < 1.0f) e.fade = std::min(1.0f, e.fade + SIM_DT / FLEET_FADE);   // a Fleet Call ship coming out of the sea haze at the border
     if (e.fall > 0) {   // parachute descent: glide from the plane to the landing spot, easing out as the canopy flares
         e.fall -= SIM_DT;
         if (e.fall > 0) {
@@ -4314,6 +4339,7 @@ void Sim::step() {
     updateStrikeMarks();
     updateInterceptors();
     updateAidDrops();
+    updateFleetArrivals();
     updateFallout();
     separateUnits();
     updateFx();

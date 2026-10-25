@@ -352,7 +352,11 @@ void Game::drawGroundFx() {
 
 void Game::drawFx() {
     Gfx& g = g_gfx;
+    static const bool fillDbg = getenv("ONEHOUR_FILLDBG") != nullptr;
+    static double byType[64]; int lastType = -1; double mark = g.fillPx;
+    if (fillDbg) for (auto& v : byType) v = 0;
     for (auto& f : g_sim.fx) {
+        if (fillDbg) { if (lastType >= 0) byType[lastType & 63] += g.fillPx - mark; mark = g.fillPx; lastType = f.type; }
         if (f.t < 0 || f.type == FX_RUBBLE || f.type == FX_WRECK) continue;
         float k = f.t / f.life;
         Vec2 a = worldToScreen(f.a), b = worldToScreen(f.b);
@@ -546,6 +550,11 @@ void Game::drawFx() {
         }
         default: break;
         }
+    }
+    if (fillDbg) {
+        if (lastType >= 0) byType[lastType & 63] += g.fillPx - mark;
+        double tot = 0; for (double v : byType) tot += v;
+        if (tot > 4e6) { fprintf(stderr, "[fill] fx %.1f Mpx:", tot / 1e6); for (int i = 0; i < 64; i++) if (byType[i] > 2e5) fprintf(stderr, " type%d %.1f", i, byType[i] / 1e6); fprintf(stderr, "\n"); }
     }
 }
 

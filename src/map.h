@@ -50,6 +50,7 @@ struct Map {
     // 256 px draw per aligned 8x8-tile block of open sea (origins in seaBlocks). shoreDist: tiles from the nearest land (chamfered, capped at 255).
     std::vector<int> seaBlocks;
     std::vector<u8> shoreDist;
+    std::vector<u8> waterDist;      // land tiles: tiles to the nearest water of any kind (chamfered, capped at 255; 0 on water)
 
     void generate();
     u8 tile(int x, int y) const { return tiles[y * MAP_W + x]; }
@@ -117,6 +118,18 @@ struct Map {
     // centre of the nearest open water tile (p itself when it already is one); bigOnly: on the lake or the ocean, not in a pond or a cut-off river;
     // comp: only in that body of water (a ship on the ocean cannot be sent onto the lake)
     Vec2 nearestWater(Vec2 p, int maxR = 12, bool bigOnly = false, int comp = 0) const;
+    std::vector<u16> landComp;      // per tile: the landmass it belongs to (0 = water); built with the map
+    // the landmass at p, or the one within 'r' tiles of it (a structure on the shore, a ship lying off it); 0 if there is none
+    int landNear(Vec2 p, int r = 0) const {
+        int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
+        if (landComp.empty()) return 0;
+        for (int k = 0; k <= r; k++) for (int dy = -k; dy <= k; dy++) for (int dx = -k; dx <= k; dx++) {
+            if (std::max(std::abs(dx), std::abs(dy)) != k || !inMap(tx + dx, ty + dy)) continue;
+            int c = landComp[(ty + dy) * MAP_W + tx + dx];
+            if (c) return c;
+        }
+        return 0;
+    }
     int compAt(Vec2 p) const { int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1); return waterComp[ty * MAP_W + tx]; }
     // like findPath for ships; the goal is moved to the nearest open water of the body the ship is on (the ocean's routes round the islands are long)
     bool findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 40000) const;

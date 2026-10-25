@@ -1324,7 +1324,12 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     Canvas patch(rw, rh);
     for (int y = 0; y < rh; y++) for (int x = 0; x < rw; x++) { const u16* q = K.pre(rx + x, ry + y); patch.px[(size_t)y * rw + x] = q ? Canvas::pack(from565(*q)) : 0; }
     if (std::any_of(patch.px.begin(), patch.px.end(), [](u32 v) { return v == 0; })) return false;   // (a patch reaching open sea has nothing kept to repaint from: leave it)
+    // (a cheap bound first: the widest sprite of the tree's kind at its scale; working out every tree's exact rectangle was most of a repaint's cost)
+    static float maxHalf[T_KINDS] = {};
+    if (maxHalf[0] <= 0) for (int k = 0; k < T_KINDS; k++) for (auto& sp : K.sprites[k]) maxHalf[k] = std::max(maxHalf[k], std::max(sp.w, sp.h) * 0.5f);
     for (auto& t : K.trees) {
+        float m = maxHalf[t.kind] * std::max(1.0f, t.r / spriteBase(t.kind)) + 6.0f;
+        if (t.x + m < rx || t.x - m > rx + rw || t.y + m < ry || t.y - m > ry + rh) continue;
         int a, b, c, d; treeRect(t, a, b, c, d);
         if (c < rx || a > rx + rw || d < ry || b > ry + rh) continue;
         drawTree(patch, t, rx, ry);

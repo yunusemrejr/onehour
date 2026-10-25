@@ -110,15 +110,15 @@ struct Gfx {
     Sprite waterFx[4];              // seamless animated caustics laid over open water
     Sprite seaSwell[4];             // seamless animated swell over the open ocean (512x512: a quarter per aligned 8x8-tile block)
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
-    static const int FLAG_W = 24, FLAG_H = 15;
+    static constexpr int FLAG_W = 24, FLAG_H = 15;
     Sprite minimapTerrain;
     // The baked ground (organic, noise-blended transitions), cut into WORLD_CHUNK px square textures: a 10240 px world is bigger than many GPUs'
     // largest texture. drawWorld blits a world rectangle from however many chunks it spans.
-    static const int WORLD_CHUNK = 1024;
+    static constexpr int WORLD_CHUNK = 1024;
     std::vector<SDL_Texture*> worldChunks;
     int worldCols = 0, worldRows = 0;
     void drawWorld(int wx, int wy, int w, int h, int dx, int dy);
-    static const int SHROUD_SS = 4;     // shroud mask cells per tile
+    static constexpr int SHROUD_SS = 4;     // shroud mask cells per tile
     SDL_Texture* miniFog = nullptr;     // the minimap's fog (MAP_W/2 x MAP_H/2 cells, see Game::drawMinimap)
     SDL_Texture* shroudTex = nullptr;   // (MAP_W*SS) x (MAP_H*SS) alpha mask, bilinear-scaled; the edge is displaced by noise so it drifts like cloud
     void updateShroud(const std::vector<u8>& fog, bool force = false);   // fog per tile: 0 never seen, 1 remembered (explored, out of sight), 2 in sight; force: rebuild it all
@@ -127,6 +127,7 @@ struct Gfx {
     bool terrainEdited = false;
     void uploadTerrainPatch(const std::vector<int>& footprint);
     bool softwareRenderer = false;  // no GPU: skip purely atmospheric full-screen blends (cloud shadows)
+    double fillPx = 0;   // (profiling: screen pixels covered by sprite draws so far; see ONEHOUR_FILLDBG)
     int userScale = 0;              // 0 = pick the UI scale from the window size
     bool init(int scale, bool software, int reqW = 0, int reqH = 0);
     void onResize();                // window size changed: recompute the logical (UI) size

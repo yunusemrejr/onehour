@@ -483,6 +483,14 @@ void Sim::strikeJetRun(Entity& e) {
     const UnitType& ut = e.ut();
     const float top = ut.speed;
     Vec2 fwd(std::cos(e.angle), std::sin(e.angle));
+    if (e.strikePass < 2) {   // heading out over the map's edge on the run or the break (a spot called right by the border): straight on out, fading
+        Vec2 out(0, 0); float dl = 1e9f;
+        if (e.pos.x < dl) { dl = e.pos.x; out = Vec2(-1, 0); }
+        if (WORLD_W - e.pos.x < dl) { dl = WORLD_W - e.pos.x; out = Vec2(1, 0); }
+        if (e.pos.y < dl) { dl = e.pos.y; out = Vec2(0, -1); }
+        if (WORLD_H - e.pos.y < dl) { dl = WORLD_H - e.pos.y; out = Vec2(0, 1); }
+        if (dl < 140.0f && fwd.x * out.x + fwd.y * out.y > 0.2f) { e.strikePass = 2; e.bombsLeft = 0; }
+    }
     if (e.strikePass == 0) {
         Vec2 lane = e.guardPos, to = lane - e.pos;
         float along = to.x * e.runDir.x + to.y * e.runDir.y;   // how far ahead along its heading the lane point still is
@@ -551,6 +559,8 @@ bool Sim::shipLanding(const Entity& c, Vec2* land) const {
 // ------------------------------------------------------------ aircraft carriers
 static inline bool isCarrierType(int t) { return t == U_C_CARRIER || t == U_K_CARRIER; }
 
+static inline bool nearBorder(Vec2 p) { const float m = 5.0f * TILE; return p.x < m || p.y < m || p.x > WORLD_W - m || p.y > WORLD_H - m; }
+
 // The enemy a carrier's jets should go after: aircraft first, then warships, then armed units and the rest, the nearest first, within CARRIER_RANGE of
 // the carrier and seen (never a town: its blocks fight nobody)
 Entity* Sim::carrierTarget(const Entity& c, const Entity* jet) {
@@ -558,6 +568,7 @@ Entity* Sim::carrierTarget(const Entity& c, const Entity* jet) {
     const float R = CARRIER_RANGE * TILE;
     forEachNear(c.pos, R, [&](Entity& t) {
         if (t.kind == EK_RESOURCE || !enemies(c.owner, t.owner) || (t.isBuilding() && t.district >= 0)) return;
+        if (nearBorder(t.pos)) return;   // (a jet's attack run would carry it off the map: a called fleet still coming in is left to the guns)
         if (!canTarget(jet ? *jet : c, t)) return;
         if (!explored(c.owner, clampi(tileOf(t.pos.x), 0, MAP_W - 1), clampi(tileOf(t.pos.y), 0, MAP_H - 1))) return;
         float d = dist(t.pos, c.pos);
@@ -569,7 +580,8 @@ Entity* Sim::carrierTarget(const Entity& c, const Entity* jet) {
 }
 
 // Every quarter second: a lost jet is replaced after CARRIER_REPLACE, and a ready jet takes off (one every CARRIER_LAUNCH_GAP) while there is an
-// enemy to fight near the carrier. (Spawning may grow the entity array: nothing touches 'c' after the launch.)
+// enemy to fight near the carrier. The jet does not appear in the air: it leaves its parking spot on the deck (the last ready one, so the others stay
+// where they are), taxis to a bow catapult and is shot off (see carrierJetRun). (Spawning may grow the entity array: nothing touches 'c' after it.)
 void Sim::updateCarrier(Entity& c) {
     if ((tick + c.gen) % 5 != 0 || c.owner < 0) return;
     const int jetT = c.type == U_C_CARRIER ? U_C_CARRIERJET : U_K_CARRIERJET;
@@ -582,42 +594,151 @@ void Sim::updateCarrier(Entity& c) {
     } else c.deckReplace = -1;
     if (c.deck.empty() || time < c.deckLaunch || c.disabledUntil > time) return;
     int ready = -1;
-    for (size_t i = 0; i < c.deck.size(); i++) if (c.deck[i] <= time) { ready = (int)i; break; }
+    for (int i = (int)c.deck.size() - 1; i >= 0; i--) if (c.deck[i] <= time) { ready = i; break; }
     if (ready < 0 || !carrierTarget(c, nullptr)) return;
+    const int slot = std::min(ready, CARRIER_WING - 1);
     c.deck.erase(c.deck.begin() + ready);
     c.deckLaunch = time + CARRIER_LAUNCH_GAP;
-    const float ang = c.angle;
+    const float side = c.catSide ? CARRIER_CAT_Y : -CARRIER_CAT_Y;
+    c.catSide ^= 1;
+    const Vec2 park(CARRIER_PARK[slot][0], CARRIER_PARK[slot][1]);
+    const float parkAng = c.angle + CARRIER_PARK[slot][2];
+    const Vec2 at = carrierPoint(c, park);
     const int owner = c.owner;
-    Vec2 at = c.pos + Vec2(std::cos(ang), std::sin(ang)) * 34.0f;   // off the bow catapults
     Ref r = spawnUnit(jetT, owner, at);
     Entity& j = ents[r.idx];
     j.pos = j.prevPos = j.lastPos = at;
-    j.alt = 1; j.airspeed = UNITS[jetT].speed * 0.55f; j.angle = j.turret = ang;
+    j.alt = 0; j.airspeed = 0; j.angle = j.turret = parkAng;
     j.home = cr; j.order = O_CARRIERJET; j.ammo = UNITS[jetT].ammo; j.targetEnt = NOREF;
-    emit(EV_SOUND, owner, SND_JET, at);
+    j.deckPhase = 1; j.deckT = 0; j.deckFrom = park; j.deckTo = Vec2(CARRIER_CAT_X0, side);
 }
 
-// A carrier's jet: it fights the carrier's targets while it has missiles, then comes back over the deck and lands (it goes back into the carrier's deck
-// list). If the carrier is gone it has nowhere to land: it flies off the map like a loan.
+// A carrier's jet: it fights the carrier's targets while it has missiles, then comes back and lands on the deck (it goes back into the carrier's deck
+// list). On deck and on the glide path it moves with the carrier, along a scripted track in the carrier's own frame. If the carrier is gone it has
+// nowhere to land: it flies off the map like a loan.
 void Sim::carrierJetRun(Entity& e) {
     const UnitType& ut = e.ut();
     Entity* c = get(e.home);
     if (!c || !c->alive || !c->isUnit() || !isCarrierType(c->type)) {
+        if (e.deckPhase != 0) { e.deckPhase = 0; e.alt = std::max(e.alt, 0.6f); e.airspeed = std::max(e.airspeed, ut.speed * 0.6f); }
         Vec2 out(e.pos.x < WORLD_W * 0.5f ? -1.0f : 1.0f, e.pos.y < WORLD_H * 0.5f ? -1.0f : 1.0f);
         leaveMap(e, out.norm());
         return;
     }
+    const float cspd = dist(c->pos, c->prevPos) / SIM_DT;   // the carrier's own speed (a jet on deck rides along with it)
+    auto smooth = [](float u) { u = clampf(u, 0.0f, 1.0f); return u * u * (3.0f - 2.0f * u); };
+    auto place = [&](Vec2 local, float rel) { e.pos = carrierPoint(*c, local); e.angle = e.turret = c->angle + rel; };
+    auto angTo = [](Vec2 d) { return std::atan2(d.y, d.x); };
+    switch (e.deckPhase) {
+    case 1: {   // taxiing from the parking spot to the catapult, turning onto the track
+        e.deckT += SIM_DT;
+        float u = smooth(e.deckT / CARRIER_TAXI_T);
+        Vec2 l = e.deckFrom + (e.deckTo - e.deckFrom) * u;
+        // its heading: from the parked angle round onto the taxi line, then straight down the catapult (relative to the hull)
+        const float parked = e.deckFrom.y < 0 ? CARRIER_PARK[0][2] : CARRIER_PARK[CARRIER_WING - 1][2];
+        float a0 = angTo(e.deckTo - e.deckFrom), rel = u < 0.3f ? parked + (a0 - parked) * (u / 0.3f) : (u < 0.7f ? a0 : a0 * (1.0f - (u - 0.7f) / 0.3f));
+        place(l, rel);
+        e.alt = 0; e.airspeed = cspd;
+        if (e.deckT >= CARRIER_TAXI_T) { e.deckPhase = 2; e.deckT = 0; e.deckFrom = e.deckTo; c->catAt = time; }
+        return;
+    }
+    case 2: {   // the catapult stroke: from standstill to flying speed off the bow
+        e.deckT += SIM_DT;
+        float u = clampf(e.deckT / CARRIER_CAT_T, 0.0f, 1.0f);
+        place(Vec2(CARRIER_CAT_X0 + (CARRIER_CAT_X1 - CARRIER_CAT_X0) * u * u, e.deckFrom.y), 0.0f);
+        e.alt = 0; e.airspeed = cspd + ut.speed * 0.62f * u;
+        if (e.deckT >= CARRIER_CAT_T) {
+            e.deckPhase = 3; e.deckT = 0; e.alt = 0.05f; e.airspeed = std::max(ut.speed * 0.62f, cspd + ut.speed * 0.5f);
+            fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 1.0f, rgb(236, 240, 244), 7.0f, Vec2(-std::cos(e.angle) * 30, -std::sin(e.angle) * 30)});
+            emit(EV_SOUND, e.owner, SND_JET, e.pos);
+        }
+        return;
+    }
+    case 3: {   // the climb-out: straight ahead, gaining height and speed
+        e.deckT += SIM_DT;
+        airSteer(e, e.angle, airTopSpeed(e));   // (straight ahead, unless the map's edge is coming up: then it pulls round already)
+        e.alt = clampf(0.05f + 0.95f * e.deckT / CARRIER_CLIMB_T, 0.0f, 1.0f);
+        if (e.deckT >= CARRIER_CLIMB_T) { e.deckPhase = 0; e.deckT = 0; e.alt = 1; }
+        return;
+    }
+    case 5: {   // the glide path: from where it lined up down to the wires, riding with the carrier
+        e.deckT += SIM_DT;
+        float u = clampf(e.deckT / CARRIER_FINAL_T, 0.0f, 1.0f);
+        Vec2 l = e.deckFrom + (e.deckTo - e.deckFrom) * u;
+        place(l, CARRIER_LAND_ANG + (e.deckAng - CARRIER_LAND_ANG) * (1.0f - smooth(u / 0.3f)));
+        e.alt = std::max(0.0f, 1.0f - u);
+        e.airspeed = cspd + ut.speed * 0.42f * (1.0f - 0.3f * u);
+        if (e.deckT >= CARRIER_FINAL_T) {   // down: the hook takes a wire
+            e.deckPhase = 6; e.deckT = 0; e.alt = 0; e.deckFrom = e.deckTo; e.deckTo = Vec2(CARRIER_ROLL_X, CARRIER_ROLL_Y);
+            fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 0.8f, rgb(214, 214, 210), 5.0f, Vec2(-std::cos(e.angle) * 12, -std::sin(e.angle) * 12)});
+            fx.push_back({FX_SPARK, e.pos, Vec2(), 0, 0.25f, rgb(255, 220, 160), 4});
+        }
+        return;
+    }
+    case 6: {   // the roll-out: the wire pulls it up short
+        e.deckT += SIM_DT;
+        float u = clampf(e.deckT / CARRIER_ROLL_T, 0.0f, 1.0f), k = 1.0f - (1.0f - u) * (1.0f - u);
+        place(e.deckFrom + (e.deckTo - e.deckFrom) * k, CARRIER_LAND_ANG);
+        e.alt = 0; e.airspeed = cspd;
+        if (e.deckT >= CARRIER_ROLL_T) {
+            int slot = std::min((int)c->deck.size(), CARRIER_WING - 1);
+            e.deckPhase = 7; e.deckT = 0; e.deckFrom = e.deckTo; e.deckTo = Vec2(CARRIER_PARK[slot][0], CARRIER_PARK[slot][1]);
+        }
+        return;
+    }
+    case 7: {   // taxiing to its parking spot; there it is struck down for rearming (back into the deck list)
+        e.deckT += SIM_DT;
+        float T = CARRIER_TAXI_T * 1.3f, u = smooth(e.deckT / T);
+        Vec2 d = e.deckTo - e.deckFrom;
+        place(e.deckFrom + d * u, angTo(d));
+        e.alt = 0; e.airspeed = cspd;
+        if (e.deckT >= T) { c->deck.push_back(time + CARRIER_REARM); destroy(e, false); }
+        return;
+    }
+    default: break;
+    }
     if (e.ammo > 0) {
         Entity* t = get(e.targetEnt);
-        if (!t || !canTarget(e, *t) || dist(t->pos, c->pos) > CARRIER_RANGE * TILE * 1.35f) {
+        if (!t || !canTarget(e, *t) || dist(t->pos, c->pos) > CARRIER_RANGE * TILE * 1.35f || nearBorder(t->pos)) {
             t = carrierTarget(*c, &e);
             e.targetEnt = t ? refOf(*t) : NOREF; e.jetBreak = 0; e.stuckTimer = 0;
         }
-        if (t) { jetAttack(e, *t); return; }
+        if (t) { if (e.deckPhase == 4) e.deckPhase = 0; e.deckT = 0; e.goRounds = 0; jetAttack(e, *t); return; }
     }
-    Vec2 deck = c->pos - Vec2(std::cos(c->angle), std::sin(c->angle)) * 18.0f;
-    if (dist(e.pos, deck) < 26.0f) { c->deck.push_back(time + CARRIER_REARM); destroy(e, false); return; }   // down on the deck (rearming)
-    flyTo(e, deck, ut.speed);
+    // coming home: line up astern of the angled deck (going round first when it would arrive from the wrong side), then fly the glide path. The
+    // points it steers by stay inside the map (a carrier off the border - a called fleet coming in, say - would put them outside it), it never
+    // slows below a safe approach speed on the way (flyTo is a landing approach: it bleeds speed near its spot), and a jet that has gone round
+    // twice, or has been at it for a long while, comes in from where it is
+    e.deckT += SIM_DT;   // (in this phase: seconds since it started for home)
+    const Vec2 touch(CARRIER_TOUCH_X, CARRIER_TOUCH_Y);
+    const float landAng = c->angle + CARRIER_LAND_ANG;
+    const Vec2 ld(std::cos(landAng), std::sin(landAng));
+    const float edge = 2.5f * TILE;
+    auto inside = [&](Vec2 q) { return Vec2(clampf(q.x, edge, WORLD_W - edge), clampf(q.y, edge, WORLD_H - edge)); };
+    auto steerTo = [&](Vec2 q, float spd) { Vec2 d = q - e.pos; airSteer(e, std::atan2(d.y, d.x), spd); };
+    const Vec2 gate = inside(carrierPoint(*c, touch) - ld * 190.0f);
+    const float approach = std::max(airTopSpeed(e) * AIR_STALL * 1.3f, ut.speed * 0.55f);
+    const bool anyway = e.goRounds >= 2 || e.deckT > 20.0f;
+    if (e.deckPhase == 4) {
+        Vec2 wide = inside(gate - ld * 260.0f);
+        if (dist(e.pos, wide) < 140.0f) { e.deckPhase = 0; if (e.goRounds < 255) e.goRounds++; }
+        else { steerTo(wide, ut.speed * 0.8f); return; }
+    }
+    if (dist(e.pos, gate) < (anyway ? 150.0f : 80.0f)) {
+        Vec2 h(std::cos(e.angle), std::sin(e.angle));
+        if (h.x * ld.x + h.y * ld.y > (anyway ? -1.1f : 0.88f)) {   // lined up (or past caring): onto the glide path
+            e.goRounds = 0;
+            float rel = e.angle - c->angle;
+            while (rel > 3.14159265f) rel -= 6.2831853f;
+            while (rel < -3.14159265f) rel += 6.2831853f;
+            e.deckPhase = 5; e.deckT = 0; e.deckFrom = carrierLocal(*c, e.pos); e.deckTo = touch; e.deckAng = rel;
+            e.targetEnt = NOREF;
+            carrierJetRun(e);   // (the first step of the glide path this tick: it never stops dead in the air)
+            return;
+        }
+        e.deckPhase = 4;   // the wrong way round: out astern and back in
+    }
+    steerTo(gate, dist(e.pos, gate) > 600.0f ? ut.speed : approach);
 }
 
 // ------------------------------------------------------------ indestructible structures and the Island Nuke Launchers
@@ -817,4 +938,142 @@ void Sim::updateHealAntenna(Entity& b) {
         healed++;
     });
     if (healed && ((tick / PULSE) + b.gen) % 4 == 0) fx.push_back({FX_RING, b.pos, b.pos, 0, 1.1f, rgb(120, 255, 180), R * 0.85f});
+}
+
+// ------------------------------------------------------------ Fleet Call
+// The tech structure's naval power: a battle fleet comes in from the open sea. Nothing appears in the middle of the map: the called spot is moved onto
+// the nearest open ocean, and the ships come out of the haze at the stretch of map border nearest it, lane after lane, then sail in and form up round
+// it (patrol boats as a screen ahead, destroyers and cruisers round the carrier). From then on they are the army's own ships.
+static inline bool isPatrolType(int t) { return t == U_C_PATROL || t == U_K_PATROL; }
+static inline bool isDestroyerType(int t) { return t == U_C_DESTROYER || t == U_K_DESTROYER; }
+
+int Sim::fleetsReady(int player) const {
+    if (player < 0 || player >= numPlayers || !players[player].alive || time < players[player].dropReady) return 0;
+    int n = 0;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.fleetTimer) n++;
+    return n;
+}
+float Sim::fleetWait(int player) const {
+    if (player < 0 || player >= numPlayers) return -1;
+    float best = -1;
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.bt().role == BR_TECH) {
+        float w = std::max(0.0f, std::max(e.fleetTimer, players[player].dropReady) - time);
+        if (best < 0 || w < best) best = w;
+    }
+    return best;
+}
+
+std::vector<int> Sim::fleetManifest(int player) const {
+    std::vector<int> out;
+    if (player < 0 || player >= numPlayers) return out;
+    const bool cy = players[player].faction == F_CYBER;
+    for (int k = 0; k < FLEET_PATROLS; k++) out.push_back(cy ? U_C_PATROL : U_K_PATROL);
+    for (int k = 0; k < FLEET_WARSHIPS; k++) out.push_back(cy ? U_C_DESTROYER : U_K_DESTROYER);
+    for (int k = 0; k < FLEET_WARSHIPS; k++) out.push_back(cy ? U_C_CRUISER : U_K_CRUISER);
+    for (int k = 0; k < FLEET_CARRIERS; k++) out.push_back(cy ? U_C_CARRIER : U_K_CARRIER);
+    return out;
+}
+
+bool Sim::fleetEntry(Vec2 pos, Vec2& goal, Vec2& entry, Vec2& inward) const {
+    const int ocean = g_map.oceanComp;
+    if (ocean == 0) return false;
+    pos = Vec2(clampf(pos.x, TILE, WORLD_W - TILE), clampf(pos.y, TILE, WORLD_H - TILE));
+    goal = g_map.nearestWater(pos, (int)FLEET_REACH, true, ocean);
+    if (!g_map.navTile(tileOf(goal.x), tileOf(goal.y)) || g_map.compAt(goal) != ocean) return false;
+    // the four borders, nearest first; on each, slide from the point level with the spot until the whole column of lanes (and a couple of ship
+    // lengths in from the border) is open ocean
+    const float depth = 1.6f * TILE;
+    const int half = 3;
+    struct Side { float d; Vec2 n; } sides[4] = { { goal.x, Vec2(1, 0) }, { WORLD_W - goal.x, Vec2(-1, 0) }, { goal.y, Vec2(0, 1) }, { WORLD_H - goal.y, Vec2(0, -1) } };
+    std::sort(sides, sides + 4, [](const Side& a, const Side& b) { return a.d < b.d; });
+    for (const Side& sd : sides) {
+        const Vec2 n = sd.n, along(-n.y, n.x);
+        Vec2 base = n.x > 0 ? Vec2(depth, goal.y) : n.x < 0 ? Vec2(WORLD_W - depth, goal.y) : n.y > 0 ? Vec2(goal.x, depth) : Vec2(goal.x, WORLD_H - depth);
+        for (int k = 0; k <= 50; k++) for (int sgn = -1; sgn <= 1; sgn += 2) {
+            if (k == 0 && sgn > 0) continue;
+            Vec2 c = base + along * (sgn * k * 2.0f * TILE);
+            bool ok = true;
+            for (int l = -half; l <= half && ok; l++) for (int dd = 0; dd <= 3 && ok; dd++) {
+                Vec2 q = c + along * (l * FLEET_LANE * TILE) + n * (dd * 2.0f * TILE);
+                int x = tileOf(q.x), y = tileOf(q.y);
+                if (!inMap(x, y) || !g_map.navOpen(x, y) || g_map.waterComp[y * MAP_W + x] != ocean) ok = false;
+            }
+            if (ok) { entry = c; inward = n; return true; }
+        }
+    }
+    return false;
+}
+
+bool Sim::cmdFleetCall(int player, Vec2 pos) {
+    if (player < 0 || player >= numPlayers) return false;
+    Player& pl = players[player];
+    if (!pl.alive || time < pl.dropReady) return false;
+    Entity* tech = nullptr;   // like the paradrops: each Data Center / Arms Lab calls one fleet per cooldown
+    for (auto& e : ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && e.disabledUntil <= time && e.bt().role == BR_TECH && time >= e.fleetTimer) { tech = &e; break; }
+    if (!tech) return false;
+    Vec2 goal, entry, n;
+    if (!fleetEntry(pos, goal, entry, n)) return false;
+    tech->fleetTimer = time + DROP_TIERS[dropTier(player)].cooldown;   // the paradrops' own cooldown
+    const Vec2 along(-n.y, n.x);
+    const int ocean = g_map.oceanComp;
+    auto slot = [&](float fwd, float side) {   // a place in the formation round the goal (tiles ahead along the way in, tiles to the side)
+        Vec2 q = goal + n * (fwd * TILE) + along * (side * TILE);
+        q = Vec2(clampf(q.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(q.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
+        Vec2 w = g_map.nearestWater(q, 9, true, ocean);
+        return g_map.compAt(w) == ocean && g_map.navTile(tileOf(w.x), tileOf(w.y)) ? w : goal;
+    };
+    int pi = 0, di = 0, ci = 0, total = 0;
+    for (int t : fleetManifest(player)) {
+        FleetShip f; f.owner = player; f.type = t; f.dir = n;
+        int lane; float row, fwd, side;
+        if (isPatrolType(t)) {   // the screen: lanes two and three out on either side, three rows deep; they spread into a line well ahead of the goal
+            static const int LANES[4] = { -2, 2, -3, 3 };
+            lane = LANES[pi % 4]; int r = pi / 4; row = r * 0.7f;
+            side = (lane < 0 ? -1.0f : 1.0f) * (std::abs(lane) == 3 ? 9.0f - 2.0f * r : 1.0f + 2.0f * r);
+            fwd = std::abs(side) <= 5.0f ? 8.0f : (std::abs(side) <= 7.0f ? 6.5f : 5.0f);
+            pi++;
+        } else if (isDestroyerType(t)) {   // the first row in the middle lanes; they take the places ahead of the carrier
+            lane = di - 1; row = 0;
+            fwd = lane == 0 ? 5.5f : 4.0f; side = lane * 4.0f;
+            di++;
+        } else if (t == U_C_CRUISER || t == U_K_CRUISER) {   // the second row: the flanks of the carrier, one just ahead of it
+            lane = ci - 1; row = 1;
+            fwd = lane == 0 ? 1.0f : -2.0f; side = lane * 6.0f;
+            ci++;
+        } else {   // the carrier last, down the middle lane, to the centre of the group a little behind the goal
+            lane = 0; row = 2.3f;
+            fwd = -3.5f; side = 0;
+        }
+        f.from = entry + along * (lane * FLEET_LANE * TILE);
+        f.at = time + 0.4f + row * FLEET_GAP + 0.22f * std::abs(lane);
+        f.to = slot(fwd, side);
+        fleetArrivals.push_back(f);
+        total++;
+    }
+    fleetMarks.push_back({entry, goal, player, time});
+    const char* edge = n.x > 0 ? "west" : n.x < 0 ? "east" : n.y > 0 ? "north" : "south";
+    char msg[160];
+    snprintf(msg, sizeof msg, "%s: %d ships inbound from the %s edge of the map", FLEETS[pl.faction].name, total, edge);
+    emit(EV_MSG, player, SND_NONE, goal, msg);
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, entry, "ENEMY FLEET APPROACHING FROM THE OPEN SEA");
+    return true;
+}
+
+void Sim::updateFleetArrivals() {
+    for (size_t i = 0; i < fleetArrivals.size();) {
+        if (time < fleetArrivals[i].at) { i++; continue; }
+        FleetShip f = fleetArrivals[i];
+        fleetArrivals.erase(fleetArrivals.begin() + i);
+        if (f.owner < 0 || f.owner >= numPlayers || !players[f.owner].alive) continue;   // (the army fell before its fleet came in)
+        Ref r = spawnUnit(f.type, f.owner, f.from);
+        Entity& e = ents[r.idx];
+        e.angle = e.turret = std::atan2(f.dir.y, f.dir.x);
+        e.fade = 0.02f;   // out of the haze (see updateUnit)
+        e.guardPos = f.to;
+        cmdMove({r}, f.to, true);
+        bool last = true;
+        for (auto& o : fleetArrivals) if (o.owner == f.owner) { last = false; break; }
+        if (last) emit(EV_MSG, f.owner, SND_UNIT_READY, f.to, "The fleet has arrived: it is yours to command");
+    }
+    for (size_t i = 0; i < fleetMarks.size();) { if (time - fleetMarks[i].t0 > 30.0f) fleetMarks.erase(fleetMarks.begin() + i); else i++; }
 }

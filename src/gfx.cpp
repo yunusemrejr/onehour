@@ -112,10 +112,16 @@ void Gfx::draw(const Sprite& s, float x, float y, float angle, float scale, Colo
     scale *= s.dscale;
     SDL_Rect dst = { (int)std::lround(x - s.ox * scale), (int)std::lround(y - s.oy * scale), (int)std::lround(s.w * scale), (int)std::lround(s.h * scale) };
     SDL_Point c = { (int)std::lround(s.ox * scale), (int)std::lround(s.oy * scale) };
+    fillPx += std::max(0, std::min(dst.x + dst.w, SCREEN_W) - std::max(dst.x, 0)) * (double)std::max(0, std::min(dst.y + dst.h, SCREEN_H) - std::max(dst.y, 0));
     SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b);
     SDL_SetTextureAlphaMod(s.tex, alpha);
     if (angle == 0) SDL_RenderCopy(ren, s.tex, nullptr, &dst);
-    else SDL_RenderCopyEx(ren, s.tex, nullptr, &dst, angle * 57.29578f, &c, SDL_FLIP_NONE);
+    else {
+        static const bool slowDbg = getenv("ONEHOUR_SLOWDRAW") != nullptr;
+        u64 t0 = slowDbg ? SDL_GetPerformanceCounter() : 0;
+        SDL_RenderCopyEx(ren, s.tex, nullptr, &dst, angle * 57.29578f, &c, SDL_FLIP_NONE);
+        if (slowDbg) { double ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency(); if (ms > 20) fprintf(stderr, "[slowdraw] draw rot %.0f ms: sprite %dx%d dst %d,%d %dx%d\n", ms, s.w, s.h, dst.x, dst.y, dst.w, dst.h); }
+    }
 }
 void Gfx::drawRolled(const Sprite& s, float x, float y, float angle, float roll, float scale, Color mod, u8 alpha) {
     if (!s.tex) return;
@@ -174,7 +180,23 @@ void Gfx::glowAdd(float cx, float cy, float r, Color c) {
 }
 void Gfx::drawSized(const Sprite& s, float cx, float cy, float w, float h, float angle, Color mod, u8 alpha) {
     if (!s.tex) return;
+    if (angle != 0 && w > 600 && w >= 4 * h) {
+        // a long beam (a laser to a warhead high over the map, a rail shot across the screen): only the part over the view is drawn. Rotating the
+        // whole of a 3000 px quad cost the CPU renderer 20-30 ms a beam - seconds a frame during a nuclear exchange - and a GPU nothing it shows
+        Vec2 d(std::cos(angle), std::sin(angle));
+        float t0 = -w * 0.5f, t1 = w * 0.5f;
+        const float m = h + 8.0f, lo[2] = { -m, -m }, hi[2] = { SCREEN_W + m, SCREEN_H + m }, p0[2] = { cx, cy }, dv[2] = { d.x, d.y };
+        for (int k = 0; k < 2; k++) {   // Liang-Barsky against the view, one axis at a time
+            if (std::fabs(dv[k]) < 1e-6f) { if (p0[k] < lo[k] || p0[k] > hi[k]) return; continue; }
+            float a = (lo[k] - p0[k]) / dv[k], b = (hi[k] - p0[k]) / dv[k];
+            if (a > b) std::swap(a, b);
+            t0 = std::max(t0, a); t1 = std::min(t1, b);
+            if (t0 >= t1) return;
+        }
+        cx += d.x * (t0 + t1) * 0.5f; cy += d.y * (t0 + t1) * 0.5f; w = t1 - t0;
+    }
     SDL_FRect dst = { cx - w * 0.5f, cy - h * 0.5f, w, h };
+    fillPx += std::max(0.0f, std::min(dst.x + dst.w, (float)SCREEN_W) - std::max(dst.x, 0.0f)) * (double)std::max(0.0f, std::min(dst.y + dst.h, (float)SCREEN_H) - std::max(dst.y, 0.0f));
     SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b);
     SDL_SetTextureAlphaMod(s.tex, alpha);
     if (angle == 0) { SDL_RenderCopyF(ren, s.tex, nullptr, &dst); return; }
@@ -190,7 +212,10 @@ void Gfx::drawSized(const Sprite& s, float cx, float cy, float w, float h, float
         } else SDL_RenderCopyF(ren, s.tex, nullptr, &dst);
         return;
     }
+    static const bool slowDbg = getenv("ONEHOUR_SLOWDRAW") != nullptr;
+    u64 t0 = slowDbg ? SDL_GetPerformanceCounter() : 0;
     SDL_RenderCopyExF(ren, s.tex, nullptr, &dst, angle * 57.29578f, nullptr, SDL_FLIP_NONE);
+    if (slowDbg) { double ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency(); if (ms > 20) fprintf(stderr, "[slowdraw] drawSized rot %.0f ms: sprite %dx%d dst %.0f,%.0f %.0fx%.0f\n", ms, s.w, s.h, dst.x, dst.y, dst.w, dst.h); }
 }
 void Gfx::discFill(float cx, float cy, float r, Color c) {
     if (!disc.tex || r < 1) return;
@@ -389,23 +414,24 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
             edgeN[(size_t)y * W2 + x] = vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f;
         }
     }
-    // Only the blocks of BLK x BLK tiles where the fog changed (and their neighbours, which the bilinear fringe reaches into) are rebuilt and
-    // re-uploaded: units moving about change a few blocks at a time.
+    // Only the tiles whose fog changed, and the ring of tiles round them (the bilinear fringe of a tile reaches one tile into its neighbours), are
+    // rebuilt, and the texture is updated band by band (BLK tile rows at a time, the span of what changed in it). The old scheme rebuilt whole
+    // 8 x 8-tile blocks and all eight neighbours of each for every tile that changed: in a late battle that was most of the frame's CPU time.
     // A new texture (a rebaked map) or a new match starts from nothing: the whole mask is rebuilt. (Patching only what changed since the last
     // refresh left the previous match's explored ground clear in the new texture, so the map showed through the fog.)
     static std::vector<u8> last;
     static SDL_Texture* lastTex = nullptr;
-    const int BLK = 8, BW = (MAP_W + BLK - 1) / BLK, BH = (MAP_H + BLK - 1) / BLK;
-    static std::vector<u8> dirty;
-    dirty.assign((size_t)BW * BH, 0);
+    static std::vector<u8> dirty;   // per tile
+    const int BLK = 8, BH = (MAP_H + BLK - 1) / BLK;
     bool full = force || shroudTex != lastTex || (int)buf.size() != W2 * H2 || last.size() != fog.size();
     lastTex = shroudTex;
-    if (full) { buf.assign((size_t)W2 * H2, 0); std::fill(dirty.begin(), dirty.end(), 1); }
+    if (full) { buf.assign((size_t)W2 * H2, 0); dirty.assign((size_t)MAP_W * MAP_H, 1); }
     else {
         bool any = false;
         for (int i = 0; i < MAP_W * MAP_H; i++) if (fog[i] != last[i]) {
-            int bx = (i % MAP_W) / BLK, by = (i / MAP_W) / BLK; any = true;
-            for (int j = -1; j <= 1; j++) for (int k = -1; k <= 1; k++) { int X = bx + k, Y = by + j; if (X >= 0 && Y >= 0 && X < BW && Y < BH) dirty[(size_t)Y * BW + X] = 1; }
+            if (!any) { dirty.assign((size_t)MAP_W * MAP_H, 0); any = true; }
+            int x = i % MAP_W, y = i / MAP_W;
+            for (int j = std::max(0, y - 1); j <= std::min(MAP_H - 1, y + 1); j++) for (int k = std::max(0, x - 1); k <= std::min(MAP_W - 1, x + 1); k++) dirty[(size_t)j * MAP_W + k] = 1;
         }
         if (!any) return;
     }
@@ -414,29 +440,48 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
     const float DIM = 118.0f;   // the remembered veil's opacity
     auto E = [&](int a, int b) { return LV[fog[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)]]; };
     auto pack = [](float a, int r, int g, int b) { return (u32)clampi((int)a, 0, 255) << 24 | (u32)b << 16 | (u32)g << 8 | (u32)r; };
-    for (int by = 0; by < BH; by++) for (int bx = 0; bx < BW; bx++) {
-        if (!dirty[(size_t)by * BW + bx]) continue;
-        int px0 = bx * BLK * SS, py0 = by * BLK * SS, px1 = std::min(W2, (bx + 1) * BLK * SS), py1 = std::min(H2, (by + 1) * BLK * SS);
-        for (int y = py0; y < py1; y++) for (int x = px0; x < px1; x++) {
-            float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
-            int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx = fx - x0, ty = fy - y0;
-            float a00 = E(x0, y0), a10 = E(x0 + 1, y0), a01 = E(x0, y0 + 1), a11 = E(x0 + 1, y0 + 1);
-            float v = lerpf(lerpf(a00, a10, tx), lerpf(a01, a11, tx), ty);
-            u32& o = buf[(size_t)y * W2 + x];
-            int m = mottle[(size_t)y * W2 + x];
-            bool flat = a00 == a10 && a00 == a01 && a00 == a11;   // inside one level: no fringe to displace
-            if (!flat) v = clampf(v + (edgeN[(size_t)y * W2 + x] - 0.5f) * 0.34f, 0.0f, 1.0f);
-            if (v <= 0.0f) { o = pack(255, 5 + m / 3, 8 + m / 3, 12 + m / 2); continue; }   // never seen: opaque, faintly mottled
-            if (v >= 1.0f) { o = 0; continue; }                                               // in sight: clear
-            if (v < 0.5f) {   // the edge of the unknown: from opaque to the veil
-                float k = v / 0.5f; k = k * k * (3 - 2 * k);
-                o = pack(lerpf(255.0f, DIM, k), (int)lerpf(5, 14, k), (int)lerpf(8, 20, k), (int)lerpf(12, 30, k));
-            } else {          // the edge of sight: from the veil to clear
-                float k = (v - 0.5f) / 0.5f; k = k * k * (3 - 2 * k);
-                o = pack(lerpf(DIM, 0.0f, k), 14, 20, 30);
+    auto F = [&](int a, int b) { return fog[clampi(b, 0, MAP_H - 1) * MAP_W + clampi(a, 0, MAP_W - 1)]; };
+    for (int band = 0; band < BH; band++) {
+        int bx0 = MAP_W, bx1 = -1;
+        const int ty0 = band * BLK, ty1 = std::min(MAP_H, ty0 + BLK);
+        for (int ty = ty0; ty < ty1; ty++) for (int tx = 0; tx < MAP_W; tx++) {
+            if (!dirty[(size_t)ty * MAP_W + tx]) continue;
+            bx0 = std::min(bx0, tx); bx1 = std::max(bx1, tx);
+            const int px0 = tx * SS, py0 = ty * SS;
+            // one level all round (the tile and its eight neighbours): no fringe, a plain fill
+            const u8 l0 = F(tx, ty);
+            bool flat = true;
+            for (int j = -1; j <= 1 && flat; j++) for (int k = -1; k <= 1; k++) if (F(tx + k, ty + j) != l0) { flat = false; break; }
+            if (flat) {
+                for (int y = py0; y < py0 + SS; y++) for (int x = px0; x < px0 + SS; x++) {
+                    u32& o = buf[(size_t)y * W2 + x];
+                    if (l0 == 2) o = 0;
+                    else if (l0 == 1) o = pack(DIM, 14, 20, 30);
+                    else { int m = mottle[(size_t)y * W2 + x]; o = pack(255, 5 + m / 3, 8 + m / 3, 12 + m / 2); }
+                }
+                continue;
+            }
+            for (int y = py0; y < py0 + SS; y++) for (int x = px0; x < px0 + SS; x++) {
+                float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
+                int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx2 = fx - x0, ty2 = fy - y0;
+                float a00 = E(x0, y0), a10 = E(x0 + 1, y0), a01 = E(x0, y0 + 1), a11 = E(x0 + 1, y0 + 1);
+                float v = lerpf(lerpf(a00, a10, tx2), lerpf(a01, a11, tx2), ty2);
+                u32& o = buf[(size_t)y * W2 + x];
+                int m = mottle[(size_t)y * W2 + x];
+                bool pflat = a00 == a10 && a00 == a01 && a00 == a11;   // inside one level: no fringe to displace
+                if (!pflat) v = clampf(v + (edgeN[(size_t)y * W2 + x] - 0.5f) * 0.34f, 0.0f, 1.0f);
+                if (v <= 0.0f) { o = pack(255, 5 + m / 3, 8 + m / 3, 12 + m / 2); continue; }   // never seen: opaque, faintly mottled
+                if (v >= 1.0f) { o = 0; continue; }                                               // in sight: clear
+                if (v < 0.5f) {   // the edge of the unknown: from opaque to the veil
+                    float k = v / 0.5f; k = k * k * (3 - 2 * k);
+                    o = pack(lerpf(255.0f, DIM, k), (int)lerpf(5, 14, k), (int)lerpf(8, 20, k), (int)lerpf(12, 30, k));
+                } else {          // the edge of sight: from the veil to clear
+                    float k = (v - 0.5f) / 0.5f; k = k * k * (3 - 2 * k);
+                    o = pack(lerpf(DIM, 0.0f, k), 14, 20, 30);
+                }
             }
         }
-        if (!full) { SDL_Rect r = { px0, py0, px1 - px0, py1 - py0 }; SDL_UpdateTexture(shroudTex, &r, &buf[(size_t)py0 * W2 + px0], W2 * 4); }
+        if (!full && bx1 >= bx0) { SDL_Rect r = { bx0 * SS, ty0 * SS, (bx1 - bx0 + 1) * SS, (ty1 - ty0) * SS }; SDL_UpdateTexture(shroudTex, &r, &buf[(size_t)r.y * W2 + r.x], W2 * 4); }
     }
     if (full) SDL_UpdateTexture(shroudTex, nullptr, buf.data(), W2 * 4);
 }

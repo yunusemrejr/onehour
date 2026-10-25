@@ -82,17 +82,6 @@ void elevator(Art& A, float x, float y, float w, float h, Color deck, Color mk) 
     A.line(x + w * 0.5f, y + 0.9f, x + w * 0.5f, y + h - 0.9f, 0.5f, rgba(CV_DARK, 150));
 }
 
-// a fighter parked on deck, nose +x, about 12 px long and 9 px across: a swept wing each side, a tail fin pair and a canopy
-void deckJet(Art& A, float x, float y, Color body, Color canopy) {
-    for (int s = -1; s <= 1; s += 2) {
-        A.poly({ {x + 1.6f, y}, {x - 2.6f, y + s * 4.6f}, {x - 3.4f, y + s * 4.6f}, {x - 1.0f, y} }, body, 0.5f, 0.4f);
-        A.poly({ {x - 2.2f, y + s * 0.6f}, {x - 4.8f, y + s * 3.2f}, {x - 3.8f, y + s * 0.6f} }, body, 0.4f, 0.3f);
-    }
-    A.cap(x - 3.6f, y, x + 4.4f, y, 1.2f, body, 0.7f, 0.5f);
-    A.poly({ {x + 4.0f, y - 1.2f}, {x + 6.8f, y}, {x + 4.0f, y + 1.2f} }, body, 0.4f, 0.3f);
-    A.dot(x + 1.2f, y, 0.55f, canopy);
-}
-
 // ---------------------------------------------------------------- aircraft carrier
 
 void carrierBody(Art& A, bool cy) {
@@ -134,13 +123,13 @@ void carrierBody(Art& A, bool cy) {
     // elevators: one on the starboard quarter, one forward on the port side
     elevator(A, 18.5f, 66.5f, 9, 10.5f, deck, mk);
     elevator(A, 70, 49.5f, 9, 9, deck, mk);
-    // four parked jets: two port forward, two starboard forward (noses +x, clear of the catapults' ends)
-    for (float x : { 88.0f, 100.0f }) {
-        deckJet(A, x + 1.0f, 53.5f, rgba(dk, 80), rgba(dk, 80));   // ground shadow
-        deckJet(A, x, 52.5f, cy ? rgb(146, 154, 162) : rgb(168, 170, 162), dk);
-    }
-    deckJet(A, 90.0f, 75.6f, rgba(dk, 80), rgba(dk, 80));
-    deckJet(A, 89.0f, 74.6f, cy ? rgb(146, 154, 162) : rgb(168, 170, 162), dk);
+    // (the wing is not painted on: the jets on deck are drawn live, where they really are - parked, taxiing, on a catapult - see Game::drawCarrierDeck)
+    // the arresting wires across the landing area, and the parking spots marked out along both deck edges
+    for (int k = 0; k < 4; k++) { float x = 19.0f + k * 3.2f; A.line(x, 52.4f, x - 0.2f, 60.4f, 0.45f, rgba(cy ? CV_DARK : CK_DARK, 210)); A.dot(x, 52.2f, 0.5f, mk); A.dot(x - 0.2f, 60.6f, 0.5f, mk); }
+    for (float x : { 98.8f, 86.1f, 73.4f }) { A.ring(x, 54.0f, 3.2f, 0.35f, rgba(mk, 120), 0.0f, 0); A.ring(x + 1.3f, 74.0f, 3.2f, 0.35f, rgba(mk, 120), 0.0f, 0); }
+    // the landing lens beside the angled deck (port quarter): a box with its row of lights
+    A.rect(34, 45.6f, 3.6f, 1.6f, 0.3f, shade(dk, 1.4f), 0.6f, 0.3f);
+    for (int k = 0; k < 3; k++) A.dot(34.8f + k * 1.0f, 46.4f, 0.35f, k == 1 ? rgb(255, 190, 60) : rgb(90, 230, 120));
     // the island on the starboard side (y > 64): a stepped superstructure with its bridge forward, glazed, and a mast and radar aft
     A.shadowRect(50, 70, 18, 9, 2.2f, 2.2f, 1.8f, 170);
     A.rect(50, 70, 18, 9, 1.6f, isl, 1.8f, 0.55f);

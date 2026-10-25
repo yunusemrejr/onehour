@@ -215,6 +215,22 @@ void buildIcon(int id, Ico& I) {
         I.seg(17.5f, 7, 20.5f, 7, 1.2f, HOT).deco();
         I.circle(5, 7, 2.2f, HOT);
         break;
+    case ICO_FLEET: {   // Fleet Call: a warship in profile coming in over the swell, a second one behind it still in the haze
+        const Color SEA = rgb(60, 150, 214), HULL = rgb(150, 160, 174);
+        I.poly({ { -21, -6 }, { -3, -6 }, { -6, -1 }, { -19, -1 } }, rgb(176, 196, 214), 0.2f).alpha(0.55f).deco();   // the far hull, half haze
+        I.box(-13, -9, 3.5f, 2.6f, 0.6f, rgb(176, 196, 214), 0.2f).alpha(0.55f).deco();
+        I.poly({ { -15, 3 }, { 21, 3 }, { 15, 12 }, { -12, 12 } }, HULL, 0.45f);    // the near hull: a raked bow on the right
+        I.box(0, -1, 6.5f, 4.0f, 1.0f, STEEL, 0.4f);                                // the superstructure
+        I.box(-1, -7, 3.0f, 2.2f, 0.6f, STEEL, 0.4f);                               // the bridge
+        I.seg(-1, -9, -1, -17, 0.9f, GREY, 0.2f);                                   // the mast
+        I.seg(-4, -14, 2, -14, 0.7f, GREY, 0.2f).deco();
+        I.seg(9, 1, 17, -2, 1.3f, rgb(88, 96, 108), 0.2f);                           // the forward gun
+        I.circle(9, 2, 2.4f, rgb(110, 118, 130), 0.3f);
+        I.seg(-10, 7, 12, 7, 0.7f, rgb(96, 106, 120), 0.0f).deco();                 // a line of portholes / the boot top
+        for (int k = 0; k < 3; k++) { float y = 15.5f + k * 3.6f, x0 = -20.0f + k * 3.0f; I.seg(x0, y, x0 + 10, y - 1.2f, 1.1f, SEA, 0.1f).deco(); I.seg(x0 + 13, y, x0 + 23, y - 1.2f, 1.1f, SEA, 0.1f).deco(); }   // the swell
+        I.seg(21, 12, 25, 9, 1.0f, WHITE, 0.0f).deco();                              // the bow wave
+        break;
+    }
     case ICO_SELL:   // a gold coin with a dollar sign
         I.circle(0, 0, 20, GOLD, 0.5f);
         I.ring(0, 0, 15.5f, 1.6f, rgb(176, 122, 18)).deco();

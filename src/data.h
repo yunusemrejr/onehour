@@ -346,6 +346,21 @@ static const int   W_STRIKE_BOMB = 52;          // their bombs (WEAPONS index)
 struct StrikeType { const char* name; const char* desc; };
 extern const StrikeType STRIKES[F_COUNT];
 
+// Fleet Call (the tech structure's naval power, key L): a battle fleet sails in from the open sea. It never appears out of thin air in the middle of
+// the map: the ships come out of the haze at the map border nearest the spot you pick (it must be on the ocean), lane after lane, and sail in to
+// take up a formation round it. The fleet is always the same - FLEET_PATROLS patrol boats, FLEET_WARSHIPS of each warship (destroyers and missile
+// cruisers) and one aircraft carrier with its full wing; never a cargo ship - and once in they are ordinary ships under your command. Free of charge,
+// once per paradrop cooldown per tech structure (more Data Centers / Arms Labs: more fleets); computer armies call it too.
+static const int   FLEET_PATROLS = 10;
+static const int   FLEET_WARSHIPS = 3;          // of each medium warship
+static const int   FLEET_CARRIERS = 1;
+static const float FLEET_FADE = 3.2f;           // seconds a ship takes to come out of the sea haze at the border (it cannot be targeted while it is mostly haze)
+static const float FLEET_LANE = 3.4f;           // tiles between two lanes of the column coming in
+static const float FLEET_GAP = 1.7f;            // seconds between two warships entering on the same lane (a patrol boat: 70% of it)
+static const float FLEET_REACH = 10.0f;         // tiles: how far from the ocean the called spot may be (it is moved onto the nearest open sea)
+struct FleetType { const char* name; const char* desc; };
+extern const FleetType FLEETS[F_COUNT];
+
 // Jeeps: fast open-top transports. Up to JEEP_SEATS infantry ride inside and shoot from it with their own weapons; a jeep is also a gun.
 static const int   JEEP_SEATS = 7;
 static const int   DROP_JEEPS_MIN = 3, DROP_JEEPS_MAX = 10;   // an airdrop brings between these many loaded jeeps, by what the army has unlocked
@@ -374,6 +389,22 @@ static const float CARRIER_RANGE = 22.0f;      // tiles from the carrier
 static const float CARRIER_LAUNCH_GAP = 1.2f;  // seconds between two launches
 static const float CARRIER_REARM = 8.0f;       // seconds a jet spends on deck between sorties
 static const float CARRIER_REPLACE = 30.0f;    // seconds to ready a replacement for a jet that was lost
+// Flight-deck operations (the carrier's own frame in world px: x ahead of the hull centre, y to starboard; the deck art is 1.495 px per canvas px).
+// A launch: the jet taxis from its parking spot to a bow catapult (port and starboard in turn), is shot off the bow and climbs away, growing as it
+// rises. A recovery: it lines up astern on the angled deck, comes down the glide path, catches a wire, rolls out and taxis back to a parking spot.
+static const float CARRIER_TAXI_T = 0.75f;      // seconds to taxi from a parking spot to the catapult (and back after a landing: a little longer)
+static const float CARRIER_CAT_T = 0.65f;       // seconds on the catapult stroke
+static const float CARRIER_CLIMB_T = 1.0f;      // seconds of the climb-out
+static const float CARRIER_FINAL_T = 1.5f;      // seconds on the glide path down to the deck
+static const float CARRIER_ROLL_T = 0.5f;       // seconds of the roll-out after the trap
+static const float CARRIER_CAT_X0 = 55.3f, CARRIER_CAT_X1 = 82.2f, CARRIER_CAT_Y = 6.6f;   // the catapult track (one either side of the centre line)
+static const float CARRIER_TOUCH_X = -62.8f, CARRIER_TOUCH_Y = -12.0f;    // touchdown on the angled deck (the wires)
+static const float CARRIER_ROLL_X = -20.9f, CARRIER_ROLL_Y = -15.0f;      // where the roll-out stops
+static const float CARRIER_LAND_ANG = -0.071f;  // heading of the angled deck relative to the hull
+static const float CARRIER_PARK[CARRIER_WING][3] = {   // the parking spots: x, y and the parked jet's heading relative to the hull (noses angled in)
+    { 52.0f, -15.0f, 0.5f }, { 33.0f, -15.0f, 0.5f }, { 14.0f, -14.6f, 0.5f },
+    { 54.0f, 15.0f, -0.5f }, { 35.0f, 15.0f, -0.5f }, { 17.0f, 15.6f, -0.5f } };
+static const float CARRIER_JET_DECK_SCALE = 0.5f;   // a jet on deck is drawn this much smaller than in the air (it grows as it climbs)
 // Cargo ship: an unarmed transport of CARGOSHIP_CAP cargo places (an infantryman 1, a light vehicle 4, a tank 6, a super-heavy 10). Units board it from
 // a shore it lies beside (right-click it with units selected) and it lands them on any shore: "unload here" lets them out onto the nearest land,
 // "unload at" sails it to the water nearest the spot first. If it sinks, everyone aboard is lost.

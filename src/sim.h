@@ -73,6 +73,7 @@ struct Entity {
     float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
     float strikeTimer = 0;  // tech structure: sim time it can take another Phone Strike call
     float aidTimer = 0;     // tech structure: sim time its next Aid Drop flight is ready (human players only)
+    float fleetTimer = 0;   // tech structure: sim time it can call another fleet (Fleet Call)
     float cooldown2 = 0;    // structure: the roof gun of the Defense Guns upgrade (its own target, cooldown and facing)
     Ref engaged2;
     float turret2 = 0;
@@ -132,6 +133,14 @@ struct Entity {
     std::vector<float> deck;          // aircraft carrier: one entry per jet on deck, the sim time it is rearmed and ready to launch
     float deckReplace = -1;           // ... when the next replacement for a lost jet arrives (-1: none under way)
     float deckLaunch = 0;             // ... earliest time of the next launch
+    u8 catSide = 0;                   // ... the catapult the next launch uses (port / starboard in turn)
+    float catAt = -10;                // ... when the last jet went off a catapult (the blast deflector and the steam are drawn for a moment)
+    u8 deckPhase = 0;                 // carrier jet: 0 flying, 1 taxiing to the catapult, 2 on the catapult, 3 climbing out, 4 going round for the approach,
+                                      // 5 on the glide path, 6 rolling out after the trap, 7 taxiing to its parking spot
+    float deckT = 0;                  // ... seconds into that phase
+    Vec2 deckFrom, deckTo;            // ... where the phase starts and ends, in the carrier's own frame (px ahead, px to starboard)
+    float deckAng = 0;                // ... its heading relative to the hull when the glide path began (it eases onto the angled deck's)
+    u8 goRounds = 0;                  // ... approaches it has had to break off and go round again (after two it comes in from where it is)
     float lifeUntil = -1;             // a loan (UnitType.temp): sim time at which it is withdrawn whatever it is doing (-1 = never)
     float autoHoldUntil = -1;         // dozer: a direct move / target order keeps it from wandering off to mend things on its own until then
     std::vector<Ref> siteQueue;       // dozer: construction sites it was pulled away from before they were finished (resumed once it is idle)
@@ -198,6 +207,7 @@ struct Player {
     bool alive = true;
     bool isAI = false;
     int difficulty = 1;         // 0 easy, 1 normal, 2 hard, 3 brutal
+    bool sharpFire = true;      // units picking their own targets pass over one already doomed by what is in flight to it (see Sim::sharpScore); --duelmatrix switches it off for A/B
     int team = 0;
     Faction faction = F_CYBER;
     int money = START_CASH;
@@ -342,6 +352,12 @@ struct Sim {
     // the waves of an Air Strike still to come in (each a V formation launched at 'at' from the map edge on its own heading)
     struct StrikeWave { int owner = -1, type = 0, n = 0; Vec2 target, dir; float at = 0; };
     std::vector<StrikeWave> strikeWaves;
+    // the ships of a Fleet Call still to come out of the haze at the map border: each enters at 'at' at 'from' heading 'dir' and sails to its place 'to'
+    struct FleetShip { int owner = -1, type = 0; Vec2 from, dir, to; float at = 0; };
+    std::vector<FleetShip> fleetArrivals;
+    // where a called fleet comes in (for the caller's eyes: the lane is drawn while the ships are still arriving)
+    struct FleetMark { Vec2 entry, goal; int owner = -1; float t0 = 0; };
+    std::vector<FleetMark> fleetMarks;
     static constexpr float STRIKE_MARK_LIFE = 45.0f;
     static constexpr float AID_SPEED = 230.0f;
     static constexpr float AID_LINGER = 14.0f;   // seconds the opened crates stay on the ground after the delivery
@@ -374,10 +390,11 @@ struct Sim {
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid
-    static const int GRID_CELL = 64;
-    static const int GRID_W = WORLD_W / GRID_CELL, GRID_H = WORLD_H / GRID_CELL;
+    static constexpr int GRID_CELL = 64;
+    static constexpr int GRID_W = WORLD_W / GRID_CELL, GRID_H = WORLD_H / GRID_CELL;
     std::vector<int> grid[GRID_W * GRID_H];
     std::vector<int> heliList;   // living helicopters (rebuilt with the grid every tick)
+    std::vector<float> incoming; // per entity index: damage already on its way in projectiles (rebuilt with the grid every tick; sharp fire skips the doomed)
 
     void init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed);
     void step();
@@ -470,6 +487,13 @@ struct Sim {
     int strikesReady(int player) const;          // tech structures that can take a call right now
     float strikeWait(int player) const;          // seconds until the soonest one is ready (0 = ready, -1 = no tech structure)
     std::vector<int> strikeManifest(int player) const;   // the fighters that would answer the call now
+    bool cmdFleetCall(int player, Vec2 pos);     // tech structure: a battle fleet sails in from the map border nearest pos (on the ocean) and forms up there
+    int fleetsReady(int player) const;           // tech structures that can call a fleet right now (after the paradrops' opening delay)
+    float fleetWait(int player) const;           // seconds until the soonest one is ready (0 = ready, -1 = no tech structure)
+    std::vector<int> fleetManifest(int player) const;   // the ships of a fleet: patrol boats, the warships, the carrier (never a cargo ship)
+    // where a fleet called on pos would come in: the spot moved onto the open ocean ('goal'), the border point it enters at and the heading in.
+    // False if pos is not on (or within FLEET_REACH of) the ocean, or no stretch of border there is open sea
+    bool fleetEntry(Vec2 pos, Vec2& goal, Vec2& entry, Vec2& inward) const;
     int dropsReady(int player) const;         // tech structures that can send a paradrop right now (after the opening delay)
     float dropWait(int player) const;         // seconds until the soonest paradrop is ready (0 = ready, -1 = no tech structure)
     bool cmdAidDrop(int player, Vec2 pos);    // tech structure, human players only: a relief flight drops $20000 and a dozer to the army nearest pos
@@ -610,6 +634,7 @@ private:
     void updateAirlifts();
     void updateStrikeMarks();
     void updateAidDrops();
+    void updateFleetArrivals();
     void updateAntiNuke(Entity& b);                      // a defence watching the sky over its area: engages a warhead closing in on it
     void breakNuke(Nuke& n);                             // a warhead shot down: the airburst, and only its pieces fall on the target now
     void updateInterceptors();
@@ -621,6 +646,8 @@ private:
     void launchStrikeWave(const StrikeWave& w);
     void updateCarrier(Entity& c);                       // aircraft carrier: replaces lost jets, launches ready ones at enemies near it
     void carrierJetRun(Entity& e);                       // a carrier's jet: fight near the carrier, land on it to rearm
+    static Vec2 carrierPoint(const Entity& c, Vec2 local) { float ca = std::cos(c.angle), sa = std::sin(c.angle); return c.pos + Vec2(local.x * ca - local.y * sa, local.x * sa + local.y * ca); }   // the carrier's own frame to the world
+    static Vec2 carrierLocal(const Entity& c, Vec2 world) { Vec2 d = world - c.pos; float ca = std::cos(c.angle), sa = std::sin(c.angle); return Vec2(d.x * ca + d.y * sa, -d.x * sa + d.y * ca); }
     Entity* carrierTarget(const Entity& c, const Entity* jet);   // the enemy a carrier's jet should go for (nullptr: nothing near)
     void leaveMap(Entity& e, Vec2 away);                 // a loan flies off: straight out to the nearest edge, fading over the ocean, then gone
     void nukeBomberRun(Entity& e);                       // Nuclear Bomber: hold the line to the target, release, fly on and leave the map
@@ -659,6 +686,7 @@ private:
     void noteCombat(Entity& e, const Entity& opponent);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
     Entity* acquireTarget(Entity& e, float range, int wpn = -1);
+    float sharpScore(const Entity& e, const Entity& t, float d, const Weapon& wp) const;   // Player::sharpFire: the extra score of a target (lower goes first)
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);
     void finishBuilding(Entity& b);

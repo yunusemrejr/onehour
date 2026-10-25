@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
@@ -651,6 +651,8 @@ bool fortTest(u64 seed);     // tests10.cpp: the map's neutral civilian strongho
 bool lakeUpdateTest(u64 seed);   // tests13.cpp: infiltrators swim to the island launchers, Waymakers, the patrol boat, the bigger lake, weather
 bool civilTest(u64 seed);        // tests15.cpp: the towns round the lake, the riots, the newer commander, difficulty raised mid-match
 bool oceanTest(u64 seed);        // tests16.cpp: the island map in the sea, the navy on the ocean, cargo ships, aircraft carriers
+bool fleetTest(u64 seed);        // tests17.cpp: the Fleet Call (a battle fleet from the map border), carrier deck operations
+bool duelMatrix(u64 seed);       // tests17.cpp: sharp fire against plain fire in mirrored battles
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
@@ -2668,7 +2670,7 @@ static void writeArtSheet(const char* path) {
 int main(int argc, char** argv) {
     if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
-    int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0;
+    int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0; int lateMin = 0;
     for (int i = 1; i < argc; i++) {   // the headless scene tests check one mechanic each in scenes that run for minutes: no riots in them (full matches - the game,
         std::string a = argv[i];         // --selftest, --fuzztest, --determinismtest, the AI evaluations - keep them; --civiltest switches them on where it tests them)
         if ((a.find("test") != std::string::npos || a.find("matrix") != std::string::npos || a == "--scenario") && a != "--selftest" && a != "--fuzztest" && a != "--determinismtest") Sim::riotsDefault = false;
@@ -2694,6 +2696,7 @@ int main(int argc, char** argv) {
         else if (a == "--uitest") { headless = true; software = true; shot = nullptr; ticks = -1; }
         else if (a == "--autostart") autostart = true;
         else if (a == "--bench") { benchFrames = 300; if (i + 1 < argc && argv[i + 1][0] != '-') benchFrames = atoi(argv[++i]); headless = true; software = true; }
+        else if (a == "--latebench") { lateMin = 30; if (i + 1 < argc && argv[i + 1][0] != '-') lateMin = atoi(argv[++i]); headless = true; software = true; }
         else if (a == "--scenario") { g_map.generate(); return scenarioTest(seed) ? 0 : 1; }
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
         else if (a == "--hqtest") { g_map.generate(); return hqTest(seed) ? 0 : 1; }
@@ -2737,6 +2740,8 @@ int main(int argc, char** argv) {
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
         else if (a == "--oceantest") { g_map.generate(); return oceanTest(seed) ? 0 : 1; }
+        else if (a == "--fleettest") { g_map.generate(); return fleetTest(seed) ? 0 : 1; }
+        else if (a == "--duelmatrix") { g_map.generate(); return duelMatrix(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2957,6 +2962,56 @@ int main(int argc, char** argv) {
         g_gfx.shutdown(); SDL_Quit(); return 0;
     }
     if (ticks == -1) { bool ok = uiTest(); g_gfx.shutdown(); SDL_Quit(); return ok ? 0 : 1; }
+    if (lateMin > 0) {
+        // a whole match as a player would see it: four armies (the viewed one under the computer too), one rendered frame per game second (the
+        // camera alternates between the viewed base and the latest fighting); per game minute the cost of a tick and of a frame, and what has piled up
+        g_game.menu.enemyFaction[0] = 1; g_game.menu.enemyFaction[1] = 1; g_game.menu.enemyFaction[2] = 0; g_game.menu.enemiesAllied = false;   // everyone against everyone: the longest matches
+        g_game.menu.enemyDiff[0] = 3; g_game.menu.enemyDiff[1] = 2; g_game.menu.enemyDiff[2] = 2;
+        g_game.startGame(); g_sim.players[0].isAI = true; g_sim.players[0].difficulty = 3; g_ai.init(seed);
+        const double f0 = (double)SDL_GetPerformanceFrequency();
+        double simT = 0, simW = 0, renT = 0, renW = 0, aiT = 0, aiW = 0; int nT = 0, nR = 0;
+        const int lateFrom = getenv("ONEHOUR_LATEFROM") ? atoi(getenv("ONEHOUR_LATEFROM")) : 0, lateFps = getenv("ONEHOUR_LATEFPS") ? atoi(getenv("ONEHOUR_LATEFPS")) : 3;   // (profiling: render only from that minute, that many frames a second)
+        auto rssMb = []() { long pages = 0, rss = 0; FILE* f = fopen("/proc/self/statm", "r"); if (f) { if (fscanf(f, "%ld %ld", &pages, &rss) != 2) rss = 0; fclose(f); } return rss * 4096.0 / 1048576.0; };
+        for (int t = 1; t <= lateMin * 60 * SIM_HZ; t++) {
+            u64 s0 = SDL_GetPerformanceCounter();
+            g_sim.step();
+            u64 s1 = SDL_GetPerformanceCounter();
+            g_ai.update();
+            double sms = (SDL_GetPerformanceCounter() - s0) * 1000.0 / f0, ams = (SDL_GetPerformanceCounter() - s1) * 1000.0 / f0; simT += sms; simW = std::max(simW, sms); nT++;
+            aiT += ams; aiW = std::max(aiW, ams);
+            if (getenv("ONEHOUR_BENCHDBG") && sms > 25) printf("  t=%.1fs tick %.1f ms (AI %.1f ms) nukes %zu fx %zu projs %zu\n", g_sim.time, sms, ams, g_sim.nukes.size(), g_sim.fx.size(), g_sim.projs.size());
+            if (t % SIM_HZ == 0 && t >= lateFrom * 60 * SIM_HZ) {
+                Vec2 b = g_sim.players[0].basePos;
+                if ((t / SIM_HZ) % 2) { float best = -1; for (auto& e : g_sim.ents) if (e.alive && e.lastDamaged > best) { best = e.lastDamaged; b = e.pos; } }
+                g_game.cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                for (int k = 0; k < lateFps; k++) {   // three frames a second by default: enough for the particles and the fog to follow the camera
+                    u64 r0 = SDL_GetPerformanceCounter();
+                    g_game.renderAlpha = 1; g_game.wallTime += 1.0f / 60; g_game.frameDt = 1.0f / 60;
+                    g_game.update(1.0f / 60);
+                    u64 r1 = SDL_GetPerformanceCounter();
+                    g_gfx.fillPx = 0;
+                    g_game.render();
+                    u64 r2 = SDL_GetPerformanceCounter();
+                    g_gfx.present();
+                    double rms = (SDL_GetPerformanceCounter() - r0) * 1000.0 / f0; renT += rms; renW = std::max(renW, rms); nR++;
+                    if (getenv("ONEHOUR_BENCHDBG") && rms > 150) printf("  t=%.0fs frame %.0f ms: update %.0f render %.0f present %.0f fill %.1f Mpx | parts %zu fx %zu nukes %zu fallouts %zu decals %zu cam %.0f,%.0f\n", g_sim.time, rms,
+                        (r1 - r0) * 1000.0 / f0, (r2 - r1) * 1000.0 / f0, (SDL_GetPerformanceCounter() - r2) * 1000.0 / f0, g_gfx.fillPx / 1e6, g_game.parts.size(), g_sim.fx.size(), g_sim.nukes.size(), g_sim.fallouts.size(), g_game.decals.size(), g_game.cam.x, g_game.cam.y);
+                }
+            }
+            g_sim.events.clear();
+            if (t % (60 * SIM_HZ) == 0) {
+                int alive = 0, units = 0; for (auto& e : g_sim.ents) if (e.alive) { alive++; if (e.isUnit()) units++; }
+                char alive4[8] = "----"; for (int p = 0; p < std::min(4, g_sim.numPlayers); p++) alive4[p] = g_sim.players[p].alive ? '0' + p : 'x';
+                printf("min %3d %s | tick avg %.2f worst %.1f ms (AI avg %.2f worst %.1f) | frame avg %.2f worst %.1f ms | ents %zu alive %d units %d | fx %zu projs %zu parts %zu decals %zu treads %zu | rss %.0f MB%s\n",
+                       t / (60 * SIM_HZ), alive4, simT / std::max(1, nT), simW, aiT / std::max(1, nT), aiW, renT / std::max(1, nR), renW, g_sim.ents.size(), alive, units, g_sim.fx.size(), g_sim.projs.size(),
+                       g_game.parts.size(), g_game.decals.size(), g_game.treads.size(), rssMb(), g_sim.gameOver ? " (over)" : "");
+                fflush(stdout);
+                simT = simW = renT = renW = aiT = aiW = 0; nT = nR = 0;
+                if (g_sim.gameOver) break;
+            }
+        }
+        g_gfx.shutdown(); SDL_Quit(); return 0;
+    }
     if (benchFrames > 0) {
         // a busy scene: four AI armies eight minutes in, the camera sweeping across the battle, every frame fully rendered (software renderer: no GPU help)
         g_game.startGame(); g_sim.players[0].isAI = true; g_ai.init(seed);
@@ -3330,6 +3385,27 @@ int main(int argc, char** argv) {
                 g_game.cam = Vec2(clampf(sea.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(sea.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 if (getenv("ONEHOUR_OCEANSEL")) g_game.selection = { std::string(getenv("ONEHOUR_OCEANSEL")) == "cargo" ? cargo : car };
+            }
+            if (getenv("ONEHOUR_FLEET")) {   // showcase: a Fleet Call off the main island's west coast, N ticks after the call (ONEHOUR_FLEETCAM=entry|goal, ONEHOUR_FLEETPICK=1: the targeting overlay)
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                int bb0 = firstBuildOf(g_sim.players[0].faction);
+                Vec2 bp = g_sim.players[0].basePos;
+                for (int dy = 4; dy < 20; dy++) for (int dx = -14; dx < 14; dx++) { int tx = tileOf(bp.x) + dx, ty = tileOf(bp.y) + dy; if (!g_sim.hasBuilding(0, bb0 + BR_TECH) && g_sim.canPlace(0, bb0 + BR_TECH, tx, ty)) g_sim.placeBuilding(bb0 + BR_TECH, 0, tx, ty, true); }
+                g_sim.players[0].dropReady = 0;
+                Vec2 sea = g_map.nearestWater(Vec2((ISLE_X0 - 18) * TILE, WORLD_H * 0.42f), 12, true, g_map.oceanComp);
+                Vec2 goal, entry, n;
+                g_sim.fleetEntry(sea, goal, entry, n);
+                std::string camAt = getenv("ONEHOUR_FLEETCAM") ? getenv("ONEHOUR_FLEETCAM") : "entry";
+                Vec2 focus = camAt == "goal" ? goal : entry + n * (6.0f * TILE);
+                g_game.cam = Vec2(clampf(focus.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(focus.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                if (getenv("ONEHOUR_FLEETPICK")) {   // the targeting overlay: the mouse over the spot, the mode on
+                    g_game.cam = Vec2(clampf(goal.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(goal.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                    g_game.mouseX = (int)(sea.x - g_game.cam.x); g_game.mouseY = (int)(sea.y - g_game.cam.y); g_game.fleetMode = true;
+                } else {
+                    g_sim.cmdFleetCall(0, sea);
+                    int nt = atoi(getenv("ONEHOUR_FLEET")); if (nt < 1) nt = 60;
+                    for (int t = 0; t < nt; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                }
             }
             if (getenv("ONEHOUR_STRIKE")) {   // showcase: the Air Strike's waves over an enemy line (ONEHOUR_STRIKE=N ticks after the call; ONEHOUR_CAMBACK=px shifts the camera up the approach)
                 for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);

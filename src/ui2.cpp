@@ -41,7 +41,7 @@ void Game::drawShipWake(const Entity& e, Vec2 p) {
 }
 
 // The rotating mounts of a ship, at their places on the hull
-void Game::drawShipMounts(const Entity& e, Vec2 p, Color mod) {
+void Game::drawShipMounts(const Entity& e, Vec2 p, Color mod, u8 alpha) {
     Gfx& g = g_gfx;
     const Sprite& tur = g.unitTurret[e.type][slotOf(e.owner < 0 ? 0 : e.owner)];
     if (!tur.tex) return;
@@ -54,7 +54,7 @@ void Game::drawShipMounts(const Entity& e, Vec2 p, Color mod) {
         float rec = 0;
         if (e.ut().weapon >= 0 && !paused) { const Weapon& w = WEAPONS[e.ut().weapon]; float since = w.cooldown - e.cooldown; if (w.cooldown > 0.6f && since >= 0 && since < 0.18f) rec = 1.0f - since / 0.18f; }   // a barrel kicks back after a salvo
         Vec2 q(p.x + lx * ca - ly * sa - std::cos(e.turret) * 3.0f * rec, p.y + lx * sa + ly * ca - std::sin(e.turret) * 3.0f * rec);
-        g.draw(tur, q.x, q.y, e.turret, 0.82f, mod);
+        g.draw(tur, q.x, q.y, e.turret, 0.82f, mod, alpha);
     }
 }
 
@@ -394,5 +394,132 @@ void Game::drawDistrictLabels() {
         else if (D.ruins > 0) { snprintf(sb, sizeof sb, "rebuilding %d block%s", D.ruins, D.ruins == 1 ? "" : "s"); st = sb; }
         else if (g_sim.time - D.lastHit < 6.0f) st = "under fire";
         if (st) { int sw = g.textW(st, 1); g.text((int)c.x - sw / 2, (int)top + 11, st, rgb(255, 196, 120)); }
+    }
+}
+
+// ------------------------------------------------------------ Fleet Call
+// Picking the spot: where the fleet would form up (the spot moved onto the open ocean), the places of its ships, and the lanes it comes in along from the
+// map border (an arrow at the screen edge when the border is off screen). Afterwards, while the ships are still coming in, the caller's team sees the
+// lanes faintly.
+void Game::drawFleetCall() {
+    Gfx& g = g_gfx;
+    const int hp = g_sim.humanPlayer;
+    const Color ac = g_sim.players[hp].faction == F_CYBER ? rgb(110, 230, 255) : rgb(222, 178, 60);   // (the HUD accent of the army)
+    auto lanes = [&](Vec2 entry, Vec2 goal, Vec2 n, u8 a) {
+        Vec2 along(-n.y, n.x);
+        for (int l = -3; l <= 3; l++) {
+            Vec2 s0 = worldToScreen(entry + along * (l * FLEET_LANE * TILE));
+            Vec2 s1 = worldToScreen(goal + along * (l * 1.4f * TILE) - n * (2.0f * TILE));
+            g.line(s0.x, s0.y, s1.x, s1.y, Color{ac.r, ac.g, ac.b, (u8)(l == 0 ? a : a / 2)});
+        }
+        // where the lanes leave the screen: a chevron on the screen edge pointing in from the border
+        Vec2 se = worldToScreen(entry), sg = worldToScreen(goal);
+        if (se.x < 0 || se.y < 0 || se.x > SCREEN_W || se.y > VIEW_H) {
+            Vec2 d = (sg - se); float L = d.len(); if (L < 1) return; d = d * (1.0f / L);
+            float t = 0;   // walk from the goal back toward the entry until the screen edge
+            for (; t < L; t += 8.0f) { Vec2 q = sg - d * t; if (q.x < 14 || q.y < 14 || q.x > SCREEN_W - 14 || q.y > VIEW_H - 14) break; }
+            Vec2 q = sg - d * t, sd(-d.y, d.x);
+            for (int k = 0; k < 2; k++) {
+                Vec2 c = q + d * (k * 9.0f + std::fmod(wallTime * 18.0f, 9.0f));
+                g.thickLine(c.x - d.x * 7 + sd.x * 7, c.y - d.y * 7 + sd.y * 7, c.x, c.y, Color{ac.r, ac.g, ac.b, a}, 2.0f);
+                g.thickLine(c.x - d.x * 7 - sd.x * 7, c.y - d.y * 7 - sd.y * 7, c.x, c.y, Color{ac.r, ac.g, ac.b, a}, 2.0f);
+            }
+        }
+    };
+    for (auto& m : g_sim.fleetMarks) {
+        if (m.owner < 0 || g_sim.players[m.owner].team != g_sim.players[hp].team) continue;
+        float age = g_sim.time - m.t0, k = clampf((30.0f - age) / 8.0f, 0.0f, 1.0f);
+        // (the heading in is square to the border the entry lies on)
+        Vec2 n = m.entry.x < 3.0f * TILE ? Vec2(1, 0) : m.entry.x > WORLD_W - 3.0f * TILE ? Vec2(-1, 0) : m.entry.y < 3.0f * TILE ? Vec2(0, 1) : Vec2(0, -1);
+        lanes(m.entry, m.goal, n, (u8)(110 * k));
+        Vec2 sg = worldToScreen(m.goal);
+        g.dashedCircle(sg.x, sg.y, 9.0f * TILE, Color{ac.r, ac.g, ac.b, (u8)(120 * k)}, wallTime * 14.0f);
+    }
+    if (!fleetMode) return;
+    Vec2 wp = screenToWorld(mouseX, mouseY), goal, entry, n;
+    Vec2 m(mouseX, mouseY);
+    if (!g_sim.fleetEntry(wp, goal, entry, n)) {   // not on (or near) the ocean
+        g.circle(m.x, m.y, 18.0f, rgb(255, 110, 90), 24);
+        g.thickLine(m.x - 9, m.y - 9, m.x + 9, m.y + 9, rgb(255, 110, 90), 2.0f);
+        g.thickLine(m.x + 9, m.y - 9, m.x - 9, m.y + 9, rgb(255, 110, 90), 2.0f);
+        return;
+    }
+    float pulse = 0.5f + 0.5f * std::sin(wallTime * 6.0f);
+    Vec2 sg = worldToScreen(goal);
+    g.discFill(sg.x, sg.y, 9.0f * TILE, Color{ac.r, ac.g, ac.b, (u8)(18 + 14 * pulse)});
+    g.dashedCircle(sg.x, sg.y, 9.0f * TILE, ac, wallTime * 20.0f);
+    lanes(entry, goal, n, 190);
+    // the formation: patrol boats ahead, the warships round the carrier
+    Vec2 along(-n.y, n.x);
+    auto mark = [&](float fwd, float side, float len, float beam) {
+        Vec2 q = worldToScreen(goal + n * (fwd * TILE) + along * (side * TILE));
+        g.drawSized(g.disc, q.x, q.y, len, beam, std::atan2(n.y, n.x), Color{ac.r, ac.g, ac.b, 120});
+    };
+    for (int k = 0; k < FLEET_PATROLS; k++) { float side = -9.0f + 2.0f * k; mark(std::fabs(side) <= 5 ? 8.0f : (std::fabs(side) <= 7 ? 6.5f : 5.0f), side, 18, 7); }
+    for (int l = -1; l <= 1; l++) { mark(l == 0 ? 5.5f : 4.0f, l * 4.0f, 30, 10); mark(l == 0 ? 1.0f : -2.0f, l * 6.0f, 32, 11); }
+    mark(-3.5f, 0, 64, 20);
+    char buf[96];
+    const char* edge = n.x > 0 ? "west" : n.x < 0 ? "east" : n.y > 0 ? "north" : "south";
+    snprintf(buf, sizeof buf, "%d ships from the %s edge", (int)g_sim.fleetManifest(hp).size(), edge);
+    g.text((int)(sg.x - g.textW(buf) / 2), (int)(sg.y - 9.0f * TILE - 16), buf, ac);
+}
+
+// ------------------------------------------------------------ the carrier's flight deck
+// What the deck really holds: one parked jet per entry of its deck list (rearming ones with a fuel cart and their crew beside them), a few deck hands
+// in their coloured jerseys, and at the bow the blast deflector raised behind the catapult that has just fired, with steam drifting off the track.
+// The jets that are taxiing, on a catapult or landing are ordinary units drawn on top (see Sim::carrierJetRun).
+void Game::drawCarrierDeck(const Entity& e, Vec2 p, float ang, Color mod, u8 alpha) {
+    Gfx& g = g_gfx;
+    const float ca = std::cos(ang), sa = std::sin(ang);
+    auto at = [&](float lx, float ly) { return Vec2(p.x + lx * ca - ly * sa, p.y + lx * sa + ly * ca); };
+    const int jetT = e.type == U_C_CARRIER ? U_C_CARRIERJET : U_K_CARRIERJET;
+    const Sprite& jet = g.unitBody[jetT][slotOf(e.owner < 0 ? 0 : e.owner)];
+    const float t = g_sim.time;
+    const bool cy = e.type == U_C_CARRIER;
+    const u8 a = alpha;
+    // the parked wing
+    int n = std::min((int)e.deck.size(), CARRIER_WING);
+    for (int i = 0; i < n; i++) {
+        const float* pk = CARRIER_PARK[i];
+        Vec2 q = at(pk[0], pk[1]);
+        float ja = ang + pk[2];
+        g.draw(jet, q.x + 1.2f, q.y + 1.8f, ja, CARRIER_JET_DECK_SCALE, rgb(0, 0, 0), (u8)(70 * a / 255));
+        g.draw(jet, q.x, q.y, ja, CARRIER_JET_DECK_SCALE, mod, a);
+        if (e.deck[i] > t) {   // rearming: a fuel cart at its wing, a purple-shirted fueller and a red-shirted ordnance hand, an amber light
+            float side = pk[1] < 0 ? 1.0f : -1.0f;   // (inboard of the jet)
+            Vec2 cart = at(pk[0] - 4.0f, pk[1] + side * 9.0f);
+            g.drawSized(g.disc, cart.x, cart.y, 6.0f, 3.6f, ang, rgb(70, 74, 80), a);
+            g.drawSized(g.disc, cart.x, cart.y, 4.4f, 2.4f, ang, cy ? rgb(220, 226, 232) : rgb(210, 190, 90), a);
+            Vec2 h1 = at(pk[0] + 2.0f, pk[1] + side * 7.0f + std::sin(wallTime * 2.0f + i) * 0.8f), h2 = at(pk[0] - 7.0f, pk[1] + side * 4.0f);
+            g.fillCircle(h1.x, h1.y, 1.3f, rgb(150, 80, 200, a));
+            g.fillCircle(h2.x, h2.y, 1.3f, rgb(220, 60, 50, a));
+            if (((int)(wallTime * 3.0f) + i) & 1) g.glowAdd(cart.x, cart.y, 4.0f, Color{255, 190, 70, (u8)(150 * a / 255)});
+        }
+    }
+    // the deck hands: yellow (aircraft handlers) by the island and the bow, green (catapult crew) at the catapults, white (safety) aft
+    static const float CREW[7][3] = { { 6.0f, 9.5f, 0 }, { -4.0f, 10.5f, 0 }, { 66.0f, -2.0f, 1 }, { 66.0f, 13.5f, 1 }, { -44.0f, 6.0f, 2 }, { 40.0f, 3.0f, 0 }, { -30.0f, -21.0f, 2 } };
+    static const Color JERSEY[3] = { rgb(250, 214, 60), rgb(80, 210, 110), rgb(240, 240, 240) };
+    for (int k = 0; k < 7; k++) {
+        float w = std::sin(wallTime * (0.6f + 0.13f * k) + k * 1.7f) * 1.6f;
+        Vec2 q = at(CREW[k][0] + w, CREW[k][1] + std::cos(wallTime * 0.5f + k) * 0.8f);
+        Color j = JERSEY[(int)CREW[k][2]];
+        g.fillCircle(q.x, q.y, 1.25f, Color{j.r, j.g, j.b, a});
+    }
+    // the blast deflector behind the catapult that fired last stands up for a moment, and steam drifts back off its track
+    float since = t - e.catAt;
+    float lastY = e.catSide ? -CARRIER_CAT_Y : CARRIER_CAT_Y;   // (catSide already points at the next one)
+    for (int s = -1; s <= 1; s += 2) {
+        float y = s * CARRIER_CAT_Y;
+        bool up = since >= -0.8f && since < CARRIER_CAT_T + 0.6f && std::fabs(y - lastY) < 0.1f;
+        Vec2 a0 = at(CARRIER_CAT_X0 - 11.0f, y - 6.0f), a1 = at(CARRIER_CAT_X0 - 11.0f, y + 6.0f);
+        g.thickLine(a0.x, a0.y, a1.x, a1.y, up ? rgb(58, 62, 70, a) : rgb(110, 116, 124, (u8)(a * 0.6f)), up ? 2.6f : 1.0f);
+        if (up) g.glowAdd((a0.x + a1.x) * 0.5f, (a0.y + a1.y) * 0.5f, 6.0f, Color{255, 170, 90, (u8)(70 * a / 255)});
+        if (std::fabs(y - lastY) < 0.1f && since > CARRIER_CAT_T && since < CARRIER_CAT_T + 1.4f) {
+            float k = 1.0f - (since - CARRIER_CAT_T) / 1.4f;
+            for (int m = 0; m < 4; m++) {
+                Vec2 q = at(CARRIER_CAT_X0 + m * 7.0f, y + std::sin(wallTime * 3.0f + m) * 1.2f);
+                g.drawSized(g.fxs.cloud[m & 1], q.x, q.y, 10.0f + 3.0f * m, 5.0f, ang, rgb(240, 244, 248), (u8)(110 * k * a / 255));
+            }
+        }
     }
 }

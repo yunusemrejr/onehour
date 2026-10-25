@@ -7,7 +7,8 @@ Game g_game;
 
 enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_STOP, BK_CANCEL, BK_AREA, BK_SCAN, BK_RESEARCH, BK_NUKE, BK_DROP, BK_FORCE, BK_UPGRADE, BK_AID, BK_UNLOAD, BK_DROPOFF, BK_MININUKE, BK_AIRSTRIKE, BK_DEEPNUKE,
        BK_ISLANDNUKE,   // an island launcher the army holds: fire its small nuke
-       BK_NUKEBOMBER }; // tech structure: call in the Nuclear Bomber
+       BK_NUKEBOMBER,   // tech structure: call in the Nuclear Bomber
+       BK_FLEET };      // tech structure: Fleet Call
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -21,6 +22,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_DEEPNUKE: return "K";
     case BK_DROP: return "P";
     case BK_AIRSTRIKE: return "I";
+    case BK_FLEET: return "L";
     case BK_ISLANDNUKE: return "K";
     case BK_NUKEBOMBER: return "B";
     case BK_AID: return "D";
@@ -47,6 +49,7 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_DROP: return ICO_PARADROP;
     case BK_AID: return ICO_AID;
     case BK_AIRSTRIKE: return ICO_AIRSTRIKE;
+    case BK_FLEET: return ICO_FLEET;
     case BK_SELL: return ICO_SELL;
     case BK_RALLY: return ICO_RALLY;
     case BK_ATTACKMOVE: return ICO_ATTACKMOVE;
@@ -134,7 +137,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -509,6 +512,9 @@ void Game::buildButtonsRaw() {
             std::vector<int> answer = g_sim.strikeManifest(g_sim.humanPlayer);
             snprintf(tip, sizeof tip, "%s  [I]  %s  (%s)", st.name, st.desc, rosterText(answer, 120).c_str());
             add(BK_AIRSTRIKE, 0, g_sim.strikesReady(g_sim.humanPlayer) > 0, st.name, tip);
+            const FleetType& ft = FLEETS[pl.faction];
+            snprintf(tip, sizeof tip, "%s  [L]  %s (%d s now)", ft.name, ft.desc, (int)DROP_TIERS[g_sim.dropTier(g_sim.humanPlayer)].cooldown);
+            add(BK_FLEET, 0, g_sim.fleetsReady(g_sim.humanPlayer) > 0, ft.name, tip);
             int bt = pl.faction == F_CYBER ? U_C_NUKEBOMBER : U_K_NUKEBOMBER;
             snprintf(tip, sizeof tip, "Nuclear Bomber  [B]  A %s strategic bomber comes in from the map corner behind your base, flies straight to the spot you pick, drops one mid-sized nuclear bomb (%.1f tile blast, leaves radiation) and flies on off the map. Strong anti-air can shoot it down before the drop. One call per %d s per tech structure%s",
                      UNITS[bt].name, NUKE_RADIUS * std::sqrt(NUKEBOMBER_SCALE), (int)NUKEBOMBER_COOLDOWN, g_sim.time < NUKEBOMBER_OPEN ? "  (available a few minutes into the match)" : "");
@@ -626,7 +632,7 @@ bool Game::launchNuke(Vec2 at) {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false;
 }
 
 void Game::clickButton(const Button& b) {
@@ -654,6 +660,7 @@ void Game::cmdSelection(int kind, int id) {
     case BK_DEEPNUKE: if (g_sim.deepNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeDeep = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_DROP: if (g_sim.dropsReady(g_sim.humanPlayer) > 0) { cancelModes(); dropMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_AIRSTRIKE: if (g_sim.strikesReady(g_sim.humanPlayer) > 0) { cancelModes(); strikeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_FLEET: if (g_sim.fleetsReady(g_sim.humanPlayer) > 0) { cancelModes(); fleetMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_ISLANDNUKE: if (g_sim.islandNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeIsland = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_NUKEBOMBER: if (g_sim.bombersReady(g_sim.humanPlayer) > 0) { cancelModes(); bomberMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_AID: if (g_sim.aidsReady(g_sim.humanPlayer) > 0) { cancelModes(); aidMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
@@ -813,7 +820,7 @@ void Game::gameEvent(const SDL_Event& e) {
         SDL_Keycode k = e.key.keysym.sym;
         u16 mod = e.key.keysym.mod;
         if (k == SDLK_ESCAPE) {
-            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode) cancelModes();
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || fleetMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode) cancelModes();
             else if (showHelp) showHelp = false;
             else openPauseMenu();
             return;
@@ -860,6 +867,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
                 else if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, wp)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, wp)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
+                else if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, wp)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, wp)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, wp)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else cam = Vec2(clampf(wp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(wp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -892,6 +900,7 @@ void Game::gameEvent(const SDL_Event& e) {
             if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; forceLatch = false; return; }
             if (dropMode) { if (g_sim.cmdParadrop(g_sim.humanPlayer, w)) dropMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, w)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, w)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, w)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (aidMode) { if (g_sim.cmdAidDrop(g_sim.humanPlayer, w)) aidMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, w); } dropoffMode = false; g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
@@ -903,7 +912,7 @@ void Game::gameEvent(const SDL_Event& e) {
             return;
         }
         if (btn == SDL_BUTTON_RIGHT) {
-            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || aidMode || rallyMode || areaMode || dropoffMode) { cancelModes(); return; }
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || fleetMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode) { cancelModes(); return; }
             issueRightClick(w);
             return;
         }
@@ -1551,15 +1560,17 @@ void Game::drawEntity(Entity& e) {
     }
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
     if (air || fallK > 0) { Color t = ambientTint(); mod = rgb(mod.r * t.r / 255, mod.g * t.g / 255, mod.b * t.b / 255); }   // (aircraft are drawn after the world's light pass: they take the hour's light themselves)
-    const u8 ghost = (u8)((Sim::stealthOf(e) ? 150 : 255) * clampf(e.fade, 0, 1));   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near); a departing Air Strike fighter fades out
+    const u8 ghost = (u8)((Sim::stealthOf(e) ? 150 : 255) * clampf(e.fade, 0, 1));
+    const bool deckJet = e.type == U_C_CARRIERJET || e.type == U_K_CARRIERJET;
+    const float usc = deckJet ? CARRIER_JET_DECK_SCALE + (1.0f - CARRIER_JET_DECK_SCALE) * clampf(alt, 0, 1) : 1.0f;   // a carrier jet on deck is small; it grows as it climbs   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near); a departing Air Strike fighter fades out
     if (air) {
         // shadow: the aircraft's own silhouette, thrown to the south-east and sliding closer as it settles onto the pad
-        g.drawRolled(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, e.roll, 1, rgb(0, 0, 0), (u8)((70 + 40 * (1 - alt)) * clampf(e.fade, 0, 1)));
+        g.drawRolled(body, p.x + 3 + 15 * alt, p.y + 4 + 27 * alt, e.angle, e.roll, usc, rgb(0, 0, 0), (u8)((70 + 40 * (1 - alt)) * clampf(e.fade, 0, 1)));
         p.y -= 14 * alt;   // altitude
     } else {
         if (ut.naval) {   // a hull on the water: the wake round it and a soft dark patch under it
-            drawShipWake(e, p);
-            g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), 64);
+            if (e.fade > 0.35f) drawShipWake(e, p);   // (a Fleet Call ship still in the haze at the border leaves none yet)
+            g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), (u8)(64 * clampf(e.fade, 0, 1)));
         } else if (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) {   // an infiltrator paddling its inflatable raft
             float ca = std::cos(e.angle), sa = std::sin(e.angle);
             if (spd > 5) for (int k = 1; k <= 2; k++) g.drawSized(g.fxs.ring, p.x - ca * 9 * k, p.y - sa * 9 * k, 10.0f + 7 * k, 7.0f + 5 * k, e.angle, rgb(220, 240, 255), (u8)(90 / k));
@@ -1633,12 +1644,12 @@ void Game::drawEntity(Entity& e) {
     // jets: afterburner flame, glow and a vapour trail while they are moving fast
     if (air && ut.jet && spd > 120 && !disabled) {
         float burn = clampf((spd - 120) / 360.0f, 0, 1), th = e.angle;
-        const float jsc = artScale(e.type);
+        const float jsc = artScale(e.type) * usc;
         Vec2 tail = Vec2(p.x - std::cos(th) * 25.0f * 0.62f * jsc, p.y - std::sin(th) * 25.0f * 0.62f * jsc);
         int fr = ((int)(wallTime * 24) + (int)e.gen) % 6;
         bool cyj = ut.faction == F_CYBER;
         Color fc = cyj ? rgb(140, 230, 255) : rgb(255, 190, 110);
-        g.draw(g.fxs.flame[fr], tail.x, tail.y, th - 1.5708f, 0.55f + 1.0f * burn, fc, (u8)(150 + 105 * burn));
+        g.draw(g.fxs.flame[fr], tail.x, tail.y, th - 1.5708f, (0.55f + 1.0f * burn) * usc, fc, (u8)(150 + 105 * burn));
         g.glowAdd(tail.x, tail.y, 9 + 9 * burn, Color{fc.r, fc.g, fc.b, (u8)(120 * burn + 40)});
         if (frameDt > 0 && burn > 0.45f && fxRng.f() < 40.0f * frameDt) {
             float wy = alt > 0.5f ? 1.0f : 0.0f; (void)wy;
@@ -1676,9 +1687,26 @@ void Game::drawEntity(Entity& e) {
             }
         }
     }
-    if (air && std::abs(e.roll) > 0.02f) g.drawRolled(*bs, p.x, p.y, drawAng, e.roll, 1, mod, ghost);   // banking into a turn, or a barrel roll
-    else g.draw(*bs, p.x, p.y, drawAng, 1, mod, ghost);
-    if (ut.naval) drawShipMounts(e, p, mod);
+    if (air && std::abs(e.roll) > 0.02f) g.drawRolled(*bs, p.x, p.y, drawAng, e.roll, usc, mod, ghost);   // banking into a turn, or a barrel roll
+    else g.draw(*bs, p.x, p.y, drawAng, usc, mod, ghost);
+    if (deckJet && e.deckPhase == 2 && frameDt > 0) {   // on the catapult: steam streams back off the track behind it
+        Vec2 f(std::cos(e.angle), std::sin(e.angle));
+        for (float q = fxRng.f(); q < 70.0f * frameDt; q += 1.0f)
+            emitP(e.pos.x - f.x * fxRng.f(6, 30), e.pos.y - f.y * fxRng.f(6, 30), -f.x * fxRng.f(10, 40) + fxRng.f(-8, 8), -f.y * fxRng.f(10, 40) + fxRng.f(-8, 8),
+                  fxRng.f(0.5f, 0.9f), 2.5f, 8.0f, rgb(240, 244, 248, 170), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 1.2f, fxRng.f(0, 6), 0.2f);
+    }
+    if (ut.naval) drawShipMounts(e, p, mod, ghost);
+    if (e.type == U_C_CARRIER || e.type == U_K_CARRIER) drawCarrierDeck(e, p, drawAng, mod, ghost);
+    if (ut.naval && e.fade < 1.0f) {   // a called ship coming out of the sea haze at the map border: a bank of mist round the hull thins as it sails clear
+        float k = 1.0f - clampf(e.fade, 0, 1), L = e.radius() * 2.6f;
+        g.drawSized(g.disc, p.x, p.y, L * 1.6f, L, e.angle, rgb(226, 234, 242), (u8)(40 * k));
+        g.glowAdd(p.x, p.y, L * 0.6f, Color{200, 220, 236, (u8)(50 * k)});
+        if (frameDt > 0) for (float q = fxRng.f(); q < 26.0f * k * frameDt * (e.radius() / 12.0f); q += 1.0f) {   // banks of sea mist rolling off the hull
+            float a = fxRng.f(0, 6.2832f), r = fxRng.f(0.2f, 1.0f) * L * 0.8f;
+            emitP(e.pos.x + std::cos(a) * r, e.pos.y + std::sin(a) * r * 0.7f, fxRng.f(-6, 6), fxRng.f(-6, 6), fxRng.f(1.2f, 2.2f), L * 0.35f, L * 0.8f,
+                  rgb(232, 238, 244, 130), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.6f, fxRng.f(0, 6), fxRng.f(-0.2f, 0.2f));
+        }
+    }
     if (ut.kind == UK_VEH && ut.cargoCap > 0 && !ut.naval) drawJeepCrew(e, p);
     const Sprite& tur = g.unitTurret[e.type][slotOf(owner)];
     if (tur.tex && !ut.naval) {
@@ -1977,6 +2005,7 @@ void Game::renderWorld() {
     drawZones();
     drawRangeRings();
     drawStrikeMarks();
+    drawFleetCall();
     drawDistrictLife();   // the towns' streets: walkers and cars (under the blocks' roofs and shadows)
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
@@ -2092,6 +2121,7 @@ void Game::renderWorld() {
     }
     else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d strike fighters bomb the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size()); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
     else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
+    else if (fleetMode) { Vec2 gl, en, nn; bool ok = g_sim.fleetEntry(screenToWorld(mouseX, mouseY), gl, en, nn); g.text(mouseX + 12, mouseY - 4, ok ? "Fleet Call: the fleet forms up here" : "Fleet Call: pick a spot on the open ocean", ok ? hudAccent(g_sim.players[g_sim.humanPlayer].faction) : rgb(255, 150, 120)); }
     else if (aidMode) {
         int who[MAX_PLAYERS]; int n = g_sim.aidCandidates(g_sim.humanPlayer, screenToWorld(mouseX, mouseY), who);
         char buf[160];
@@ -2478,12 +2508,12 @@ void Game::renderHud() {
         } else g.text(tx, b.y + ly, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
         if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(tx, b.y + sy, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
-        if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE || b.kind == BK_NUKEBOMBER || b.kind == BK_ISLANDNUKE) {
-            float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidWait(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikeWait(g_sim.humanPlayer)
+        if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE || b.kind == BK_FLEET || b.kind == BK_NUKEBOMBER || b.kind == BK_ISLANDNUKE) {
+            float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidWait(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikeWait(g_sim.humanPlayer) : b.kind == BK_FLEET ? g_sim.fleetWait(g_sim.humanPlayer)
                       : b.kind == BK_NUKEBOMBER ? g_sim.bomberWait(g_sim.humanPlayer) : b.kind == BK_ISLANDNUKE ? g_sim.islandNukeWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
             if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(tx, b.y + sy, buf, hudDim()); }
             else if (b.enabled) {
-                int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidsReady(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikesReady(g_sim.humanPlayer) : 1;
+                int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidsReady(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikesReady(g_sim.humanPlayer) : b.kind == BK_FLEET ? g_sim.fleetsReady(g_sim.humanPlayer) : 1;
                 if (dn > 1) { snprintf(buf, sizeof buf, "READY x%d", dn); g.text(tx, b.y + sy, buf, accent); } else g.text(tx, b.y + sy, "READY", accent);
             }
         }
@@ -2527,7 +2557,7 @@ void Game::renderHud() {
             "Structure selected         train units; right-click ground for rally; Del sells",
             "F + click / Ctrl+right-click  force fire on your own or an ally's unit or structure (they never shoot back)",
             "F or Ctrl while aiming     a strike power hits friendly ground too (a nuke always does)",
-            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I phone strike, D aid drop, U/G/E/N/H/A upgrades",
+            "Tech structure            X strike, V map scan (30s), R Advanced Program, P airdrop, I Air Strike, L Fleet Call, B Nuclear Bomber, D aid drop, U/G/E/N/H/A upgrades",
             "Wall (pasture/defense)    W: unlimited thick wall segments; H: Hyper Protection, A: Anti-Rocket wall lasers (rockets, nukes, aircraft)",
             "Spy selected              right-click an enemy structure, an island launcher or a Bastion Wall to take it (swims across water)",
             "Soldiers + bunker / lifter right-click your bunker (50 + a dozer) or cargo lifter (40 places) to board",

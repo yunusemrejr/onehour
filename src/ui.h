@@ -49,6 +49,7 @@ struct Game {
     bool launchNuke(Vec2 at);       // fires the missile (a selected ready bunker's, else any ready one); false if none could go
     bool dropMode = false;          // picking a paradrop zone
     bool strikeMode = false;        // picking the spot a Phone Strike package is called in on
+    bool fleetMode = false;         // picking the stretch of ocean a Fleet Call sails to
     bool aidMode = false;           // picking the spot for an Aid Drop
     bool rallyMode = false;
     bool dropoffMode = false;       // picking the spot where a cargo chopper sets down and unloads
@@ -77,7 +78,7 @@ struct Game {
     void openPauseMenu();
     void closePauseMenu();
     void stepSpeed(int dir);        // move to the next/previous entry of SPEED_STEPS
-    static const int SPEED_COUNT = 7;
+    static constexpr int SPEED_COUNT = 7;
     struct Ping { Vec2 pos; float time; };
     std::vector<Ping> pings;
     std::vector<Particle> parts;
@@ -154,10 +155,12 @@ private:
     void cancelModes();
     void drawNukes();
     void drawShipWake(const Entity& e, Vec2 p);                    // ui2.cpp: the newer features' rendering
-    void drawShipMounts(const Entity& e, Vec2 p, Color mod);
+    void drawShipMounts(const Entity& e, Vec2 p, Color mod, u8 alpha = 255);
+    void drawCarrierDeck(const Entity& e, Vec2 p, float ang, Color mod, u8 alpha);   // ui2.cpp: the wing parked on deck, the deck crew, the catapults' blast deflectors and steam
     void drawJeepCrew(const Entity& e, Vec2 p);
     void drawEscorts(const Entity& e, Vec2 p);
     void drawStrikeMarks();
+    void drawFleetCall();          // ui2.cpp: the Fleet Call target (where the fleet would come in) and the lanes of fleets still coming in
     void drawCoverRing(Vec2 sp, float radiusPx, Color col, bool powered, const char* label);
     void drawInterceptors();
     void drawDock(const Entity& e, Vec2 p);                       // a Naval Yard's pier into the lake

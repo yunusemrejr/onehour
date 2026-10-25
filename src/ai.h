@@ -16,9 +16,15 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
               FEAT_RIOT = 0x20000,    // riots: a home guard stays behind while order is low, rioters do not skew the army's composition, soft spots get a turret
               FEAT_TEAM = 0x40000,    // allied commanders play as a team: one focus enemy for the whole team, joint attacks, plans called out to a human ally
               FEAT_PERSONA = 0x80000, // every commander is a person with a style of their own (see Persona): raids, patience, appetite for towns and spies
-              FEAT_ALL = 0xFFFFF,
+              FEAT_FLEET2 = 0x100000, // the fleet: ships already on their way or fighting keep at it, a carrier stands off and lets its jets fight
+              FEAT_HOLD = 0x200000,   // defence and wave orders leave units that are already fighting at the spot alone (no mid-fight re-routing)
+              FEAT_FLEETCALL = 0x400000, // the tech structure's Fleet Call: a battle fleet from the open sea, sent where the commander's fleet is needed
+              FEAT_EASYWIT = 0x800000,   // an Easy commander plays sensibly (dodges nukes late, leaves radiation, helps allies, breaks off a lost attack,
+                                         // uses its tech structure's powers); its economy, army size and reaction times stay Easy's
+              FEAT_COMBO = 0x1000000,    // Hard and Brutal: combined arms - an Air Strike goes in on the objective's defences as a wave sets off
+              FEAT_ALL = 0x1FFFFFF,
     FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER
-                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA };   // what ships
+                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA | FEAT_FLEET2 | FEAT_HOLD | FEAT_FLEETCALL | FEAT_EASYWIT | FEAT_COMBO };   // what ships
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -66,7 +72,7 @@ struct AiPlayer {
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 25, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastSpyOrder = -100;     // when the spies were last sent after a structure
-    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0, nextCivicTry = 0;   // when the fleet was last given a target, and the jeeps last loaded
+    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0, nextCivicTry = 0, nextFleetCall = 0;   // when the fleet was last given a target, and the jeeps last loaded
     float nukeHoldSince = -1;   // a covered nuke target is waited out for the second ramp since this time
     int nukesSeen = 0;             // enemy warheads launched so far (a commander that has been nuked builds anti-nuke defences)
     int seenNukeIds = 0;
