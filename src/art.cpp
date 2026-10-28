@@ -65,6 +65,7 @@ static int unitLocal(int type) {
     if (type == U_C_CARRIER || type == U_K_CARRIER) return 29;          // aircraft carriers (art_ocean.cpp, 128 px canvas)
     if (type == U_C_CARGOSHIP || type == U_K_CARGOSHIP) return 30;      // cargo ships (art_ocean.cpp, 128 px canvas)
     if (type == U_C_CARRIERJET || type == U_K_CARRIERJET) return 31;    // carrier jets (art_ocean.cpp)
+    if (type == U_C_LASERCMD || type == U_K_LASERCMD) return 32;        // laser commandos (art_commando.cpp)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -1211,6 +1212,7 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 29: artCarrierBody(c, team, cy); break;            // aircraft carrier (art_ocean.cpp)
     case 30: artCargoShipBody(c, team, cy); break;          // cargo ship (art_ocean.cpp)
     case 31: artCarrierJetBody(c, team, cy); break;         // carrier jet (art_ocean.cpp)
+    case 32: artCommandoBody(c, team, cy, frame); break;    // laser commando (art_commando.cpp)
     case 28: artRioterBody(c, team, type == U_FIREBOMBER ? 1 : 0, frame); break;   // civilian rioters (art_riot.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
@@ -1591,6 +1593,7 @@ float artScale(int type) {
     if (local == 29) return 4.6f;    // aircraft carriers: about two and a half destroyers long (128 px canvas: see artCanvas)
     if (local == 30) return 4.0f;    // cargo ships
     if (local == 31) return 1.16f;   // carrier jets: a little smaller than the plain fighters
+    if (local == 32) return 1.12f;   // laser commandos: bulkier than an elite trooper, still infantry-sized
     if (local == 16) return 0.75f;   // spy drones: small and delicate
     return 1.0f;
 }

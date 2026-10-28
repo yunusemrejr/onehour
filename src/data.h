@@ -74,6 +74,7 @@ enum UnitTypeId {
     U_C_CARRIER, U_K_CARRIER,       // aircraft carriers (Naval Yard + tech structure): a floating airbase whose own wing of jets flies from its deck
     U_C_CARGOSHIP, U_K_CARGOSHIP,   // military cargo ships: carry a whole battalion (vehicles, dozers, infantry) over the sea and land it on any shore
     U_C_CARRIERJET, U_K_CARRIERJET, // a carrier's jets: never built, they take off from their carrier, fight round it and land on it again (Sim::carrierJetRun)
+    U_C_LASERCMD, U_K_LASERCMD,     // laser commandos: never built (no barracks trains them), they only jump with a bunker's Para Backup (see W_TOXIC_LANCE)
     U_COUNT
 };
 
@@ -513,8 +514,10 @@ enum BunkerUpg { BU_SHELL = 0,   // super-thick shell: more health and a heavier
                  BU_MEDIC,       // field hospital: mends the units and structures round it all the time, even under fire
                  BU_TRIPLE,      // triple launch tubes: every launch is three missiles at once, spread over the target
                  BU_SWIFT,       // swift warheads: its missiles fly twice as fast and are much harder to shoot down
-                 BU_PARA,        // para backup: calls a cargo plane with 35 paratroopers anywhere, once a minute
-                 BU_COUNT };
+                 BU_PARA,        // para backup: calls a cargo plane with 35 paratroopers anywhere, once a minute (laser commandos among them)
+                 BU_RAIN,        // rain rack: the Rain Nukes power - five small, very fast warheads at random spots in a wide circle
+                 BU_TANKS,       // heavy lift pad: the Tank Drop power - a heavy cargo plane drops ten tanks and a medic vehicle
+                 BU_COUNT };     // (Entity.bunkerUpg is a u8: eight at most)
 struct BunkerUpgType { const char* name; const char* tag; const char* hotkey; const char* desc; int cost; float time; };   // tag: a short name for the info panel
 extern const BunkerUpgType BUNKER_UPGS[BU_COUNT];
 static const float BUNKER_SHELL_HP = 1.8f;        // super-thick shell: max health multiplier ...
@@ -536,6 +539,30 @@ static const float BUNKER_SWIFT_FLIGHT = 0.5f;    // swift warheads: share of th
 static const float BUNKER_SWIFT_RESIST = 0.3f;    // ... and of every defence's chance to shoot one down
 static const int   BUNKER_PARA_TROOPS = 35;       // paratroopers in one Para Backup ...
 static const float BUNKER_PARA_COOLDOWN = 60.0f;  // ... and seconds between two calls of one bunker
+// Rain Nukes (BU_RAIN): RAIN_NUKES small warheads leave the bunker a beat apart and come down at random spots inside a circle of RAIN_NUKE_AREA
+// tiles (at least RAIN_NUKE_SPACING apart). They fly a fifth of a nuke's usual time and every defence's chance against them is RAIN_NUKE_RESIST of it
+static const int   RAIN_NUKES = 5;
+static const float RAIN_NUKE_SCALE = 0.1f;        // each a tenth of a full warhead's blast area (radius NUKE_RADIUS * sqrt(scale))
+static const float RAIN_NUKE_AREA = 10.0f;        // tiles: radius of the target circle (the big selector)
+static const float RAIN_NUKE_SPACING = 3.2f;      // tiles between two impact points (when the circle leaves room)
+static const float RAIN_NUKE_FLIGHT = 0.2f;       // share of the usual flight time (NUKE_FLIGHT)
+static const float RAIN_NUKE_RESIST = 0.06f;      // share of every defence's usual chance to shoot one down
+static const float RAIN_NUKE_GAP = 0.15f;         // seconds between two launches of one rain
+static const float RAIN_NUKE_COOLDOWN = 120.0f;   // seconds between two rains of one bunker
+// Tank Drop (BU_TANKS): a heavy cargo plane drops TANK_DROP_TANKS tanks (the army's main battle tank; its super-heavy for some once unlocked) and
+// one medic vehicle on the spot. Like any airlift it can be shot down on the way, but it is TANK_DROP_ARMOR times as tough
+static const int   TANK_DROP_TANKS = 10;
+static const int   TANK_DROP_HEAVY = 3;           // tanks of the drop that are the super-heavy kind once the army has unlocked it
+static const float TANK_DROP_COOLDOWN = 150.0f;   // seconds between two drops of one bunker
+static const float TANK_DROP_ARMOR = 2.5f;
+// The laser commandos of a Para Backup: ten times a Laser Trooper's health and firepower, and their Toxic Lance leaves a small toxic cloud
+// where it hits (a short-lived Fallout zone that poisons only enemy ground units); BUNKER_PARA_COMMANDOS of them in every drop
+static const int   W_TOXIC_LANCE = 54;            // WEAPONS index of their lance
+static const int   BUNKER_PARA_COMMANDOS = 5;
+static const float TOXIC_RADIUS = 1.6f;           // tiles
+static const float TOXIC_LIFE = 6.0f;             // seconds a cloud lasts (another hit nearby renews it)
+static const float TOXIC_POWER = 1.0f;            // strength (a fallout zone's 'power')
+static const int   TOXIC_MAX = 48;                // clouds at once on the whole map
 // Where things sit on the 3x3 apron, in px from its centre (the art paints its mounts there; the sim fires from there).
 static const float BUNKER_HATCH_R = 20.0f;        // the hatch in the middle (drawn live)
 static const float BUNKER_GUN_X = 28.0f;          // the two miniguns: (-X, 0) and (+X, 0)

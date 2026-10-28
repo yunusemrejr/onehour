@@ -24,25 +24,134 @@ float Sim::bunkerParaWait(const Entity& b) const {
     return std::max(0.0f, b.paraReady - time);
 }
 
-// What one Para Backup carries: BUNKER_PARA_TROOPS soldiers, riflemen, anti-air troopers and snipers above all, then the heavier kinds, each one only
-// if the army has unlocked it (a kind it has not falls back to the plain rifleman). Never an infiltrator: they do not jump with the line troops.
+// What one Para Backup carries: BUNKER_PARA_TROOPS soldiers. BUNKER_PARA_COMMANDOS laser commandos (no barracks trains them: they only come this way),
+// then riflemen, anti-air troopers and snipers above all and the heavier kinds, each one only if the army has unlocked it (a kind it has not falls
+// back to the plain rifleman). Never an infiltrator: they do not jump with the line troops.
 std::vector<int> Sim::bunkerParaManifest(int player) const {
     std::vector<int> load;
     if (player < 0 || player >= numPlayers) return load;
     bool cy = players[player].faction == F_CYBER;
     const int rifle = cy ? U_C_INF1 : U_K_INF1, aa = cy ? U_C_INF2 : U_K_INF2, heavy = cy ? U_C_INF3 : U_K_INF3;
-    const int elite = cy ? U_C_ELITE : U_K_ELITE, sniper = cy ? U_C_SNIPER : U_K_SNIPER;
+    const int elite = cy ? U_C_ELITE : U_K_ELITE, sniper = cy ? U_C_SNIPER : U_K_SNIPER, commando = cy ? U_C_LASERCMD : U_K_LASERCMD;
     // the stick in the order the soldiers jump (mixed, so every part of the drop zone gets some of each); 35 places
-    static const int PATTERN[7] = { 0, 1, 2, 0, 1, 2, 3 };   // 0 rifle, 1 anti-air, 2 sniper, 3 heavy / elite in turn
-    int extra = 0;
+    static const int PATTERN[7] = { 4, 0, 1, 2, 0, 1, 3 };   // 0 rifle, 1 anti-air, 2 sniper, 3 heavy / elite in turn, 4 laser commando
+    int extra = 0, commandos = 0;
     for (int k = 0; k < BUNKER_PARA_TROOPS; k++) {
         int slot = PATTERN[k % 7], t = rifle;
-        if (slot == 1) t = unitAvailable(player, aa) ? aa : rifle;
+        if (slot == 4) t = commandos++ < BUNKER_PARA_COMMANDOS ? commando : rifle;
+        else if (slot == 1) t = unitAvailable(player, aa) ? aa : rifle;
         else if (slot == 2) t = unitAvailable(player, sniper) ? sniper : (unitAvailable(player, aa) && (k & 1) ? aa : rifle);
         else if (slot == 3) { int want = (extra++ & 1) ? elite : heavy; t = unitAvailable(player, want) ? want : (unitAvailable(player, heavy) ? heavy : aa); if (!unitAvailable(player, t)) t = rifle; }
         load.push_back(t);
     }
     return load;
+}
+
+float Sim::bunkerRainWait(const Entity& b) const {
+    if (!bunkerHas(b, BU_RAIN)) return -1;
+    return std::max(0.0f, b.rainReady - time);
+}
+float Sim::bunkerTankWait(const Entity& b) const {
+    if (!bunkerHas(b, BU_TANKS)) return -1;
+    return std::max(0.0f, b.tankReady - time);
+}
+
+// What one Tank Drop carries: TANK_DROP_TANKS of the army's main battle tank (TANK_DROP_HEAVY of them its super-heavy once it has unlocked it), in
+// the order they leave the plane, and the medic vehicle last (it lands in the middle of the stick).
+std::vector<int> Sim::bunkerTankManifest(int player) const {
+    std::vector<int> load;
+    if (player < 0 || player >= numPlayers) return load;
+    bool cy = players[player].faction == F_CYBER;
+    const int tank = cy ? U_C_TANK : U_K_TANK, titan = cy ? U_C_TITAN : U_K_TITAN, medic = cy ? U_C_MEDIC : U_K_MEDIC;
+    const bool heavy = unitAvailable(player, titan);
+    for (int k = 0; k < TANK_DROP_TANKS; k++) {
+        load.push_back(heavy && k % 3 == 1 && k / 3 < TANK_DROP_HEAVY ? titan : tank);
+        if (k == TANK_DROP_TANKS / 2 - 1) load.push_back(medic);
+    }
+    return load;
+}
+
+// ------------------------------------------------------------ Upgrade All Bunkers
+// One button on any bunker queues every upgrade the army's finished bunkers still lack. Each bunker then fits its queue one upgrade after another
+// (the order below: protection first), paying for each fitting as it starts; one that cannot be paid waits until the money is there.
+static const int BUNKER_FIT_ORDER[BU_COUNT] = { BU_SHELL, BU_LASERS, BU_MEDIC, BU_SWIFT, BU_TRIPLE, BU_PARA, BU_RAIN, BU_TANKS };
+
+int Sim::bunkerUpgradesMissing(int player, int* cost, bool unqueued) const {
+    int n = 0, c = 0;
+    for (auto& b : ents) {
+        if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER) continue;
+        for (int u = 0; u < BU_COUNT; u++) {
+            if (bunkerHas(b, u) || b.bunkerBusy == u || (unqueued && ((b.bunkerQueue >> u) & 1))) continue;
+            n++; c += BUNKER_UPGS[u].cost;
+        }
+    }
+    if (cost) *cost = c;
+    return n;
+}
+
+int Sim::cmdBunkerUpgradeAll(int player) {
+    if (player < 0 || player >= numPlayers) return 0;
+    int n = 0, bunkers = 0, cost = 0;
+    for (auto& b : ents) {
+        if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER) continue;
+        int before = n;
+        for (int u = 0; u < BU_COUNT; u++) {
+            if (bunkerHas(b, u) || b.bunkerBusy == u || ((b.bunkerQueue >> u) & 1)) continue;
+            b.bunkerQueue |= (u8)(1 << u); n++; cost += BUNKER_UPGS[u].cost;
+        }
+        if (n > before) bunkers++;
+        startQueuedFitting(b);   // (an idle bunker starts at once if the money is there)
+    }
+    if (n > 0) {
+        char msg[128]; snprintf(msg, sizeof msg, "Upgrade All Bunkers: %d fitting%s queued on %d bunker%s ($%d in all, paid as each one starts)", n, n > 1 ? "s" : "", bunkers, bunkers > 1 ? "s" : "", cost);
+        emit(EV_MSG, player, SND_CLICK, players[player].basePos, msg);
+    }
+    return n;
+}
+
+void Sim::cancelBunkerQueue(int player) {
+    if (player < 0 || player >= numPlayers) return;
+    bool any = false;
+    for (auto& b : ents) if (b.alive && b.isBuilding() && b.owner == player && b.bunkerQueue) { b.bunkerQueue = 0; any = true; }
+    if (any) emit(EV_MSG, player, SND_CLICK, players[player].basePos, "Upgrade All Bunkers: queue cancelled (fittings under way go on)");
+}
+
+// The next queued upgrade of an idle bunker, if its army can pay for it now (fitted ones leave the queue). True if a fitting started.
+bool Sim::startQueuedFitting(Entity& b) {
+    if (!b.bunkerQueue || b.bunkerBusy >= 0 || b.owner < 0 || !b.constructed) return false;
+    for (int u : BUNKER_FIT_ORDER) {
+        if (!((b.bunkerQueue >> u) & 1)) continue;
+        if (bunkerHas(b, u)) { b.bunkerQueue &= (u8)~(1 << u); continue; }
+        if (!canAfford(b.owner, BUNKER_UPGS[u].cost)) return false;   // (waits for the money: the order stays as it is)
+        players[b.owner].money -= BUNKER_UPGS[u].cost;
+        b.bunkerQueue &= (u8)~(1 << u);
+        b.bunkerBusy = u; b.bunkerProgress = 0;
+        return true;
+    }
+    return false;
+}
+
+// ------------------------------------------------------------ toxic clouds
+// A Toxic Lance hit leaves a small cloud that poisons the enemy's ground units in it (see updateFallout: Fallout.toxic). A hit near one of the same
+// army's clouds renews that one instead of stacking another, and there are never more than TOXIC_MAX on the map.
+void Sim::toxicCloud(Vec2 at, int owner) {
+    int count = 0;
+    for (auto& f : fallouts) {
+        if (!f.toxic) continue;
+        count++;
+        if (f.owner == owner && dist(f.pos, at) < TOXIC_RADIUS * TILE * 0.75f) {
+            f.t = 0; f.power = TOXIC_POWER; f.r = TOXIC_RADIUS * TILE;
+            if (f.visTag) for (auto& vf : fx) if (vf.type == FX_FALLOUT && vf.tag == f.visTag) { vf.t = 0; vf.size = f.r; break; }
+            return;
+        }
+    }
+    if (count >= TOXIC_MAX) return;
+    const float R = TOXIC_RADIUS * TILE;
+    fallouts.push_back({at, R, 0.0f, 0.0f, TOXIC_POWER, owner, true, TOXIC_LIFE});
+    fallouts.back().toxic = true;
+    fx.push_back({FX_FALLOUT, at, at, 0, TOXIC_LIFE, rgb(150, 255, 80), R});
+    fx.back().tag = ++fxTagSeq;
+    fallouts.back().visTag = fxTagSeq;
 }
 
 // A blast at strength k (1 = a direct hit by an ordinary warhead; already scaled for a big warhead, the distance and a shot-down warhead's
@@ -74,6 +183,7 @@ void Sim::bunkerMend(Entity& b) {
 
 // Fitting the upgrade under way, then what the fitted ones do every tick: the laser battery's two roof lasers and the field hospital.
 void Sim::updateBunkerUpgrades(Entity& b) {
+    if (b.bunkerQueue && b.bunkerBusy < 0 && (tick + b.gen) % 15 == 0) startQueuedFitting(b);
     if (b.bunkerBusy >= 0) {
         int u = b.bunkerBusy;
         b.bunkerProgress += SIM_DT / BUNKER_UPGS[u].time;
@@ -86,6 +196,8 @@ void Sim::updateBunkerUpgrades(Entity& b) {
                 b.hatchMax *= BUNKER_SHELL_HATCH; b.hatch *= BUNKER_SHELL_HATCH;
             }
             if (u == BU_PARA) b.paraReady = time;
+            if (u == BU_RAIN) b.rainReady = time;
+            if (u == BU_TANKS) b.tankReady = time;
             if (u == BU_LASERS) anyBunkerLasers = true;
             fx.push_back({FX_RING, b.pos, b.pos, 0, 0.9f, rgb(255, 236, 170), 70.0f});
             emit(EV_MSG, b.owner, SND_BUILD_DONE, b.pos, (std::string(BUNKER_UPGS[u].name) + ": this bunker is upgraded").c_str());

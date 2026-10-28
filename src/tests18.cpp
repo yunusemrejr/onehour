@@ -5,6 +5,8 @@
 //  * per-bunker upgrades: bought for one bunker, fitted in time, never carried over to another; one fitting at a time; the shell's health,
 //    the triple launch (three swift missiles at once), the Para Backup (35 paratroopers, no infiltrators, once a minute), the laser battery
 //    against aircraft and the field hospital mending a tank
+//  * Upgrade All Bunkers, Rain Nukes (five fast warheads spread over a wide circle), Tank Drop (ten tanks and a medic) and the Para Backup's laser
+//    commandos (ten Laser Troopers in one; their toxic clouds poison only the enemy)
 //  * a shift-dragged line of structures (Sim::cmdBuildLine, Game::bulkSpots): every spot placed and paid, footprints edge to edge, one dozer queue
 //  * a Waymaker laid over a structure and the trees beside it clears the trees and leaves the structure
 #include "sim.h"
@@ -157,6 +159,126 @@ static bool upgradeTest18(u64 seed) {
     return true;
 }
 
+// The October bunker powers: Upgrade All Bunkers (queues, pays as it goes, waits for money, can be cancelled), Rain Nukes (five fast, nearly
+// unstoppable small warheads spread over a wide circle), Tank Drop (ten tanks and a medic on the silk) and the Para Backup's laser commandos
+// (ten Laser Troopers in one, toxic clouds that poison only the enemy's units)
+static bool powersTest18(u64 seed) {
+    for (int fi = 0; fi < 2; fi++) {
+        init18(seed + 7 + fi, (Faction)fi);
+        Player& pl = g_sim.players[0];
+        const bool cy = fi == 0;
+        Ref A = bunkerAt18(0, pl.basePos + Vec2(14.0f * TILE, 6.0f * TILE));
+        Ref B = bunkerAt18(0, pl.basePos + Vec2(14.0f * TILE, -10.0f * TILE));
+        run18(0.2f);
+        // ---- Upgrade All Bunkers
+        int cost = 0;
+        CHECK18(g_sim.bunkerUpgradesMissing(0, &cost) == 2 * BU_COUNT, "a bare bunker does not lack every upgrade");
+        int total = 0; for (int u = 0; u < BU_COUNT; u++) total += BUNKER_UPGS[u].cost;
+        CHECK18(cost == 2 * total, "Upgrade All's price is not every missing upgrade's");
+        CHECK18(!g_sim.cmdBunkerRain(A, pl.basePos) && !g_sim.cmdTankDrop(A, pl.basePos), "a bunker without the upgrades called Rain Nukes or a Tank Drop");
+        pl.money = BUNKER_UPGS[BU_SHELL].cost + 10;   // enough for one fitting: the other bunker waits for the money
+        CHECK18(g_sim.cmdBunkerUpgradeAll(0) == 2 * BU_COUNT, "Upgrade All did not queue every missing upgrade of both bunkers");
+        CHECK18(g_sim.cmdBunkerUpgradeAll(0) == 0, "Upgrade All queued the same upgrades twice");
+        Entity* a = g_sim.get(A); Entity* b = g_sim.get(B);
+        CHECK18((a->bunkerBusy >= 0) != (b->bunkerBusy >= 0), "with money for one fitting, not exactly one bunker started");
+        CHECK18(pl.money == 10, "the first queued fitting did not cost its price");
+        run18(5.0f);
+        CHECK18(g_sim.get(A)->bunkerBusy < 0 || g_sim.get(B)->bunkerBusy < 0, "a bunker started a fitting it could not pay for");
+        g_sim.cancelBunkerQueue(0);
+        CHECK18(g_sim.get(A)->bunkerQueue == 0 && g_sim.get(B)->bunkerQueue == 0, "cancel left a queue");
+        pl.money = 200000;
+        CHECK18(g_sim.cmdBunkerUpgradeAll(0) > 0, "Upgrade All refused after a cancel");
+        float fitTime = 0; for (int u = 0; u < BU_COUNT; u++) fitTime += BUNKER_UPGS[u].time + 0.6f;
+        run18(fitTime + 2.0f);
+        a = g_sim.get(A); b = g_sim.get(B);
+        CHECK18(a && b && a->bunkerUpg == (u8)((1 << BU_COUNT) - 1) && b->bunkerUpg == (u8)((1 << BU_COUNT) - 1), "Upgrade All did not fit every upgrade on every bunker");
+        CHECK18(g_sim.bunkerUpgradesMissing(0) == 0 && a->bunkerQueue == 0, "a fully upgraded army still lacks something");
+        // ---- Rain Nukes
+        Vec2 tgt = g_sim.players[1].basePos + Vec2(4.0f * TILE, 0);
+        size_t n0 = g_sim.nukes.size();
+        CHECK18(g_sim.bunkerRainWait(*a) == 0 && g_sim.cmdBunkerRain(A, tgt), "a ready Rain Nukes call was refused");
+        CHECK18(!g_sim.cmdBunkerRain(A, tgt), "Rain Nukes ignored the cooldown");
+        CHECK18(g_sim.nukes.size() == n0 + RAIN_NUKES && RAIN_NUKES == 5, "Rain Nukes did not send five warheads");
+        float minGap = 1e9f;
+        for (size_t k = n0; k < g_sim.nukes.size(); k++) {
+            const Sim::Nuke& n = g_sim.nukes[k];
+            CHECK18(n.rain && dist(n.pos, tgt) <= RAIN_NUKE_AREA * TILE + 1.0f, "a rain warhead fell outside its circle");
+            CHECK18(Sim::flightOf(n) <= 1.5f && Sim::nukeResist(n) <= 0.07f, "a rain warhead is not fast and hard to stop");
+            for (size_t j = n0; j < k; j++) minGap = std::min(minGap, dist(n.pos, g_sim.nukes[j].pos));
+        }
+        CHECK18(minGap >= 1.5f * TILE, "the rain warheads were bunched on one spot");
+        size_t f0 = g_sim.fallouts.size();
+        run18(2.6f);
+        CHECK18(g_sim.nukes.size() == n0 && g_sim.fallouts.size() >= f0 + RAIN_NUKES, "the rain warheads did not all come down within 2.6 s");
+        g_sim.fallouts.clear();
+        // ---- Tank Drop
+        std::vector<int> tl = g_sim.bunkerTankManifest(0);
+        int tanks = 0, medics = 0;
+        for (int t : tl) { if (UNITS[t].role == UR_HEALER && UNITS[t].kind == UK_VEH) medics++; else if (UNITS[t].kind == UK_VEH && UNITS[t].armor == AR_HEAVY && UNITS[t].weapon >= 0) tanks++; }
+        CHECK18((int)tl.size() == TANK_DROP_TANKS + 1 && tanks == TANK_DROP_TANKS && medics == 1, "a Tank Drop does not carry ten tanks and a medic");
+        Vec2 zone = openGroundNear(pl.basePos + Vec2(-12.0f * TILE, 10.0f * TILE), 6);
+        int vb = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.ut().kind == UK_VEH) vb++;
+        CHECK18(g_sim.cmdTankDrop(A, zone), "a ready Tank Drop was refused");
+        CHECK18(!g_sim.cmdTankDrop(A, zone), "a Tank Drop ignored its cooldown");
+        CHECK18(g_sim.airlifts.back().maxHp >= Sim::AIRLIFT_HP * 2.0f, "the Tank Drop plane is no tougher than an airlift");
+        run18(40.0f);
+        int landed = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.ut().kind == UK_VEH && e.fall <= 0 && dist(e.pos, zone) < 10.0f * TILE) landed++;
+        if (landed < TANK_DROP_TANKS + 1) { fprintf(stderr, "bunkertest: %d vehicles landed at the zone (%d before)\n", landed, vb); return fail18("the Tank Drop did not land its tanks and medic"); }
+        // ---- the Para Backup's laser commandos: never trained, ten times a Laser Trooper, toxic clouds
+        const int cmdT = cy ? U_C_LASERCMD : U_K_LASERCMD;
+        const UnitType& ct = UNITS[cmdT]; const UnitType& lt = UNITS[U_C_INF2];
+        const Weapon& cw = WEAPONS[ct.weapon]; const Weapon& lw = WEAPONS[lt.weapon];
+        CHECK18(ct.builtBy == BR_NONE && !ct.temp, "a laser commando can be trained (or cannot be commanded)");
+        CHECK18(ct.hp >= lt.hp * 10.0f - 0.5f && cw.dmg >= lw.dmg * 10.0f - 0.5f && cw.air && cw.ground, "a laser commando is not ten Laser Troopers");
+        for (int k = 0; k < AR_COUNT; k++) CHECK18(cw.dmg * cw.mult[k] >= lw.dmg * lw.mult[k] * 10.0f - 0.5f, "the Toxic Lance is weaker than ten laser rifles against some armour");
+        std::vector<int> pload = g_sim.bunkerParaManifest(0);
+        int nc = 0; for (int t : pload) if (t == cmdT) nc++;
+        CHECK18(nc == BUNKER_PARA_COMMANDOS && nc >= 1, "a Para Backup does not carry its laser commandos");
+        // a toxic cloud poisons the enemy's soldiers and vehicles in it, never its own side's or a structure
+        const int foeInf = cy ? U_K_INF1 : U_C_INF1, ownInf = cy ? U_C_INF1 : U_K_INF1;
+        {
+            Vec2 c1 = openGroundNear(g_sim.players[0].basePos + Vec2(-6.0f * TILE, -20.0f * TILE), 3);
+            Ref mine = g_sim.spawnUnit(ownInf, 0, c1), foe = g_sim.spawnUnit(foeInf, 1, c1 + Vec2(6.0f, 0));
+            g_sim.cmdStop({mine}); g_sim.cmdStop({foe});
+            g_sim.get(mine)->disabledUntil = g_sim.get(foe)->disabledUntil = g_sim.time + 3.0f;   // (neither shoots the other: only the cloud acts)
+            g_sim.toxicCloud(c1, 0);
+            CHECK18(!g_sim.fallouts.empty() && g_sim.fallouts.back().toxic && g_sim.fallouts.back().enemyOnly, "toxicCloud made no enemy-only toxic zone");
+            size_t nf = g_sim.fallouts.size();
+            g_sim.toxicCloud(c1 + Vec2(8.0f, 0), 0);
+            CHECK18(g_sim.fallouts.size() == nf, "a second hit beside a cloud stacked another instead of renewing it");
+            run18(2.0f);
+            Entity* me = g_sim.get(mine); Entity* fo = g_sim.get(foe);
+            CHECK18(me && me->hp >= me->maxHp - 0.5f, "a toxic cloud poisoned its own side");
+            CHECK18(!fo || fo->hp < fo->maxHp * 0.9f, "a toxic cloud did not poison an enemy soldier in it");
+            run18(TOXIC_LIFE);
+            bool left = false; for (auto& f : g_sim.fallouts) if (f.toxic) left = true;
+            CHECK18(!left, "a toxic cloud outlived TOXIC_LIFE");
+        }
+        // a commando against a squad of enemy soldiers
+        Vec2 arena = openGroundNear(g_sim.players[0].basePos + Vec2(-16.0f * TILE, -14.0f * TILE), 8);
+        flattenArena(arena, 8, 8);
+        Ref cr = g_sim.spawnUnit(cmdT, 0, arena);
+        std::vector<Ref> foes;
+        for (int k = 0; k < 6; k++) foes.push_back(g_sim.spawnUnit(foeInf, 1, arena + Vec2(5.0f * TILE + (k % 3) * 14.0f, (k / 3) * 14.0f - 7.0f)));
+        size_t fall0 = g_sim.fallouts.size();
+        bool toxic = false;
+        for (int s2 = 0; s2 < 40 && !toxic; s2++) { run18(0.1f); for (auto& f : g_sim.fallouts) if (f.toxic && f.owner == 0 && f.enemyOnly) toxic = true; }
+        CHECK18(toxic && g_sim.fallouts.size() > fall0, "the Toxic Lance left no toxic cloud");
+        run18(8.0f);
+        int alive = 0; for (Ref r : foes) if (g_sim.get(r)) alive++;
+        CHECK18(alive == 0, "one laser commando did not wipe out six enemy soldiers in 12 s");
+        CHECK18(g_sim.get(cr) != nullptr, "the laser commando fell to six riflemen");
+        g_sim.fallouts.clear();
+        // and an enemy gunship goes down fast
+        int gunship = cy ? U_K_AIR : U_C_AIR;
+        Ref gs = g_sim.spawnUnit(gunship, 1, g_sim.get(cr)->pos + Vec2(5.0f * TILE, 0));
+        g_sim.cmdAttack({gs}, cr);
+        run18(4.0f);
+        CHECK18(!g_sim.get(gs), "a laser commando did not bring an enemy gunship down in 4 s");
+    }
+    return true;
+}
+
 static bool bulkTest18(u64 seed) {
     init18(seed, F_CYBER);
     Player& pl = g_sim.players[0];
@@ -242,7 +364,7 @@ static bool aiTest18(u64 seed) {
 
 bool bunkerUpdateTest(u64 seed) {
     g_ok18 = true;
-    bool ok = hardeningTest18(seed) && garrisonTest18(seed) && upgradeTest18(seed) && bulkTest18(seed) && waymakerTest18(seed) && aiTest18(seed);
+    bool ok = hardeningTest18(seed) && garrisonTest18(seed) && upgradeTest18(seed) && powersTest18(seed) && bulkTest18(seed) && waymakerTest18(seed) && aiTest18(seed);
     if (ok) printf("bunkertest: ok (last scene ran to %.0f s)\n", g_sim.time);
     return ok;
 }

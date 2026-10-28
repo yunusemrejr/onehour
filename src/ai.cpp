@@ -1264,13 +1264,19 @@ void AiPlayer::think() {
     // ---------- the bunkers' own upgrades (FEAT_BUNKERUP): with money to spare the commander fits its bunkers one upgrade at a time - the shell and the
     // laser battery first - and a bunker with a radio mast calls its paratroopers in where a paradrop would go
     if (on(FEAT_BUNKERUP) && bunkers > 0 && pl.difficulty >= 1 && (S.tick & 15) == (u32)(player & 15)) {
-        static const int order[BU_COUNT] = { BU_SHELL, BU_LASERS, BU_MEDIC, BU_SWIFT, BU_TRIPLE, BU_PARA };
+        static const int order[BU_COUNT] = { BU_SHELL, BU_LASERS, BU_MEDIC, BU_SWIFT, BU_TRIPLE, BU_PARA, BU_RAIN, BU_TANKS };
         float from = pl.difficulty >= 3 ? 9.0f : (pl.difficulty == 2 ? 11.0f : 14.0f);
-        Ref para;
+        Ref para, rain, tanks;
         for (size_t i = 0; i < S.ents.size(); i++) {
             const Entity& b = S.ents[i];
-            if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER) continue;
-            if (!para.valid() && Sim::bunkerHas(b, BU_PARA) && S.bunkerParaWait(b) == 0 && b.disabledUntil <= S.time) para = S.refOf(b);
+            if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER || b.disabledUntil > S.time) continue;
+            if (!para.valid() && Sim::bunkerHas(b, BU_PARA) && S.bunkerParaWait(b) == 0) para = S.refOf(b);
+            if (!rain.valid() && Sim::bunkerHas(b, BU_RAIN) && S.bunkerRainWait(b) == 0) rain = S.refOf(b);
+            if (!tanks.valid() && Sim::bunkerHas(b, BU_TANKS) && S.bunkerTankWait(b) == 0) tanks = S.refOf(b);
+        }
+        if (rain.valid() && smart) {   // Rain Nukes: the five warheads spread over a wide circle, so the spot is scored over that circle (a lower bar per warhead)
+            float bestScore; Vec2 bestPos = nukeSpot(RAIN_NUKE_AREA * TILE * 0.8f, bestScore);
+            if (bestScore >= nukeBar * 0.9f && S.cmdBunkerRain(rain, bestPos) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] RAIN NUKES at %d,%d\n", player, S.time, tileOf(bestPos.x), tileOf(bestPos.y));
         }
         if (tm >= from) for (size_t i = 0; i < S.ents.size(); i++) {
             const Entity& b = S.ents[i];
@@ -1290,6 +1296,17 @@ void AiPlayer::think() {
                 if (tgt && S.aaCover(*tgt, player) <= 3.0f) { at = tgt->pos + (pl.basePos - tgt->pos).norm() * (5.0f * TILE); go = true; }
             }
             if (go && S.cmdBunkerPara(para, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] BUNKER PARA at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
+        }
+        if (tanks.valid() && wits) {   // the Tank Drop goes where a paradrop would: onto a threat at home, or beside the objective of a wave under way
+            Vec2 at; bool go = false;
+            if (threat && threatCount >= 3 && dist(threat->pos, pl.basePos) < 26 * TILE) {
+                Vec2 d = threat->pos - pl.basePos; float l = std::max(1.0f, d.len());
+                at = pl.basePos + d * (std::min(l, 6.0f * TILE) / l); go = true;
+            } else if (attacking && !threat) {
+                Entity* tgt = S.get(attackTarget);
+                if (tgt && S.aaCover(*tgt, player) <= 5.0f) { at = tgt->pos + (pl.basePos - tgt->pos).norm() * (7.0f * TILE); go = true; }
+            }
+            if (go && S.cmdTankDrop(tanks, at, true) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] TANK DROP at %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
         }
     }
 

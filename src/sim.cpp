@@ -998,6 +998,70 @@ bool Sim::cmdBunkerPara(Ref bunker, Vec2 pos, bool attackOn) {
     return true;
 }
 
+// A bunker's Rain Nukes (BU_RAIN): RAIN_NUKES small warheads leave the hatch a beat apart and come down at random spots inside a circle of
+// RAIN_NUKE_AREA tiles round pos (kept RAIN_NUKE_SPACING apart where the circle leaves room). They fly a fifth of the usual time and the defences
+// barely touch them (RAIN_NUKE_RESIST); swift warheads change nothing for them. Once per RAIN_NUKE_COOLDOWN per bunker; the launch reveals it.
+bool Sim::cmdBunkerRain(Ref bunker, Vec2 pos, bool force) {
+    Entity* b = get(bunker);
+    if (!b || !b->alive || !b->isBuilding() || !b->constructed || b->bt().role != BR_BUNKER || b->owner < 0 || !bunkerHas(*b, BU_RAIN) || time < b->rainReady || b->disabledUntil > time) return false;
+    const int player = b->owner;
+    force = force && !players[player].isAI;
+    b->rainReady = time + RAIN_NUKE_COOLDOWN;
+    const float R = RAIN_NUKE_AREA * TILE, gap = RAIN_NUKE_SPACING * TILE;
+    std::vector<Vec2> spots;
+    for (int k = 0; k < RAIN_NUKES; k++) {
+        Vec2 best; float bestGap = -1;
+        for (int tries = 0; tries < 24; tries++) {   // the spot furthest from the others among a few random ones (the first that is far enough)
+            float ang = rng.f(0, 6.2832f), r = R * std::sqrt(rng.f());
+            Vec2 p = pos + Vec2(std::cos(ang), std::sin(ang)) * r;
+            p = Vec2(clampf(p.x, TILE, WORLD_W - TILE), clampf(p.y, TILE, WORLD_H - TILE));
+            float g = 1e9f;
+            for (auto& q : spots) g = std::min(g, dist(p, q));
+            if (g > bestGap) { bestGap = g; best = p; }
+            if (g >= gap) break;
+        }
+        spots.push_back(best);
+    }
+    const float kk = b->bt().w * TILE / 96.0f;
+    for (int k = 0; k < RAIN_NUKES; k++) {
+        Nuke n{b->pos + Vec2(rng.f(-20, 20), rng.f(-20, 20)) * kk, spots[k], player, -RAIN_NUKE_GAP * k, force, RAIN_NUKE_SCALE};
+        n.rain = true;
+        nukes.push_back(n);
+    }
+    emit(EV_SOUND, -1, SND_ROCKET, b->pos);
+    emit(EV_MSG, player, SND_NONE, pos, "Rain Nukes away");
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) {
+        b->detUntil[p] = std::max(b->detUntil[p], time + MINI_NUKE_REVEAL);
+        emit(EV_MSG, p, SND_ATTACKED, pos, "NUCLEAR RAIN INBOUND"); emit(EV_UNDER_ATTACK, p, SND_ATTACKED, pos, "Five small warheads are coming down!");
+    }
+    return true;
+}
+
+// A bunker's Tank Drop (BU_TANKS): a heavy cargo plane (TANK_DROP_ARMOR times an airlift's toughness) comes in over the bunker's side of the map and
+// drops bunkerTankManifest on parachutes on the spot. Once per TANK_DROP_COOLDOWN per bunker.
+bool Sim::cmdTankDrop(Ref bunker, Vec2 pos, bool attackOn) {
+    Entity* b = get(bunker);
+    if (!b || !b->alive || !b->isBuilding() || !b->constructed || b->bt().role != BR_BUNKER || b->owner < 0 || !bunkerHas(*b, BU_TANKS) || time < b->tankReady || b->disabledUntil > time) return false;
+    int player = b->owner;
+    std::vector<int> load = bunkerTankManifest(player);
+    if (load.empty()) return false;
+    pos = Vec2(clampf(pos.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(pos.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
+    b->tankReady = time + TANK_DROP_COOLDOWN;
+    Airlift a;
+    a.owner = player; a.target = pos; a.attackOn = attackOn;
+    a.hp = a.maxHp = AIRLIFT_HP * TANK_DROP_ARMOR;
+    a.dir = flightTrack(b->pos, pos, a.pos);
+    a.prevPos = a.pos;
+    a.load = std::move(load);
+    a.releaseAt = -(float)a.load.size() * 0.09f * AIRLIFT_SPEED * 0.5f;   // the stick is centred on the target
+    airlifts.push_back(a);
+    emit(EV_SOUND, player, SND_AIR, a.pos);
+    char msg[64]; snprintf(msg, sizeof msg, "Tank Drop inbound: %d tanks and a medic", TANK_DROP_TANKS);
+    emit(EV_MSG, player, SND_NONE, pos, msg);
+    for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY HEAVY AIRLIFT DETECTED");
+    return true;
+}
+
 Vec2 Sim::landingSpot(Airlift& a, float spacing) {
     float R = DROPS[players[a.owner].faction].radius * TILE;
     Vec2 fallback; bool have = false;
@@ -1521,20 +1585,21 @@ void Sim::updateFallout() {
         }
         f.t += SIM_DT; f.tick += SIM_DT;
         if (f.t >= f.life) { fallouts.erase(fallouts.begin() + i); continue; }
-        if (f.t < 12.0f && rng.f() < 0.06f) {   // chaos: random blasts and flame inside the crater
+        if (!f.toxic && f.t < 12.0f && rng.f() < 0.06f) {   // chaos: random blasts and flame inside the crater
             float a = rng.f(0, 6.283f), r = f.r * std::sqrt(rng.f(0.0f, 1.0f)) * 0.9f; Vec2 p = f.pos + Vec2(std::cos(a) * r, std::sin(a) * r);
             fx.push_back({FX_EXPLODE, p, p, 0, 0.8f, rgb(255, 150, 60), rng.f(20, 44)});
             fx.push_back({FX_SMOKE, p, p, 0, 4.0f, rgb(52, 48, 44), rng.f(18, 36), Vec2(rng.f(-8, 8), rng.f(-34, -16))});
         }
         if (f.tick >= 0.5f) {
             f.tick -= 0.5f;
-            float strength = (f.t < f.life - 15.0f ? 1.0f : (f.life - f.t) / 15.0f) * f.power;   // dies down at the end (and is weaker for the pieces of a warhead that was shot down)
+            float strength = (f.toxic ? std::min(1.0f, (f.life - f.t) / 2.0f) : (f.t < f.life - 15.0f ? 1.0f : (f.life - f.t) / 15.0f)) * f.power;   // dies down at the end (and is weaker for the pieces of a warhead that was shot down)
             std::vector<Ref> in;
             forEachNear(f.pos, f.r, [&](Entity& e) { if (e.kind != EK_RESOURCE && !e.isAir() && dist(e.pos, f.pos) <= f.r) in.push_back(refOf(e)); });
             for (auto r : in) {
                 Entity* e = get(r); if (!e) continue;
                 if (f.enemyOnly && !enemies(f.owner, e->owner)) continue;   // bunker defense radiation vents only poison enemy forces
                 if (inField(e->pos)) continue;   // inside a decontamination field: the air is being scrubbed, the truck absorbs its dose instead (see above)
+                if (e->isBuilding() && f.toxic) continue;   // (a toxic cloud only poisons soldiers and vehicles)
                 if (e->isBuilding()) {   // radiation only weakens structures: a slow, non-lethal drain that stops at a tenth of their health (a bunker's filters keep it out)
                     if (e->hp > e->maxHp * 0.12f && !(e->constructed && e->bt().role == BR_BUNKER)) applyDamage(*e, e->maxHp * 0.0012f * strength, f.enemyOnly ? f.owner : -1, NOREF, nullptr);
                     continue;
@@ -1912,7 +1977,12 @@ void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle
     switch (w.proj) {
     case PJ_LASER:
         fx.push_back({FX_BEAM, from, tgt.pos, 0, 0.12f, w.color, 2});
-        applyDamage(tgt, w.dmg, e.owner, self, &w);
+        if (w.splash > 0) splashDamage(tgt.pos, w.splash, w.dmg, e.owner, self, w, tref, forced);   // (the target takes it whole, the rest round it less)
+        else applyDamage(tgt, w.dmg, e.owner, self, &w);
+        if (&w == &WEAPONS[W_TOXIC_LANCE]) {   // a laser commando's lance: a toxic cloud where it hits (on the ground under an aircraft)
+            fx.push_back({FX_BEAM, from, tgt.pos, 0, 0.18f, rgb(220, 255, 170), 1});
+            toxicCloud(tgt.pos, e.owner);
+        }
         break;
     case PJ_ARC:
         fx.push_back({FX_ARC, from, tgt.pos, 0, 0.16f, w.color, 2});
@@ -4298,6 +4368,7 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     if (!b.passengers.empty()) ejectAll(b, false);
     if (from >= 0) for (int t : b.queue) players[from].money += UNITS[t].cost;
     b.queue.clear(); b.queueProgress = 0; b.hasRally = false; b.engaged = NOREF; b.engaged2 = NOREF; b.forceTarget = NOREF; b.unloading = false;
+    b.bunkerQueue = 0;   // (the old owner's Upgrade All queue is not the new owner's to pay for)
     float oldMax = b.maxHp;
     b.owner = to;
     if (b.bt().role == BR_ISLANDNUKE) { b.siloTimer = std::max(b.siloTimer, time + ISLAND_NUKE_ARM); players[to].launchersTaken++; }   // the new crew needs a while to take over the launch codes

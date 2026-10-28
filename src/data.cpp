@@ -56,6 +56,7 @@ const Weapon WEAPONS[] = {
     /* 51 */{ "Close-In Guns",    15, 7.0f, 0, 0.10f, PJ_BULLET, 0,    true, true,  {1.0f, 0.55f, 0.25f, 0.20f, 1.9f}, 1, 1300, SND_MG,          rgb(255, 228, 150) },
     /* 52 */{ "Strike Bombs",    125, 1.0f, 0, 0.00f, PJ_BOMB,   1.7f, true, false, {1.25f, 1.20f, 1.00f, 1.40f, 0.0f}, 1, 0,    SND_EXPLODE_L,   rgb(255, 196, 120) },
     /* 53 */{ "Bunker Sky Laser",  140, 12.0f,0, 0.55f, PJ_LASER,  0,    true, true,  {1.2f, 1.10f, 0.95f, 0.50f, 2.6f}, 1, 0,    SND_LASER_HEAVY, rgb(130, 250, 255) },
+    /* 54 */{ "Toxic Lance",     480, 7.0f, 0, 1.50f, PJ_LASER,  0.9f, true, true,  {0.4f, 1.00f, 1.00f, 0.60f, 0.9f}, 1, 0,    SND_LASER_HEAVY, rgb(150, 255, 80) },   // ten Laser Rifles in one (W 1), a splash and a toxic cloud
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -146,6 +147,10 @@ const UnitType UNITS[U_COUNT] = {
     // a carrier's jets: never built, never commanded (temp); they live on their carrier's deck (Sim::updateCarrier, Sim::carrierJetRun)
     { "Sea Raptor", "-", F_CYBER,   UK_AIR, UR_COMBAT, AR_AIR, 700, 610, 1200, 0, 10, 10, W_FIGHTER_C, 6, BR_NONE, -1, "Carrier jet of a Horizon Carrier: launches on its own against enemies near the carrier, six missile passes, then lands on the deck to rearm", 0, 1, 0, 0, 0, ST_NONE, INFIL_DETECT, DET_DRONE | DET_INFIL, 0, 0, 0.08f, 1, 0 },
     { "Sea Saber",  "-", F_CLANKER, UK_AIR, UR_COMBAT, AR_AIR, 740, 590, 1200, 0, 10, 10, W_FIGHTER_K, 6, BR_NONE, -1, "Carrier jet of a Leviathan Carrier: launches on its own against enemies near the carrier, six missile passes, then lands on the deck to rearm", 0, 1, 0, 0, 0, ST_NONE, INFIL_DETECT, DET_DRONE | DET_INFIL, 0, 0, 0.08f, 1, 0 },
+    // the laser commandos: never built (no barracks trains them), they only jump with a bunker's Para Backup. Ten Laser Troopers in one, and the
+    // Toxic Lance leaves a small cloud where it hits that poisons the enemy's soldiers and vehicles round the target
+    { "Prism Commando", "-", F_CYBER,   UK_INF, UR_COMBAT, AR_INF, 1000, 56, 3250, 0, 8, 7, W_TOXIC_LANCE, 0, BR_NONE, -1, "Laser commando of a bunker's Para Backup (no barracks trains them): ten times a Laser Trooper's health and firepower against aircraft, tanks and massed infantry. The Toxic Lance splashes and leaves a toxic cloud round its target that poisons enemy soldiers and vehicles" },
+    { "Venom Commando", "-", F_CLANKER, UK_INF, UR_COMBAT, AR_INF, 1000, 56, 3250, 0, 8, 7, W_TOXIC_LANCE, 0, BR_NONE, -1, "Laser commando of a bunker's Para Backup (no barracks trains them): ten times a Laser Trooper's health and firepower against aircraft, tanks and massed infantry. The Toxic Lance splashes and leaves a toxic cloud round its target that poisons enemy soldiers and vehicles" },
 };
 
 const BuildType BUILDS[B_COUNT] = {
@@ -273,7 +278,9 @@ const BunkerUpgType BUNKER_UPGS[BU_COUNT] = {
     { "Field Hospital", "Hospital","H", "A field hospital in this bunker: everything of yours within 8 tiles - soldiers, vehicles, aircraft and structures - is mended all the time, even under fire", 2500, 25.0f },
     { "Triple Launch", "Triple", "N", "Three launch tubes for this bunker: every Mini Nuke launch fires three missiles at once, spread over the target (instead of a pair)", 5000, 40.0f },
     { "Swift Warheads", "Swift","W", "Boosted, armoured missiles for this bunker: its mini-nukes reach the target in half the time and every defence's chance to shoot one down drops to 30%", 3500, 30.0f },
-    { "Para Backup", "Para",   "B", "A radio mast for this bunker: once a minute it calls a cargo plane that drops 35 paratroopers anywhere you pick - riflemen, anti-air troopers and snipers above all, with every other kind of soldier your army has unlocked (never infiltrators)", 4500, 35.0f },
+    { "Para Backup", "Para",   "B", "A radio mast for this bunker: once a minute it calls a cargo plane that drops 35 paratroopers anywhere you pick - five laser commandos no barracks can train (ten times a Laser Trooper, with toxic lances), riflemen, anti-air troopers and snipers, and every other kind of soldier your army has unlocked (never infiltrators)", 4500, 35.0f },
+    { "Rain Rack", "Rain",     "R", "A rack of small warheads for this bunker: the Rain Nukes power - five small nukes fall at random spots in a wide circle you pick (10 tiles), in under two seconds. Almost nothing can shoot them down. Once every two minutes", 6000, 40.0f },
+    { "Heavy Lift Pad", "Tanks","V", "A heavy lift pad for this bunker: the Tank Drop power - a heavy cargo plane drops ten tanks and a medic vehicle on the spot you pick (super-heavy tanks among them once unlocked). Once every two and a half minutes", 5500, 35.0f },
 };
 
 const DropType DROPS[F_COUNT] = {

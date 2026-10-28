@@ -52,6 +52,11 @@ void artNukeBomberBody(Canvas& c, Color team, bool cyber);
 // lit bottle and a canvas bag of them. Both are 64x64 canvas, facing +x, centred at (32,32), with the walk cycle in frame 0 / 1 / 2 as the soldiers.
 void artRioterBody(Canvas& c, Color team, int kind, int frame);
 
+// The laser commandos (Prism Commando / Venom Commando): elite infantry in bulky armour, dropped only by a bunker's Para Backup. 64x64 canvas,
+// facing +x, centred at (32,32), with the walk cycle in frame 0 / 1 / 2 as the troopers. A long Toxic Lance rifle whose coil and emitter glow
+// toxic green. Cyber is pale ceramic with a cyan visor; Clanker is olive and rust with a gas mask. Paints, sharpens and outlines itself.
+void artCommandoBody(Canvas& c, Color team, bool cyber, int frame);
+
 // Sea art (art_ocean.cpp). The big ships are 128x128 (ART_BIG), the hull lies along x with the bow at +x, centred at (64,64).
 static const int ART_BIG = 128;
 // The Aircraft Carrier: about 120 px long, a 34 px flight deck with an angled landing deck to port, the island on the starboard side (y > 64)

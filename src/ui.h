@@ -41,6 +41,8 @@ struct Game {
     int bulkTx = 0, bulkTy = 0;
     void bulkSpots(int type, int tx1, int ty1, std::vector<std::pair<int, int>>& out) const;   // the footprints of that line, start first, none overlapping
     Ref paraBunker;                 // dropMode for a bunker's Para Backup (BU_PARA) instead of the tech structure's drop
+    Ref tankBunker;                 // dropMode for a bunker's Tank Drop (BU_TANKS)
+    Ref rainBunker;                 // nukeMode for a bunker's Rain Nukes (BU_RAIN): the big circle the five warheads fall in
     bool attackMoveMode = false;
     bool forceMode = false;         // Force Fire button: the next click attacks whatever is under it, your own or an ally's units and structures included
     bool forceLatch = false;        // F while aiming a strike power: the blast hits friendly ground too (same as holding Ctrl)

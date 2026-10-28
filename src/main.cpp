@@ -2587,7 +2587,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 34);
+            int c = rng.range(0, 35);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2623,6 +2623,16 @@ static bool fuzzTest(u64 seed, int seconds) {
             case 31: { Ref b2 = anyEnt(rng.range(-1, 2), 3); g_sim.cmdDeepNuke(rng.range(-1, 4), where(), rng.range(0, 1) == 0, b2); if (rng.range(0, 3) == 0) { Sim::Nuke n; n.from = g_sim.players[0].basePos; n.pos = where(); n.owner = rng.range(0, 3); n.t = Sim::NUKE_FLIGHT - rng.f(0.0f, 6.5f); n.scale = UNUKE_SCALE; n.deep = true; g_sim.nukes.push_back(n); } break; }   // silver warheads
             case 32: { Ref b2 = anyEnt(rng.range(-2, 3), 3); g_sim.cmdIslandNuke(rng.range(-1, 4), where(), rng.range(0, 1) == 0, b2); if (rng.range(0, 4) == 0) for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_ISLANDNUKE) { e.owner = rng.range(-1, 1); e.siloTimer = 0; } break; }   // island launchers: any owner, fired at anything
             case 33: { if (rng.range(0, 2) == 0) for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_TECH) e.bomberTimer = 0; g_sim.cmdNukeBomber(rng.range(-1, 4), where()); break; }   // the Nuclear Bomber call-in, anywhere
+            case 35: {   // the bunkers' Rain Nukes, Tank Drop and Upgrade All (any upgrades, cooldowns, owners and spots)
+                Ref b2 = anyEnt(rng.range(-1, 2), 3); Entity* be = g_sim.get(b2);
+                if (be && rng.range(0, 1) == 0) { be->bunkerUpg |= (u8)(1 << rng.range(0, BU_COUNT - 1)); be->rainReady = be->tankReady = 0; }
+                int k = rng.range(0, 3);
+                if (k == 0) g_sim.cmdBunkerRain(b2, where(), rng.range(0, 1) == 0);
+                else if (k == 1) g_sim.cmdTankDrop(b2, where(), rng.range(0, 1) == 0);
+                else if (k == 2) g_sim.cmdBunkerUpgradeAll(rng.range(-1, 4));
+                else g_sim.cancelBunkerQueue(rng.range(0, 3));
+                break;
+            }
             case 34: { int bt = rng.range(0, 1) ? B_C_FWALL : B_K_FWALL; int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 2) == 0 ? rng.range(-1, 1) : 0, tx, ty, rng.range(0, 1) == 0); break; }   // Bastion Walls, any owner
             case 25: { int bt = B_C_BUNKER + rng.range(0, 5); int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, tx, ty, rng.range(0, 1) == 0); break; }
             }
@@ -2676,7 +2686,7 @@ static void writeArtSheet(const char* path) {
 }
 
 // ONEHOUR_BUNKERSHEET=<file.bmp>: headless preview of both armies' bunkers (Cyber top row, Clanker bottom row) on grass, at the 2x art scale:
-// the bare bunker, then the bunker with each per-bunker upgrade alone (BunkerUpg order), then with all six. Live parts are not drawn.
+// the bare bunker, then the bunker with each per-bunker upgrade alone (BunkerUpg order), then with all of them. Live parts are not drawn.
 static void writeBunkerSheet(const char* path) {
     const int GAP = 6, M = 8, N = BU_COUNT + 2;
     BArtSize sz = artBuildingSize(B_C_BUNKER);
@@ -2691,7 +2701,7 @@ static void writeBunkerSheet(const char* path) {
             Color m = Canvas::unpack(mask.px[i]);
             if (m.a) { Color t = PLAYER_COLOR[f]; Color b0 = Canvas::unpack(base.px[i]); float k = m.a / 255.0f; base.px[i] = Canvas::pack(Color{(u8)(b0.r + (t.r * m.r / 255 - b0.r) * k), (u8)(b0.g + (t.g * m.g / 255 - b0.g) * k), (u8)(b0.b + (t.b * m.b / 255 - b0.b) * k), std::max(b0.a, m.a)}); }
         }
-        Canvas ups[BU_COUNT] = { Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h), Canvas(sz.w, sz.h) };
+        std::vector<Canvas> ups(BU_COUNT, Canvas(sz.w, sz.h));
         for (int u = 0; u < BU_COUNT; u++) artBunkerUpgrade(ups[u], type, u);
         for (int cell = 0; cell < N; cell++) {
             int x0 = M + cell * (sz.w + GAP), y0 = M + f * (sz.h + GAP);
@@ -3513,7 +3523,7 @@ int main(int argc, char** argv) {
                 int left = 0, small = 0; for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1) { left++; printf("  %s %.0f%%\n", e.bt().name, 100 * e.hp / e.maxHp); }
                 (void)small; printf("nuke showcase: %d enemy structures left\n", left);
             }
-            if (const char* bk = getenv("ONEHOUR_BUNKER")) {   // showcase of the bunker update: base | line | way (combine with ONEHOUR_WEATHER=...)
+            if (const char* bk = getenv("ONEHOUR_BUNKER")) {   // showcase of the bunker update: base | line | way | rain | rainfall | tanks | commando (combine with ONEHOUR_WEATHER=...)
                 std::string m = bk;
                 for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
                 auto camOn = [&](Vec2 p) { g_game.cam = Vec2(clampf(p.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(p.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); };
@@ -3544,6 +3554,40 @@ int main(int argc, char** argv) {
                     g_game.selection.clear(); g_game.selection.push_back(dz);
                     g_game.placingType = wt; g_game.bulkDrag = true; g_game.bulkTx = cx - 7; g_game.bulkTy = cy - 2;
                     Vec2 sc = tileCenter(cx + 6, cy - 5) - g_game.cam; g_game.mouseX = (int)sc.x; g_game.mouseY = (int)sc.y;
+                } else if (m == "rain" || m == "rainfall" || m == "tanks" || m == "commando") {
+                    // rain: a fully upgraded bunker selected, aiming its Rain Nukes (the command bar with the powers and Upgrade All; the big circle)
+                    // rainfall: the five warheads coming down on an enemy camp (ONEHOUR_BUNKERTICKS ticks after the call); tanks: a Tank Drop on the silk
+                    // commando: laser commandos lancing an enemy squad and a tank (toxic clouds)
+                    int bt = cy0 ? B_C_BUNKER : B_K_BUNKER;
+                    Ref b = g_sim.placeBuilding(bt, 0, cx - 6, cy - 1, true);
+                    Entity* be = g_sim.get(b);
+                    be->bunkerUpg = (u8)((1 << BU_COUNT) - 1); be->maxHp *= BUNKER_SHELL_HP; be->hp = be->maxHp; g_sim.anyBunkerLasers = true;
+                    int ticks = getenv("ONEHOUR_BUNKERTICKS") ? atoi(getenv("ONEHOUR_BUNKERTICKS")) : 18;
+                    Vec2 tgt = c + Vec2(8.0f * TILE, 0);
+                    if (m == "rain") {
+                        camOn(c + Vec2(3.0f * TILE, 0));
+                        frames(6, true);
+                        g_game.selection.clear(); g_game.selection.push_back(b);
+                        g_game.nukeMode = true; g_game.rainBunker = b;
+                        Vec2 sc = tgt - g_game.cam; g_game.mouseX = (int)sc.x; g_game.mouseY = (int)sc.y;
+                    } else if (m == "rainfall") {
+                        for (int k = 0; k < 14; k++) g_sim.spawnUnit(cy0 ? U_K_INF1 : U_C_INF1, 1, tgt + Vec2(g_sim.rng.f(-6, 6) * TILE, g_sim.rng.f(-4, 4) * TILE));
+                        for (int k = 0; k < 4; k++) g_sim.spawnUnit(cy0 ? U_K_TANK : U_C_TANK, 1, tgt + Vec2(g_sim.rng.f(-5, 5) * TILE, g_sim.rng.f(-4, 4) * TILE));
+                        g_sim.cmdBunkerRain(b, tgt);
+                        camOn(c + Vec2(4.0f * TILE, 0));
+                        frames(ticks, true);
+                    } else if (m == "tanks") {
+                        Vec2 z = c + Vec2(6.0f * TILE, 2.0f * TILE);
+                        g_sim.cmdTankDrop(b, z);
+                        camOn(z);
+                        frames(ticks, true);
+                    } else {
+                        for (int k = 0; k < 3; k++) g_sim.spawnUnit(cy0 ? U_C_LASERCMD : U_K_LASERCMD, 0, c + Vec2(-1.0f * TILE, (k - 1) * 1.2f * TILE));
+                        for (int k = 0; k < 10; k++) g_sim.spawnUnit(cy0 ? U_K_INF1 : U_C_INF1, 1, c + Vec2((5.5f + (k % 3) * 0.6f) * TILE, ((k / 3) - 1.5f) * 0.9f * TILE));
+                        Ref tk = g_sim.spawnUnit(cy0 ? U_K_TANK : U_C_TANK, 1, c + Vec2(6.0f * TILE, 3.0f * TILE)); g_sim.get(tk)->hp = g_sim.get(tk)->maxHp;
+                        camOn(c + Vec2(2.5f * TILE, 0));
+                        frames(ticks, true);
+                    }
                 } else if (m == "way") {   // a Waymaker over the corner of a structure and the wood beside it: the ghost marks what it clears and what it keeps
                     int pw = cy0 ? B_C_POWER : B_K_POWER, wt = cy0 ? B_C_WAYMAKER : B_K_WAYMAKER;
                     g_sim.placeBuilding(pw, 0, cx - 1, cy - 1, true);

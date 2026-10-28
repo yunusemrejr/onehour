@@ -160,6 +160,9 @@ struct Entity {
     int bunkerBusy = -1;              // ... the one being fitted now (-1: none) and how far along it is (0..1)
     float bunkerProgress = 0;
     float paraReady = 0;              // ... sim time its Para Backup can be called again (BU_PARA)
+    float rainReady = 0;              // ... its Rain Nukes (BU_RAIN) ...
+    float tankReady = 0;              // ... and its Tank Drop (BU_TANKS)
+    u8 bunkerQueue = 0;               // ... upgrades waiting to be fitted after the current one (Upgrade All Bunkers; paid as each one starts)
     float lzCd[2] = {0, 0}, lzAng[2] = {0, 0};   // ... its laser battery's two roof lasers (BU_LASERS): cooldown, facing and target
     Ref lzTgt[2];
     float lzFired = -10;              // ... when one of them last fired (the emitters glow for a moment)
@@ -314,7 +317,7 @@ struct Sim {
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; Ref source; bool super = false; bool swift = false; };   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; Ref source; bool super = false; bool swift = false; bool rain = false; };   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
                                           // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
@@ -322,9 +325,9 @@ struct Sim {
     std::vector<Nuke> nukes;
     bool anyBunkerLasers = false;   // a bunker's laser battery was fitted this match: only then is every rocket and shell checked against them (bunkerLaserIntercept)
     static constexpr float NUKE_FLIGHT = 7.0f;
-    static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : (n.swift ? NUKE_FLIGHT * BUNKER_SWIFT_FLIGHT : NUKE_FLIGHT); }   // seconds from launch to impact (a Super Nuke is much faster)
+    static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : (n.rain ? NUKE_FLIGHT * RAIN_NUKE_FLIGHT : (n.swift ? NUKE_FLIGHT * BUNKER_SWIFT_FLIGHT : NUKE_FLIGHT)); }   // seconds from launch to impact (a Super Nuke is much faster)
     // Share of a defence's usual chance to shoot this warhead down: the silver casing halves it, a Super Nuke's is a tenth, a swift bunker missile's 30%
-    static float nukeResist(const Nuke& n) { return (n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f)) * (n.swift ? BUNKER_SWIFT_RESIST : 1.0f); }
+    static float nukeResist(const Nuke& n) { return (n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f)) * (n.swift ? BUNKER_SWIFT_RESIST : 1.0f) * (n.rain ? RAIN_NUKE_RESIST : 1.0f); }   // (a rain warhead: RAIN_NUKE_RESIST)
     int nukeSeq = 0;
     int fxTagSeq = 0;   // handles into Sim::fx (a fallout zone shrinks its own haze as an Anti-Radiation Truck scrubs it)
     // The air position of a warhead t seconds into its flight: a long arc over the ground line from the ramp to the target (the renderer draws the missile here too).
@@ -407,7 +410,7 @@ struct Sim {
     bool riotSpawnSpot(int victim, Vec2& out);
     Entity* riotPickTarget(Riot& r, Vec2 from);
     int riotersAlive() const;
-    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; float life = FALLOUT_LIFE; int visTag = 0; };   // life: seconds it lasts (an Underground Nuke's three times as long); visTag: the FX_FALLOUT haze it is drawn as
+    struct Fallout { Vec2 pos; float r; float t; float tick; float power = 1.0f; int owner = -1; bool enemyOnly = false; float life = FALLOUT_LIFE; int visTag = 0; bool toxic = false; };   // toxic: a laser commando's cloud (Sim::toxicCloud)   // life: seconds it lasts (an Underground Nuke's three times as long); visTag: the FX_FALLOUT haze it is drawn as
     std::vector<Fallout> fallouts;   // radiation zones left by detonations
 
     // spatial grid
@@ -511,6 +514,16 @@ struct Sim {
     bool cmdBunkerUpgrade(Ref bunker, int u);
     bool cmdBunkerPara(Ref bunker, Vec2 pos, bool attackOn = false);   // BU_PARA: a cargo plane drops BUNKER_PARA_TROOPS paratroopers at pos
     std::vector<int> bunkerParaManifest(int player) const;   // the infantry such a drop carries (what the army has unlocked; never infiltrators)
+    bool cmdBunkerRain(Ref bunker, Vec2 pos, bool force = false);    // BU_RAIN: RAIN_NUKES small fast warheads at random spots within RAIN_NUKE_AREA of pos
+    float bunkerRainWait(const Entity& b) const;                    // seconds until its Rain Nukes are ready (-1: not fitted)
+    bool cmdTankDrop(Ref bunker, Vec2 pos, bool attackOn = false);  // BU_TANKS: a heavy cargo plane drops bunkerTankManifest at pos
+    float bunkerTankWait(const Entity& b) const;
+    std::vector<int> bunkerTankManifest(int player) const;          // TANK_DROP_TANKS tanks and a medic vehicle
+    int bunkerUpgradesMissing(int player, int* cost = nullptr, bool unqueued = false) const;   // fittings its bunkers still lack (unqueued: nor queued)
+    int cmdBunkerUpgradeAll(int player);                            // queues every missing upgrade on every finished bunker of the army; fittings queued
+    void cancelBunkerQueue(int player);                             // drops what Upgrade All queued (a fitting under way goes on)
+    bool startQueuedFitting(Entity& b);                             // (the next queued upgrade of an idle bunker, when it can be paid)
+    void toxicCloud(Vec2 at, int owner);                            // a Toxic Lance hit: a small enemy-only toxic zone (renews one of its own nearby)
     float bunkerParaWait(const Entity& b) const;             // seconds until it can call one (0 ready, -1 not fitted)
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
     bool cmdPhoneStrike(int player, Vec2 pos);   // tech structure: call in a strike package on a spot of your choice (see PhoneStrike)

@@ -329,6 +329,33 @@ void paraMast(Bld& b) {
     a.poly({{88, 59}, {95, 66}, {95, 69}, {88, 62}}, K_YEL, 0.5f, 0.0f);
 }
 
+// rain rack: a launch rack on the north-east spot (x 57..68, y 10..18), its five small warheads standing up with red noses. The spot lies
+// between the field hospital and the laser battery, clear of the hatch collar, so the rack never covers a live part
+void rainRack(Bld& b) {
+    Art& a = b.a;
+    Color steel = b.cy ? rgb(96, 110, 128) : rgb(112, 106, 90), silver = rgb(228, 234, 242);
+    a.shadowRect(57.0f, 16.2f, 10.9f, 2.2f, 1.0f, 1.0f, 1.2f, 100);
+    a.rect(57.0f, 16.2f, 10.9f, 2.2f, 0.5f, steel, 1.0f, 0.4f);   // the rack's cradle
+    for (int i = 0; i < 5; i++) {
+        float x = 58.4f + i * 2.1f;
+        a.cap(x, 16.6f, x, 11.8f, 0.95f, silver, 0.5f, 0.5f);   // the warhead body
+        a.circle(x, 11.0f, 0.95f, K_RED, 0.4f, 0.3f);           // its red nose
+    }
+}
+
+// heavy lift pad: a landing pad on the north-west spot (x 27..36, y 15..20), between the overdrive pop-up and the field hospital, clear of the
+// hatch collar. Its north and south rims are hazard stripes, a landing ring marks the middle and a beacon light stands at its east end
+void liftPad(Bld& b) {
+    Art& a = b.a;
+    Color hz1 = b.cy ? rgb(232, 188, 62) : rgb(204, 156, 56), hz2 = b.cy ? rgb(36, 36, 32) : rgb(96, 72, 44);
+    a.shadowRect(26.8f, 15.2f, 9.4f, 4.8f, 1.0f, 1.0f, 1.2f, 100);
+    a.rect(26.8f, 15.2f, 9.4f, 4.8f, 0.4f, b.cy ? rgb(92, 104, 122) : rgb(124, 118, 100), 1.0f, 0.4f);
+    b.hazard(26.8f, 15.2f, 9.4f, 1.0f, 2, hz1, hz2);
+    b.hazard(26.8f, 19.0f, 9.4f, 1.0f, 2, hz1, hz2);
+    a.ring(31.5f, 17.6f, 1.3f, 0.5f, rgb(236, 240, 244), 0.4f, 0.2f);
+    b.light(35.2f, 17.6f, 0.8f, b.cy ? C_CYAN : K_RED, 150);
+}
+
 }  // namespace
 
 void artBunkerUpgrade(Canvas& c, int type, int upg) {
@@ -342,6 +369,8 @@ void artBunkerUpgrade(Canvas& c, int type, int upg) {
     case BU_TRIPLE: tripleLaunch(b); break;
     case BU_SWIFT:  swiftGuidance(b); break;
     case BU_PARA:   paraMast(b); break;
+    case BU_RAIN:   rainRack(b); break;
+    case BU_TANKS:  liftPad(b); break;
     }
     c.outline(rgb(8, 10, 14, 120));
 }

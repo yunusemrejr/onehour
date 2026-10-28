@@ -10,7 +10,10 @@ enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_ST
        BK_NUKEBOMBER,   // tech structure: call in the Nuclear Bomber
        BK_FLEET,        // tech structure: Fleet Call
        BK_BUNKERUPG,    // a bunker's own upgrade (id: BunkerUpg)
-       BK_BUNKERPARA }; // a bunker's Para Backup call
+       BK_BUNKERPARA,   // a bunker's Para Backup call
+       BK_BUNKERRAIN,   // a bunker's Rain Nukes
+       BK_TANKDROP,     // a bunker's Tank Drop
+       BK_BUNKERALL };  // Upgrade All Bunkers (id 1: cancel what it queued)
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -37,6 +40,9 @@ static const char* kindHotkey(int kind, int id) {
     case BK_UPGRADE: return UPGRADES[0][id].hotkey;   // (the same keys for both armies)
     case BK_BUNKERUPG: return BUNKER_UPGS[id].hotkey;
     case BK_BUNKERPARA: return "P";
+    case BK_BUNKERRAIN: return "J";
+    case BK_TANKDROP: return "D";
+    case BK_BUNKERALL: return "A";
     }
     return nullptr;
 }
@@ -66,6 +72,9 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_DROPOFF: return ICO_DROPOFF;
     case BK_BUNKERUPG: return ICO_BU_SHELL + id;
     case BK_BUNKERPARA: return ICO_PARADROP;
+    case BK_BUNKERRAIN: return ICO_RAINNUKE;
+    case BK_TANKDROP: return ICO_TANKDROP;
+    case BK_BUNKERALL: return id == 1 ? ICO_CANCEL : ICO_BUNKERALL;
     case BK_UPGRADE:
         switch (id) {
         case UPG_RUGGED: return ICO_UP_RUGGED;
@@ -143,7 +152,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -593,13 +602,37 @@ void Game::buildButtonsRaw() {
                 const BunkerUpgType& ug = BUNKER_UPGS[u];
                 if (Sim::bunkerHas(*b, u)) continue;
                 if (b->bunkerBusy == u) snprintf(tip, sizeof tip, "%s: fitting (%d%%). %s", ug.name, (int)(b->bunkerProgress * 100), ug.desc);
-                else snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s. For THIS bunker only (%d s to fit, one fitting at a time)%s", ug.name, ug.cost, ug.hotkey, ug.desc, (int)ug.time, b->bunkerBusy >= 0 ? "  (busy fitting another upgrade)" : "");
+                else snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s. For THIS bunker only (%d s to fit, one fitting at a time)%s", ug.name, ug.cost, ug.hotkey, ug.desc, (int)ug.time,
+                              ((b->bunkerQueue >> u) & 1) ? "  (queued by Upgrade All Bunkers)" : (b->bunkerBusy >= 0 ? "  (busy fitting another upgrade)" : ""));
                 add(BK_BUNKERUPG, u, g_sim.bunkerUpgAvailable(*b, u) && g_sim.canAfford(g_sim.humanPlayer, ug.cost), ug.name, tip);
             }
             if (Sim::bunkerHas(*b, BU_PARA)) {
                 float pw = g_sim.bunkerParaWait(*b);
                 snprintf(tip, sizeof tip, "Call Para Backup  [P]  A cargo plane drops %d paratroopers on the spot you pick (%s). Once a minute per bunker%s", BUNKER_PARA_TROOPS, rosterText(g_sim.bunkerParaManifest(g_sim.humanPlayer), 110).c_str(), pw > 0 ? "  (reloading)" : "");
                 add(BK_BUNKERPARA, 0, pw <= 0 && b->disabledUntil <= g_sim.time, "Call Paratroops", tip);
+            }
+            if (Sim::bunkerHas(*b, BU_RAIN)) {
+                float rw = g_sim.bunkerRainWait(*b);
+                snprintf(tip, sizeof tip, "Rain Nukes  [J]  Pick a wide circle (%d tiles): %d small warheads (%.1f tile blast each, leave radiation) come down at random spots in it, %.1f s after launch. Almost nothing can shoot them down (%d%% of a defence's usual chance). They hit your own units in the circle too. Once every %d s per bunker%s",
+                         (int)RAIN_NUKE_AREA, RAIN_NUKES, NUKE_RADIUS * std::sqrt(RAIN_NUKE_SCALE), Sim::NUKE_FLIGHT * RAIN_NUKE_FLIGHT, (int)(RAIN_NUKE_RESIST * 100 + 0.5f), (int)RAIN_NUKE_COOLDOWN, rw > 0 ? "  (reloading)" : "");
+                add(BK_BUNKERRAIN, 0, rw <= 0 && b->disabledUntil <= g_sim.time, "Rain Nukes", tip);
+            }
+            if (Sim::bunkerHas(*b, BU_TANKS)) {
+                float tw = g_sim.bunkerTankWait(*b);
+                snprintf(tip, sizeof tip, "Tank Drop  [D]  A heavy cargo plane drops %d tanks and a medic vehicle on the spot you pick (%s). Tougher than other airlifts, but heavy flak can still bring it down. Once every %d s per bunker%s",
+                         TANK_DROP_TANKS, rosterText(g_sim.bunkerTankManifest(g_sim.humanPlayer), 110).c_str(), (int)TANK_DROP_COOLDOWN, tw > 0 ? "  (reloading)" : "");
+                add(BK_TANKDROP, 0, tw <= 0 && b->disabledUntil <= g_sim.time, "Tank Drop", tip);
+            }
+            {   // Upgrade All Bunkers: every upgrade every bunker of the army still lacks, queued from this one bunker
+                int cost = 0, open = g_sim.bunkerUpgradesMissing(g_sim.humanPlayer, &cost, true), allCost = 0, all = g_sim.bunkerUpgradesMissing(g_sim.humanPlayer, &allCost);
+                if (open > 0 || all == 0) {
+                    snprintf(tip, sizeof tip, "Upgrade All Bunkers  [A]  Update all upgrades for all bunkers: queues every upgrade your bunkers still lack (%d fitting%s, $%d in all). Each bunker fits its queue one upgrade after another and pays as each one starts; a fitting waits while money is short",
+                             open, open == 1 ? "" : "s", cost);
+                    add(BK_BUNKERALL, 0, open > 0, "Upgrade All Bunkers", all == 0 ? "Upgrade All Bunkers  [A]  Every bunker you have is fully upgraded" : tip);
+                } else {
+                    snprintf(tip, sizeof tip, "Cancel Queued Upgrades  [A]  Upgrade All Bunkers has queued every missing upgrade ($%d still to pay). Click to drop the queue (fittings under way go on)", allCost);
+                    add(BK_BUNKERALL, 1, true, "Cancel Queued Upgrades", tip);
+                }
             }
             return;
         }
@@ -645,6 +678,11 @@ void Game::buildButtonsRaw() {
 }
 
 bool Game::launchNuke(Vec2 at) {
+    if (rainBunker.valid()) {
+        if (!g_sim.cmdBunkerRain(rainBunker, at, forceFireKey())) return false;
+        addMessage("Rain Nukes launched", rgb(255, 120, 90));
+        return true;
+    }
     if (nukeDeep) {
         Ref from = NOREF;
         for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o->isBuilding() && o->bt().role == BR_UNUKE && o->owner == g_sim.humanPlayer && o->constructed && g_sim.time >= o->actionTimer) { from = r; break; } }
@@ -672,7 +710,7 @@ bool Game::launchNuke(Vec2 at) {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; bulkDrag = false; paraBunker = NOREF;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF;
 }
 
 void Game::clickButton(const Button& b) {
@@ -708,6 +746,23 @@ void Game::cmdSelection(int kind, int id) {
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_UPGRADE: if (g_sim.cmdUpgrade(g_sim.humanPlayer, id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_BUNKERUPG: { Entity* b = selectedBuilding(); if (b && g_sim.cmdBunkerUpgrade(g_sim.refOf(*b), id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break; }
+    case BK_BUNKERRAIN: {
+        Entity* b = selectedBuilding();
+        if (b && b->bt().role == BR_BUNKER && g_sim.bunkerRainWait(*b) == 0 && b->disabledUntil <= g_sim.time) { Ref r = g_sim.refOf(*b); cancelModes(); nukeMode = true; rainBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
+        else g_audio.play(SND_CANT, Vec2(), true);
+        break;
+    }
+    case BK_TANKDROP: {
+        Entity* b = selectedBuilding();
+        if (b && b->bt().role == BR_BUNKER && g_sim.bunkerTankWait(*b) == 0 && b->disabledUntil <= g_sim.time) { Ref r = g_sim.refOf(*b); cancelModes(); dropMode = true; tankBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
+        else g_audio.play(SND_CANT, Vec2(), true);
+        break;
+    }
+    case BK_BUNKERALL:
+        if (id == 1) { g_sim.cancelBunkerQueue(g_sim.humanPlayer); g_audio.play(SND_CLICK, Vec2(), true); }
+        else if (g_sim.cmdBunkerUpgradeAll(g_sim.humanPlayer) > 0) g_audio.play(SND_CLICK, Vec2(), true);
+        else g_audio.play(SND_CANT, Vec2(), true);
+        break;
     case BK_BUNKERPARA: {
         Entity* b = selectedBuilding();
         if (b && b->bt().role == BR_BUNKER && g_sim.bunkerParaWait(*b) == 0) { Ref r = g_sim.refOf(*b); cancelModes(); dropMode = true; paraBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
@@ -910,9 +965,9 @@ void Game::gameEvent(const SDL_Event& e) {
                 if (areaMode) applyArea(wp, AREA_DEFAULT_R);
                 else if (attackMoveMode && !selection.empty()) { g_sim.cmdMove(selection, wp, true); attackMoveMode = false; }
                 else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) { powerMode = false; forceLatch = false; } }
-                else if (nukeMode) { if (launchNuke(wp)) { nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; forceLatch = false; } }
+                else if (nukeMode) { if (launchNuke(wp)) { nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; rainBunker = NOREF; bomberMode = false; forceLatch = false; } }
                 else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
-                else if (dropMode) { if (paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, wp) : g_sim.cmdParadrop(g_sim.humanPlayer, wp)) { dropMode = false; paraBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); }
+                else if (dropMode) { if (tankBunker.valid() ? g_sim.cmdTankDrop(tankBunker, wp) : paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, wp) : g_sim.cmdParadrop(g_sim.humanPlayer, wp)) { dropMode = false; paraBunker = NOREF; tankBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, wp)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, wp)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, wp)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
@@ -945,8 +1000,8 @@ void Game::gameEvent(const SDL_Event& e) {
                 return;
             }
             if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) { powerMode = false; forceLatch = false; } else g_audio.play(SND_CANT, Vec2(), true); return; }
-            if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; forceLatch = false; return; }
-            if (dropMode) { if (paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, w) : g_sim.cmdParadrop(g_sim.humanPlayer, w)) { dropMode = false; paraBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; rainBunker = NOREF; bomberMode = false; forceLatch = false; return; }
+            if (dropMode) { if (tankBunker.valid() ? g_sim.cmdTankDrop(tankBunker, w) : paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, w) : g_sim.cmdParadrop(g_sim.humanPlayer, w)) { dropMode = false; paraBunker = NOREF; tankBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, w)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, w)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, w)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
@@ -2071,7 +2126,20 @@ void Game::renderWorld() {
             g.text((int)c.x - g.textW(why) / 2, (int)c.y - bt.h * TILE / 2 - 16, why, rgb(255, 180, 140));
         }
     }
-    if (nukeMode) {
+    if (nukeMode && rainBunker.valid()) {   // Rain Nukes: the wide circle the warheads fall in at random, and the size of one blast drifting round in it
+        Vec2 m = Vec2(mouseX, mouseY);
+        float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f), R = RAIN_NUKE_AREA * TILE, nr = NUKE_RADIUS * TILE * std::sqrt(RAIN_NUKE_SCALE);
+        g.discFill(m.x, m.y, R, rgb(255, 60, 40, (int)(26 * pulse)));
+        g.dashedCircle(m.x, m.y, R, rgb(255, 90, 60), wallTime * 30.0f);
+        g.circle(m.x, m.y, R + 2, rgb(255, 160, 110, 120), 96);
+        for (int k = 0; k < RAIN_NUKES; k++) {
+            float a = wallTime * 0.7f + k * 6.2832f / RAIN_NUKES, r = R * (0.3f + 0.4f * (k & 1)) ;
+            Vec2 c = m + Vec2(std::cos(a), std::sin(a)) * r;
+            g.discFill(c.x, c.y, nr, rgb(255, 80, 50, (int)(30 * pulse)));
+            g.circle(c.x, c.y, nr, rgb(255, 120, 80, 170), 32);
+        }
+        g.circle(m.x, m.y, 4, rgb(255, 200, 90), 12);
+    } else if (nukeMode) {
         Vec2 m = Vec2(mouseX, mouseY);
         float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f);
         float nr = NUKE_RADIUS * TILE * (nukeMini ? std::sqrt(MINI_NUKE_SCALE) : (nukeIsland ? std::sqrt(ISLAND_NUKE_SCALE) : (nukeDeep ? std::sqrt(UNUKE_SCALE) : 1.0f)));
@@ -2267,6 +2335,13 @@ void Game::renderWorld() {
         else snprintf(buf, sizeof buf, "FORCE FIRE: pick a unit or structure");
         g.text(mouseX + 12, mouseY - 4, buf, rgb(255, 120, 90));
     }
+    else if (nukeMode && rainBunker.valid()) {
+        char rb[128]; snprintf(rb, sizeof rb, "RAIN NUKES: %d WARHEADS FALL AT RANDOM IN THE BIG CIRCLE (YOU TOO)", RAIN_NUKES);
+        const char* rb2 = "Too fast for the defences: they almost never stop one";
+        int tx = std::min(mouseX + 12, SCREEN_W - 6 - std::max(g.textW(rb), g.textW(rb2)));   // (kept on the screen)
+        g.text(tx, mouseY - 18, rb, rgb(255, 100, 70));
+        g.text(tx, mouseY - 6, rb2, rgb(255, 214, 140));
+    }
     else if (nukeMode) {
         g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : (nukeIsland ? "ISLAND NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : (nukeDeep ? "UNDERGROUND NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)")), nukeDeep ? rgb(220, 224, 232) : rgb(255, 100, 70));
         Vec2 wp = screenToWorld(mouseX, mouseY);
@@ -2281,7 +2356,7 @@ void Game::renderWorld() {
         if (nd > 0) { char ab[200]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the bomb is shot down", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true, NUKEBOMBER_SCALE, false) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
     }
     else if (strikeMode) { char buf[128]; snprintf(buf, sizeof buf, "%s: %d strike fighters bomb the spot you pick", STRIKES[g_sim.players[g_sim.humanPlayer].faction].name, (int)g_sim.strikeManifest(g_sim.humanPlayer).size()); g.text(mouseX + 12, mouseY - 4, buf, hudAccent(g_sim.players[g_sim.humanPlayer].faction)); }
-    else if (dropMode) g.text(mouseX + 12, mouseY - 4, DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
+    else if (dropMode) g.text(mouseX + 12, mouseY - 4, tankBunker.valid() ? "TANK DROP: 10 tanks and a medic" : paraBunker.valid() ? "PARA BACKUP: 35 paratroopers" : DROPS[g_sim.players[g_sim.humanPlayer].faction].name, hudAccent(g_sim.players[g_sim.humanPlayer].faction));
     else if (fleetMode) { Vec2 gl, en, nn; bool ok = g_sim.fleetEntry(screenToWorld(mouseX, mouseY), gl, en, nn); g.text(mouseX + 12, mouseY - 4, ok ? "Fleet Call: the fleet forms up here" : "Fleet Call: pick a spot on the open ocean", ok ? hudAccent(g_sim.players[g_sim.humanPlayer].faction) : rgb(255, 150, 120)); }
     else if (aidMode) {
         int who[MAX_PLAYERS]; int n = g_sim.aidCandidates(g_sim.humanPlayer, screenToWorld(mouseX, mouseY), who);
@@ -2523,16 +2598,31 @@ void Game::renderHud() {
                     if (e->hatch > 0) snprintf(buf, sizeof buf, "Hatch %d / %d: the garrison fires from it", (int)e->hatch, (int)e->hatchMax);
                     else snprintf(buf, sizeof buf, "HATCH DOWN: garrison silent until it is refitted");
                     g.text(INFO_X + 86, hy + 70, buf, e->hatch > 0 ? hudDim() : rgb(255, 140, 120));
-                    if (e->bunkerBusy >= 0) snprintf(buf, sizeof buf, "Fitting %s: %d%%", BUNKER_UPGS[e->bunkerBusy].name, (int)(e->bunkerProgress * 100));
+                    int queued = 0; for (int u = 0; u < BU_COUNT; u++) queued += (e->bunkerQueue >> u) & 1;
+                    if (e->bunkerBusy >= 0) snprintf(buf, sizeof buf, queued ? "Fitting %s: %d%%  (%d more queued)" : "Fitting %s: %d%%", BUNKER_UPGS[e->bunkerBusy].name, (int)(e->bunkerProgress * 100), queued);
+                    else if (queued) snprintf(buf, sizeof buf, "%d upgrade%s queued: waiting for money", queued, queued > 1 ? "s" : "");
                     else snprintf(buf, sizeof buf, "Nuke-hardened (%d%% a hit), radiation-proof", (int)(BUNKER_NUKE_SHARE * 100 * (Sim::bunkerHas(*e, BU_SHELL) ? BUNKER_SHELL_NUKE : 1.0f) + 0.5f));
-                    g.text(INFO_X + 86, hy + 84, buf, e->bunkerBusy >= 0 ? rgb(255, 226, 150) : rgb(150, 220, 255));
+                    g.text(INFO_X + 86, hy + 84, buf, e->bunkerBusy >= 0 || queued ? rgb(255, 226, 150) : rgb(150, 220, 255));
                     float mw = std::max(0.0f, e->siloTimer - g_sim.time);
                     const char* tubes = Sim::bunkerHas(*e, BU_TRIPLE) ? "Triple nuke" : "Mini nuke";
-                    if (mw > 0) snprintf(buf, sizeof buf, "%s %d:%02d", tubes, (int)mw / 60, (int)mw % 60); else snprintf(buf, sizeof buf, "%s READY (K)", tubes);
-                    if (Sim::bunkerHas(*e, BU_PARA)) { float pw = g_sim.bunkerParaWait(*e); size_t l = strlen(buf); if (pw > 0) snprintf(buf + l, sizeof buf - l, "   Paras %ds", (int)std::ceil(pw)); else snprintf(buf + l, sizeof buf - l, "   Paras READY (P)"); }
+                    // the launch and the calls it has: with the newer powers fitted the line is kept short (the keys are on the buttons)
+                    const bool many = Sim::bunkerHas(*e, BU_RAIN) || Sim::bunkerHas(*e, BU_TANKS);
+                    if (mw > 0) snprintf(buf, sizeof buf, "%s %d:%02d", many ? (Sim::bunkerHas(*e, BU_TRIPLE) ? "Triple" : "Mini") : tubes, (int)mw / 60, (int)mw % 60);
+                    else snprintf(buf, sizeof buf, many ? "%s READY" : "%s READY (K)", many ? (Sim::bunkerHas(*e, BU_TRIPLE) ? "Triple" : "Mini") : tubes);
+                    auto call = [&](bool has, float w, const char* name, const char* key) {
+                        if (!has) return;
+                        size_t l = strlen(buf);
+                        if (w > 0) snprintf(buf + l, sizeof buf - l, many ? "  %s %ds" : "   %s %ds", name, (int)std::ceil(w));
+                        else if (many) snprintf(buf + l, sizeof buf - l, "  %s READY", name);
+                        else snprintf(buf + l, sizeof buf - l, "   %s READY (%s)", name, key);
+                    };
+                    call(Sim::bunkerHas(*e, BU_PARA), g_sim.bunkerParaWait(*e), "Paras", "P");
+                    call(Sim::bunkerHas(*e, BU_RAIN), g_sim.bunkerRainWait(*e), "Rain", "J");
+                    call(Sim::bunkerHas(*e, BU_TANKS), g_sim.bunkerTankWait(*e), "Tanks", "D");
                     g.text(INFO_X + 86, hy + 96, buf, mw > 0 ? rgb(255, 200, 120) : rgb(255, 110, 90));
                     std::string fit;
                     for (int u = 0; u < BU_COUNT; u++) if (Sim::bunkerHas(*e, u)) { if (!fit.empty()) fit += " "; fit += BUNKER_UPGS[u].tag; }
+                    if (e->bunkerUpg == (u8)((1 << BU_COUNT) - 1)) fit = "every upgrade";   // (the whole list would run into the command grid)
                     if (!fit.empty()) { fit = "Fitted: " + fit; g.text(INFO_X + 86, hy + 108, fit.c_str(), accent); }
                     else { snprintf(buf, sizeof buf, "Income $%d / %ds   no upgrades fitted yet", (int)(BUNKER_INCOME * pl.econMul()), (int)BUNKER_INCOME_INTERVAL); g.text(INFO_X + 86, hy + 108, buf, rgb(240, 220, 130)); }
                 }
@@ -2889,7 +2979,7 @@ void Game::drawNukes() {
             char warn[64]; snprintf(warn, sizeof warn, "INSIDE THE SUPER NUKE'S BLAST  %ds", (int)std::ceil(Sim::flightOf(n) - n.t));
             g.text((int)(SCREEN_W * 0.5f - g.textW(warn, 2) * 0.5f), 34, warn, rgb(255, 214, 240), 2);
         }
-        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (su ? "SUPER NUKE" : sv ? "UNDERGROUND NUKE" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE")), (int)std::ceil(Sim::flightOf(n) - n.t));
+        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (su ? "SUPER NUKE" : sv ? "UNDERGROUND NUKE" : n.rain ? "RAIN NUKE" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE")), (int)std::ceil(Sim::flightOf(n) - n.t));
         g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, n.broken ? rgb(255, 214, 140) : rgb(255, 230, 200));
         if (n.broken) continue;   // (the missile is gone: its pieces are drawn with the anti-nuke shots)
         // the missile: rises from the ramp on a long arc and falls on the target

@@ -378,6 +378,57 @@ void buildIcon(int id, Ico& I) {
             I.box(x, 10, 2.5f, 2.5f, 0.6f, rgb(110, 128, 80), 0.3f);
         }
         break;
+    case ICO_BU_RAIN:   // a rack of five small warheads, red noses up
+        I.box(0, 10, 19, 2.4f, 0.8f, rgb(96, 104, 116), 0.3f);
+        for (int k = -2; k <= 2; k++) {
+            float x = k * 8.0f;
+            I.seg(x, 9, x, -5, 2.4f, SILVER, 0.5f);
+            I.poly({ { x - 2.6f, -5 }, { x + 2.6f, -5 }, { x, -12 } }, HOT, 0.4f);
+        }
+        break;
+    case ICO_BU_TANKS:   // a square lift pad with an amber ring, a white H and a beacon light on a post
+        I.box(0, 5, 17, 17, 2.0f, rgb(70, 80, 96), 0.4f);
+        I.ring(0, 5, 14.5f, 1.2f, ORANGE, 0.3f).deco();
+        I.seg(-6, -3, -6, 13, 2.2f, WHITE, 0.0f).deco();
+        I.seg(6, -3, 6, 13, 2.2f, WHITE, 0.0f).deco();
+        I.seg(-6, 5, 6, 5, 2.2f, WHITE, 0.0f).deco();
+        I.seg(0, -12, 0, -18, 0.9f, GREY, 0.2f).deco();
+        I.circle(0, -20, 2.6f, AMBER, 0.2f);
+        break;
+    case ICO_RAINNUKE:   // five small warheads falling, each with its impact ring below
+        for (int k = -2; k <= 2; k++) {
+            float x = k * 8.5f, y = (k & 1) ? -6.0f : -14.0f;
+            I.seg(x, y - 6, x, y + 4, 2.0f, SILVER, 0.5f);
+            I.poly({ { x - 2.2f, y + 4 }, { x + 2.2f, y + 4 }, { x, y + 9 } }, HOT, 0.4f);
+            I.ring(x, 15.5f, 3.6f, 1.1f, ORANGE, 0.2f).deco();
+        }
+        break;
+    case ICO_TANKDROP: {   // a tank under an orange parachute, its straps running down to the hull
+        std::vector<paint::P> canopy;
+        for (int i = 0; i <= 8; i++) { float t = (180.0f + i * 22.5f) * 3.14159265f / 180.0f; canopy.push_back({ std::cos(t) * 17, -10 + std::sin(t) * 13 }); }
+        I.poly(canopy, rgb(232, 122, 52), 0.4f);
+        for (float deg : { 225.0f, 270.0f, 315.0f }) {
+            float t = deg * 3.14159265f / 180.0f;
+            I.seg(0, -10, std::cos(t) * 17, -10 + std::sin(t) * 13, 0.9f, WHITE, 0.0f).deco();
+        }
+        I.seg(-14, -9, -9, 6, 0.6f, PALE, 0.0f).deco();
+        I.seg(14, -9, 9, 6, 0.6f, PALE, 0.0f).deco();
+        I.box(0, 10, 13, 5.0f, 1.2f, rgb(122, 136, 84), 0.4f);       // the hull, olive
+        I.seg(0, 9, 15, 9, 1.8f, rgb(92, 102, 64), 0.3f);            // the gun barrel
+        I.seg(-12, 17, 12, 17, 2.4f, rgb(40, 44, 40), 0.2f);         // the tracks
+        I.circle(-12, 17, 2.4f, rgb(40, 44, 40), 0.2f);
+        I.circle(12, 17, 2.4f, rgb(40, 44, 40), 0.2f);
+        break;
+    }
+    case ICO_BUNKERALL:   // three small bunkers under an upward arrow: the whole base upgraded at once
+        for (int k = -1; k <= 1; k++) {
+            float x = k * 12.0f;
+            I.poly(ellipse(x, 5, 5.4f, 3.8f, 10), rgb(134, 150, 170), 0.4f);   // the dome
+            I.box(x, 9.5f, 5.4f, 4.2f, 1.0f, rgb(104, 118, 138), 0.4f);        // its base
+            I.box(x, 12.6f, 1.8f, 1.4f, 0.4f, INK, 0.0f).deco();               // the door
+        }
+        I.poly({ { 0, -21 }, { 9, -10 }, { 3.5f, -10 }, { 3.5f, -1 }, { -3.5f, -1 }, { -3.5f, -10 }, { -9, -10 } }, GOLD, 0.4f);
+        break;
     case ICO_UNLOAD:   // everybody out of a door
         I.box(-12, 0, 7, 14, 1.5f, rgb(110, 118, 130), 0.3f);
         I.box(-12, 0, 4, 11, 0.8f, rgb(24, 28, 36), 0).deco();
