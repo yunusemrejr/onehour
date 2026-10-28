@@ -128,6 +128,54 @@ bool recoveryTest(u64 seed) {
         CHECK5(c.hq >= 1, "a computer army whose last dozer sat in a bunker did not rebuild its Command structure");
         CHECK5(c.hubs >= 1, "a computer army whose last dozer sat in a bunker did not restore its supply line");
     }
+    // ---- 4. nothing left but a dozer stranded on another island, with money: the commander founds its new base on that island
+    for (int fi = 0; fi < 2; fi++) {
+        Faction me = (Faction)fi;
+        recoveryScene(me, 2, seed + 300 + fi);
+        strip([](const Entity&) { return false; }, 0, 20000);
+        const int home = g_map.landNear(g_sim.players[1].basePos, 3);
+        std::vector<int> area(65536, 0);
+        for (int i = 0; i < MAP_W * MAP_H; i++) if (g_map.landComp[i] && g_map.landComp[i] != home && g_map.passable(i % MAP_W, i / MAP_W)) area[g_map.landComp[i]]++;
+        int isle = 0; for (int k = 1; k < 65536; k++) if (area[k] > area[isle]) isle = k;
+        CHECK5(isle && area[isle] > 300, "the map has no other island to strand a dozer on");
+        Vec2 sum; int n = 0;
+        for (int i = 0; i < MAP_W * MAP_H; i++) if (g_map.landComp[i] == isle && g_map.passable(i % MAP_W, i / MAP_W)) { sum += tileCenter(i % MAP_W, i / MAP_W); n++; }
+        Vec2 spot = g_map.nearestFree(sum * (1.0f / n), 30);
+        CHECK5(g_map.landNear(spot) == isle, "no free ground on the island");
+        Ref dz = g_sim.spawnUnit(firstUnitOf(me) + 0, 1, spot);
+        CHECK5(dz.valid() && !g_map.sameGround(spot, g_sim.players[1].basePos), "the island is reachable on foot from the old base");
+        bool hqOnIsle = false, hubOnIsle = false;
+        int secs = 0;
+        for (; secs < 300 && !(hqOnIsle && hubOnIsle); secs += 15) {
+            runAi(15);
+            for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isBuilding() && e.constructed && g_map.landNear(e.pos, 2) == isle) {
+                if (e.bt().role == BR_HQ) hqOnIsle = true;
+                if (e.bt().role == BR_SUPPLY) hubOnIsle = true;
+            }
+        }
+        Census c = census(1);
+        char tag[96]; snprintf(tag, sizeof tag, "%s stranded on an island, %d s", FACTION_NAME[me], secs); printCensus(tag, c);
+        CHECK5(hqOnIsle, "a dozer stranded on an island did not raise a new Command structure there");
+        CHECK5(hubOnIsle, "a commander refounded on an island did not raise a supply hub there");
+        CHECK5(g_map.landNear(g_sim.players[1].basePos, 3) == isle, "the commander's home did not move to the island");
+        for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isBuilding() && !e.constructed) CHECK5(g_map.landNear(e.pos, 2) == isle, "a stranded commander laid out a structure its dozer cannot reach");
+    }
+    // ---- 5. a relief dozer lands next to the old base, which the enemy army now holds: the commander rebuilds somewhere safer
+    for (int fi = 0; fi < 2; fi++) {
+        Faction me = (Faction)fi;
+        recoveryScene(me, 2, seed + 400 + fi);
+        strip([](const Entity&) { return false; }, 0, 20000);
+        Vec2 old = g_sim.players[1].basePos;
+        int tank = firstUnitOf(F_CYBER) + 5;   // (player 0 is Cyber: Photon Tanks camp on the ruins)
+        for (int k = 0; k < 10; k++) { Ref t = g_sim.spawnUnit(tank, 0, g_map.nearestFree(old + Vec2((k % 5 - 2) * 40.0f, (k / 5) * 40.0f - 20.0f), 12)); g_sim.cmdStop({t}); }
+        reliefDrop(0);
+        Ref dz = NOREF; for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isUnit() && e.ut().role == UR_DOZER) dz = g_sim.refOf(e);
+        if (Entity* d = g_sim.get(dz)) { d->pos = d->prevPos = g_map.nearestFree(old + Vec2(0, 14.0f * TILE), 12); }   // (out of the tanks' reach for now)
+        runAi(5);
+        CHECK5(dist(g_sim.players[1].basePos, old) > 12.0f * TILE, "a commander whose old base the enemy holds did not pick a new home");
+        char tag[96]; snprintf(tag, sizeof tag, "%s old base held by the enemy", FACTION_NAME[me]);
+        printf("  %-34s home moved %.0f tiles\n", tag, dist(g_sim.players[1].basePos, old) / TILE);
+    }
     if (g_ok5) printf("recoverytest: ok\n");
     return g_ok5;
 }

@@ -197,6 +197,60 @@ bool AiPlayer::recoverBase(int dozers, bool hasHq) {
     return placed;
 }
 
+// A commander with no Command structure left whose home is lost to it - its surviving dozer cannot drive there (it was dropped on an island, or the
+// base lies across the water), or the enemy holds the ground - founds a new base: the spot its dozer can reach that is safest from what it knows of
+// the enemy, with supply piles near it, not too far to drive and clear of radiation. Home (basePos) moves there, so every rebuilt structure, the
+// garrison and the haulers follow it. True if home moved.
+bool AiPlayer::relocateBase() {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    if (S.time - relocatedAt < 20.0f || S.countRole(player, BR_HQ, false) > 0) return false;
+    const Vec2 homeGround = g_map.nearestFree(pl.basePos, 8);   // (home itself may be rubble or a wreck: the free ground next to it)
+    Entity* d = nullptr; float dd = 1e18f;   // the founder: a free dozer, one that can still drive home first
+    for (auto& e : S.ents) {
+        if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || civicDozerType(e.type) || e.carrier.valid() || e.fall > 0) continue;
+        float k = dist(e.pos, pl.basePos) + (g_map.sameGround(e.pos, homeGround) ? 0.0f : 1e9f);
+        if (k < dd) { dd = k; d = &e; }
+    }
+    if (!d) return false;
+    auto danger = [&](Vec2 p) { return enemyStrengthNear(p, 16.0f) + (S.inFallout(p, 4.0f * TILE) ? 6000.0f : 0.0f); };
+    const bool reach = g_map.sameGround(d->pos, homeGround);
+    const float here = danger(pl.basePos);
+    if (reach && here < 2500.0f) return false;   // the old home will do
+    // candidates: supply piles on the dozer's ground, and a ring of spots round the dozer
+    std::vector<Vec2> cand;
+    for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0 && g_map.sameGround(d->pos, e.pos)) cand.push_back(e.pos);
+    cand.push_back(d->pos);
+    for (float r : { 8.0f, 16.0f, 26.0f }) for (int k = 0; k < 8; k++) {
+        Vec2 p = d->pos + Vec2(std::cos(k * 0.785f), std::sin(k * 0.785f)) * (r * TILE);
+        if (p.x > TILE && p.y > TILE && p.x < WORLD_W - TILE && p.y < WORLD_H - TILE && g_map.sameGround(d->pos, p)) cand.push_back(p);
+    }
+    struct Site { Vec2 p; float score; };
+    std::vector<Site> sites;
+    for (Vec2 p : cand) {
+        float rich = 0;
+        for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0 && dist(e.pos, p) < 12.0f * TILE) rich += (float)e.amount;
+        float score = danger(p) + dist(p, d->pos) / TILE * 30.0f - std::min(rich, 60000.0f) / 30.0f;
+        sites.push_back({p, score});
+    }
+    std::sort(sites.begin(), sites.end(), [](const Site& a, const Site& b) { return a.score < b.score; });
+    const int hqType = firstBuildOf(pl.faction) + BR_HQ;
+    for (size_t i = 0; i < sites.size() && i < 4; i++) {   // the best few, where a Command structure actually fits
+        int tx, ty;
+        groundFrom = d->pos; groundCheck = true;
+        Vec2 saved = pl.basePos; pl.basePos = sites[i].p;   // (findSpot searches round home)
+        bool fits = findSpot(hqType, sites[i].p, 12, tx, ty);
+        groundCheck = false;
+        if (!fits) { pl.basePos = saved; continue; }
+        pl.basePos = S.buildingCenter(hqType, tx, ty);
+        relocatedAt = S.time; relocations++;
+        if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] RELOCATE home %d,%d -> %d,%d (dozer %s home, danger there %.0f)\n", player, S.time, tileOf(saved.x), tileOf(saved.y), tileOf(pl.basePos.x), tileOf(pl.basePos.y), reach ? "can reach" : "cannot reach", here);
+        return true;
+    }
+    relocatedAt = S.time;   // (nowhere fits: look again later)
+    return false;
+}
+
 bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty) {
     const BuildType& b = BUILDS[buildType];
     if (b.role == BR_BUNKER) return findBunkerSpot(buildType, tx, ty);
@@ -230,6 +284,7 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
             bool nearBunker = false;
             for (auto& o : bunkersAt) if (dist(c, o.first) < (o.second ? 8.0f : 16.0f) * TILE) { nearBunker = true; break; }
             if (nearBunker) continue;
+            if (groundCheck && !g_map.sameGround(groundFrom, c)) continue;   // across water or a wall from the dozer that would build it
             if (!g_sim.canPlace(player, buildType, x, y)) continue;
             // Human wall orders may seal a base by choice. The commander must
             // preserve an exit for its builders, haulers and reinforcement waves.
@@ -302,7 +357,10 @@ bool AiPlayer::tryBuild(int buildType, Vec2 preferNear, int maxRing) {
     if (!g_sim.buildAvailable(player, buildType)) return false;
     if (!g_sim.canAfford(player, BUILDS[buildType].cost)) return false;
     int tx, ty;
-    if (!findSpot(buildType, preferNear, maxRing, tx, ty)) return false;
+    groundFrom = d->pos; groundCheck = true;   // (only where this dozer can drive: a dozer on an island builds on the island)
+    bool found = findSpot(buildType, preferNear, maxRing, tx, ty);
+    groundCheck = false;
+    if (!found) return false;
     return g_sim.cmdBuild(g_sim.refOf(*d), buildType, tx, ty);
 }
 
@@ -853,6 +911,7 @@ void AiPlayer::think() {
 
     prof.mark("supply");
     // ---------- construction (one decision per think, with a reserve for economy; in recovery every free dozer gets the next core piece first)
+    if (recovering && !hq) relocateBase();
     if (recovering) recoverBase(dozers, hq != nullptr);
     Entity* dz = idleDozer();
     if (dz) {

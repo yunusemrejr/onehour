@@ -99,6 +99,9 @@ struct AiPlayer {
     float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
     bool recovering = false;    // most of the base is gone: rebuild the core before anything else (see FEAT_RECOVER)
+    float relocatedAt = -100;   // when the commander last moved its home to a new site (relocateBase)
+    int relocations = 0;        // (statistics)
+    Vec2 groundFrom; bool groundCheck = false;   // findSpot: only spots a dozer standing at groundFrom can drive to
     // ---- the newer commander (ai_civil.cpp): persona, towns, riots, team play
     int persona = PE_STRATEGIST;
     const char* commander = "";     // the commander's name (messages, the selftest report)
@@ -133,6 +136,7 @@ private:
     float assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy);
     float enemyStrengthNear(Vec2 p, float radiusTiles);
     Entity* idleDozer(bool civic = false);   // civic: a civilian dozer (they raise only the town; the others only the base)
+    bool relocateBase();                        // recovery without a Command structure: found the new base where a surviving dozer can build and live
     bool recoverBase(int dozers, bool hasHq);   // recovery mode: every free dozer raises the next missing core structure (-> something was placed)
     void managePower();
 };
