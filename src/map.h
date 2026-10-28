@@ -94,7 +94,12 @@ struct Map {
     mutable std::vector<u16> region;
     mutable bool regionDirty = true;
     mutable u32 cacheGen = 0;           // generation of closestInRegion's memo (0 after a rebuild: it starts afresh)
-    void touch() { regionDirty = true; }
+    void touch() { regionDirty = true; navGen++; navAllDirty = true; }
+    bool sameGround(Vec2 a, Vec2 b) const {   // a ground route can get from a to b (both on free ground of one region)
+        if (regionDirty) buildRegions();
+        int ia = clampi(tileOf(a.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(a.x), 0, MAP_W - 1), ib = clampi(tileOf(b.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(b.x), 0, MAP_W - 1);
+        return region[ia] != 0 && region[ia] == region[ib];
+    }
     void buildRegions() const;
     bool closestInRegion(u16 rg, int gx, int gy, int& bx, int& by) const;   // the tile of region rg nearest to (gx, gy) (octile distance)
     float moveCost(int x, int y) const { return tiles[y * MAP_W + x] == T_ROAD ? 0.8f : 1.0f; }
@@ -139,6 +144,21 @@ struct Map {
     // like findPath for ships; the goal is moved to the nearest open water of the body the ship is on (the ocean's routes round the islands are long)
     bool findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = 40000) const;
     bool navLineClear(Vec2 a, Vec2 b) const;                                     // straight line over open water
+    // Per-tile answers to the tests above, kept so the naval search does not redo them for every tile it looks at. NF_WET is navTile, NF_OPEN is
+    // navOpen, NF_SHORE marks a tile with land or a structure among its eight neighbours (the search charges it extra). navLabel numbers the stretches
+    // of open water a hull can sail between (0 = not open), built only when a long search asks for them. Rebuilt on the first naval search after
+    // navGen moves; navGen moves wherever navTile can change: generate, touch, setStructure and setResource.
+    static constexpr u8 NF_WET = 1, NF_OPEN = 2, NF_SHORE = 4;
+    mutable u8 navFlag[MAP_W * MAP_H];
+    mutable u32 navLabel[MAP_W * MAP_H];
+    mutable u32 navGen = 1, navFlagGen = 0, navLabelGen = 0;
+    // the box of tiles whose navTile may have changed since the flags were last built (all of the map after generate or touch())
+    mutable bool navAllDirty = true;
+    mutable int navBx0 = MAP_W, navBy0 = MAP_H, navBx1 = -1, navBy1 = -1;
+    void noteNavChange(int x0, int y0, int x1, int y1) { navGen++; navBx0 = std::min(navBx0, x0); navBy0 = std::min(navBy0, y0); navBx1 = std::max(navBx1, x1); navBy1 = std::max(navBy1, y1); }
+    void buildNavFlags() const;
+    void buildNavLabels() const;
+    u8 navFlagAt(int x, int y) const { return inMap(x, y) ? navFlag[y * MAP_W + x] : 0; }
 };
 
 extern Map g_map;

@@ -4,6 +4,7 @@
 #include "data.h"
 #include "map.h"
 #include <SDL2/SDL.h>
+#include <unordered_map>
 
 struct Canvas {
     int w, h;
@@ -113,11 +114,17 @@ struct Gfx {
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
     static constexpr int FLAG_W = 24, FLAG_H = 15;
     Sprite minimapTerrain;
-    // The baked ground (organic, noise-blended transitions), cut into WORLD_CHUNK px square textures: a 10240 px world is bigger than many GPUs'
-    // largest texture. drawWorld blits a world rectangle from however many chunks it spans.
+    // The baked ground (organic, noise-blended transitions), cut into WORLD_CHUNK px square chunks: a 10240 px world is bigger than many GPUs'
+    // largest texture. drawWorld blits a world rectangle from however many chunks it spans. Every chunk keeps its pixels in CPU memory as
+    // dithered RGB565; only the chunks drawn lately also hold an SDL texture (at most WORLD_RESIDENT, the least recently drawn one is destroyed
+    // first), so a low-end machine does not pay for a 400 MB 32-bit copy of the whole world.
     static constexpr int WORLD_CHUNK = 1024;
-    std::vector<SDL_Texture*> worldChunks;
-    int worldCols = 0, worldRows = 0;
+    static constexpr int WORLD_RESIDENT = 24;
+    struct WorldChunk { std::vector<u16> px; SDL_Texture* tex = nullptr; int w = 0, h = 0; u32 used = 0; };   // used: the drawWorld call that last drew it
+    std::vector<WorldChunk> worldChunks;
+    int worldCols = 0, worldRows = 0, worldResident = 0;
+    u32 worldStamp = 0;
+    std::vector<SDL_Texture*> worldRetired;   // textures given up mid-frame: destroyed at the next beginFrame, once the queued draws that may use them are flushed
     void drawWorld(int wx, int wy, int w, int h, int dx, int dy);
     static constexpr int SHROUD_SS = 4;     // shroud mask cells per tile
     SDL_Texture* miniFog = nullptr;     // the minimap's fog (MAP_W/2 x MAP_H/2 cells, see Game::drawMinimap)
@@ -130,12 +137,14 @@ struct Gfx {
     bool softwareRenderer = false;  // no GPU: skip purely atmospheric full-screen blends (cloud shadows)
     double fillPx = 0;   // (profiling: screen pixels covered by sprite draws so far; see ONEHOUR_FILLDBG)
     int userScale = 0;              // 0 = pick the UI scale from the window size
+    int refreshHz = 60;             // the display's refresh rate (the main loop never runs faster)
     bool init(int scale, bool software, int reqW = 0, int reqH = 0);
     void onResize();                // window size changed: recompute the logical (UI) size
     void shutdown();
     Sprite fromCanvas(Canvas& c, float ox, float oy);
     void draw(const Sprite& s, float x, float y, float angle = 0, float scale = 1, Color mod = rgb(255, 255, 255), u8 alpha = 255);
     void drawRect(const Sprite& s, int x, int y, int w, int h, u8 alpha = 255);
+    void copyScaled(SDL_Texture* t, const SDL_Rect* src, const SDL_FRect& dst);   // SDL_RenderCopyF, cut to the screen first on the CPU renderer
     void text(int x, int y, const char* s, Color c, int scale = 1, bool shadow = true);
     int textW(const char* s, int scale = 1) { return (int)strlen(s) * 6 * scale; }
     void fill(int x, int y, int w, int h, Color c);
@@ -148,6 +157,16 @@ struct Gfx {
     void drawSized(const Sprite& s, float cx, float cy, float w, float h, float angle, Color mod = rgb(255, 255, 255), u8 alpha = 255);   // centred, any aspect, rotated about its centre
     // an aircraft rolling about its long axis: the sprite foreshortened across the wings by |cos roll| and mirrored while it is belly-up
     void drawRolled(const Sprite& s, float x, float y, float angle, float roll, float scale = 1, Color mod = rgb(255, 255, 255), u8 alpha = 255);
+    // The CPU renderer turns a sprite by building a scaled, turned copy of the whole quad on every call (off-screen parts included): a
+    // battlefield of wrecks and track marks cost a quarter of a second a frame. Small sprites are drawn from copies turned once instead.
+    bool rotCached(SDL_Texture* t, float x, float y, float w, float h, float px, float py, float angle, bool flipV, Color mod, u8 alpha);   // small sprites: pre-turned copies
+    struct Pix { int w = 0, h = 0; std::vector<u32> px; };
+    struct RotEntry { SDL_Texture* tex = nullptr; SDL_Texture* src = nullptr; int bucket = 0, w = 0, h = 0, size = 0; bool flip = false; size_t bytes = 0; u32 used = 0; };
+    std::unordered_map<SDL_Texture*, std::vector<Pix>> pixCache;   // (read-back pixels per texture: level 0 full size, 1 half, 2 quarter)
+    std::unordered_map<u64, RotEntry> rotCache;                     // (rotCached)
+    size_t rotBytes = 0; u32 rotClock = 0;
+    const Pix* pixelsOf(SDL_Texture* t, int level);
+
     void discFill(float cx, float cy, float r, Color c);  // flat translucent disc with a soft edge
     void dashedCircle(float cx, float cy, float r, Color c, float phase, float dash = 9, float gap = 6);
     Sprite fromCanvasSmooth(Canvas& c, float ox, float oy);   // bilinear-filtered texture (supersampled sprites)
@@ -163,6 +182,8 @@ private:
     void buildMisc();
     void buildMinimap();
     void bakeTerrain();
+    void makeChunkTexture(WorldChunk& ch, u32 stamp);   // gives a chunk its SDL texture, first freeing the least recently drawn one if the cap is reached
+    void uploadChunkRect(WorldChunk& ch, int x, int y, int w, int h);   // copies a rectangle of the chunk's RGB565 pixels into its texture (if it has one)
     void buildEffects();
 };
 extern Gfx g_gfx;

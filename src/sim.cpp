@@ -385,18 +385,60 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         const bool naval = e.ut().naval;
         const int comp = naval ? g_map.compAt(e.pos) : 0;
         auto clear = [&](Vec2 a, Vec2 b) { return naval ? g_map.navLineClear(a, b) : g_map.lineClear(a, b); };
+        // a ship of a fleet joins a route another ship has planned: at the nearest point of the route (within 30 tiles) it can sail straight to, which is
+        // a waypoint or a point on one of its legs. The fleet sails one route between them instead of a search for each ship (that was most of a late-game
+        // spike). Ground units still share only a route that starts beside them.
+        auto joinAt = [&](const std::vector<Vec2>& route, size_t last, Vec2& at) {
+            int best = -1; float bd = 1e18f;
+            for (size_t k = 0; k <= last && k < route.size(); k++) {
+                Vec2 p = route[k];
+                if (k >= 1) {   // the closest point of the leg that ends at this waypoint
+                    Vec2 a0 = route[k - 1], ab = route[k] - a0;
+                    float t = std::max(0.0f, std::min(1.0f, ((e.pos.x - a0.x) * ab.x + (e.pos.y - a0.y) * ab.y) / std::max(1e-6f, ab.len2())));
+                    p = a0 + ab * t;
+                }
+                float dk = dist(e.pos, p);
+                bool whole = p.x == route[k].x && p.y == route[k].y;   // (a point on a leg must also see the waypoint it leads to)
+                if (dk < bd && dk <= 30.0f * TILE && clear(e.pos, p) && (whole || clear(p, route[k]))) { bd = dk; best = (int)k; at = p; }
+            }
+            return best;
+        };
         if (!swimmer(e)) for (auto& sh : shared) {
             if (sh.naval != naval || sh.comp != comp) continue;
-            if (dist(sh.from, e.pos) > (naval ? 4.0f : 2.5f) * TILE || dist(sh.to, d) > (naval ? 6.0f : 4.0f) * TILE) continue;
+            if (dist(sh.to, d) > (naval ? 6.0f : 4.0f) * TILE || (!naval && dist(sh.from, e.pos) > 2.5f * TILE)) continue;
             if (!sh.reached) {   // the spot cannot be reached from here: the same closest point
-                if (sh.path.empty() || !clear(e.pos, sh.path[0])) continue;
-                e.path = sh.path; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
+                if (sh.path.empty()) continue;
+                Vec2 at = sh.path[0];
+                int k = naval ? joinAt(sh.path, sh.path.size() - 1, at) : (clear(e.pos, sh.path[0]) ? 0 : -1);
+                if (k < 0) continue;
+                e.path.assign(sh.path.begin() + k, sh.path.end());
+                if (at.x != sh.path[k].x || at.y != sh.path[k].y) e.path.insert(e.path.begin(), at);
+                e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
                 reused = true; break;
             }
             if (sh.path.size() < 3) continue;
-            if (!clear(e.pos, sh.path[0]) || !clear(sh.path[sh.path.size() - 2], d)) continue;
-            e.path = sh.path; e.path.back() = d; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
+            Vec2 at = sh.path[0];
+            int k = naval ? joinAt(sh.path, sh.path.size() - 2, at) : (clear(e.pos, sh.path[0]) ? 0 : -1);
+            if (k < 0 || !clear(sh.path[sh.path.size() - 2], d)) continue;
+            e.path.assign(sh.path.begin() + k, sh.path.end());
+            if (at.x != sh.path[k].x || at.y != sh.path[k].y) e.path.insert(e.path.begin(), at);
+            e.path.back() = d; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
             reused = true; break;
+        }
+        // A wider net for land units: a route planned for a unit up to nine tiles off (more on a long march) is joined at a point along it this one
+        // can see (and that is not much farther from it than from that unit), so an army spread over a field plans a handful of routes, not dozens
+        // (the farther the march, the less the first stretch matters: a wave sent 150 tiles shares routes among units up to 18 tiles apart)
+        const float joinR = std::max(9.0f * TILE, std::min(18.0f * TILE, 0.12f * dist(e.pos, d)));
+        if (!reused && !naval && !swimmer(e)) for (auto& sh : shared) {
+            if (sh.naval || !sh.reached || sh.path.size() < 4 || dist(sh.to, d) > 4.0f * TILE || dist(sh.from, e.pos) > joinR) continue;
+            if (!clear(sh.path[sh.path.size() - 2], d)) continue;
+            for (size_t k = 0; k < std::min<size_t>(3, sh.path.size() - 2) && !reused; k++) {
+                float dj = dist(e.pos, sh.path[k]);
+                if (dj > joinR + 3.0f * TILE || dj > dist(sh.from, sh.path[k]) + 5.0f * TILE || !clear(e.pos, sh.path[k])) continue;
+                e.path.assign(sh.path.begin() + k, sh.path.end()); e.path.back() = d; e.pathIdx = 0; e.repathTimer = PATH_INTERVAL;
+                reused = true;
+            }
+            if (reused) break;
         }
         if (!reused) {
             bool reached = requestPath(e, d);
@@ -1612,7 +1654,9 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
     if (e.path.empty()) {   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
         Vec2 fb = g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4);
         if (!g_map.passable(tileOf(fb.x), tileOf(fb.y))) { fb = g_map.nearestFree(dest, 18); ok = g_map.findPath(e.pos, fb, e.path); }   // (a spot out in the lake: walk to the shore)
-        if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(fb.x), tileOf(fb.y)) && dist(fb, e.pos) <= 3.0f * TILE ? fb : e.pos);   // (a far goal it cannot reach at all: stay put, never push against the terrain in a straight line)
+        // (a far goal it cannot reach at all: stay put, never push against the terrain in a straight line; nor against a wall line for a spot just
+        // beyond it - units of a wave used to stand pressed to an enemy wall for minutes, walking at a goal two tiles off on its other side)
+        if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(fb.x), tileOf(fb.y)) && dist(fb, e.pos) <= 3.0f * TILE && (swimmer(e) || g_map.sameGround(e.pos, fb)) ? fb : e.pos);
     }
     return ok;
 }
@@ -1715,7 +1759,55 @@ float Sim::sharpScore(const Entity& e, const Entity& t, float d, const Weapon& w
     return ti < incoming.size() && incoming[ti] >= t.hp ? 4.0f : 0.0f;
 }
 
-Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn) {
+// The plain score is the distance against how well the weapon hurts the target's armour, with nudges (things that shoot back first, a Command
+// structure last). The smart one (MICRO_THREAT, every shooter that is not an aircraft) weighs what a kill is worth: the damage per second the
+// target deals - to this shooter, or for less to its friends - against the seconds this shooter needs to kill it, so a group shoots the tank
+// destroyer before the wall it stands behind and the wounded rocket trooper before the fresh rifleman. A target it has to walk to costs extra.
+// MICRO_FOCUS prefers a target already taking fire that is not yet doomed (the group finishes one enemy before starting the next).
+float Sim::targetScore(const Entity& e, const Entity& t, const Weapon& wp, int wpn, float d) {
+    const int micro = e.owner >= 0 && e.owner < MAX_PLAYERS ? players[e.owner].micro : 0;
+    if ((micro & MICRO_THREAT) && !e.isAir()) {
+        const float myDps = std::max(0.5f, wp.dmg * wp.mult[t.armor()] * std::max(1, wp.burst) / std::max(0.05f, wp.cooldown) * (wp.splash > 0 ? 1.15f : 1.0f));
+        const float ttk = std::max(0.5f, t.hp / myDps);   // seconds this shooter alone needs
+        float threat = 0;
+        int tw = t.weapon();
+        if (tw >= 0 && (t.isUnit() ? t.ut().role == UR_COMBAT || t.ut().cargoCap > 0 : (t.constructed && !(players[t.owner < 0 ? 0 : t.owner].lowPower() && t.bt().power < 0)))) {
+            const Weapon& w2 = WEAPONS[tw];
+            const float dps2 = w2.dmg * std::max(1, w2.burst) / std::max(0.05f, w2.cooldown);
+            const bool hitsMe = (e.isAir() ? w2.air : w2.ground) && !(t.isUnit() && t.ut().sniper && !(e.isUnit() && e.ut().kind == UK_INF));
+            threat = hitsMe ? dps2 * w2.mult[e.armor()] : dps2 * 0.3f;
+        }
+        float base = 0.6f;   // nothing to fear from it: what its loss costs the enemy
+        if (t.isUnit()) base = t.ut().role == UR_HARVESTER ? 5.0f : (t.ut().role == UR_DOZER ? 4.0f : (t.ut().role == UR_HEALER ? 6.0f : 1.5f));
+        else if (!t.constructed) base = 0.35f;
+        else if (t.bt().role == BR_HQ) base = 0.3f;
+        float value = (threat + base) / ttk;
+        float reach = d > wp.range + 0.15f ? (d - wp.range) * 1.6f : 0.0f;   // it would have to walk there under fire
+        float score = d * 0.35f + reach - 3.0f * std::log(value + 1e-4f);
+        if (wpn >= 0 && t.isAir()) score -= 1.5f;   // a roof gun is there to keep aircraft off the base first
+        size_t ti = (size_t)(&t - &ents[0]);
+        if (ti < incoming.size() && incoming[ti] > 0) {
+            if (players[e.owner].sharpFire && incoming[ti] >= t.hp) score += 6.0f;   // doomed already: no shot is wasted on it
+            else if (micro & MICRO_FOCUS) score -= 2.0f * std::min(1.0f, incoming[ti] / std::max(1.0f, t.hp)) + 0.6f;
+        }
+        return score;
+    }
+    float score = d - 2.5f * wp.mult[t.armor()];
+    if (t.isUnit() && t.weapon() >= 0) score -= 1.5f;          // shoot back at things that shoot
+    if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
+    if (t.isBuilding() && !t.constructed) score += 1.0f;
+    if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
+    if (wpn >= 0 && t.isAir()) score -= 1.0f;                  // a roof gun is there to keep aircraft off the base first
+    score += sharpScore(e, t, d, wp);
+    if (e.isAir() && !t.isAir()) {
+        if (e.ut().jet || e.ut().heli) score += std::min(8.0f, aaCover(t, e.owner) * (e.ut().heli ? 1.2f : 1.6f));   // (a gunship hovers in the flak: it picks prey outside it too)
+        if (e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
+        else if (t.isBuilding() && t.bt().role != BR_AATURRET && t.bt().weapon < 0) score += 1.5f;
+    }
+    return score;
+}
+
+Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn, float* scoreOut) {
     int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return nullptr;
     const Weapon& wp = WEAPONS[w];
@@ -1726,21 +1818,34 @@ Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn) {
         if (groundOnly && t.isAir()) return;
         float d = distToEntity(e.pos, t) / TILE;
         if (d < wp.minRange) return;
-        float score = d - 2.5f * wp.mult[t.armor()];
-        if (t.isUnit() && t.weapon() >= 0) score -= 1.5f;          // shoot back at things that shoot
-        if (t.isUnit() && t.ut().role == UR_HARVESTER) score -= 0.5f;
-        if (t.isBuilding() && !t.constructed) score += 1.0f;
-        if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;  // HQ is a slog; prefer softer targets
-        if (wpn >= 0 && t.isAir()) score -= 1.0f;                  // a roof gun is there to keep aircraft off the base first
-        score += sharpScore(e, t, d, wp);
-        if (e.isAir() && !t.isAir()) {
-            if (e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
-            if (e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
-            else if (t.isBuilding() && t.bt().role != BR_AATURRET && t.bt().weapon < 0) score += 1.5f;
-        }
+        float score = targetScore(e, t, wp, wpn, d);
         if (score < bs) { bs = score; best = &t; }
     });
+    if (scoreOut) *scoreOut = bs;
     return best;
+}
+
+// MICRO_KITE: a unit that outranges the foe it is fighting by a tile and a half (and is not much slower) backs away while its gun reloads, as
+// long as the foe is closing in: it keeps shooting from beyond the foe's reach instead of trading shots it does not have to.
+bool Sim::kiteStep(Entity& e, const Entity& t, const Weapon& w, float d) {
+    if (e.isAir() || e.ut().naval || e.ut().kind != UK_VEH || !t.isUnit() || t.isAir() || e.cooldown < 0.25f) return false;   // (vehicles: a squad of riflemen backing off only broke up its own line)
+    int tw = t.weapon();
+    if (tw < 0 || !canTarget(t, e, tw)) return false;
+    const Weapon& w2 = WEAPONS[tw];
+    if (w.range < w2.range + 1.5f || e.ut().speed < t.ut().speed * 0.85f || d > w2.range + 1.2f) return false;
+    if (e.hp > e.maxHp * 0.9f && d > w2.range + 0.6f) return false;   // (healthy and still outside its reach: no need yet)
+    Vec2 away = e.pos - t.pos; float l = away.len();
+    if (l < 1) return false;
+    away = away * (1.0f / l);
+    const float step = e.ut().speed * SIM_DT * 0.8f;
+    for (float side : { 0.0f, 0.6f, -0.6f }) {   // straight back, or slanted off a wall
+        Vec2 dir(away.x * std::cos(side) - away.y * std::sin(side), away.x * std::sin(side) + away.y * std::cos(side));
+        Vec2 np = e.pos + dir * step;
+        if (!walkable(e, tileOf(np.x), tileOf(np.y)) || inFallout(np)) continue;
+        e.pos = np; e.path.clear(); e.pathIdx = 0;
+        return true;
+    }
+    return false;
 }
 
 // Best enemy for a unit guarding a zone: anything inside the circle, or anything it can already shoot from where it stands.
@@ -1765,7 +1870,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
         score += sharpScore(e, t, d, wp);
         if (t.isBuilding() && !t.constructed) score += 1.0f;
         if (t.isBuilding() && t.bt().role == BR_HQ) score += 2.0f;
-        if (e.isAir() && !t.isAir() && e.ut().jet) score += std::min(8.0f, aaCover(t, e.owner) * 1.6f);
+        if (e.isAir() && !t.isAir() && (e.ut().jet || e.ut().heli)) score += std::min(8.0f, aaCover(t, e.owner) * (e.ut().heli ? 1.2f : 1.6f));
         if (e.isAir() && !t.isAir() && e.ut().bomber) { score += std::min(7.0f, aaCover(t, e.owner) * 1.2f); if (t.isBuilding()) score -= 3.0f; }
         if (score < bs) { bs = score; best = &t; }
     });
@@ -3133,6 +3238,20 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             else { e.angle = std::atan2(dv.y, dv.x); tryFire(e, *t); }
             break;
         }
+        // MICRO_RETARGET: a target it picked itself is looked over twice a second - something it can hit from where it stands beats one it would
+        // have to chase, and a much better one in reach (the gun firing on it) beats the wall it was plinking at
+        if ((players[e.owner].micro & MICRO_RETARGET) && !e.forceTarget.valid() && (tick + e.gen) % 10 == 3
+            && (e.autoTask || e.leashed || e.postOrder == O_ATTACKMOVE || e.postOrder == O_GUARDPOS || e.postOrder == O_GUARDAREA)) {
+            float altScore = 0;
+            Entity* alt = acquireTarget(e, w.range + 0.3f, -1, &altScore);
+            if (alt && alt != t) {
+                bool inReach = d <= w.range + 0.15f && d >= w.minRange;
+                if (!inReach || altScore + 2.5f < targetScore(e, *t, w, -1, d)) {
+                    e.targetEnt = refOf(*alt); e.path.clear(); e.pathIdx = 0; e.repathTimer = 0;
+                    t = alt; d = distToEntity(e.pos, *t) / TILE;
+                }
+            }
+        }
         if (d < w.minRange) {
             // Seek a reachable firing distance, including a lateral exit when a
             // wall or shoreline blocks straight reverse. Never follow the old
@@ -3146,6 +3265,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         } else if (d <= w.range) {
             e.path.clear();
             tryFire(e, *t);
+            if ((players[e.owner].micro & MICRO_KITE) && e.order == O_ATTACK) kiteStep(e, *t, w, d);
         } else {
             // approach; repath if the target moved away from the path end
             bool need = e.pathIdx >= e.path.size();

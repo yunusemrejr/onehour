@@ -100,7 +100,7 @@ bool AiPlayer::teamJoin(const std::vector<Ref>& army, float armyValue, float wav
         Entity* tgt = S.get(o.attackTarget);
         if (!tgt || !S.enemies(player, tgt->owner) || Sim::districtRuin(*tgt)) continue;
         lastTeamJoin = S.time; teamJoins++;
-        attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = o.attackTarget; wave = army; waveHasSample = false; beginWaveLearning();
+        attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = o.attackTarget; wave = army; reassessed = true; waveHasSample = false; beginWaveLearning();   // (a joint attack is not called off alone)
         S.cmdMove(army, tgt->pos, true);
         nextOrderTime = S.time + 6;
         if (aiDebugC()) fprintf(stderr, "[ai%d t=%.0f] TEAM JOIN ai%d's attack on %s with %d units\n", player, S.time, q, tgt->isUnit() ? tgt->ut().name : tgt->bt().name, (int)army.size());

@@ -43,7 +43,7 @@ struct Brain {
     float unitEff(int type, const float* x) const;
     void learnUnit(int type, const float* x, float observedEff);
     // doctrines: UCB1 over the average reward, so promising openings are repeated and the others still get tried
-    int pickDoctrine(Rng& rng, int ctx = 0) const;
+    int pickDoctrine(Rng& rng, int ctx = 0, int exclude = 0) const;   // exclude: doctrines (a bit per Doctrine) it may not pick
     float doctrineValue(int ctx, int d) const;   // the context's average reward, shrunk toward the overall one while it has few games
     void learnDoctrine(int ctx, int d, float reward);
     bool load(const char* path);

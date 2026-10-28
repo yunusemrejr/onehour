@@ -70,11 +70,12 @@ float Brain::doctrineValue(int ctx, int d) const {
     ctx = clampi(ctx, 0, DOC_CTX - 1);
     return (ctxN[ctx][d] * ctxQ[ctx][d] + K * docQ[d]) / (ctxN[ctx][d] + K);
 }
-int Brain::pickDoctrine(Rng& rng, int ctx) const {
+int Brain::pickDoctrine(Rng& rng, int ctx, int exclude) const {
     ctx = clampi(ctx, 0, DOC_CTX - 1);
     int total = 0; for (int d = 0; d < DOCTRINES; d++) total += ctxN[ctx][d];
     int best = DOC_BALANCED; float bs = -1e9f;
     for (int d = 0; d < DOCTRINES; d++) {
+        if (exclude >> d & 1) continue;
         float bonus = learning ? 0.45f * std::sqrt(std::log((float)total + 2.0f) / (ctxN[ctx][d] + 1.0f)) : 0.0f;
         float sc = doctrineValue(ctx, d) + bonus + rng.f(0.0f, 0.04f);
         if (sc > bs) { bs = sc; best = d; }

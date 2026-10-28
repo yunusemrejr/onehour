@@ -209,12 +209,23 @@ struct Fx {
 
 struct UnitOutcome { int type; float value; float mix[3]; };
 
+// Unit-level behaviours of the October micro update, each switchable for --micromatrix (mirrored fights, one side without them)
+enum MicroBit {
+    MICRO_RETARGET = 1,   // a unit that picked its own target keeps looking: it turns on something it can hit right now instead of chasing one out of reach,
+                          // and on a far better one in reach (the gun shooting at it rather than the wall it was plinking)
+    MICRO_THREAT = 2,     // targets are weighed by what killing them is worth: the damage they deal per second against the seconds it takes to kill them
+    MICRO_FOCUS = 4,      // a target already taking fire (and not yet doomed) is preferred: a group finishes one enemy before the next
+    MICRO_KITE = 8,       // a unit that outranges what it fights (and is not slower) backs off between shots while the foe closes in
+    MICRO_ALL = 15
+};
+
 struct Player {
     bool active = false;
     bool alive = true;
     bool isAI = false;
     int difficulty = 1;         // 0 easy, 1 normal, 2 hard, 3 brutal
     bool sharpFire = true;      // units picking their own targets pass over one already doomed by what is in flight to it (see Sim::sharpScore); --duelmatrix switches it off for A/B
+    int micro = MICRO_ALL;      // the smarter unit behaviours (MicroBit) this army's units use; --micromatrix plays a side with none of them for A/B
     int team = 0;
     Faction faction = F_CYBER;
     int money = START_CASH;
@@ -709,7 +720,9 @@ private:
     void applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap = -1.0f, bool nuke = false);   // nuke: warhead damage (it ignores the hardened floor: a bunker / silo can be destroyed by them)
     void noteCombat(Entity& e, const Entity& opponent);
     void splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced = false);
-    Entity* acquireTarget(Entity& e, float range, int wpn = -1);
+    Entity* acquireTarget(Entity& e, float range, int wpn = -1, float* scoreOut = nullptr);
+    float targetScore(const Entity& e, const Entity& t, const Weapon& wp, int wpn, float d);   // how much a shooter wants a target (lower goes first)
+    bool kiteStep(Entity& e, const Entity& t, const Weapon& w, float d);   // MICRO_KITE: backs off a step from a shorter-ranged foe (true: it moved)
     float sharpScore(const Entity& e, const Entity& t, float d, const Weapon& wp) const;   // Player::sharpFire: the extra score of a target (lower goes first)
     Entity* acquireZoneTarget(Entity& e);
     Entity* findZonePile(Entity& h);

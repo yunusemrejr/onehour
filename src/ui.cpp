@@ -160,14 +160,19 @@ void Game::update(float dt) {
     if (!menuOpen) scroll(dt);
     if (!paused && !g_sim.gameOver) {
         accumulator += dt * speed;
+        // Catching up costs at most about 30 ms of a frame: a machine that cannot keep up (a slow frame, a busy tick) runs the battle a little
+        // slower instead of stalling the picture for eight ticks at a time and then dropping the time anyway
+        const u64 t0 = SDL_GetPerformanceCounter(), budget = SDL_GetPerformanceFrequency() * 30 / 1000;
+        const int maxSteps = std::max(2, (int)std::ceil(speed * 2.0f));   // (fast-forward needs a few more ticks a frame)
         int steps = 0;
-        while (accumulator >= SIM_DT && steps < 8) {
+        while (accumulator >= SIM_DT && steps < maxSteps) {
             g_sim.step();
             g_ai.update();
             accumulator -= SIM_DT;
             steps++;
+            if (SDL_GetPerformanceCounter() - t0 > budget) break;
         }
-        if (steps == 8) accumulator = 0;   // can't keep up: drop time rather than spiral
+        if (accumulator > SIM_DT * 2) accumulator = SIM_DT * 2;   // can't keep up: drop time rather than spiral
     }
     renderAlpha = paused ? 1.0f : clampf(accumulator / SIM_DT, 0, 1);
     frameDt = (paused || menuOpen || g_sim.gameOver) ? 0.0f : dt * speed;
@@ -1114,7 +1119,7 @@ void Game::drawShroud() {
     const int SS = Gfx::SHROUD_SS;
     SDL_Rect src = { tx0 * SS, ty0 * SS, (tx1 - tx0 + 1) * SS, (ty1 - ty0 + 1) * SS };
     SDL_FRect dst = { tx0 * TILE - cam.x, ty0 * TILE - cam.y, (float)(tx1 - tx0 + 1) * TILE, (float)(ty1 - ty0 + 1) * TILE };
-    SDL_RenderCopyF(g.ren, g.shroudTex, &src, &dst);
+    g.copyScaled(g.shroudTex, &src, dst);
 }
 
 
@@ -1499,7 +1504,7 @@ void Game::drawEntity(Entity& e) {
                 SDL_Rect src = { 0, s.h - rows, s.w, rows };
                 SDL_FRect dst = { p.x - s.ox * d, p.y - s.oy * d + (s.h - rows) * d, s.w * d, rows * d };
                 SDL_SetTextureColorMod(s.tex, 255, 255, 255); SDL_SetTextureAlphaMod(s.tex, 255);
-                SDL_RenderCopyF(g.ren, s.tex, &src, &dst);
+                g.copyScaled(s.tex, &src, dst);
                 Color wl = hudAccent(bt.faction);
                 g.fill((int)(fx - 2), (int)dst.y, (int)(fw + 4), 1, rgb(wl.r, wl.g, wl.b, 200));
                 g.glowAdd(fx + std::fmod(wallTime * 40.0f + e.gen * 17.0f, fw), dst.y, 10, Color{wl.r, wl.g, wl.b, 150});
@@ -1888,7 +1893,28 @@ void Game::drawEntity(Entity& e) {
     if (selected && air && ut.ammo > 0) for (int k = 0; k < ut.ammo; k++) g.fill((int)p.x - 10 + k * 3, (int)p.y - e.radius() - 11, 2, 2, k < e.ammo ? rgb(255, 230, 120) : rgb(80, 80, 80));
 }
 
+// ONEHOUR_RENDERPROF=ms (profiling, with SDL_RENDER_BATCHING=0 so each draw runs when it is issued): print any world frame slower than that,
+// section by section
+namespace {
+struct RenderProf {
+    static int limit() { static int v = getenv("ONEHOUR_RENDERPROF") ? atoi(getenv("ONEHOUR_RENDERPROF")) : -1; return v; }
+    u64 t0 = 0, last = 0; const char* names[32]; double ms[32]; int n = 0;
+    RenderProf() { if (limit() >= 0) t0 = last = SDL_GetPerformanceCounter(); }
+    void mark(const char* name) { if (limit() < 0 || n >= 32) return; u64 now = SDL_GetPerformanceCounter(); names[n] = name; ms[n++] = (now - last) * 1000.0 / SDL_GetPerformanceFrequency(); last = now; }
+    ~RenderProf() {
+        if (limit() < 0) return;
+        mark("rest");
+        double tot = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency();
+        if (tot < limit()) return;
+        fprintf(stderr, "[renderprof t=%.1f] %.1f ms:", g_sim.time, tot);
+        for (int i = 0; i < n; i++) if (ms[i] >= 0.5) fprintf(stderr, " %s %.1f", names[i], ms[i]);
+        fprintf(stderr, "\n");
+    }
+};
+}
+
 void Game::renderWorld() {
+    RenderProf rp;
     Gfx& g = g_gfx;
     g.refreshTerrain();   // trees and rocks cleared for new structures since the last frame
     updateWeather();
@@ -1912,7 +1938,7 @@ void Game::renderWorld() {
         int sx0 = clampi((int)cam.x, 0, WORLD_W - 1), sy0 = clampi((int)cam.y, 0, WORLD_H - 1);
         int sw = std::min(SCREEN_W + 1, WORLD_W - sx0), sh = std::min(VIEW_H + 1, WORLD_H - sy0);
         g.drawWorld(sx0, sy0, sw, sh, sx0 - (int)cam.x, sy0 - (int)cam.y);
-    }
+    } rp.mark("terrain");
     // water: seamless animated caustics over open water. Interior water is pre-grouped by the map into aligned 4x4 blocks
     // (one 128 px draw each) plus the leftover shore-side tiles, so a lake filling the screen costs dozens of draws, not hundreds.
     {
@@ -1964,8 +1990,8 @@ void Game::renderWorld() {
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
     }
-    drawSeaLife();
-    drawGroundFx();
+    drawSeaLife(); rp.mark("water+sealife");
+    drawGroundFx(); rp.mark("groundfx");
     // placement ghost
     if (placingType >= 0 && bulkDrag) {   // a shift-dragged line: every footprint of it, green where it goes up, red where it cannot (or the money runs out)
         Vec2 w = screenToWorld(mouseX, mouseY);
@@ -2138,6 +2164,7 @@ void Game::renderWorld() {
     drawStrikeMarks();
     drawFleetCall();
     drawDistrictLife();   // the towns' streets: walkers and cars (under the blocks' roofs and shadows)
+    rp.mark("ghosts+zones+rings+town");
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
@@ -2152,6 +2179,7 @@ void Game::renderWorld() {
     }
     std::sort(ground.begin(), ground.end(), [](Entity* a, Entity* b) { return a->pos.y < b->pos.y; });
     for (auto* e : ground) drawEntity(*e);
+    rp.mark("entities");
     // flags: every finished structure flies its owner's flag from a mast on the roof edge (over units, under aircraft)
     for (auto& e : g_sim.ents) {
         if (!e.alive || !e.isBuilding() || !e.constructed || e.owner < 0 || e.bt().role == BR_BUNKER) continue;   // (a bunker flies no flag: it is underground)
@@ -2166,8 +2194,9 @@ void Game::renderWorld() {
         float px = p.x + (bt.w >= 3 ? hw * 0.5f : hw * 0.4f), py = p.y - hh + (area >= 6 ? 12.0f : 7.0f);
         g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
     }
-    drawClouds();
+    drawClouds(); rp.mark("flags+clouds");
     drawWeatherTint();   // the light of the hour over the ground world; what follows (fire, tracers, aircraft) is lit on its own
+    rp.mark("tint");
     // projectiles: hot streaks for bullets and rockets, a lobbed shell with a ground shadow
     for (auto& p : g_sim.projs) {
         const Weapon& w = WEAPONS[p.weapon];
@@ -2210,16 +2239,17 @@ void Game::renderWorld() {
             g.glowAdd(s.x, s.y, 4.5f, Color{w.color.r, w.color.g, w.color.b, 110});
         }
     }
-    drawParticles(0);
-    drawFx();
-    drawParticles(1);
-    drawNukes();
+    drawParticles(0); rp.mark("projs+parts0");
+    drawFx(); rp.mark("fx");
+    drawParticles(1); rp.mark("parts1");
+    drawNukes(); rp.mark("nukes");
     for (auto* e : air) drawEntity(*e);
-    drawAirlifts();
-    drawShroud();
+    rp.mark("air");
+    drawAirlifts(); rp.mark("airlifts");
+    drawShroud(); rp.mark("shroud");
     drawDistrictLabels();
     drawAidDrops();
-    drawRain();
+    drawRain(); rp.mark("labels+aid+rain");
     if (!g.softwareRenderer && g.vignette.tex) g.drawRect(g.vignette, 0, 0, SCREEN_W, VIEW_H);   // soft dark corners frame the battlefield (one draw, GPU only)
     // drag box
     if (dragging) {

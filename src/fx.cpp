@@ -221,8 +221,18 @@ void Gfx::buildEffects() {
 }
 
 // ================================================================= particles
+void Game::noteFrameCost(float ms) {
+    frameCost = frameCost <= 0 ? ms : frameCost * 0.9f + ms * 0.1f;
+    // down a step soon after frames run slower than ~33 fps, up a step only after a while well inside a 60 fps frame (a vsync wait counts as cost,
+    // so a GPU at 60 Hz sits at about 17 ms and stays where it is)
+    if (frameCost > 30.0f && detail > 0 && wallTime - detailAt > 1.0f) { detail--; detailAt = wallTime; frameCost = 22.0f; }
+    else if (frameCost < 13.0f && detail < 3 && wallTime - detailAt > 5.0f) { detail++; detailAt = wallTime; }
+}
+
 void Game::emitP(float x, float y, float vx, float vy, float life, float s0, float s1, Color col, u8 kind, u8 var, float ay, float drag, float rot, float vrot) {
-    if (parts.size() >= 900) return;
+    static const size_t CAP[4] = { 160, 360, 620, 900 };
+    static const float KEEP[4] = { 0.3f, 0.5f, 0.75f, 1.0f };   // (lower detail: a share of every burst, so each effect still shows)
+    if (parts.size() >= CAP[detail] || (detail < 3 && fxRng.f() > KEEP[detail])) return;
     parts.push_back(Particle{ x, y, vx, vy, ay, drag, 0, life, s0, s1, rot, vrot, col, kind, var });
 }
 
@@ -288,11 +298,13 @@ void Game::spawnFromFx() {
 // ================================================================= drawing
 void Game::drawGroundFx() {
     Gfx& g = g_gfx;
-    for (auto& d : decals) {
+    static const int DECALS[4] = { 0, 14, 30, 1 << 20 };   // (lower detail: only the newest scorch marks)
+    for (size_t i = decals.size() > (size_t)DECALS[detail] ? decals.size() - DECALS[detail] : 0; i < decals.size(); i++) {
+        const Decal& d = decals[i];
         if (!onScreen(d.x, d.y, d.r + 8)) continue;
         float k = d.age / d.life, a = 255 * clampf((1 - k) * 4.0f, 0, 1) * 0.85f;
         Vec2 s = worldToScreen(Vec2(d.x, d.y));
-        g.draw(g.fxs.scorch[d.kind % 3], s.x, s.y, d.rot, d.r * 2.0f / 96.0f, rgb(255, 255, 255), (u8)a);
+        g.draw(g.fxs.scorch[d.kind % 3], s.x, s.y, g.softwareRenderer ? 0.0f : d.rot, d.r * 2.0f / 96.0f, rgb(255, 255, 255), (u8)a);   // (a round splotch: the CPU renderer lays it upright)
     }
     for (auto& t : treads) {
         if (t.age >= t.life || !onScreen(t.x, t.y, 16)) continue;
@@ -311,7 +323,7 @@ void Game::drawGroundFx() {
             g.draw(g.rubble[idx], s.x, s.y, 0, 1, rgb(255, 255, 255), al);
             if (f.t < 18.0f) {   // embers still glowing in the wreckage, and the odd thread of smoke
                 Rng r((u64)f.size * 31 + 7);
-                int n = 3 + w * h / 3;
+                int n = (3 + w * h / 3) * detail / 3;
                 for (int i = 0; i < n; i++) {
                     float x = s.x + r.f(-0.4f, 0.4f) * w * TILE, y = s.y + r.f(-0.4f, 0.4f) * h * TILE;
                     float fl = 0.5f + 0.5f * std::sin(wallTime * (5.0f + i) + i * 2.3f), fade = 1.0f - f.t / 18.0f;
@@ -434,7 +446,7 @@ void Game::drawFx() {
         case FX_EXPLODE: {
             int fr = std::min(7, (int)(k * 8.0f));
             float rr = f.size * (0.35f + 0.65f * std::sqrt(k)), al = 1 - k * k * k;
-            g.glowAdd(a.x, a.y, rr * (2.3f + 0.8f * (1 - k)), Color{255, 140, 50, (u8)(150 * (1 - k))});
+            if (detail >= 2 || rr < 40) g.glowAdd(a.x, a.y, rr * (2.3f + 0.8f * (1 - k)), Color{255, 140, 50, (u8)(150 * (1 - k))});
             g.drawSized(g.fxs.fire[fr], a.x, a.y, rr * 2.5f, rr * 2.5f, std::fmod(f.a.x * 0.37f, 6.28f), rgb(255, 255, 255), (u8)(255 * al));
             if (k < 0.2f) g.glowAdd(a.x, a.y, rr * 1.4f, Color{255, 252, 220, (u8)(230 * (1 - k * 5))});
             break;
@@ -443,6 +455,7 @@ void Game::drawFx() {
             int v = (int)(std::fabs(f.a.x * 3.1f + f.a.y * 1.7f)) & 3;
             float rad = f.size * (0.6f + k) * 1.15f, al = f.color.a / 255.0f * 0.9f;
             float fade = std::min(1.0f, f.t * 6.0f) * (1 - k);
+            if (fade < (3 - detail) * 0.12f) break;   // (lower detail: the faintest smoke goes first)
             g.drawSized(g.fxs.smoke[v], a.x, a.y, rad * 2, rad * 2, f.t * 0.3f + (float)v, Color{f.color.r, f.color.g, f.color.b, 255}, (u8)(255 * clampf(0.55f * fade * (f.color.r < 120 ? 1.15f : 1.0f), 0, 1) * (al > 0 ? 1 : 1)));
             break;
         }
@@ -483,18 +496,20 @@ void Game::drawFx() {
             if (heat > 0) g.glowAdd(a.x, a.y, R * 1.25f * heat, sv ? Color{210, 218, 232, (u8)(160 * heat * fade)} : Color{255, 140, 50, (u8)(180 * heat * fade)});
             // base surge: a low skirt of dust billows rolling outward along the ground
             float sg = clampf(t / 10.0f, 0, 1); sg = 1 - (1 - sg) * (1 - sg);
-            for (int i = 0; i < 16; i++) {
+            const int st = detail >= 3 ? 1 : (detail == 2 ? 2 : 3);   // (lower detail: every second or third billow, each a little bigger)
+            const float sb = 1.0f + 0.22f * (st - 1);
+            for (int i = 0; i < 16; i += st) {
                 float an = i * 0.3927f + std::sin(i * 2.3f) * 0.12f, rr = R * (0.28f + 1.05f * sg) * (0.86f + 0.14f * std::sin(i * 3.1f + t * 0.4f));
-                float rad = R * (0.2f + 0.1f * sg) + 8;
+                float rad = (R * (0.2f + 0.1f * sg) + 8) * sb;
                 g.drawSized(g.fxs.billow[i & 3], a.x + std::cos(an) * rr, a.y + std::sin(an) * rr * 0.42f + 4, rad * 2.4f, rad * 1.6f, 0, lerpc(sv ? Color{160, 164, 172, 255} : Color{168, 146, 120, 255}, ash, sg), (u8)(150 * fade * (1.0f - 0.4f * sg)));
             }
             // stem: turbulent billows, fat at the foot, narrow in the middle, flaring into the cap; the lower part still glows
             const int NS = 30;
-            for (int i = 0; i < NS; i++) {
+            for (int i = 0; i < NS; i += st) {
                 float u = i / (float)(NS - 1);
                 float prof = 1.45f - 0.95f * std::sin(u * 3.1416f * 0.62f) + 0.55f * u * u * u;   // foot wide, waist narrow, throat widening under the cap
                 float wob = std::sin(t * 1.1f + i * 1.9f) * R * 0.05f * (0.5f + u) + std::sin(t * 0.5f + u * 5.0f) * R * 0.035f;
-                float rad = R * 0.15f * prof * (0.65f + 0.35f * grow) + 7;
+                float rad = (R * 0.15f * prof * (0.65f + 0.35f * grow) + 7) * sb;
                 Vec2 p(a.x + wob, a.y - H * u * 0.97f);
                 Color c = lerpc(lerpc(ash, soot, u * 0.4f), ember, clampf(heat * (1 - u * 1.3f), 0, 1) * 0.85f);
                 g.drawSized(g.fxs.billow[i & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(235 * fade));
@@ -502,12 +517,12 @@ void Game::drawFx() {
             // condensation collar: a pale ring that opens around the stem and fades
             { float cu = clampf((t - 1.5f) / 2.5f, 0, 1), cf = cu * clampf(1 - (t - 4.0f) / 9.0f, 0, 1) * fade;
               if (cf > 0.02f) { Vec2 cp(a.x, a.y - H * 0.5f); float cr = Rc * (0.55f + 0.25f * cu);
-                for (int i = 0; i < 14; i++) { float an = i * 0.4488f + t * 0.08f; g.drawSized(g.fxs.billow[(i + 2) & 3], cp.x + std::cos(an) * cr, cp.y + std::sin(an) * cr * 0.28f, R * 0.5f, R * 0.4f, 0, Color{236, 232, 228, 255}, (u8)(120 * cf)); } } }
+                for (int i = 0; i < 14; i += st) { float an = i * 0.4488f + t * 0.08f; g.drawSized(g.fxs.billow[(i + 2) & 3], cp.x + std::cos(an) * cr, cp.y + std::sin(an) * cr * 0.28f, R * 0.5f, R * 0.4f, 0, Color{236, 232, 228, 255}, (u8)(120 * cf)); } } }
             // cap: two rolling tori of billows (an outer rolling lip and a smaller inner one), back half first, then the core, then the front half
             auto torus = [&](bool front) {
                 for (int ring = 0; ring < 2; ring++) {
                     int n = ring ? 18 : 32;
-                    for (int i = 0; i < n; i++) {
+                    for (int i = 0; i < n; i += st) {
                         float th = i * 6.2832f / n + t * (ring ? -0.07f : 0.05f) + ring * 0.4f, sn = std::sin(th);
                         if ((sn > 0) != front) continue;
                         float phi = i * 1.9f + t * (ring ? 1.5f : 1.0f);                         // the roll of the vortex ring
@@ -517,18 +532,18 @@ void Game::drawFx() {
                         float up = std::sin(phi) * 0.5f + 0.5f;                                // top of the roll catches the light, the underside glows
                         Color c = lerpc(lerpc(ash, lit, up * 0.8f), ember, clampf(heat * (1 - up) * (sn > 0 ? 1.0f : 0.6f), 0, 1) * 0.9f);
                         if (up > 0.5f) c = lerpc(c, soot, clampf((t - 8.0f) / 10.0f, 0, 0.6f));
-                        float rad = rm * 1.08f + 9;
+                        float rad = (rm * 1.08f + 9) * sb;
                         g.drawSized(g.fxs.billow[(i + ring) & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(255 * fade));
                     }
                 }
             };
             torus(false);
-            for (int i = 0; i < 10; i++) {   // dense core of the cap
+            for (int i = 0; i < 10; i += st) {   // dense core of the cap
                 float an = i * 0.628f + t * 0.2f; Vec2 p(top.x + std::cos(an) * Rc * 0.4f, top.y - Rc * 0.14f + std::sin(an) * Rc * 0.16f);
                 g.drawSized(g.fxs.billow[i & 3], p.x, p.y, Rc * 1.15f, Rc * 0.9f, 0, lerpc(lerpc(ash, lit, 0.35f), ember, heat * 0.5f), (u8)(240 * fade));
             }
             torus(true);
-            for (int i = 0; i < 9; i++) {    // pale smooth hat riding on top of the cap
+            for (int i = 0; i < 9; i += st) {    // pale smooth hat riding on top of the cap
                 float an = i * 0.698f + t * 0.1f; Vec2 p(top.x + std::cos(an) * Rc * 0.38f, top.y - Rc * 0.34f + std::sin(an) * Rc * 0.1f);
                 g.drawSized(g.fxs.billow[(i + 3) & 3], p.x, p.y, Rc * 0.7f, Rc * 0.45f, 0, lit, (u8)(190 * fade * grow));
             }
@@ -546,10 +561,10 @@ void Game::drawFx() {
             if (cx < -R - 40 || cy < -R - 40 || cx > SCREEN_W + R + 40 || cy > VIEW_H + R + 40) break;
             const bool sv = f.color.r == UNUKE_GLOW.r && f.color.g == UNUKE_GLOW.g && f.color.b == UNUKE_GLOW.b;   // an Underground Nuke's radiation glows silver
             const Color haze = sv ? Color{150, 158, 172, 255} : Color{70, 220, 40, 255}, edge = sv ? rgb(214, 220, 232) : rgb(120, 255, 80), mote = sv ? Color{224, 230, 242, 255} : Color{110, 255, 70, 255};
-            g.glowAdd(cx, cy, R * 0.95f, Color{haze.r, haze.g, haze.b, (u8)((26 + 18 * pulse) * fade)});
+            if (detail >= 2) g.glowAdd(cx, cy, R * 0.95f, Color{haze.r, haze.g, haze.b, (u8)((26 + 18 * pulse) * fade)});
             g.drawSized(g.fxs.ring, cx, cy, R * 2.0f, R * 2.0f, 0, edge, (u8)((90 + 90 * pulse) * fade));
             if (R < 600) g.drawSized(g.fxs.ring, cx, cy, R * 1.5f, R * 1.5f, 0, edge, (u8)(40 * fade));   // (an Underground Nuke's zone is too wide for the inner ring: it would cover the screen twice)
-            for (int i = 0; i < 26; i++) {
+            for (int i = 0, motes = detail >= 3 ? 26 : 6 + 5 * detail; i < motes; i++) {
                 float h1 = std::fmod(i * 0.6180339f, 1.0f), h2 = std::fmod(i * 0.7548776f + 0.3f, 1.0f);
                 float an = h1 * 6.2832f + wallTime * 0.05f * (1 + h2), rr = R * std::sqrt(h2) * 0.95f;
                 float fl = 0.5f + 0.5f * std::sin(wallTime * (1.5f + h1 * 3) + i);

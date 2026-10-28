@@ -91,6 +91,11 @@ struct Game {
     size_t treadHead = 0;
     float nukeFlash = 0;            // seconds of white-out left after a tactical nuke goes off on screen
     float frameDt = 0;              // wall time this frame, zero while paused (drives particle emission and ageing)
+    // Effects detail, 0..3, set from what frames actually cost (noteFrameCost): a machine that cannot keep up draws fewer particles, puffs,
+    // scorch marks and cloud billows instead of stuttering through a nuclear exchange. Nothing that matters to play is ever left out.
+    int detail = 3;
+    float frameCost = 0, detailAt = -100;
+    void noteFrameCost(float ms);   // render + present time of the frame just shown
     Rng fxRng{ 0xFA11 };
 
     void startGame();

@@ -6,6 +6,8 @@
 // Features of the pro commander, each switchable on its own so --evalai can measure what a single one is worth (ONEHOUR_BASEMASK)
 // (the estimate-based retreat was tried and measured no better than the cost-based one)
 enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEAT_ALLY = 16, FEAT_SPECIAL = 32,   // FEAT_SPECIAL: spy drones with the army, spies that capture structures
+              FEAT_DOCPICK = 0x800,  // the opening is chosen knowing that an all-in rush throws its army at defences that hold (units that pick their targets
+                                     // well make a base very hard to crack early): no rush unless this commander's own record says rushing pays here
               FEAT_NAVY = 64,    // a Naval Yard on the lake, a fleet of its own, the Guard Drones upgrade, jeeps loaded with infantry
               FEAT_AEGIS = 128,  // anti-nuke defences round the base and nuke targeting that reckons with the enemy's (and fires a salvo at a covered target)
               FEAT_RECOVER = 256,   // an army that has lost most of its base rebuilds the core first, with every free dozer, and keeps its last units home
@@ -23,9 +25,17 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
                                          // uses its tech structure's powers); its economy, army size and reaction times stay Easy's
               FEAT_COMBO = 0x1000000,    // Hard and Brutal: combined arms - an Air Strike goes in on the objective's defences as a wave sets off
               FEAT_BUNKERUP = 0x2000000, // Normal and up: the bunkers' own upgrades bought when the money is there (shell and lasers first), Para Backup called
-              FEAT_ALL = 0x3FFFFFF,
+              // ---- the October micro & commander update
+              FEAT_PRESS = 0x4000000,    // a wave that has taken its objective picks the next one near where it stands, not near home (no march back)
+              FEAT_MEASURED = 0x8000000, // a raid on the base is met with enough to beat it (by the combat estimate), nearest first: the rest stay put
+              FEAT_MEDEVAC = 0x10000000, // a valuable unit nearly dead in a wave pulls out to be patched up at home instead of dying for nothing
+              FEAT_REASSESS = 0x20000000, // a wave that comes in sight of its objective weighs what it now sees there and turns back before a lost assault
+              FEAT_ADAPT = 0x40000000,   // a plan that is failing changes: after a wave thrown away against the enemy's defences, an all-in opening
+                                         // (rush, air first) turns into a defended, economic game with bigger waves instead of feeding it more armies
+              FEAT_ALL = 0x7FFFFFFF,
     FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER
-                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA | FEAT_FLEET2 | FEAT_HOLD | FEAT_FLEETCALL | FEAT_EASYWIT | FEAT_COMBO | FEAT_BUNKERUP };   // what ships
+                 | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA | FEAT_FLEET2 | FEAT_HOLD | FEAT_FLEETCALL | FEAT_EASYWIT | FEAT_COMBO | FEAT_BUNKERUP
+                 | FEAT_PRESS | FEAT_MEASURED | FEAT_MEDEVAC | FEAT_REASSESS | FEAT_ADAPT | FEAT_DOCPICK };   // what ships
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -60,6 +70,9 @@ struct AiPlayer {
     Ref attackTarget;
     float nextOrderTime = 0;
     std::vector<Ref> wave;      // units committed to the current attack
+    bool reassessed = false;    // FEAT_REASSESS: the wave has had its look at the objective
+    int failedWaves = 0; bool adapted = false;   // FEAT_ADAPT: waves thrown away so far, and whether the plan has changed
+    Ref droppedTarget; float lastRetarget = -100;   // the objective last dropped for radiation, and when the wave was last sent to a new one
     Ref failedTarget; float failedAt = -1000;   // last target a wave broke against
     Vec2 huntPoint; float huntAt = -1000;       // where the army sweeps when only the enemy's hidden things are left, and when to pick the next spot
 
@@ -116,7 +129,7 @@ struct AiPlayer {
 private:
     bool tryBuild(int buildType, Vec2 preferNear, int maxRing = 22);
     int chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAir);
-    Entity* pickAttackTarget();
+    Entity* pickAttackTarget(const Vec2* from = nullptr);   // from: score the distance from there (a wave in the field) instead of from home
     float assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy);
     float enemyStrengthNear(Vec2 p, float radiusTiles);
     Entity* idleDozer(bool civic = false);   // civic: a civilian dozer (they raise only the town; the others only the base)

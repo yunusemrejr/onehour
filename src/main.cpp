@@ -25,6 +25,8 @@ static void usage() {
            "  --seed S         random seed for the game\n"
            "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
+           "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
+           "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
 
@@ -166,6 +168,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
 }
 
 
+static int g_playMicro[4] = { -1, -1, -1, -1 };   // Player::micro per army for playAiGame (-1: the default)
 // Plays one AI-only game headless. Returns the winning team (or -1 when nobody won within maxSecs).
 static int playAiGame(u64 seed, int players, const Faction* fac, const bool* brain, int difficulty, int maxSecs, const int* teamIn = nullptr, const bool* smart = nullptr, const int* diffIn = nullptr, const bool* pro = nullptr) {
     bool ai[4] = { true, true, true, true };
@@ -175,6 +178,7 @@ static int playAiGame(u64 seed, int players, const Faction* fac, const bool* bra
     if (diffIn) for (int i = 0; i < 4; i++) diff[i] = diffIn[i];
     g_sim.init(players, fac, ai, diff, team, seed);
     for (int p = 0; p < 4; p++) { g_ai.brainEnabled[p] = brain[p]; g_ai.smartEnabled[p] = smart ? smart[p] : true; g_ai.proEnabled[p] = pro ? pro[p] : true; }
+    for (int p = 0; p < 4; p++) if (g_playMicro[p] >= 0) g_sim.players[p].micro = g_playMicro[p];   // (--evalai with ONEHOUR_OLDMICRO: the baseline's units without the micro update)
     g_ai.init(seed);
     for (int t = 0; t < maxSecs * SIM_HZ && !g_sim.gameOver; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
     if (g_sim.gameOver) g_ai.finish(g_sim.winnerTeam);
@@ -262,6 +266,8 @@ static int evalAi(int games, u64 seed, int difficulty) {
         for (int p = 0; p < 4; p++) g_ai.brainOverride[p] = (getenv("ONEHOUR_BRAIN2") && p == (flip ? 0 : 1)) ? &baseBrain : nullptr;
         if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK") || getenv("ONEHOUR_BRAIN2")) { pro[0] = pro[1] = true; }
         static const int oldDiff = getenv("ONEHOUR_OLDDIFF") ? atoi(getenv("ONEHOUR_OLDDIFF")) : difficulty;   // the baseline may play at another difficulty
+        static const bool oldMicro = getenv("ONEHOUR_OLDMICRO") != nullptr;   // the baseline's units without the micro update (Player::micro 0)
+        for (int p = 0; p < 4; p++) g_playMicro[p] = (oldMicro && p == (flip ? 0 : 1)) ? 0 : -1;
         int diffs[4] = { flip ? oldDiff : difficulty, flip ? difficulty : oldDiff, difficulty, difficulty };
         static const bool teams2v2 = getenv("ONEHOUR_EVALTEAMS") != nullptr;   // 2 against 2: two new commanders (armies 0 and 2) against two previous ones (1 and 3)
         int w;
@@ -654,6 +660,7 @@ bool oceanTest(u64 seed);        // tests16.cpp: the island map in the sea, the 
 bool fleetTest(u64 seed);        // tests17.cpp: the Fleet Call (a battle fleet from the map border), carrier deck operations
 bool bunkerUpdateTest(u64 seed); // tests18.cpp: nuclear-hardened bunkers, 200/5 garrison, per-bunker upgrades, shift-drag lines, the smarter Waymaker
 bool duelMatrix(u64 seed);       // tests17.cpp: sharp fire against plain fire in mirrored battles
+bool microMatrix(u64 seed);      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
@@ -2773,6 +2780,7 @@ int main(int argc, char** argv) {
         else if (a == "--fleettest") { g_map.generate(); return fleetTest(seed) ? 0 : 1; }
         else if (a == "--bunkertest") { g_map.generate(); return bunkerUpdateTest(seed) ? 0 : 1; }
         else if (a == "--duelmatrix") { g_map.generate(); return duelMatrix(seed) ? 0 : 1; }
+        else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2804,6 +2812,7 @@ int main(int argc, char** argv) {
     // headless runs (screenshots, ui test) keep the classic 1024x640 unless --size is given
     if (headless && reqW <= 0) { reqW = MIN_SCREEN_W; reqH = MIN_SCREEN_H; }
     if (!g_gfx.init(scale, software, reqW, reqH)) return 1;
+    if (!headless && g_gfx.softwareRenderer) g_game.detail = 2;   // no GPU: start a step down (it climbs back if the machine keeps up)
     if (!headless) {
         g_audio.init();
         g_brainPath = Brain::defaultPath();
@@ -3025,6 +3034,7 @@ int main(int argc, char** argv) {
                     u64 r2 = SDL_GetPerformanceCounter();
                     g_gfx.present();
                     double rms = (SDL_GetPerformanceCounter() - r0) * 1000.0 / f0; renT += rms; renW = std::max(renW, rms); nR++;
+                    if (!getenv("ONEHOUR_FULLDETAIL")) g_game.noteFrameCost((float)((SDL_GetPerformanceCounter() - r1) * 1000.0 / f0));   // (as the game does: effects detail follows the frame cost)
                     if (getenv("ONEHOUR_BENCHDBG") && rms > 150) printf("  t=%.0fs frame %.0f ms: update %.0f render %.0f present %.0f fill %.1f Mpx | parts %zu fx %zu nukes %zu fallouts %zu decals %zu cam %.0f,%.0f\n", g_sim.time, rms,
                         (r1 - r0) * 1000.0 / f0, (r2 - r1) * 1000.0 / f0, (SDL_GetPerformanceCounter() - r2) * 1000.0 / f0, g_gfx.fillPx / 1e6, g_game.parts.size(), g_sim.fx.size(), g_sim.nukes.size(), g_sim.fallouts.size(), g_game.decals.size(), g_game.cam.x, g_game.cam.y);
                 }
@@ -3783,6 +3793,7 @@ int main(int argc, char** argv) {
     if (autostart) { g_game.startGame(); if (allAi) { g_sim.players[0].isAI = true; g_ai.init(seed); } g_game.speed = 3.0f; }
     u64 freq = SDL_GetPerformanceFrequency();
     u64 last = SDL_GetPerformanceCounter();
+    const bool fpsLog = getenv("ONEHOUR_FPSLOG") != nullptr;
     bool running = true;
     while (running) {
         SDL_Event e;
@@ -3799,9 +3810,19 @@ int main(int argc, char** argv) {
         last = now;
         if (dt > 0.1f) dt = 0.1f;
         g_game.update(dt);
+        const u64 r0 = SDL_GetPerformanceCounter();
         g_game.render();
         g_gfx.present();
-        if (software) SDL_Delay(12);   // no vsync on the software path: cap around 60 fps
+        g_game.noteFrameCost((float)((SDL_GetPerformanceCounter() - r0) * 1000.0 / freq));
+        if (fpsLog) {   // ONEHOUR_FPSLOG: frames a second, the frame cost and the effects detail every five seconds (a real window, GPU or not)
+            static int frames = 0; static double worst = 0; static u64 since = now;
+            frames++; worst = std::max(worst, (SDL_GetPerformanceCounter() - now) * 1000.0 / freq);
+            if (now - since > freq * 5) { printf("fps %.1f | frame cost %.1f ms (worst whole frame %.1f ms) | detail %d | sim %.0f s, %s renderer\n", frames * (double)freq / (now - since), g_game.frameCost, worst, g_game.detail, g_sim.time, g_gfx.softwareRenderer ? "software" : "GPU"); fflush(stdout); frames = 0; worst = 0; since = now; }
+        }
+        // Never spin faster than the display: without vsync (the software renderer, a GPU fallback, a driver or compositor that ignores it) the
+        // loop would otherwise draw hundreds of frames a second, and a laptop that heats up throttles its CPU into stutter
+        const double spent = (SDL_GetPerformanceCounter() - now) / (double)freq, frame = 1.0 / std::max(60, g_gfx.refreshHz);
+        if (spent < frame - 0.0015) SDL_Delay((Uint32)((frame - spent) * 1000.0));
     }
     g_audio.shutdown();
     g_gfx.shutdown();
