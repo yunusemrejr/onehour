@@ -2088,6 +2088,30 @@ static bool uiTest() {
         if (g_game.menuOpen) return fail("Esc did not close the pause menu");
         frames(10);
         if (g_sim.tick == tick0) return fail("sim did not resume after the pause menu");
+        // the bunkers' calls work like the Mini Nuke: with one bunker selected, pressing P / J / D again calls in the next ready bunker's
+        {
+            const int me = g_sim.humanPlayer, bt = g_sim.players[me].faction == F_CYBER ? B_C_BUNKER : B_K_BUNKER;
+            std::vector<Ref> bks;
+            Vec2 bp = g_sim.players[me].basePos;
+            for (int r = 6; r < 40 && bks.size() < 2; r++) for (int k = 0; k < 16 && bks.size() < 2; k++) {
+                int tx = tileOf(bp.x) + (int)(r * std::cos(k * 0.3927f)), ty = tileOf(bp.y) + (int)(r * std::sin(k * 0.3927f));
+                if (g_sim.canPlace(me, bt, tx, ty)) bks.push_back(g_sim.placeBuilding(bt, me, tx, ty, true));
+            }
+            if (bks.size() < 2) return fail("no room for two bunkers");
+            for (Ref r : bks) { Entity* b = g_sim.get(r); b->bunkerUpg = (u8)((1 << BU_COUNT) - 1); b->paraReady = b->rainReady = b->tankReady = 0; b->disabledUntil = 0; }
+            g_game.selection.clear(); g_game.selection.push_back(bks[0]);
+            g_game.cam = Vec2(clampf(bp.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(bp.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+            struct Call { SDL_Keycode k; int u; const char* what; } calls[3] = { { SDLK_p, BU_PARA, "Para Backup" }, { SDLK_j, BU_RAIN, "Rain Nukes" }, { SDLK_d, BU_TANKS, "Tank Drop" } };
+            for (auto& c : calls) {
+                for (int n = 0; n < 2; n++) { key(c.k); click(260 + n * 300, VIEW_H / 3, SDL_BUTTON_LEFT); }
+                int fired = 0; for (Ref r : bks) if (g_sim.bunkerPowerWait(*g_sim.get(r), c.u) > 0) fired++;
+                if (fired != 2) { fprintf(stderr, "uitest: %s: %d of 2 bunkers fired after two presses\n", c.what, fired); return fail("a second press did not call the next ready bunker"); }
+                key(c.k);
+                if (g_game.nukeMode || g_game.dropMode) return fail("a bunker call opened its targeting with no bunker ready");
+            }
+            g_sim.nukes.clear(); g_sim.airlifts.clear();
+            g_game.selection.clear();
+        }
         // a computer army's difficulty: its row follows "Controls help"; Right asks once, Right again raises it a step, Left never lowers it
         int armies = 0, firstAi = -1;
         for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.players[p].isAI && g_sim.players[p].alive) { armies++; if (firstAi < 0) firstAi = p; }

@@ -606,22 +606,27 @@ void Game::buildButtonsRaw() {
                               ((b->bunkerQueue >> u) & 1) ? "  (queued by Upgrade All Bunkers)" : (b->bunkerBusy >= 0 ? "  (busy fitting another upgrade)" : ""));
                 add(BK_BUNKERUPG, u, g_sim.bunkerUpgAvailable(*b, u) && g_sim.canAfford(g_sim.humanPlayer, ug.cost), ug.name, tip);
             }
-            if (Sim::bunkerHas(*b, BU_PARA)) {
-                float pw = g_sim.bunkerParaWait(*b);
-                snprintf(tip, sizeof tip, "Call Para Backup  [P]  A cargo plane drops %d paratroopers on the spot you pick (%s). Once a minute per bunker%s", BUNKER_PARA_TROOPS, rosterText(g_sim.bunkerParaManifest(g_sim.humanPlayer), 110).c_str(), pw > 0 ? "  (reloading)" : "");
-                add(BK_BUNKERPARA, 0, pw <= 0 && b->disabledUntil <= g_sim.time, "Call Paratroops", tip);
+            // the bunkers' calls work like the Mini Nuke: any ready bunker of the army answers (this one first), so pressing the key again calls the next
+            char ready[64];
+            auto readyText = [&](int u) { int fit = 0, n = g_sim.bunkerPowersReady(g_sim.humanPlayer, u, &fit); snprintf(ready, sizeof ready, "  (%d of %d bunker%s ready)", n, fit, fit == 1 ? "" : "s"); return n; };
+            int fitP = 0, fitR = 0, fitT = 0;
+            g_sim.bunkerPowersReady(g_sim.humanPlayer, BU_PARA, &fitP); g_sim.bunkerPowersReady(g_sim.humanPlayer, BU_RAIN, &fitR); g_sim.bunkerPowersReady(g_sim.humanPlayer, BU_TANKS, &fitT);
+            if (fitP > 0) {
+                int n = readyText(BU_PARA);
+                snprintf(tip, sizeof tip, "Call Para Backup  [P]  A cargo plane drops %d paratroopers on the spot you pick (%s). Once a minute per bunker: any of your bunkers with a radio mast answers, so press P again for the next one%s", BUNKER_PARA_TROOPS, rosterText(g_sim.bunkerParaManifest(g_sim.humanPlayer), 110).c_str(), ready);
+                add(BK_BUNKERPARA, 0, n > 0, "Call Paratroops", tip);
             }
-            if (Sim::bunkerHas(*b, BU_RAIN)) {
-                float rw = g_sim.bunkerRainWait(*b);
-                snprintf(tip, sizeof tip, "Rain Nukes  [J]  Pick a wide circle (%d tiles): %d small warheads (%.1f tile blast each, leave radiation) come down at random spots in it, %.1f s after launch. Almost nothing can shoot them down (%d%% of a defence's usual chance). They hit your own units in the circle too. Once every %d s per bunker%s",
-                         (int)RAIN_NUKE_AREA, RAIN_NUKES, NUKE_RADIUS * std::sqrt(RAIN_NUKE_SCALE), Sim::NUKE_FLIGHT * RAIN_NUKE_FLIGHT, (int)(RAIN_NUKE_RESIST * 100 + 0.5f), (int)RAIN_NUKE_COOLDOWN, rw > 0 ? "  (reloading)" : "");
-                add(BK_BUNKERRAIN, 0, rw <= 0 && b->disabledUntil <= g_sim.time, "Rain Nukes", tip);
+            if (fitR > 0) {
+                int n = readyText(BU_RAIN);
+                snprintf(tip, sizeof tip, "Rain Nukes  [J]  Pick a wide circle (%d tiles): %d small warheads (%.1f tile blast each, leave radiation) come down at random spots in it, %.1f s after launch. Almost nothing can shoot them down (%d%% of a defence's usual chance). They hit your own units in the circle too. Once every %d s per bunker: any of your bunkers with a rain rack answers, so press J again for the next one%s",
+                         (int)RAIN_NUKE_AREA, RAIN_NUKES, NUKE_RADIUS * std::sqrt(RAIN_NUKE_SCALE), Sim::NUKE_FLIGHT * RAIN_NUKE_FLIGHT, (int)(RAIN_NUKE_RESIST * 100 + 0.5f), (int)RAIN_NUKE_COOLDOWN, ready);
+                add(BK_BUNKERRAIN, 0, n > 0, "Rain Nukes", tip);
             }
-            if (Sim::bunkerHas(*b, BU_TANKS)) {
-                float tw = g_sim.bunkerTankWait(*b);
-                snprintf(tip, sizeof tip, "Tank Drop  [D]  A heavy cargo plane drops %d tanks and a medic vehicle on the spot you pick (%s). Tougher than other airlifts, but heavy flak can still bring it down. Once every %d s per bunker%s",
-                         TANK_DROP_TANKS, rosterText(g_sim.bunkerTankManifest(g_sim.humanPlayer), 110).c_str(), (int)TANK_DROP_COOLDOWN, tw > 0 ? "  (reloading)" : "");
-                add(BK_TANKDROP, 0, tw <= 0 && b->disabledUntil <= g_sim.time, "Tank Drop", tip);
+            if (fitT > 0) {
+                int n = readyText(BU_TANKS);
+                snprintf(tip, sizeof tip, "Tank Drop  [D]  A heavy cargo plane drops %d tanks and a medic vehicle on the spot you pick (%s). Tougher than other airlifts, but heavy flak can still bring it down. Once every %d s per bunker: any of your bunkers with a lift pad answers, so press D again for the next one%s",
+                         TANK_DROP_TANKS, rosterText(g_sim.bunkerTankManifest(g_sim.humanPlayer), 110).c_str(), (int)TANK_DROP_COOLDOWN, ready);
+                add(BK_TANKDROP, 0, n > 0, "Tank Drop", tip);
             }
             {   // Upgrade All Bunkers: every upgrade every bunker of the army still lacks, queued from this one bunker
                 int cost = 0, open = g_sim.bunkerUpgradesMissing(g_sim.humanPlayer, &cost, true), allCost = 0, all = g_sim.bunkerUpgradesMissing(g_sim.humanPlayer, &allCost);
@@ -679,7 +684,7 @@ void Game::buildButtonsRaw() {
 
 bool Game::launchNuke(Vec2 at) {
     if (rainBunker.valid()) {
-        if (!g_sim.cmdBunkerRain(rainBunker, at, forceFireKey())) return false;
+        if (!g_sim.cmdBunkerRain(g_sim.readyBunker(g_sim.humanPlayer, BU_RAIN, rainBunker), at, forceFireKey())) return false;   // (another one if that one was knocked offline meanwhile)
         addMessage("Rain Nukes launched", rgb(255, 120, 90));
         return true;
     }
@@ -746,16 +751,14 @@ void Game::cmdSelection(int kind, int id) {
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_UPGRADE: if (g_sim.cmdUpgrade(g_sim.humanPlayer, id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_BUNKERUPG: { Entity* b = selectedBuilding(); if (b && g_sim.cmdBunkerUpgrade(g_sim.refOf(*b), id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break; }
-    case BK_BUNKERRAIN: {
+    case BK_BUNKERRAIN: case BK_TANKDROP: case BK_BUNKERPARA: {   // (the selected bunker if it is ready, else any ready one: see Sim::readyBunker)
         Entity* b = selectedBuilding();
-        if (b && b->bt().role == BR_BUNKER && g_sim.bunkerRainWait(*b) == 0 && b->disabledUntil <= g_sim.time) { Ref r = g_sim.refOf(*b); cancelModes(); nukeMode = true; rainBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
-        else g_audio.play(SND_CANT, Vec2(), true);
-        break;
-    }
-    case BK_TANKDROP: {
-        Entity* b = selectedBuilding();
-        if (b && b->bt().role == BR_BUNKER && g_sim.bunkerTankWait(*b) == 0 && b->disabledUntil <= g_sim.time) { Ref r = g_sim.refOf(*b); cancelModes(); dropMode = true; tankBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
-        else g_audio.play(SND_CANT, Vec2(), true);
+        int u = kind == BK_BUNKERRAIN ? BU_RAIN : kind == BK_TANKDROP ? BU_TANKS : BU_PARA;
+        Ref r = g_sim.readyBunker(g_sim.humanPlayer, u, b ? g_sim.refOf(*b) : NOREF);
+        if (!r.valid()) { g_audio.play(SND_CANT, Vec2(), true); break; }
+        cancelModes();
+        if (u == BU_RAIN) { nukeMode = true; rainBunker = r; } else { dropMode = true; (u == BU_TANKS ? tankBunker : paraBunker) = r; }
+        g_audio.play(SND_CLICK, Vec2(), true);
         break;
     }
     case BK_BUNKERALL:
@@ -763,12 +766,6 @@ void Game::cmdSelection(int kind, int id) {
         else if (g_sim.cmdBunkerUpgradeAll(g_sim.humanPlayer) > 0) g_audio.play(SND_CLICK, Vec2(), true);
         else g_audio.play(SND_CANT, Vec2(), true);
         break;
-    case BK_BUNKERPARA: {
-        Entity* b = selectedBuilding();
-        if (b && b->bt().role == BR_BUNKER && g_sim.bunkerParaWait(*b) == 0) { Ref r = g_sim.refOf(*b); cancelModes(); dropMode = true; paraBunker = r; g_audio.play(SND_CLICK, Vec2(), true); }
-        else g_audio.play(SND_CANT, Vec2(), true);
-        break;
-    }
     case BK_ATTACKMOVE: attackMoveMode = true; forceMode = false; areaMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_FORCE: cancelModes(); forceMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_AREA: areaMode = true; areaDrag = false; placingType = -1; attackMoveMode = false; powerMode = false; rallyMode = false; g_audio.play(SND_CLICK, Vec2(), true); break;
@@ -967,7 +964,7 @@ void Game::gameEvent(const SDL_Event& e) {
                 else if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, wp, forceFireKey())) { powerMode = false; forceLatch = false; } }
                 else if (nukeMode) { if (launchNuke(wp)) { nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; rainBunker = NOREF; bomberMode = false; forceLatch = false; } }
                 else if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, wp); } dropoffMode = false; }
-                else if (dropMode) { if (tankBunker.valid() ? g_sim.cmdTankDrop(tankBunker, wp) : paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, wp) : g_sim.cmdParadrop(g_sim.humanPlayer, wp)) { dropMode = false; paraBunker = NOREF; tankBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); }
+                else if (dropMode) { if (tankBunker.valid() ? g_sim.cmdTankDrop(g_sim.readyBunker(g_sim.humanPlayer, BU_TANKS, tankBunker), wp) : paraBunker.valid() ? g_sim.cmdBunkerPara(g_sim.readyBunker(g_sim.humanPlayer, BU_PARA, paraBunker), wp) : g_sim.cmdParadrop(g_sim.humanPlayer, wp)) { dropMode = false; paraBunker = NOREF; tankBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, wp)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, wp)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
                 else if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, wp)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); }
@@ -1001,7 +998,7 @@ void Game::gameEvent(const SDL_Event& e) {
             }
             if (powerMode) { if (g_sim.cmdPower(g_sim.humanPlayer, w, forceFireKey())) { powerMode = false; forceLatch = false; } else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (nukeMode) { if (!launchNuke(w)) g_audio.play(SND_CANT, Vec2(), true); nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; rainBunker = NOREF; bomberMode = false; forceLatch = false; return; }
-            if (dropMode) { if (tankBunker.valid() ? g_sim.cmdTankDrop(tankBunker, w) : paraBunker.valid() ? g_sim.cmdBunkerPara(paraBunker, w) : g_sim.cmdParadrop(g_sim.humanPlayer, w)) { dropMode = false; paraBunker = NOREF; tankBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (dropMode) { if (tankBunker.valid() ? g_sim.cmdTankDrop(g_sim.readyBunker(g_sim.humanPlayer, BU_TANKS, tankBunker), w) : paraBunker.valid() ? g_sim.cmdBunkerPara(g_sim.readyBunker(g_sim.humanPlayer, BU_PARA, paraBunker), w) : g_sim.cmdParadrop(g_sim.humanPlayer, w)) { dropMode = false; paraBunker = NOREF; tankBunker = NOREF; } else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (strikeMode) { if (g_sim.cmdPhoneStrike(g_sim.humanPlayer, w)) strikeMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (fleetMode) { if (g_sim.cmdFleetCall(g_sim.humanPlayer, w)) fleetMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (bomberMode) { if (g_sim.cmdNukeBomber(g_sim.humanPlayer, w)) bomberMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }

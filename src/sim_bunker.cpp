@@ -56,6 +56,31 @@ float Sim::bunkerTankWait(const Entity& b) const {
     return std::max(0.0f, b.tankReady - time);
 }
 
+// The three calls a bunker can be fitted with work like its Mini Nuke: any ready bunker of the army answers, so pressing the key again calls in the
+// next one. A bunker knocked offline by a pulse cannot call.
+float Sim::bunkerPowerWait(const Entity& b, int u) const {
+    return u == BU_PARA ? bunkerParaWait(b) : u == BU_RAIN ? bunkerRainWait(b) : u == BU_TANKS ? bunkerTankWait(b) : -1.0f;
+}
+static bool powerReady(const Sim& S, const Entity& b, int player, int u) {
+    return b.alive && b.isBuilding() && b.owner == player && b.constructed && b.bt().role == BR_BUNKER && b.disabledUntil <= S.time && S.bunkerPowerWait(b, u) == 0;
+}
+int Sim::bunkerPowersReady(int player, int u, int* fitted) const {
+    int n = 0, f = 0;
+    for (auto& b : ents) {
+        if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || b.bt().role != BR_BUNKER || !bunkerHas(b, u)) continue;
+        f++;
+        if (powerReady(*this, b, player, u)) n++;
+    }
+    if (fitted) *fitted = f;
+    return n;
+}
+Ref Sim::readyBunker(int player, int u, Ref prefer) const {
+    const Entity* p = get(prefer);
+    if (p && powerReady(*this, *p, player, u)) return prefer;
+    for (auto& b : ents) if (powerReady(*this, b, player, u)) return refOf(b);
+    return NOREF;
+}
+
 // What one Tank Drop carries: TANK_DROP_TANKS of the army's main battle tank (TANK_DROP_HEAVY of them its super-heavy once it has unlocked it), in
 // the order they leave the plane, and the medic vehicle last (it lands in the middle of the stick).
 std::vector<int> Sim::bunkerTankManifest(int player) const {

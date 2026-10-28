@@ -523,6 +523,9 @@ struct Sim {
     int cmdBunkerUpgradeAll(int player);                            // queues every missing upgrade on every finished bunker of the army; fittings queued
     void cancelBunkerQueue(int player);                             // drops what Upgrade All queued (a fitting under way goes on)
     bool startQueuedFitting(Entity& b);                             // (the next queued upgrade of an idle bunker, when it can be paid)
+    float bunkerPowerWait(const Entity& b, int u) const;              // BU_PARA / BU_RAIN / BU_TANKS: seconds until that call is ready (-1: not fitted)
+    int bunkerPowersReady(int player, int u, int* fitted = nullptr) const;   // the army's bunkers with that call ready (fitted: how many have it at all)
+    Ref readyBunker(int player, int u, Ref prefer = NOREF) const;     // one of them ('prefer' when it is ready), like the Mini Nuke picks its bunker
     void toxicCloud(Vec2 at, int owner);                            // a Toxic Lance hit: a small enemy-only toxic zone (renews one of its own nearby)
     float bunkerParaWait(const Entity& b) const;             // seconds until it can call one (0 ready, -1 not fitted)
     bool cmdParadrop(int player, Vec2 pos, bool attackOn = false);   // tech structure: a cargo plane drops the army's airborne force at pos
