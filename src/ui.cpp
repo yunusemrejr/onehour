@@ -126,6 +126,13 @@ void Game::addMessage(const char* text, Color c) {
 }
 
 // ------------------------------------------------------------ game setup
+// The human leaves a match before its end (restart, back to the menu, quit): the opponent models still learn what it showed (an early attack, an
+// air force, ...) and are kept. A match played out learns at its end instead (see Game::update).
+void leaveMatchLearning() {
+    if (g_brainPath.empty() || g_sim.gameOver || g_game.state != GS_PLAYING) return;
+    g_ai.left(); g_brain.save(g_brainPath.c_str());
+}
+
 void Game::startGame() {
     Faction fac[MAX_PLAYERS]; bool ai[MAX_PLAYERS]; int diff[MAX_PLAYERS]; int team[MAX_PLAYERS];
     Rng r(seed);
@@ -3086,7 +3093,7 @@ void Game::pauseMenuActivate(int row) {
             g_audio.play(SND_BUILD_DONE, Vec2(), true);
         }
         break;
-    case PMR_RESTART: closePauseMenu(); startGame(); break;
+    case PMR_RESTART: closePauseMenu(); leaveMatchLearning(); startGame(); break;
     case PMR_SURRENDER: {
         closePauseMenu(); paused = false;
         int me = g_sim.humanPlayer, winner = -1;
@@ -3095,8 +3102,8 @@ void Game::pauseMenuActivate(int row) {
         g_sim.gameOver = true; g_sim.winnerTeam = winner;
         break;
     }
-    case PMR_MENU: closePauseMenu(); state = GS_MENU; break;
-    case PMR_QUIT: quitRequested = true; break;
+    case PMR_MENU: closePauseMenu(); leaveMatchLearning(); state = GS_MENU; break;
+    case PMR_QUIT: leaveMatchLearning(); quitRequested = true; break;
     }
 }
 

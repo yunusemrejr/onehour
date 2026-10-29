@@ -8,6 +8,15 @@
 
 namespace {
 
+// Everything near p, riders included (Sim::forEachNear leaves out soldiers in a bunker or a jeep and vehicles in a cargo ship; these estimates always
+// counted them where their carrier stands)
+template <class F> void ridersOf(Entity& c, F& fn, int depth) {
+    for (Ref r : c.passengers) if (Entity* q = g_sim.get(r)) { fn(*q); if (depth < 2 && !q->passengers.empty()) ridersOf(*q, fn, depth + 1); }
+}
+template <class F> void forNear(Vec2 p, float r, F&& fn) {
+    g_sim.forEachNear(p, r, [&](Entity& e) { fn(e); if (!e.passengers.empty()) ridersOf(e, fn, 0); });
+}
+
 // Where a warhead of blast radius R would cost the enemy most, as far as this army has seen: units and small structures in the inner blast count in
 // full, big structures half; friends and own units in the circle count against it; enemy anti-nuke cover and (for a bomber) flak on the way lower it.
 Vec2 frontierTarget(int player, float R, float scale, bool bomber, float& best) {
@@ -19,21 +28,35 @@ Vec2 frontierTarget(int player, float R, float scale, bool bomber, float& best) 
         if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
         cand.push_back(&e);
     }
+    // (what lies round each candidate is asked of the spatial grid - it was every candidate against every candidate and the whole map once or twice
+    // more for each - and the anti-nuke cover and flak, which can only lower a score, only for a candidate that can still win)
+    std::vector<char> isCand(S.ents.size(), 0);
+    for (const Entity* c : cand) isCand[c - &S.ents[0]] = 1;
+    std::vector<Vec2> flakAt;
+    if (bomber) for (auto& o : S.ents) if (o.alive && o.isBuilding() && o.constructed && S.enemies(player, o.owner) && o.bt().role == BR_AATURRET) flakAt.push_back(o.pos);
+    const float R2 = R * R, F2 = R * 1.05f * R * 1.05f;
     Vec2 bestPos; best = 0;
     for (const Entity* c : cand) {
         float score = 0;
-        for (const Entity* o : cand) {
-            float d = dist(c->pos, o->pos); if (d > R) continue;
-            float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
-            if (o->isUnit()) score += UNITS[o->type].cost * f;
-            else { const BuildType& bt = o->bt(); float cost = bt.cost * (o->district >= 0 ? 0.1f : bt.role == BR_CIVIC ? 0.4f : 1.0f); score += bt.w * bt.h <= 6 ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }
-        }
-        for (auto& o : S.ents) if (o.alive && o.isUnit() && o.owner >= 0 && !S.enemies(player, o.owner) && dist(c->pos, o.pos) < R * 1.05f) score -= UNITS[o.type].cost * 1.2f;   // our own and our allies' people
+        forNear(c->pos, R * 1.05f, [&](Entity& o) {
+            float d2 = dist2(c->pos, o.pos);
+            size_t oi = &o - &S.ents[0];
+            if (oi < isCand.size() && isCand[oi]) {
+                if (d2 > R2) return;
+                float d = std::sqrt(d2);
+                float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));
+                if (o.isUnit()) score += UNITS[o.type].cost * f;
+                else { const BuildType& bt = o.bt(); float cost = bt.cost * (o.district >= 0 ? 0.1f : bt.role == BR_CIVIC ? 0.4f : 1.0f); score += bt.w * bt.h <= 6 ? cost * (f >= 0.62f ? 0.9f : 0.3f) : cost * 0.5f * f; }
+                return;
+            }
+            if (o.isUnit() && o.owner >= 0 && !S.enemies(player, o.owner) && d2 < F2) score -= UNITS[o.type].cost * 1.2f;   // our own and our allies' people
+        });
+        if (score <= best) continue;
         const bool super = !bomber && scale >= ISLAND_NUKE_SCALE;   // (an island launcher's Super Nuke: only lasers try for it, at a fifth of their chance)
         score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true, scale, super, super);
         if (bomber) {   // the bomber flies in from our corner over whatever stands in the way: count the batteries round the target
             int flak = 0;
-            for (auto& o : S.ents) if (o.alive && o.isBuilding() && o.constructed && S.enemies(player, o.owner) && o.bt().role == BR_AATURRET && dist(o.pos, c->pos) < 12.0f * TILE) flak++;
+            for (Vec2 a : flakAt) if (dist2(a, c->pos) < 12.0f * TILE * 12.0f * TILE) flak++;
             score *= flak >= 5 ? 0.2f : (1.0f - 0.12f * flak);
         }
         if (score > best) { best = score; bestPos = c->pos; }
@@ -79,7 +102,7 @@ void AiPlayer::frontier() {
             for (auto& e : S.ents) {
                 if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || Sim::invulnerable(e) || dist(e.pos, objective) > 7.0f * TILE) continue;
                 float v = 0;
-                for (auto& o : S.ents) if (o.alive && o.kind != EK_RESOURCE && S.enemies(player, o.owner) && dist(o.pos, e.pos) < R) v += o.isUnit() ? UNITS[o.type].cost : BUILDS[o.type].cost * ((o.bt().role == BR_TURRET || o.bt().role == BR_AATURRET || wallRole(o.bt().role)) ? 1.5f : 0.6f);
+                forNear(e.pos, R, [&](Entity& o) { if (o.kind != EK_RESOURCE && S.enemies(player, o.owner) && dist2(o.pos, e.pos) < R * R) v += o.isUnit() ? UNITS[o.type].cost : BUILDS[o.type].cost * ((o.bt().role == BR_TURRET || o.bt().role == BR_AATURRET || wallRole(o.bt().role)) ? 1.5f : 0.6f); });
                 if (v > best) { best = v; bp = e.pos; }
             }
             if (best >= bar * 0.5f) { at = bp; return true; }

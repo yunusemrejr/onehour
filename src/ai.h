@@ -32,10 +32,17 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
               FEAT_REASSESS = 0x20000000, // a wave that comes in sight of its objective weighs what it now sees there and turns back before a lost assault
               FEAT_ADAPT = 0x40000000,   // a plan that is failing changes: after a wave thrown away against the enemy's defences, an all-in opening
                                          // (rush, air first) turns into a defended, economic game with bigger waves instead of feeding it more armies
+              // ---- the learning update
+              FEAT_TUNED = 0x1000,       // Normal and up: the commander's numbers (TuneId) as trained by self-play against the commander before it
+                                         // (tools/tune.py), not the hand-set ones
+              FEAT_PUNISH = 0x2000,      // a beaten-off attack is answered at once: the attacker's army is spent, so a counterattack goes in before it rebuilds
+              FEAT_PROFILE = 0x4000,     // the opponent model (OppProfile, brain.h): what this kind of opponent did in earlier matches - an air force, an early
+                                         // attack, early nukes - readies the answer before it shows (a person's habits above all)
               FEAT_ALL = 0x7FFFFFFF,
     FEAT_DEFAULT = FEAT_MACRO | FEAT_LAUNCH | FEAT_COMP | FEAT_ECON | FEAT_ALLY | FEAT_SPECIAL | FEAT_NAVY | FEAT_AEGIS | FEAT_RECOVER | FEAT_CIVIC | FEAT_DEEPNUKE | FEAT_FRONTIER
                  | FEAT_TOWNS | FEAT_RIOT | FEAT_TEAM | FEAT_PERSONA | FEAT_FLEET2 | FEAT_HOLD | FEAT_FLEETCALL | FEAT_EASYWIT | FEAT_COMBO | FEAT_BUNKERUP
-                 | FEAT_PRESS | FEAT_MEASURED | FEAT_MEDEVAC | FEAT_REASSESS | FEAT_ADAPT | FEAT_DOCPICK };   // what ships
+                 | FEAT_PRESS | FEAT_MEASURED | FEAT_MEDEVAC | FEAT_REASSESS | FEAT_ADAPT | FEAT_DOCPICK
+                 | FEAT_TUNED | FEAT_PUNISH | FEAT_PROFILE };   // what ships
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -52,6 +59,31 @@ struct Persona {
     float finisher;         // weight on attacking the weakest enemy (one that riots and is losing) instead of the nearest
 };
 extern const Persona PERSONAS[PE_COUNT];
+
+// The numbers behind the commander's big decisions, in one place so self-play can train them (tools/tune.py plays the commander with a candidate set
+// against the commander before it, many headless matches at a time, and keeps what wins). The hand-set table is what every commander played with
+// before: the multipliers 1, the offsets 0, the thresholds their old constants.
+enum TuneId {
+    TU_THR,         // army value a wave waits for (x the clock-based threshold)
+    TU_FIRST,       // earliest first wave (x the difficulty's time)
+    TU_LAUNCH,      // added to the launch model's log-odds (above 0: launches on a thinner margin)
+    TU_CAP,         // army size cap (x)
+    TU_DEF,         // turrets round the base (x)
+    TU_WALLS,       // wall segments round the base (x)
+    TU_REASSESS,    // a wave in sight of its objective turns back below this assault ratio
+    TU_RETREAT,     // ... and breaks off when the enemy round it outweighs it this many times
+    TU_REINFORCE,   // reserves join a wave under way once worth this share of the wave threshold
+    TU_GUARD,       // share of the army kept home when a wave goes (added to the persona's)
+    TU_HARV,        // haulers (x)
+    TU_COUNTER,     // how hard the combat estimate steers the counter-pick of units (0 = not at all)
+    TU_PUNISH_THR,  // FEAT_PUNISH: the counterattack goes with this share of the wave threshold ...
+    TU_PUNISH_RA,   // ... when the estimate against the enemy's whole army is at least this
+    TU_COUNT
+};
+extern const char* const TUNE_NAME[TU_COUNT];
+extern const float TUNE_HAND[TU_COUNT];   // the hand-set numbers (every commander before the training played with these)
+extern float TUNE_TRAINED[TU_COUNT];      // FEAT_TUNED, Hard and Brutal; ONEHOUR_TUNE="name=value,..." replaces some of them in a headless run (the trainer's candidates)
+extern float TUNE_TRAINED_N[TU_COUNT];    // FEAT_TUNED, Normal (trained on its own: a slower economy); Easy keeps TUNE_HAND
 
 struct AiPlayer {
     int player = -1;
@@ -77,6 +109,20 @@ struct AiPlayer {
     Vec2 huntPoint; float huntAt = -1000;       // where the army sweeps when only the enemy's hidden things are left, and when to pick the next spot
 
     Brain* brain = &g_brain;    // the learned components this commander consults (a different one per army only in --evalai)
+    const float* tu = TUNE_HAND;   // its numbers (see TuneId)
+    const float* tuneFor(int difficulty) const { return !on(FEAT_TUNED) || difficulty < 1 ? TUNE_HAND : (difficulty == 1 ? TUNE_TRAINED_N : TUNE_TRAINED); }
+    // ---- the learning update: the counterattack (FEAT_PUNISH) and what the opponent model is told at the end of the match (FEAT_PROFILE)
+    float raidPeak = 0, lastRaidT = -100, punishUntil = -1;   // the biggest enemy force at the base during the raid under way, when it was last there,
+                                                              // and until when a counterattack may go in
+    int punishes = 0;               // (statistics for the self-play report)
+    float obsAirPeak = 0, obsInf = 0, obsVeh = 0, obsAir = 0; int obsN = 0;   // the opponent's air share at its peak, and its mix summed over the match
+    float obsFirstHit = -1, obsNukeAt = -1, obsAirAt = -1;   // when it first hit the base in force, first fired a nuke and first flew three aircraft
+    void observe(int enemyInf, int enemyVeh, int enemyAir, float threatValue);   // FEAT_PROFILE: one look at the opponent per think
+    bool profiled = false;          // (what it saw has gone into the opponent model: AiManager::learnProfiles)
+    const OppProfile* oppProf = nullptr;   // the opponent model this think consults (null: none yet, or FEAT_PROFILE off)
+    u64 thinkId = 0;                // this think's number (0: outside a think), for what is worked out once per think
+    int ownByType[U_COUNT] = {};    // its own units by type, counted in this think's survey
+    int unitsOf(int type) const { return thinkId ? ownByType[type] : g_sim.countUnits(player, type); }
     bool useBrain = true;       // false = the original hand-tuned heuristics only (baseline for evaluation)
     bool smart = true;          // false = the oldest generation of commander: no doctrines, nuke evasion, medics, bomber tactics, ally defence
     int feat = FEAT_DEFAULT;        // which pro features are on (see AiFeat)
@@ -86,7 +132,14 @@ struct AiPlayer {
     // what the doctrine and difficulty make of the shared build logic (1 = unchanged)
     struct Style { float first = 1, thr = 1, def = 1, tech = 1, air = 1, nuke = 1, army = 1; int airCap = 25, incomes = 2; float incomeFrom = 3.0f; } style;
     float lastSpyOrder = -100;     // when the spies were last sent after a structure
-    float lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0, nextCivicTry = 0, nextFleetCall = 0;   // when the fleet was last given a target, and the jeeps last loaded
+    float lastYardRally = -100, lastFleetOrder = -100, lastJeepLoad = -100, nextYardTry = 0, nextBunkerTry = 0, nextCivicTry = 0, nextFleetCall = 0;   // when the fleet was last given a target, and the jeeps last loaded
+    float nextNukeLook = 0, nextPowerLook = 0, nextStrikeLook = 0;   // when a ready warhead, power or strike looks for a target again
+    // a big group's move order is given a slice at a time (see groupMove): who is still waiting for it, with the order each had when it was given
+    struct Pending { Ref ref; Order order; Vec2 target; Ref targetEnt; };
+    struct PendingMove { std::vector<Pending> units; Vec2 to; bool attack = false; };
+    std::vector<PendingMove> pendingMoves;
+    void groupMove(const std::vector<Ref>& units, Vec2 to, bool attack);
+    void flushMoves();
     float nukeHoldSince = -1;   // a covered nuke target is waited out for the second ramp since this time
     int nukesSeen = 0;             // enemy warheads launched so far (a commander that has been nuked builds anti-nuke defences)
     int seenNukeIds = 0;
@@ -151,6 +204,8 @@ struct AiManager {
     void init(u64 seed);
     void update();
     void finish(int winnerTeam);        // the match is over: every commander's doctrine learns whether it won
+    void left();                        // the human left a match before its end: the opponent models still learn what it showed so far
+    void learnProfiles();               // FEAT_PROFILE: one lesson per match and kind of opponent, pooled from every commander that faced it
     int focus[MAX_PLAYERS];             // FEAT_TEAM: per team index (0..MAX_PLAYERS-1 by team id modulo), the enemy army the team goes after
     float focusAt = 0;
     void updateTeamFocus();

@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -182,6 +182,7 @@ static int playAiGame(u64 seed, int players, const Faction* fac, const bool* bra
     g_ai.init(seed);
     for (int t = 0; t < maxSecs * SIM_HZ && !g_sim.gameOver; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
     if (g_sim.gameOver) g_ai.finish(g_sim.winnerTeam);
+    else g_ai.left();   // (an unresolved match still teaches the opponent model what it showed)
     return g_sim.gameOver ? g_sim.winnerTeam : -1;
 }
 
@@ -247,7 +248,8 @@ static int evalAi(int games, u64 seed, int difficulty) {
     std::string path = Brain::defaultPath();
     if (!path.empty() && g_brain.load(path.c_str())) printf("using %s (%d games)\n", path.c_str(), g_brain.games);
     g_brain.learning = false;
-    int wins = 0, losses = 0, draws = 0, tieWins = 0, tieLosses = 0; double winTime = 0, loseTime = 0;
+    g_brain.profileLearning = getenv("ONEHOUR_EVALPROFILE") != nullptr;   // FEAT_PROFILE's opponent model learns over the series (nothing else does)
+    int wins = 0, losses = 0, draws = 0, tieWins = 0, tieLosses = 0, punishes = 0; double winTime = 0, loseTime = 0;
     for (int i = 0; i < games; i++) {
         if (getenv("ONEHOUR_EVALGAME") && i != atoi(getenv("ONEHOUR_EVALGAME"))) continue;   // (diagnostics: replay one game of the series)
         Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
@@ -278,6 +280,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
         } else
         w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, diffs, pro);
         int newTeam = flip ? 1 : 0;
+        punishes += g_ai.ais[newTeam].punishes;
         const char* res;
         if (w < 0) {   // (unresolved games are most of the series now: the material each side still holds at the limit is printed as a tiebreak, not counted as a win)
             draws++; res = "unresolved";
@@ -299,6 +302,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
     }
     printf("new AI vs previous generation: %d wins, %d losses, %d unresolved (of %d)%s\n", wins, losses, draws, games, "");
     printf("tiebreak at the limit (material held, >10%% apart): %d new, %d old\n", tieWins, tieLosses);
+    printf("counterattacks by the new commander: %d\n", punishes);
     if (wins) printf("  mean time of its wins %.0f s", winTime / wins);
     if (losses) printf("  mean time of its losses %.0f s", loseTime / losses);
     printf("\n");
@@ -660,7 +664,8 @@ bool oceanTest(u64 seed);        // tests16.cpp: the island map in the sea, the 
 bool fleetTest(u64 seed);        // tests17.cpp: the Fleet Call (a battle fleet from the map border), carrier deck operations
 bool bunkerUpdateTest(u64 seed); // tests18.cpp: nuclear-hardened bunkers, 200/5 garrison, per-bunker upgrades, shift-drag lines, the smarter Waymaker
 bool duelMatrix(u64 seed);       // tests17.cpp: sharp fire against plain fire in mirrored battles
-bool microMatrix(u64 seed);      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
+bool microMatrix(u64 seed);
+bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
@@ -2815,6 +2820,7 @@ int main(int argc, char** argv) {
         else if (a == "--bunkertest") { g_map.generate(); return bunkerUpdateTest(seed) ? 0 : 1; }
         else if (a == "--duelmatrix") { g_map.generate(); return duelMatrix(seed) ? 0 : 1; }
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
+        else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -3863,6 +3869,7 @@ int main(int argc, char** argv) {
     u64 last = SDL_GetPerformanceCounter();
     const bool fpsLog = getenv("ONEHOUR_FPSLOG") != nullptr;
     bool running = true;
+    void leaveMatchLearning();   // (ui.cpp: the window closed mid-match - the opponent models keep what it showed)
     while (running) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -3892,6 +3899,7 @@ int main(int argc, char** argv) {
         const double spent = (SDL_GetPerformanceCounter() - now) / (double)freq, frame = 1.0 / std::max(60, g_gfx.refreshHz);
         if (spent < frame - 0.0015) SDL_Delay((Uint32)((frame - spent) * 1000.0));
     }
+    leaveMatchLearning();
     g_audio.shutdown();
     g_gfx.shutdown();
     SDL_Quit();

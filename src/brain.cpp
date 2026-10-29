@@ -13,6 +13,7 @@ void Brain::reset() {
     waveSamples = 0; games = 0;
     for (int d = 0; d < DOCTRINES; d++) { docQ[d] = 0.5f; docN[d] = 0; }
     for (int c = 0; c < DOC_CTX; c++) for (int d = 0; d < DOCTRINES; d++) { ctxQ[c][d] = 0.5f; ctxN[c][d] = 0; }
+    for (int c = 0; c < DOC_CTX; c++) prof[c] = OppProfile();
 }
 
 void Brain::waveFeatures(float A, float D, float E, float minutes, int armyCount, float* x) {
@@ -92,6 +93,23 @@ void Brain::learnDoctrine(int ctx, int d, float reward) {
     ctxQ[ctx][d] += (reward - ctxQ[ctx][d]) / std::min(ctxN[ctx][d] + 1.0f, 16.0f);
 }
 
+void Brain::learnProfile(int ctx, float airPeak, const float* mix, float firstHit, float nukeAt, float airAt, float span) {
+    if (!(learning || profileLearning) || !std::isfinite(span) || span < 150.0f) return;
+    ctx = clampi(ctx, 0, DOC_CTX - 1);
+    OppProfile& P = prof[ctx];
+    const float a = 1.0f / std::min(P.n + 1.0f, 6.0f);   // a running average over about the last six matches
+    auto lerpTo = [&](float& v, float x) { if (std::isfinite(x)) v += (x - v) * a; };
+    lerpTo(P.airPeak, clampf(airPeak, 0, 1));
+    float ms = mix[0] + mix[1] + mix[2];
+    if (std::isfinite(ms) && ms > 0.01f) for (int k = 0; k < 3; k++) lerpTo(P.mix[k], mix[k] / ms);
+    // a time: what happened, or "not before the end of what was watched" - which only says something once the watch passed the current belief
+    auto time = [&](float& v, float t, float cap) { if (t >= 0) lerpTo(v, std::min(t, cap)); else if (span > v) lerpTo(v, std::min(span, cap)); };
+    time(P.firstHit, firstHit, 1200.0f);
+    time(P.nukeAt, nukeAt, 1800.0f);
+    time(P.airAt, airAt, 1500.0f);
+    P.n = std::min(P.n + 1, 100000000);
+}
+
 std::string Brain::defaultPath() {
     if (const char* e = getenv("ONEHOUR_BRAIN")) return e;
     const char* home = getenv("HOME");
@@ -113,7 +131,7 @@ bool Brain::save(const char* path) const {
     if (fd < 0) return false;
     FILE* f = fdopen(fd, "w");
     if (!f) { close(fd); remove(tmp.data()); return false; }
-    fprintf(f, "onehour-brain 18 %d %d\n", games, waveSamples);   // v18: the aircraft carriers, cargo ships and carrier jets joined the unit table (v17 files have 57 rows); v17: the rioters joined the unit table (v16 files have 55 rows); v16: the patrol boats joined the unit table (v15 files have 53 rows); v15: the plain fighters and the call-in nuclear bombers joined the unit table (v14 files have 49 rows); v14: the Anti-Radiation Trucks joined the unit table (v13 files have 47 rows); v13: the Supersonic Bombers joined it (v12 files have 45 rows); v12: the civilian dozers joined it (v11 files have 43 rows); v11: the jeeps, warships and strike fighters joined it (v10 files have 35 rows); v10: the spies, spy drones and cargo choppers joined it (v9 files have 29 rows);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
+    fprintf(f, "onehour-brain 19 %d %d\n", games, waveSamples);   // v19: the opponent model follows the contexts, the laser commandos are in the unit table (v18 files have 63 unit rows, or 65); v18: the aircraft carriers, cargo ships and carrier jets joined the unit table (v17 files have 57 rows); v17: the rioters joined the unit table (v16 files have 55 rows); v16: the patrol boats joined the unit table (v15 files have 53 rows); v15: the plain fighters and the call-in nuclear bombers joined the unit table (v14 files have 49 rows); v14: the Anti-Radiation Trucks joined the unit table (v13 files have 47 rows); v13: the Supersonic Bombers joined it (v12 files have 45 rows); v12: the civilian dozers joined it (v11 files have 43 rows); v11: the jeeps, warships and strike fighters joined it (v10 files have 35 rows); v10: the spies, spy drones and cargo choppers joined it (v9 files have 29 rows);   // v7: the Hornet Gunship joined the unit table; v5: doctrine statistics follow the unit rows (v4: the medics joined the unit table, v3: the jets); per-type rows are indexed by UnitTypeId
     for (int i = 0; i < WAVE_F; i++) fprintf(f, "%.5f ", ww[i]);
     fprintf(f, "\n");
     for (int t = 0; t < U_COUNT; t++) { fprintf(f, "%d", unitSamples[t]); for (int i = 0; i < UNIT_F; i++) fprintf(f, " %.5f", wu[t][i]); fprintf(f, "\n"); }
@@ -122,6 +140,8 @@ bool Brain::save(const char* path) const {
     fprintf(f, "\n");
     fprintf(f, "contexts\n");   // v9: the doctrine table per opponent context
     for (int c = 0; c < DOC_CTX; c++) { for (int d = 0; d < DOCTRINES; d++) fprintf(f, " %d %.5f", ctxN[c][d], ctxQ[c][d]); fprintf(f, "\n"); }
+    fprintf(f, "profiles\n");   // v19: the opponent model per context
+    for (int c = 0; c < DOC_CTX; c++) { const OppProfile& P = prof[c]; fprintf(f, " %d %.4f %.4f %.4f %.4f %.1f %.1f %.1f\n", P.n, P.airPeak, P.mix[0], P.mix[1], P.mix[2], P.firstHit, P.nukeAt, P.airAt); }
     bool ok = !ferror(f) && fflush(f) == 0 && fsync(fd) == 0;
     if (fclose(f) != 0) ok = false;
     if (ok && rename(tmp.data(), path) == 0) return true;
@@ -134,11 +154,19 @@ bool Brain::load(const char* path) {
     if (!f) return false;
     Brain b;
     int ver = 0;
-    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 18);   // older layouts index a different unit table: start fresh
+    bool ok = fscanf(f, "onehour-brain %d %d %d", &ver, &b.games, &b.waveSamples) == 3 && (ver >= 2 && ver <= 19);   // older layouts index a different unit table: start fresh
     for (int i = 0; ok && i < WAVE_F; i++) { float v = 0; ok = fscanf(f, "%f", &v) == 1; if (ver >= 8) b.ww[i] = v; }   // (v8: the wave features are the combat-estimate ratios; older weights mean something else, so the prior stays)
     if (ver < 8) b.waveSamples = 0;
+    // v18 was written with 63 unit rows, and for a while with 65 (the laser commandos joined the table without a new version): count them
+    int rows18 = 63;
+    if (ok && ver == 18) {
+        long at = ftell(f); char line[512]; int n = -1;   // (the first line read is the end of the wave weights' line)
+        while (fgets(line, sizeof line, f) && strncmp(line, "doctrines", 9) != 0) n++;
+        if (n == 63 || n == 65) rows18 = n;
+        fseek(f, at, SEEK_SET);
+    }
     // v2 had 22 rows (11 per army, no jets): map them onto the new table, the jets keep the prior
-    for (int row = 0; ok && row < (ver == 2 ? 22 : (ver == 3 ? 24 : (ver <= 5 ? 26 : (ver == 6 ? 28 : (ver <= 9 ? 29 : (ver == 10 ? 35 : (ver == 11 ? 43 : (ver == 12 ? 45 : (ver == 13 ? 47 : (ver == 14 ? 49 : (ver == 15 ? 53 : (ver == 16 ? 55 : (ver == 17 ? 57 : (int)U_COUNT))))))))))))); row++) {   // v4 and v5 share a 26 row table (the snipers joined in v6, the Hornet in v7, the civilians in v12, the Supersonic Bombers in v13 the Anti-Radiation Trucks in v14, the fighters and call-in bombers in v15: newcomers keep the prior)
+    for (int row = 0; ok && row < (ver == 2 ? 22 : (ver == 3 ? 24 : (ver <= 5 ? 26 : (ver == 6 ? 28 : (ver <= 9 ? 29 : (ver == 10 ? 35 : (ver == 11 ? 43 : (ver == 12 ? 45 : (ver == 13 ? 47 : (ver == 14 ? 49 : (ver == 15 ? 53 : (ver == 16 ? 55 : (ver == 17 ? 57 : (ver == 18 ? rows18 : (int)U_COUNT)))))))))))))); row++) {   // v4 and v5 share a 26 row table (the snipers joined in v6, the Hornet in v7, the civilians in v12, the Supersonic Bombers in v13 the Anti-Radiation Trucks in v14, the fighters and call-in bombers in v15: newcomers keep the prior)
         int t = row;
         if (ver == 2 && row >= 11) t = row + 1;            // the Clanker block moved up by one to make room for the Cyber jet
         ok = fscanf(f, "%d", &b.unitSamples[t]) == 1;
@@ -153,6 +181,11 @@ bool Brain::load(const char* path) {
             bool cok = fscanf(f, "%15s", tag) == 1 && std::strcmp(tag, "contexts") == 0;
             for (int c = 0; cok && c < DOC_CTX; c++) for (int d = 0; cok && d < DOCTRINES; d++) cok = fscanf(f, "%d %f", &b.ctxN[c][d], &b.ctxQ[c][d]) == 2;
             if (!cok) for (int c = 0; c < DOC_CTX; c++) for (int d = 0; d < DOCTRINES; d++) { b.ctxN[c][d] = 0; b.ctxQ[c][d] = 0.5f; }
+            if (cok && ver >= 19) {   // (a missing or damaged opponent model only resets the model)
+                bool pok = fscanf(f, "%15s", tag) == 1 && std::strcmp(tag, "profiles") == 0;
+                for (int c = 0; pok && c < DOC_CTX; c++) { OppProfile& P = b.prof[c]; pok = fscanf(f, "%d %f %f %f %f %f %f %f", &P.n, &P.airPeak, &P.mix[0], &P.mix[1], &P.mix[2], &P.firstHit, &P.nukeAt, &P.airAt) == 8; }
+                if (!pok) for (int c = 0; c < DOC_CTX; c++) b.prof[c] = OppProfile();
+            }
         }
     }
     fclose(f);
@@ -170,8 +203,14 @@ bool Brain::load(const char* path) {
         for (int c = 0; c < DOC_CTX; c++)
             if (!countOk(b.ctxN[c][d]) || !std::isfinite(b.ctxQ[c][d]) || b.ctxQ[c][d] < 0 || b.ctxQ[c][d] > 1) { b.ctxN[c][d] = 0; b.ctxQ[c][d] = 0.5f; }
     }
+    for (int c = 0; c < DOC_CTX; c++) {
+        const OppProfile& P = b.prof[c];
+        bool pok = countOk(P.n) && P.airPeak >= 0 && P.airPeak <= 1 && P.firstHit >= 0 && P.firstHit <= 1200 && P.nukeAt >= 0 && P.nukeAt <= 1800 && P.airAt >= 0 && P.airAt <= 1500;
+        for (float m : P.mix) pok = pok && m >= 0 && m <= 1;   // (NaN fails every comparison)
+        if (!pok) b.prof[c] = OppProfile();
+    }
     if (!ok) return false;
-    bool lrn = learning;
-    *this = b; learning = lrn;
+    bool lrn = learning, plrn = profileLearning;
+    *this = b; learning = lrn; profileLearning = plrn;
     return true;
 }

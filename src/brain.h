@@ -18,6 +18,17 @@ static const char* const DOCTRINE_NAME[DOCTRINES] = { "balanced", "rush", "turtl
 static const int DOC_CTX = 4;
 static inline int doctrineContext(bool opponentHuman, int opponentFaction) { return (opponentHuman ? 2 : 0) + (opponentFaction == 1 ? 1 : 0); }
 
+// The opponent model (FEAT_PROFILE): the kind of match an opponent plays, learned over the matches against it, kept per context like the doctrines
+// (a person or a computer, its faction). Running averages over roughly the last half dozen matches, so a person who changes habits is followed.
+struct OppProfile {
+    int n = 0;                       // matches it has learned from
+    float airPeak = 0.15f;           // the largest share of aircraft in the opponent's army over a match
+    float mix[3] = { 0.4f, 0.45f, 0.15f };   // its army over a whole match: infantry, vehicles (and ships), aircraft
+    float firstHit = 600;            // seconds into the match of its first attack on the base in force
+    float nukeAt = 1200;             // ... of its first nuke
+    float airAt = 720;               // ... of its third aircraft in the air
+};
+
 struct Brain {
     float ww[WAVE_F];
     float wu[U_COUNT][UNIT_F];
@@ -29,6 +40,8 @@ struct Brain {
     int docN[DOCTRINES];
     float ctxQ[DOC_CTX][DOCTRINES];   // the same per context (see doctrineContext)
     int ctxN[DOC_CTX][DOCTRINES];
+    OppProfile prof[DOC_CTX];  // the opponent model (see OppProfile)
+    bool profileLearning = false;  // the opponent model learns even while 'learning' is off (a headless evaluation of FEAT_PROFILE)
 
     Brain() { reset(); }
     void reset();
@@ -46,6 +59,9 @@ struct Brain {
     int pickDoctrine(Rng& rng, int ctx = 0, int exclude = 0) const;   // exclude: doctrines (a bit per Doctrine) it may not pick
     float doctrineValue(int ctx, int d) const;   // the context's average reward, shrunk toward the overall one while it has few games
     void learnDoctrine(int ctx, int d, float reward);
+    // the opponent model: what one match showed. Times are < 0 when the thing did not happen; 'span' is how long the match was watched, so a
+    // thing that never came counts as "not before then" (and teaches nothing when the match was too short to tell)
+    void learnProfile(int ctx, float airPeak, const float* mix, float firstHit, float nukeAt, float airAt, float span);
     bool load(const char* path);
     bool save(const char* path) const;
     static std::string defaultPath();
