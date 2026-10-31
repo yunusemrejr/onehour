@@ -1,6 +1,7 @@
 // One Hour - baked world terrain: the whole map painted once into a single texture at startup
 #pragma once
 #include "gfx.h"
+#include <functional>
 
 // Paints the WORLD_W x WORLD_H ground: noise-shaded grass, dirt, sand and asphalt blended along organic borders, a height field that lights
 // the cliffs and casts soft shadows from rocks and trees, lakes with depth, foam and wet sand, painted roads, individual trees, boulders and clutter.
@@ -11,3 +12,5 @@ void terrainOverview(const Canvas& world, Canvas& out);
 // baked world there: the felled trees and bushes vanish (the ground they stood on comes back with the trees round it redrawn), quarried rock becomes
 // bare earth. 'out' gets the final pixels of the world rectangle (x, y, w, h) to upload; false when nothing visible changed.
 bool terrainRepaint(const std::vector<int>& cleared, int& x, int& y, int& w, int& h, std::vector<u32>& out);
+// Runs f(y0, y1) over [0, rows) split across the machine's cores (the bake's helper, shared)
+void bakeRows(int rows, const std::function<void(int, int)>& f);

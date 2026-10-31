@@ -81,9 +81,9 @@ void flashCanvas(Canvas& c, int v) {
 }  // namespace
 
 void Gfx::buildEffects() {
-    { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blobAdd = fromCanvasAdd(c, 16, 16); }
-    for (int v = 0; v < 4; v++) { Canvas c(64, 64); puffCanvas(c, v, false); fxs.smoke[v] = fromCanvasSmooth(c, 32, 32); }
-    for (int v = 0; v < 3; v++) { Canvas c(64, 64); puffCanvas(c, v + 4, true); fxs.dust[v] = fromCanvasSmooth(c, 32, 32); }
+    { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blobAdd = fromCanvasAdd(c, 16, 16); blobAdd.radial = 1; }
+    for (int v = 0; v < 4; v++) { Canvas c(64, 64); puffCanvas(c, v, false); fxs.smoke[v] = fromCanvasSmooth(c, 32, 32); fxs.smoke[v].radial = 1; }
+    for (int v = 0; v < 3; v++) { Canvas c(64, 64); puffCanvas(c, v + 4, true); fxs.dust[v] = fromCanvasSmooth(c, 32, 32); fxs.dust[v].radial = 1; }
     for (int v = 0; v < 4; v++) {   // dense, lit billows for the mushroom cloud: a sphere lit from the top-left with a turbulent edge and a puckered surface
         Canvas c(96, 96);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
@@ -104,7 +104,23 @@ void Gfx::buildEffects() {
     for (int f = 0; f < 6; f++) { Canvas c(32, 48); flameCanvas(c, f); fxs.flame[f] = fromCanvasAdd(c, 16, 44); }
     for (int v = 0; v < 3; v++) { Canvas c(48, 48); flashCanvas(c, v); fxs.flash[v] = fromCanvasAdd(c, 24, 24); }
     { Canvas c(16, 4); for (int y = 0; y < 4; y++) for (int x = 0; x < 16; x++) { float a = std::pow(x / 15.0f, 2.0f) * (1 - std::abs((y + 0.5f - 2) / 2.0f) * 0.7f); c.px[y * 16 + x] = Canvas::pack(Color{255, (u8)(200 + x * 3), (u8)(120 + x * 8), (u8)(clampf(a, 0, 1) * 255)}); } fxs.streak = fromCanvasAdd(c, 15, 2); }
-    { Canvas c(128, 128); for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) { float dx = x + 0.5f - 64, dy = y + 0.5f - 64, d = std::sqrt(dx * dx + dy * dy) / 64.0f; float a = std::exp(-std::pow((d - 0.84f) / 0.08f, 2.0f)) * 0.95f + std::exp(-std::pow((d - 0.84f) / 0.32f, 2.0f)) * 0.14f; c.px[y * 128 + x] = Canvas::pack(Color{255, 255, 255, (u8)(clampf(a, 0, 1) * 255)}); } fxs.ring = fromCanvasAdd(c, 64, 64); }
+    { Canvas c(128, 128); for (int y = 0; y < 128; y++) for (int x = 0; x < 128; x++) { float dx = x + 0.5f - 64, dy = y + 0.5f - 64, d = std::sqrt(dx * dx + dy * dy) / 64.0f; float a = std::exp(-std::pow((d - 0.84f) / 0.08f, 2.0f)) * 0.95f + std::exp(-std::pow((d - 0.84f) / 0.32f, 2.0f)) * 0.14f; c.px[y * 128 + x] = Canvas::pack(Color{255, 255, 255, (u8)(clampf(a, 0, 1) * 255)}); } fxs.ring = fromCanvasAdd(c, 64, 64); fxs.ring.radial = 2; }
+    for (int sv = 0; sv < 2; sv++) for (int in = 0; in < 2; in++) {
+        // A radiation zone in one sprite: the haze glow, the edge ring and (for a zone that is not huge) the inner ring, added up as the three
+        // separate additive draws were, with their colours baked in (the drawing scales the whole by the pulse). Three overlapping big quads a
+        // zone was most of the screen area blended in a nuclear exchange.
+        const Color haze = sv ? Color{ 150, 158, 172, 255 } : Color{ 70, 220, 40, 255 }, edge = sv ? rgb(214, 220, 232) : rgb(120, 255, 80);
+        auto ringA = [](float d) { return std::exp(-std::pow((d - 0.84f) / 0.08f, 2.0f)) * 0.95f + std::exp(-std::pow((d - 0.84f) / 0.32f, 2.0f)) * 0.14f; };
+        Canvas c(256, 256);
+        for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) {
+            float d = std::sqrt((x + 0.5f - 128) * (x + 0.5f - 128) + (y + 0.5f - 128) * (y + 0.5f - 128)) / 128.0f;
+            if (d > 1.0f) continue;
+            float dg = d / 0.95f, kg = dg < 1 ? (1 - dg) * (1 - dg) * 35.0f / 255.0f : 0.0f, kr = ringA(d) * 135.0f / 255.0f, ki = in ? ringA(d / 0.75f) * 40.0f / 255.0f : 0.0f;
+            float r = (haze.r * kg + edge.r * (kr + ki)) * 1.3f, gg = (haze.g * kg + edge.g * (kr + ki)) * 1.3f, b = (haze.b * kg + edge.b * (kr + ki)) * 1.3f;
+            c.px[y * 256 + x] = Canvas::pack(Color{ (u8)clampf(r, 0, 255), (u8)clampf(gg, 0, 255), (u8)clampf(b, 0, 255), 255 });
+        }
+        fxs.fallout[sv][in] = fromCanvasAdd(c, 128, 128); fxs.fallout[sv][in].radial = 1;
+    }
     { Canvas c(64, 16); for (int y = 0; y < 16; y++) for (int x = 0; x < 64; x++) { float ax = sst(0, 0.09f, x / 64.0f) * sst(0, 0.09f, 1 - x / 64.0f), v = std::abs((y + 0.5f - 8) / 8.0f), ay = std::pow(1 - v, 1.7f); c.px[y * 64 + x] = Canvas::pack(Color{255, 255, 255, (u8)(clampf(ax * ay, 0, 1) * 255)}); } fxs.beam = fromCanvasAdd(c, 32, 8); }
     for (int v = 0; v < 4; v++) {
         Canvas c(16, 16); Art a(c, rgb(255, 255, 255), 2.0f); Rng r(40u + v);
@@ -188,7 +204,7 @@ void Gfx::buildEffects() {
             float a = std::pow(r, 9.0f) * 0.45f + std::pow(r * r2, 5.0f) * 0.8f;   // (fine filaments carry it; the broad swell only hints)
             c.px[y * 128 + x] = Canvas::pack(Color{196, 236, 248, (u8)(clampf(a, 0, 1) * 80)});
         }
-        waterFx[f] = fromCanvasAdd(c, 0, 0);
+        waterFx[f] = fromCanvasSolo(c, 0, 0, true, SDL_BLENDMODE_ADD);
     }
     // the ocean's swell (512 px: 16 tiles before it repeats): wind-driven wavelets - thin, slightly wavy crest lines running across a
     // north-westerly wind, broken into short dashes by a slow mask, with a glint on the brightest. Everything is a sum of integer-frequency
@@ -216,7 +232,7 @@ void Gfx::buildEffects() {
             if (a > 0.55f && (h & 255) < 6) a = 1.0f;   // glints
             c.px[y * N + x] = Canvas::pack(Color{206, 232, 248, (u8)(clampf(a, 0, 1) * 62)});
         }
-        seaSwell[f] = fromCanvasAdd(c, 0, 0);
+        seaSwell[f] = fromCanvasSolo(c, 0, 0, true, SDL_BLENDMODE_ADD);
     }
 }
 
@@ -456,6 +472,8 @@ void Game::drawFx() {
             float rad = f.size * (0.6f + k) * 1.15f, al = f.color.a / 255.0f * 0.9f;
             float fade = std::min(1.0f, f.t * 6.0f) * (1 - k);
             if (fade < (3 - detail) * 0.12f) break;   // (lower detail: the faintest smoke goes first)
+            if (255 * 0.55f * fade < std::max(3.0f, smokeCut)) break;   // (past the smoke budget)
+            smokeFill += 4.0f * rad * rad;
             g.drawSized(g.fxs.smoke[v], a.x, a.y, rad * 2, rad * 2, f.t * 0.3f + (float)v, Color{f.color.r, f.color.g, f.color.b, 255}, (u8)(255 * clampf(0.55f * fade * (f.color.r < 120 ? 1.15f : 1.0f), 0, 1) * (al > 0 ? 1 : 1)));
             break;
         }
@@ -561,9 +579,12 @@ void Game::drawFx() {
             if (cx < -R - 40 || cy < -R - 40 || cx > SCREEN_W + R + 40 || cy > VIEW_H + R + 40) break;
             const bool sv = f.color.r == UNUKE_GLOW.r && f.color.g == UNUKE_GLOW.g && f.color.b == UNUKE_GLOW.b;   // an Underground Nuke's radiation glows silver
             const Color haze = sv ? Color{150, 158, 172, 255} : Color{70, 220, 40, 255}, edge = sv ? rgb(214, 220, 232) : rgb(120, 255, 80), mote = sv ? Color{224, 230, 242, 255} : Color{110, 255, 70, 255};
-            if (detail >= 2) g.glowAdd(cx, cy, R * 0.95f, Color{haze.r, haze.g, haze.b, (u8)((26 + 18 * pulse) * fade)});
-            g.drawSized(g.fxs.ring, cx, cy, R * 2.0f, R * 2.0f, 0, edge, (u8)((90 + 90 * pulse) * fade));
-            if (R < 600) g.drawSized(g.fxs.ring, cx, cy, R * 1.5f, R * 1.5f, 0, edge, (u8)(40 * fade));   // (an Underground Nuke's zone is too wide for the inner ring: it would cover the screen twice)
+            if (detail >= 2) g.drawRadial(g.fxs.fallout[sv ? 1 : 0][R < 600 ? 1 : 0], cx, cy, R, R, 0, rgb(255, 255, 255), (u8)(255 * fade * (0.7f + 0.6f * pulse) / 1.3f));   // (haze and rings in one sprite)
+            else {
+                g.drawSized(g.fxs.ring, cx, cy, R * 2.0f, R * 2.0f, 0, edge, (u8)((90 + 90 * pulse) * fade));
+                if (R < 600) g.drawSized(g.fxs.ring, cx, cy, R * 1.5f, R * 1.5f, 0, edge, (u8)(40 * fade));   // (an Underground Nuke's zone is too wide for the inner ring: it would cover the screen twice)
+            }
+            (void)haze;
             for (int i = 0, motes = detail >= 3 ? 26 : 6 + 5 * detail; i < motes; i++) {
                 float h1 = std::fmod(i * 0.6180339f, 1.0f), h2 = std::fmod(i * 0.7548776f + 0.3f, 1.0f);
                 float an = h1 * 6.2832f + wallTime * 0.05f * (1 + h2), rr = R * std::sqrt(h2) * 0.95f;
@@ -596,6 +617,8 @@ void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under 
             case PK_SMOKE: case PK_DUST: case PK_CONTRAIL: {
                 float sz = lerpf(p.s0, p.s1, std::sqrt(k));
                 float al = clampf(p.age * (p.kind == PK_SMOKE ? 3.2f : 7.0f), 0, 1) * std::pow(1 - k, p.kind == PK_CONTRAIL ? 1.0f : 1.3f) * (p.col.a / 255.0f);
+                if (255 * al * 0.7f < std::max(3.0f, smokeCut * (sz > 12 ? 1.0f : 0.5f))) break;   // (too faint to see, or past the smoke budget: see smokeCut)
+                smokeFill += 4.0f * sz * sz;
                 const Sprite& sp = p.kind == PK_DUST ? g.fxs.dust[p.var % 3] : g.fxs.smoke[p.var & 3];
                 g.drawSized(sp, s.x, s.y, sz * 2, sz * 2, p.rot, Color{(u8)(p.col.r * amb.r / 255), (u8)(p.col.g * amb.g / 255), (u8)(p.col.b * amb.b / 255), 255}, (u8)(255 * al * 0.7f));   // (smoke takes the hour's light)
                 break;

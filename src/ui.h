@@ -98,6 +98,14 @@ struct Game {
     int detail = 3;
     float frameCost = 0, detailAt = -100;
     void noteFrameCost(float ms);   // render + present time of the frame just shown
+    // Smoke fill budget: the smoke, dust and haze of a big battle are large translucent sprites piled on each other, the most screen area the
+    // GPU blends in a frame. When last frame's smoke covered more than SMOKE_BUDGET screens, the faintest puffs (below smokeCut) are left out,
+    // and the cut eases off again once the air clears. The thick smoke a player reads stays.
+    float smokeCut = 0;
+    int fpsMode = 0;                // frame rate: 0 Balanced, 1 Full (every refresh), 2 Power saver (see targetFps)
+    int targetFps(int refreshHz, bool idle) const;
+    const char* fpsLabel(int refreshHz) const;
+    double smokeFill = 0;
     Rng fxRng{ 0xFA11 };
 
     void startGame();

@@ -74,10 +74,101 @@ bool Gfx::init(int scale, bool software, int reqW, int reqH) {
     { SDL_DisplayMode dm; if (SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(win), &dm) == 0 && dm.refresh_rate >= 30) refreshHz = std::min(dm.refresh_rate, 240); }
     onResize();
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    { Canvas c(2, 2); c.fillRect(0, 0, 2, 2, rgb(255, 255, 255)); white = fromCanvas(c, 0, 0).tex; }
+    {   // the atlas: GPU renderers only (the CPU renderer turns and caches sprites per texture, see rotCached)
+        SDL_RendererInfo ri;
+        useAtlas = !softwareRenderer && !getenv("ONEHOUR_NOATLAS");
+        if (SDL_GetRendererInfo(ren, &ri) == 0 && ri.max_texture_width > 0 && ri.max_texture_height > 0) atlasSize = std::min(4096, std::min(ri.max_texture_width, ri.max_texture_height));
+        if (atlasSize < 1024) useAtlas = false;
+    }
+    { Canvas c(2, 2); c.fillRect(0, 0, 2, 2, rgb(255, 255, 255)); white = fromCanvasSolo(c, 0, 0, false).tex; }
+    if (useAtlas) { Canvas c(4, 4); c.fillRect(0, 0, 4, 4, rgb(255, 255, 255)); whiteBlock = fromCanvas(c, 2, 2); whiteBlock.src = whiteBlock.sub(1, 1, 2, 2); whiteBlock.w = whiteBlock.h = 2; whiteBlock.ox = whiteBlock.oy = 1; }
     buildFont(); bakeTerrain(); buildUnits(); buildBuildings(); buildMisc(); buildEffects(); buildMinimap();
     iconsInit(*this);
+    if (getenv("ONEHOUR_ATLASDBG")) {
+        int top = 0; for (auto& pg : atlas) for (auto& p : pg.sky) top = std::max(top, (int)p.y);
+        double area = 0; for (auto& pg : atlas) area += (double)atlasSize * pg.h;
+        fprintf(stderr, "[atlas] %s: %zu page(s) %d px wide (%.0f MB), %.1f Mtexels of sprites (%.0f%% of the pages), skyline top %d\n", useAtlas ? "on" : "off", atlas.size(), atlasSize, area * 4 / 1048576.0, atlasPixels / 1e6, area > 0 ? 100.0 * atlasPixels / area : 0.0, top);
+    }
     return true;
+}
+
+// Skyline bottom-left packing: each page keeps the top edge of what is placed along its width; a rectangle goes where its bottom ends highest,
+// leftmost on a tie. Pages are made as they fill (at most eight).
+// The first page is only as tall as the game's art needs (its skyline tops out near 2700 px: a full 4096 square would leave a quarter of 64 MB
+// empty); anything that does not fit goes to a further, shorter page.
+static int pageHeight(int page, int size) { return std::min(size, page == 0 ? 2816 : 1024); }
+bool Gfx::atlasPlace(int w, int h, SDL_Texture*& tex, SDL_Rect& at) {
+    if (w > atlasSize || h > atlasSize) return false;
+    for (size_t pi = 0; ; pi++) {
+        if (pi == atlas.size()) {
+            if (atlas.size() >= 8) return false;
+            AtlasPage p;
+            p.h = h > pageHeight((int)pi, atlasSize) ? atlasSize : pageHeight((int)pi, atlasSize);   // (a sprite taller than a short page gets a full one)
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+            p.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, atlasSize, p.h);
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+            if (!p.tex) return false;
+            SDL_SetTextureBlendMode(p.tex, SDL_BLENDMODE_BLEND);
+            p.sky.push_back(SDL_Point{ 0, 0 });
+            atlas.push_back(p);
+        }
+        std::vector<SDL_Point>& sky = atlas[pi].sky;
+        const int ph = atlas[pi].h;
+        int bi = -1, bx = 0, by = 0, bTop = ph + 1;
+        for (size_t i = 0; i < sky.size(); i++) {
+            const int x = sky[i].x, right = x + w;
+            if (right > atlasSize) break;
+            int y = 0;
+            for (size_t j = i; j < sky.size() && sky[j].x < right; j++) y = std::max(y, (int)sky[j].y);
+            if (y + h > ph) continue;
+            if (y + h < bTop) { bTop = y + h; bi = (int)i; bx = x; by = y; }
+        }
+        if (bi < 0) continue;
+        const int right = bx + w;
+        std::vector<SDL_Point> ns(sky.begin(), sky.begin() + bi);
+        ns.push_back(SDL_Point{ bx, by + h });
+        size_t j = (size_t)bi;
+        while (j < sky.size() && sky[j].x < right) j++;
+        const int endPrev = j < sky.size() ? sky[j].x : atlasSize;
+        if (endPrev > right) ns.push_back(SDL_Point{ right, sky[j - 1].y });
+        for (; j < sky.size(); j++) ns.push_back(sky[j]);
+        sky.clear();
+        for (const SDL_Point& p : ns) if (sky.empty() || sky.back().y != p.y) sky.push_back(p);   // (neighbours at one height merge)
+        tex = atlas[pi].tex; at = SDL_Rect{ bx, by, w, h };
+        atlas[pi].used += (long)w * h;
+        return true;
+    }
+}
+
+// A sprite from a canvas: into the atlas when it can (with a 1 px clear border uploaded round it, so bilinear filtering at its edge reads
+// nothing of a neighbour), else a texture of its own as before.
+Sprite Gfx::makeSprite(Canvas& c, float ox, float oy, bool smooth, SDL_BlendMode mode) {
+    Sprite s; s.w = c.w; s.h = c.h; s.ox = ox; s.oy = oy; s.blend = (u8)mode;
+    SDL_Texture* page = nullptr; SDL_Rect at;
+    if (useAtlas && atlasPlace(c.w + 3, c.h + 3, page, at)) {
+        const int bw = c.w + 2, bh = c.h + 2;
+        std::vector<u32> buf((size_t)bw * bh, 0u);
+        for (int y = 0; y < c.h; y++) std::memcpy(&buf[(size_t)(y + 1) * bw + 1], &c.px[(size_t)y * c.w], (size_t)c.w * 4);
+        SDL_Rect up = { at.x, at.y, bw, bh };
+        SDL_UpdateTexture(page, &up, buf.data(), bw * 4);
+        s.tex = page; s.src = SDL_Rect{ at.x + 1, at.y + 1, c.w, c.h };
+        atlasPixels += (long)c.w * c.h;
+        return s;
+    }
+    if (smooth) SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+    s.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, c.w, c.h);
+    if (smooth) SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+    SDL_UpdateTexture(s.tex, nullptr, c.px.data(), c.w * 4);
+    SDL_SetTextureBlendMode(s.tex, mode);
+    return s;
+}
+
+Sprite Gfx::fromCanvasSolo(Canvas& c, float ox, float oy, bool smooth, SDL_BlendMode mode) {
+    const bool was = useAtlas;
+    useAtlas = false;
+    Sprite s = makeSprite(c, ox, oy, smooth, mode);
+    useAtlas = was;
+    return s;
 }
 
 void Gfx::shutdown() {
@@ -85,27 +176,9 @@ void Gfx::shutdown() {
     if (win) SDL_DestroyWindow(win);
 }
 
-Sprite Gfx::fromCanvas(Canvas& c, float ox, float oy) {
-    Sprite s;
-    s.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, c.w, c.h);
-    SDL_UpdateTexture(s.tex, nullptr, c.px.data(), c.w * 4);
-    SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_BLEND);
-    s.w = c.w; s.h = c.h; s.ox = ox; s.oy = oy;
-    return s;
-}
-
-Sprite Gfx::fromCanvasAdd(Canvas& c, float ox, float oy) {
-    Sprite s = fromCanvasSmooth(c, ox, oy);
-    SDL_SetTextureBlendMode(s.tex, SDL_BLENDMODE_ADD);
-    return s;
-}
-
-Sprite Gfx::fromCanvasSmooth(Canvas& c, float ox, float oy) {
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    Sprite s = fromCanvas(c, ox, oy);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-    return s;
-}
+Sprite Gfx::fromCanvas(Canvas& c, float ox, float oy) { return makeSprite(c, ox, oy, false, SDL_BLENDMODE_BLEND); }
+Sprite Gfx::fromCanvasAdd(Canvas& c, float ox, float oy) { return makeSprite(c, ox, oy, true, SDL_BLENDMODE_ADD); }
+Sprite Gfx::fromCanvasSmooth(Canvas& c, float ox, float oy) { return makeSprite(c, ox, oy, true, SDL_BLENDMODE_BLEND); }
 
 // ------------------------------------------------------------ primitives
 // The pixels of a texture, read back once through a target texture (the software renderer keeps no copy of them we could read), and filtered
@@ -252,9 +325,17 @@ void Gfx::draw(const Sprite& s, float x, float y, float angle, float scale, Colo
     SDL_Rect dst = { (int)std::lround(x - s.ox * scale), (int)std::lround(y - s.oy * scale), (int)std::lround(s.w * scale), (int)std::lround(s.h * scale) };
     SDL_Point c = { (int)std::lround(s.ox * scale), (int)std::lround(s.oy * scale) };
     fillPx += std::max(0, std::min(dst.x + dst.w, SCREEN_W) - std::max(dst.x, 0)) * (double)std::max(0, std::min(dst.y + dst.h, SCREEN_H) - std::max(dst.y, 0));
-    SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b);
-    SDL_SetTextureAlphaMod(s.tex, alpha);
-    if (angle == 0) { SDL_FRect fd = { (float)dst.x, (float)dst.y, (float)dst.w, (float)dst.h }; copyScaled(s.tex, nullptr, fd); }
+    if (s.radial && dst.w >= 64 && dst.h >= 64 && !softwareRenderer && std::abs(s.ox * 2 - s.w) < 1.5f && std::abs(s.oy * 2 - s.h) < 1.5f) {   // (a big round one: a mesh, see drawRadial)
+        drawRadial(s, dst.x + dst.w * 0.5f, dst.y + dst.h * 0.5f, dst.w * 0.5f, dst.h * 0.5f, s.radial == 2 ? 0.3f : 0.0f, mod, alpha, angle);
+        return;
+    }
+    if (deferAdd && s.blend == SDL_BLENDMODE_ADD) {
+        if (dst.x > SCREEN_W || dst.y > SCREEN_H || dst.x + dst.w < -dst.h || dst.y + dst.h < -dst.w) return;   // (off the screen even turned)
+        addQueue.push_back(AddDraw{ s.tex, s.src, SDL_FRect{ (float)dst.x, (float)dst.y, (float)dst.w, (float)dst.h }, angle * 57.29578f, SDL_FPoint{ (float)c.x, (float)c.y }, true, mod, alpha });
+        return;
+    }
+    bind(s, mod, alpha);
+    if (angle == 0) { SDL_FRect fd = { (float)dst.x, (float)dst.y, (float)dst.w, (float)dst.h }; copyScaled(s.tex, s.srcRect(), fd); }
     else {
         static const bool slowDbg = getenv("ONEHOUR_SLOWDRAW") != nullptr;
         u64 t0 = slowDbg ? SDL_GetPerformanceCounter() : 0;
@@ -264,9 +345,20 @@ void Gfx::draw(const Sprite& s, float x, float y, float angle, float scale, Colo
             float r = std::sqrt((float)dst.w * dst.w + (float)dst.h * dst.h);
             if (dst.x + c.x + r < 0 || dst.y + c.y + r < 0 || dst.x + c.x - r > SCREEN_W || dst.y + c.y - r > SCREEN_H) return;
         }
-        SDL_RenderCopyEx(ren, s.tex, nullptr, &dst, angle * 57.29578f, &c, SDL_FLIP_NONE);
+        SDL_RenderCopyEx(ren, s.tex, s.srcRect(), &dst, angle * 57.29578f, &c, SDL_FLIP_NONE);
         if (slowDbg) { double ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency(); if (ms > 20) fprintf(stderr, "[slowdraw] draw rot %.0f ms: sprite %dx%d dst %d,%d %dx%d\n", ms, s.w, s.h, dst.x, dst.y, dst.w, dst.h); }
     }
+}
+void Gfx::flushAdd() {
+    deferAdd = false;
+    for (const AddDraw& d : addQueue) {
+        SDL_SetTextureColorMod(d.tex, d.mod.r, d.mod.g, d.mod.b); SDL_SetTextureAlphaMod(d.tex, d.alpha); SDL_SetTextureBlendMode(d.tex, SDL_BLENDMODE_ADD);
+        const SDL_Rect* src = d.src.w > 0 ? &d.src : nullptr;
+        if (d.inner >= 0) radialNow(d.tex, d.src, d.dst.x, d.dst.y, d.dst.w, d.dst.h, d.inner, d.mod, d.alpha, d.angleDeg);
+        else if (d.angleDeg == 0) SDL_RenderCopyF(ren, d.tex, src, &d.dst);
+        else SDL_RenderCopyExF(ren, d.tex, src, &d.dst, d.angleDeg, d.hasC ? &d.c : nullptr, SDL_FLIP_NONE);
+    }
+    addQueue.clear();
 }
 void Gfx::drawRolled(const Sprite& s, float x, float y, float angle, float roll, float scale, Color mod, u8 alpha) {
     if (!s.tex) return;
@@ -275,24 +367,36 @@ void Gfx::drawRolled(const Sprite& s, float x, float y, float angle, float roll,
     SDL_FRect dst = { x - s.ox * scale, y - s.oy * scale * k, s.w * scale, s.h * scale * k };
     SDL_FPoint pc = { s.ox * scale, s.oy * scale * k };
     float shade = c < 0 ? 0.72f : 1.0f;   // (the belly is in its own shadow)
-    SDL_SetTextureColorMod(s.tex, (u8)(mod.r * shade), (u8)(mod.g * shade), (u8)(mod.b * shade));
-    SDL_SetTextureAlphaMod(s.tex, alpha);
     Color tint{ (u8)(mod.r * shade), (u8)(mod.g * shade), (u8)(mod.b * shade), 255 };
+    bind(s, tint, alpha);
     if (softwareRenderer && rotCached(s.tex, dst.x, dst.y, dst.w, dst.h, pc.x, pc.y, angle, c < 0, tint, alpha)) return;
-    SDL_RenderCopyExF(ren, s.tex, nullptr, &dst, angle * 57.29578f, &pc, c < 0 ? SDL_FLIP_VERTICAL : SDL_FLIP_NONE);
+    SDL_RenderCopyExF(ren, s.tex, s.srcRect(), &dst, angle * 57.29578f, &pc, c < 0 ? SDL_FLIP_VERTICAL : SDL_FLIP_NONE);
 }
 void Gfx::drawRect(const Sprite& s, int x, int y, int w, int h, u8 alpha) {
     SDL_FRect dst = { (float)x, (float)y, (float)w, (float)h };
-    SDL_SetTextureColorMod(s.tex, 255, 255, 255);
-    SDL_SetTextureAlphaMod(s.tex, alpha);
-    copyScaled(s.tex, nullptr, dst);
+    bind(s, rgb(255, 255, 255), alpha);
+    copyScaled(s.tex, s.srcRect(), dst);
 }
 void Gfx::fill(int x, int y, int w, int h, Color c) {
-    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
+    if (w <= 0 || h <= 0) return;
     SDL_Rect r = { x, y, w, h };
+    if (whiteBlock.tex) {   // (through the atlas: a fill between two sprites does not cut the batch)
+        SDL_BlendMode bm = SDL_BLENDMODE_BLEND; SDL_GetRenderDrawBlendMode(ren, &bm);
+        SDL_SetTextureColorMod(whiteBlock.tex, c.r, c.g, c.b); SDL_SetTextureAlphaMod(whiteBlock.tex, c.a); SDL_SetTextureBlendMode(whiteBlock.tex, bm);
+        SDL_RenderCopy(ren, whiteBlock.tex, &whiteBlock.src, &r);
+        return;
+    }
+    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
     SDL_RenderFillRect(ren, &r);
 }
 void Gfx::box(int x, int y, int w, int h, Color c) {
+    if (whiteBlock.tex) {
+        if (w <= 0 || h <= 0) return;
+        fill(x, y, w, 1, c);
+        if (h > 1) fill(x, y + h - 1, w, 1, c);
+        if (h > 2) { fill(x, y + 1, 1, h - 2, c); if (w > 1) fill(x + w - 1, y + 1, 1, h - 2, c); }
+        return;
+    }
     SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
     SDL_Rect r = { x, y, w, h };
     SDL_RenderDrawRect(ren, &r);
@@ -302,6 +406,12 @@ void Gfx::line(float x0, float y0, float x1, float y1, Color c) {
     SDL_RenderDrawLineF(ren, x0, y0, x1, y1);
 }
 void Gfx::thickLine(float x0, float y0, float x1, float y1, Color c, float thick) {
+    if (whiteBlock.tex && thick >= 1.8f) {   // one turned quad from the atlas instead of a line per pixel of width
+        float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+        if (len < 0.5f) return;
+        drawSized(whiteBlock, (x0 + x1) * 0.5f, (y0 + y1) * 0.5f, len, std::max(1.0f, (float)(int)thick), std::atan2(y1 - y0, x1 - x0), c, c.a);
+        return;
+    }
     Vec2 d = Vec2(x1 - x0, y1 - y0).norm();
     Vec2 n(-d.y, d.x);
     int k = std::max(1, (int)thick);
@@ -325,6 +435,42 @@ void Gfx::glowAdd(float cx, float cy, float r, Color c) {
     if (!blobAdd.tex) return;
     draw(blobAdd, cx, cy, 0, r / 16.0f, c, c.a);
 }
+void Gfx::drawRadial(const Sprite& s, float cx, float cy, float rx, float ry, float inner, Color mod, u8 alpha, float angle) {
+    if (!s.tex || rx <= 0 || ry <= 0) return;
+    if (softwareRenderer || rx < 32.0f || ry < 32.0f) { Sprite q = s; q.radial = 0; drawSized(q, cx, cy, rx * 2, ry * 2, angle, mod, alpha); return; }
+    if (cx + rx < 0 || cy + ry < 0 || cx - rx > SCREEN_W || cy - ry > SCREEN_H) return;
+    fillPx += 3.3 * rx * ry * (1.0 - inner * inner);
+    SDL_Rect src = s.src.w > 0 ? s.src : SDL_Rect{ 0, 0, s.w, s.h };
+    if (deferAdd && s.blend == SDL_BLENDMODE_ADD) {
+        AddDraw d{ s.tex, src, SDL_FRect{ cx, cy, rx, ry }, angle, SDL_FPoint{ 0, 0 }, false, mod, alpha };
+        d.inner = inner;
+        addQueue.push_back(d);
+        return;
+    }
+    SDL_SetTextureBlendMode(s.tex, (SDL_BlendMode)s.blend);
+    radialNow(s.tex, src, cx, cy, rx, ry, inner, mod, alpha, angle);
+}
+void Gfx::radialNow(SDL_Texture* tex, const SDL_Rect& src, float cx, float cy, float rx, float ry, float inner, Color mod, u8 alpha, float angle) {
+    int tw = 0, th = 0;
+    if (SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th) != 0 || tw <= 0 || th <= 0) return;
+    const int N = std::max(rx, ry) > 220.0f ? 32 : 20;
+    const float out = 1.0f / std::cos(3.14159265f / N);   // (the polygon's edges just outside the circle)
+    const float u0 = (src.x + src.w * 0.5f) / tw, v0 = (src.y + src.h * 0.5f) / th, su = src.w * 0.5f / tw, sv = src.h * 0.5f / th;
+    static std::vector<SDL_Vertex> vs; static std::vector<int> ix;
+    vs.clear(); ix.clear();
+    const SDL_Color col = { mod.r, mod.g, mod.b, alpha };
+    const float ca = std::cos(angle), sa = std::sin(angle);   // (a turned sprite: the texture turns under the fixed polygon)
+    auto vert = [&](float k, float c, float sn) { vs.push_back(SDL_Vertex{ SDL_FPoint{ cx + c * rx * k, cy + sn * ry * k }, col, SDL_FPoint{ u0 + (c * ca + sn * sa) * su * k, v0 + (sn * ca - c * sa) * sv * k } }); };
+    if (inner <= 0) {
+        vert(0, 0, 0);
+        for (int i = 0; i < N; i++) { float a = i * 6.2831853f / N; vert(out, std::cos(a), std::sin(a)); }
+        for (int i = 0; i < N; i++) { ix.push_back(0); ix.push_back(1 + i); ix.push_back(1 + (i + 1) % N); }
+    } else {
+        for (int i = 0; i < N; i++) { float a = i * 6.2831853f / N, c = std::cos(a), sn = std::sin(a); vert(inner, c, sn); vert(out, c, sn); }
+        for (int i = 0; i < N; i++) { int a = 2 * i, b = 2 * ((i + 1) % N); ix.push_back(a); ix.push_back(a + 1); ix.push_back(b + 1); ix.push_back(a); ix.push_back(b + 1); ix.push_back(b); }
+    }
+    SDL_RenderGeometry(ren, tex, vs.data(), (int)vs.size(), ix.data(), (int)ix.size());
+}
 void Gfx::drawSized(const Sprite& s, float cx, float cy, float w, float h, float angle, Color mod, u8 alpha) {
     if (!s.tex) return;
     if (angle != 0 && w > 600 && w >= 4 * h) {
@@ -344,9 +490,14 @@ void Gfx::drawSized(const Sprite& s, float cx, float cy, float w, float h, float
     }
     SDL_FRect dst = { cx - w * 0.5f, cy - h * 0.5f, w, h };
     fillPx += std::max(0.0f, std::min(dst.x + dst.w, (float)SCREEN_W) - std::max(dst.x, 0.0f)) * (double)std::max(0.0f, std::min(dst.y + dst.h, (float)SCREEN_H) - std::max(dst.y, 0.0f));
-    SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b);
-    SDL_SetTextureAlphaMod(s.tex, alpha);
-    if (angle == 0) { copyScaled(s.tex, nullptr, dst); return; }
+    if (s.radial && w >= 64 && h >= 64 && !softwareRenderer) { drawRadial(s, cx, cy, w * 0.5f, h * 0.5f, s.radial == 2 ? 0.3f : 0.0f, mod, alpha, angle); return; }   // (a big round one: a mesh)
+    if (deferAdd && s.blend == SDL_BLENDMODE_ADD) {
+        if (dst.x > SCREEN_W + dst.h || dst.y > SCREEN_H + dst.w || dst.x + dst.w < -dst.h || dst.y + dst.h < -dst.w) return;
+        addQueue.push_back(AddDraw{ s.tex, s.src, dst, angle * 57.29578f, SDL_FPoint{ 0, 0 }, false, mod, alpha });
+        return;
+    }
+    bind(s, mod, alpha);
+    if (angle == 0) { copyScaled(s.tex, s.srcRect(), dst); return; }
     if (softwareRenderer) {
         // The CPU renderer rotates a texture by building a rotated copy for every call: with a battle's smoke, sparks, tracers and laser beams that
         // was most of the frame. Effects do not need it: a streak or a beam becomes a few lines along its heading (a soft band round a bright core,
@@ -361,20 +512,20 @@ void Gfx::drawSized(const Sprite& s, float cx, float cy, float w, float h, float
                 line(cx - d.x * sh + n.x * o, cy - d.y * sh + n.y * o, cx + d.x * sh + n.x * o, cy + d.y * sh + n.y * o, c);
                 line(cx - d.x * sh - n.x * o, cy - d.y * sh - n.y * o, cx + d.x * sh - n.x * o, cy + d.y * sh - n.y * o, c);
             }
-        } else copyScaled(s.tex, nullptr, dst);
+        } else copyScaled(s.tex, s.srcRect(), dst);
         return;
     }
     static const bool slowDbg = getenv("ONEHOUR_SLOWDRAW") != nullptr;
     u64 t0 = slowDbg ? SDL_GetPerformanceCounter() : 0;
-    SDL_RenderCopyExF(ren, s.tex, nullptr, &dst, angle * 57.29578f, nullptr, SDL_FLIP_NONE);
+    SDL_RenderCopyExF(ren, s.tex, s.srcRect(), &dst, angle * 57.29578f, nullptr, SDL_FLIP_NONE);
     if (slowDbg) { double ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency(); if (ms > 20) fprintf(stderr, "[slowdraw] drawSized rot %.0f ms: sprite %dx%d dst %.0f,%.0f %.0fx%.0f\n", ms, s.w, s.h, dst.x, dst.y, dst.w, dst.h); }
 }
 void Gfx::discFill(float cx, float cy, float r, Color c) {
     if (!disc.tex || r < 1) return;
+    if (r >= 32.0f && !softwareRenderer) { drawRadial(disc, cx, cy, r, r, 0, c, c.a); return; }
     SDL_FRect dst = { cx - r, cy - r, r * 2, r * 2 };
-    SDL_SetTextureColorMod(disc.tex, c.r, c.g, c.b);
-    SDL_SetTextureAlphaMod(disc.tex, c.a);
-    copyScaled(disc.tex, nullptr, dst);
+    bind(disc, c, c.a);
+    copyScaled(disc.tex, disc.srcRect(), dst);
 }
 void Gfx::dashedCircle(float cx, float cy, float r, Color c, float phase, float dash, float gap) {
     if (r < 2) return;
@@ -427,7 +578,7 @@ void Gfx::buildFont() {
     Canvas c(95 * 6, 8);
     for (int g = 0; g < 95; g++) for (int col = 0; col < 5; col++) for (int row = 0; row < 7; row++)
         if (FONT5x7[g][col] >> row & 1) c.set(g * 6 + col, row, rgb(255, 255, 255));
-    font = fromCanvas(c, 0, 0).tex;
+    font = fromCanvasSolo(c, 0, 0, false).tex;   // (its own texture: text cuts glyphs out of it by position, nearest-filtered at every scale)
 }
 
 // ------------------------------------------------------------ baked world terrain (see terrain.cpp)
@@ -439,6 +590,30 @@ static u16 dithered565(u32 argb, int wx, int wy) {
     int r = clampi((int)col.r + dth / 4, 0, 255) >> 3, gg = clampi((int)col.g + dth / 8, 0, 255) >> 2, b = clampi((int)col.b + dth / 4, 0, 255) >> 3;
     return (u16)((r << 11) | (gg << 5) | b);
 }
+// The colour grade every baked ground pixel gets, and every repainted patch with it: a touch more colour and depth than the painter's own palette,
+// and broad patches of warmer and cooler light drifting over the land (sun and high cloud on a summer field), so a wide meadow or a sweep of
+// desert never reads as one flat colour. Baked once: it costs nothing a frame.
+static float groundLight(int wx, int wy) {
+    static std::vector<float> grid; static const int CELLPX = 900, GW = WORLD_W / CELLPX + 3;
+    if (grid.empty()) { Rng r(4242); grid.resize((size_t)GW * GW); for (auto& v : grid) v = r.f(); }
+    float fx = wx / (float)CELLPX, fy = wy / (float)CELLPX; int ix = (int)fx, iy = (int)fy; float tx = fx - ix, ty = fy - iy;
+    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    const float* g = &grid[(size_t)iy * GW + ix];
+    return (g[0] + (g[1] - g[0]) * tx) * (1 - ty) + (g[GW] + (g[GW + 1] - g[GW]) * tx) * ty;
+}
+static u32 gradeGround(u32 argb, int wx, int wy) {
+    static const bool off = getenv("ONEHOUR_NOGRADE") != nullptr;
+    if (off) return argb;
+    Color c = Canvas::unpack(argb);
+    float r = c.r, g = c.g, b = c.b, l = 0.299f * r + 0.587f * g + 0.114f * b;
+    const float S = 1.13f, C = 1.07f, MID = 108.0f;
+    r = l + (r - l) * S; g = l + (g - l) * S; b = l + (b - l) * S;   // richer colour
+    r = MID + (r - MID) * C; g = MID + (g - MID) * C; b = MID + (b - MID) * C;   // a little more depth
+    float w = (groundLight(wx, wy) - 0.5f) * 0.14f;   // +-7%: warm sunlit patches, cooler shaded ones
+    r *= 1.0f + w; g *= 1.0f + w * 0.55f; b *= 1.0f - w * 0.7f;
+    return Canvas::pack(Color{ (u8)clampf(r, 0, 255), (u8)clampf(g, 0, 255), (u8)clampf(b, 0, 255), c.a });
+}
+
 // RGB565 back to the 32-bit ABGR8888 layout of the software renderer's textures; the high bits repeat into the low bits so full colours stay full.
 static u32 expand565(u16 p) {
     int r = p >> 11, g = p >> 5 & 63, b = p & 31;
@@ -458,8 +633,18 @@ void Gfx::bakeTerrain() {
         int x0 = cx * WORLD_CHUNK, y0 = cy * WORLD_CHUNK;
         ch.w = std::min(WORLD_CHUNK, WORLD_W - x0); ch.h = std::min(WORLD_CHUNK, WORLD_H - y0);
         ch.px.resize((size_t)ch.w * ch.h);
-        for (int y = 0; y < ch.h; y++) for (int x = 0; x < ch.w; x++) ch.px[(size_t)y * ch.w + x] = dithered565(c.px[(size_t)(y0 + y) * c.w + x0 + x], x0 + x, y0 + y);
     }
+    groundLight(0, 0);   // (its noise grid made before the threads read it)
+    bakeRows(WORLD_H, [&](int ya, int yb) {   // graded and dithered on every core
+        for (int wy = ya; wy < yb; wy++) {
+            const int cy = wy / WORLD_CHUNK;
+            for (int cx = 0; cx < worldCols; cx++) {
+                WorldChunk& ch = worldChunks[(size_t)cy * worldCols + cx];
+                const int x0 = cx * WORLD_CHUNK, y = wy - cy * WORLD_CHUNK;
+                for (int x = 0; x < ch.w; x++) ch.px[(size_t)y * ch.w + x] = dithered565(gradeGround(c.px[(size_t)wy * c.w + x0 + x], x0 + x, wy), x0 + x, wy);
+            }
+        }
+    });
     if (const char* wp = getenv("ONEHOUR_WORLDBMP")) {   // debugging: dump the baked ground (ONEHOUR_WORLDBMP=file.bmp)
         if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(c.px.data(), c.w, c.h, 32, c.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, wp); SDL_FreeSurface(sf); }
     }
@@ -470,7 +655,7 @@ void Gfx::bakeTerrain() {
     }
     Canvas mini(232, 232);
     terrainOverview(c, mini);
-    minimapTerrain = fromCanvasSmooth(mini, 0, 0);
+    minimapTerrain = fromCanvasSolo(mini, 0, 0, true);
     // fog mask, filtered bilinearly at creation time (hint is read when the texture is created)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
     shroudTex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, MAP_W * SHROUD_SS, MAP_H * SHROUD_SS);
@@ -513,7 +698,7 @@ void Gfx::uploadTerrainPatch(const std::vector<int>& group) {
         if (bx <= ax || by <= ay) continue;
         int lx = ax - cx * WORLD_CHUNK, ly = ay - cy * WORLD_CHUNK, rw = bx - ax, rh = by - ay;   // the same part in chunk px
         for (int j = 0; j < rh; j++) for (int i = 0; i < rw; i++)
-            ch.px[(size_t)(ly + j) * ch.w + lx + i] = dithered565(px[(size_t)(ay - y + j) * w + (ax - x + i)], ax + i, ay + j);
+            ch.px[(size_t)(ly + j) * ch.w + lx + i] = dithered565(gradeGround(px[(size_t)(ay - y + j) * w + (ax - x + i)], ax + i, ay + j), ax + i, ay + j);
         uploadChunkRect(ch, lx, ly, rw, rh);
     }
 }
@@ -649,6 +834,17 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
             }
         }
         if (!full && bx1 >= bx0) { SDL_Rect r = { bx0 * SS, ty0 * SS, (bx1 - bx0 + 1) * SS, (ty1 - ty0) * SS }; SDL_UpdateTexture(shroudTex, &r, &buf[(size_t)r.y * W2 + r.x], W2 * 4); }
+        // which blocks of this band are all clear now (the ones that changed; a full rebuild does them all)
+        static_assert(BLK == SHROUD_BLK, "a shroud band is one row of blocks");
+        const int BW = (MAP_W + BLK - 1) / BLK;
+        if ((int)shroudClear.size() != BW * BH) shroudClear.assign((size_t)BW * BH, 0);
+        const int c0 = full ? 0 : (bx1 >= bx0 ? bx0 / BLK : 1), c1 = full ? BW - 1 : (bx1 >= bx0 ? bx1 / BLK : 0);
+        for (int bc = c0; bc <= c1; bc++) {
+            bool clear = true;
+            const int x0 = bc * BLK * SS, x1 = std::min(MAP_W, (bc + 1) * BLK) * SS;
+            for (int y = ty0 * SS; y < ty1 * SS && clear; y++) for (int x = x0; x < x1; x++) if (buf[(size_t)y * W2 + x] >> 24) { clear = false; break; }
+            shroudClear[(size_t)band * BW + bc] = clear;
+        }
     }
     if (full) SDL_UpdateTexture(shroudTex, nullptr, buf.data(), W2 * 4);
 }
@@ -683,6 +879,7 @@ void Gfx::buildUnits() {
         Color team = PLAYER_COLOR[p];
         for (int t = 0; t < U_COUNT; t++) {
             const UnitType& u = UNITS[t];
+            if ((p == RIOT_PLAYER) != (t == U_RIOTER || t == U_FIREBOMBER) && p == RIOT_PLAYER) continue;   // (the riot crowd's colour only ever paints rioters: a fifth less art to bake and keep)
             for (int f = 0; f < 3; f++) {
                 if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
                 const int cs = artCanvas(t);   // (the big ships are painted at twice the detail on a bigger canvas)
@@ -810,13 +1007,13 @@ void Gfx::drawFlag(float px, float py, int player, float scale, float phase) {
     const Sprite& s = flag[player];
     float cw = s.w * scale, ch = s.h * scale;
     float x0 = px + 1.0f, y0 = py - mastH + 1.0f;
-    SDL_SetTextureColorMod(s.tex, 255, 255, 255); SDL_SetTextureAlphaMod(s.tex, 255);
+    bind(s, rgb(255, 255, 255), 255);
     const int step = 2;
     for (int sx = 0; sx < s.w; sx += step) {
         float k = (float)sx / s.w;
         float dy = std::sin(phase - sx * 0.42f) * 1.7f * k * scale;
         float dxs = -std::sin(phase - sx * 0.42f + 0.6f) * 0.6f * k * scale;
-        SDL_Rect src = { sx, 0, std::min(step, s.w - sx), s.h };
+        SDL_Rect src = s.sub(sx, 0, std::min(step, s.w - sx), s.h);
         SDL_FRect dst = { x0 + sx * scale + dxs, y0 + dy, src.w * scale + 0.6f, ch };
         SDL_RenderCopyF(ren, s.tex, &src, &dst);
     }
@@ -839,10 +1036,11 @@ void Gfx::buildMisc() {
         c.outline(rgb(10, 12, 14, 180));
         pile[v] = fromCanvas(c, 20, 20);
     }
-    { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float d = std::sqrt((x + 0.5f - 128) * (x + 0.5f - 128) + (y + 0.5f - 128) * (y + 0.5f - 128)); float a = clampf(128 - d, 0, 1); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{255, 255, 255, (u8)(a * 255)}); } disc = fromCanvasSmooth(c, 128, 128); }
-    { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float dx = (x + 0.5f - 128) / 128.0f, dy = (y + 0.5f - 128) / 128.0f; float d = std::sqrt(dx * dx + dy * dy); float a = clampf((d - 0.62f) / 0.75f, 0, 1); a = a * a * (3 - 2 * a); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{4, 6, 10, (u8)(a * 105)}); } vignette = fromCanvasSmooth(c, 0, 0); }
-    { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blob = fromCanvas(c, 16, 16); }
+    { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float d = std::sqrt((x + 0.5f - 128) * (x + 0.5f - 128) + (y + 0.5f - 128) * (y + 0.5f - 128)); float a = clampf(128 - d, 0, 1); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{255, 255, 255, (u8)(a * 255)}); } disc = fromCanvasSmooth(c, 128, 128); disc.radial = 1; }
+    { Canvas c(256, 256); for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) { float dx = (x + 0.5f - 128) / 128.0f, dy = (y + 0.5f - 128) / 128.0f; float d = std::sqrt(dx * dx + dy * dy); float a = clampf((d - 0.62f) / 0.75f, 0, 1); a = a * a * (3 - 2 * a); if (a > 0) c.px[y * 256 + x] = Canvas::pack(Color{4, 6, 10, (u8)(a * 105)}); } vignette = fromCanvasSolo(c, 0, 0, true); }
+    { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blob = fromCanvas(c, 16, 16); blob.radial = 1; }
     { Canvas c(24, 16); for (int y = 0; y < 16; y++) for (int x = 0; x < 24; x++) { float dx = (x - 12) / 12.0f, dy = (y - 8) / 8.0f; float d = dx * dx + dy * dy; if (d < 1) c.set(x, y, rgb(0, 0, 0, (u8)(110 * (1 - d)))); } shadowSmall = fromCanvas(c, 12, 8); }
+    { Canvas c(48, 48); for (int y = 0; y < 48; y++) for (int x = 0; x < 48; x++) { float d = std::sqrt((x + 0.5f - 24) * (x + 0.5f - 24) + (y + 0.5f - 24) * (y + 0.5f - 24)) / 24.0f; float a = std::exp(-std::pow((d - 0.78f) / 0.12f, 2.0f)); if (d < 1 && a > 0.01f) c.px[y * 48 + x] = Canvas::pack(Color{ 255, 255, 255, (u8)(a * 255) }); } teamRing = fromCanvasSmooth(c, 24, 24); teamRing.radial = 2; }
     { Canvas c(40, 26); for (int y = 0; y < 26; y++) for (int x = 0; x < 40; x++) { float dx = (x - 20) / 20.0f, dy = (y - 13) / 13.0f; float d = dx * dx + dy * dy; if (d < 1) c.set(x, y, rgb(0, 0, 0, (u8)(120 * (1 - d)))); } shadowLarge = fromCanvas(c, 20, 13); }
 }
 

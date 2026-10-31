@@ -12,7 +12,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
     ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fleetArrivals.clear(); fleetMarks.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); strikeWaves.clear(); nukeSeq = 0; anyBunkerLasers = false;   // (strikeWaves: an Air Strike still coming in when a match ended used to fly into the next one)
     districts.clear(); riots.clear(); riotSeq = 0; riotsOn = riotsDefault && !getenv("ONEHOUR_NORIOTS");   // (ONEHOUR_NORIOTS=1: a match without riots)
     for (int p = 0; p < MAX_PLAYERS; p++) { unrest[p] = 0; control[p] = 1; riotsRaised[p] = 0; lossHeat[p] = 0; basePeak[p] = 0; riotNoteAt[p] = -100; }
-    for (auto& c : grid) c.clear();
+    gridStart.clear(); gridIdx.clear(); gridOwners.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -99,6 +99,7 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     if (b.role == BR_CIVIC && instant) e.dozerAt = time + CIVICS[civicKind(type)].dozerEvery;
     e.angle = -1.5708f;
     e.turret2 = 2.4f;   // (the roof gun idles looking out over a corner)
+    if ((b.role == BR_WALL || b.role == BR_ANTINUKE) && std::find(pdList.begin(), pdList.end(), i) == pdList.end()) pdList.push_back(i);   // (a link to its neighbours counts at once, before the next grid rebuild)
     if (b.role == BR_WAYMAKER) return refOf(i);   // a Waymaker is no obstacle: it may stand partly over a structure or water and clears only what is clearable (updateWaymaker)
     g_map.clearForStructure(tx, ty, b.w, b.h);   // trees, bushes and small rocks on the footprint are cleared away
     g_map.setStructure(tx, ty, b.w, b.h, true);
@@ -193,6 +194,10 @@ void Sim::destroy(Entity& e, bool violent) {
         g_map.setResource(e.tx, e.ty, false);
     } else if (e.owner >= 0 && violent) {
         players[e.owner].unitsLost++;
+        if (chosenType(e.type) && e.owner < numPlayers) {   // The Chosen falls: its army hears it, and so does everybody who was hunting it
+            emit(EV_UNDER_ATTACK, e.owner, SND_ATTACKED, e.pos, "The Chosen has fallen");
+            for (int q = 0; q < numPlayers; q++) if (enemies(q, e.owner)) emit(EV_MSG, q, SND_NONE, e.pos, "The enemy's Chosen is dead");
+        }
     }
     if (violent && e.owner >= 0 && e.owner < numPlayers && e.kind != EK_RESOURCE && e.district < 0)   // what an army loses shakes its hold on its own people (see updateRiots)
         lossHeat[e.owner] += e.isUnit() ? (float)UNITS[e.type].cost : (float)BUILDS[e.type].cost;
@@ -212,15 +217,28 @@ void Sim::emit(EventType t, int player, Sound s, Vec2 pos, const char* msg) {
 }
 
 void Sim::rebuildGrid() {
-    for (auto& c : grid) c.clear();
-    for (int i = 0; i < (int)ents.size(); i++) {
-        Entity& e = ents[i];
-        if (!e.alive || e.carrier.valid()) continue;   // (soldiers aboard a transport or in a bunker are not on the map)
-        int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1);
-        grid[cy * GRID_W + cx].push_back(i);
-    }
+    // a counting sort into cells: count, offsets, place (in index order, as the old per-cell vectors were filled)
+    static std::vector<int> cellOf, cursor;
+    const int n = (int)ents.size();
+    cellOf.assign(n, -1);
+    gridStart.assign(GRID_N + 1, 0);
+    gridOwners.assign(GRID_N, 0);
     heliList.clear();
-    for (int i = 0; i < (int)ents.size(); i++) if (ents[i].alive && ents[i].isUnit() && ents[i].ut().heli) heliList.push_back(i);
+    for (int i = 0; i < n; i++) {
+        const Entity& e = ents[i];
+        if (!e.alive) continue;
+        if (e.isUnit() && e.ut().heli) heliList.push_back(i);
+        if (e.carrier.valid()) continue;   // (soldiers aboard a transport or in a bunker are not on the map)
+        int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1), c = cy * GRID_W + cx;
+        cellOf[i] = c; gridStart[c + 1]++;
+        gridOwners[c] |= (u8)(1u << clampi(e.owner + 1, 0, 7));
+    }
+    for (int c = 0; c < GRID_N; c++) gridStart[c + 1] += gridStart[c];
+    pdList.clear();
+    for (int i = 0; i < n; i++) { const Entity& e = ents[i]; if (e.alive && e.isBuilding() && (e.bt().role == BR_WALL || e.bt().role == BR_ANTINUKE)) pdList.push_back(i); }
+    gridIdx.resize(gridStart[GRID_N]);
+    cursor.assign(gridStart.begin(), gridStart.end() - 1);
+    for (int i = 0; i < n; i++) if (cellOf[i] >= 0) gridIdx[cursor[cellOf[i]]++] = i;
     incoming.assign(ents.size(), 0.0f);
     for (auto& p : projs) if (p.alive && p.target.idx >= 0 && p.target.idx < (int)ents.size() && ents[p.target.idx].gen == p.target.gen && p.weapon >= 0) {
         const Entity& t = ents[p.target.idx];
@@ -254,6 +272,7 @@ bool Sim::unitAvailable(int player, int unitType) const {
     const UnitType& t = UNITS[unitType];
     if (t.faction != players[player].faction) return false;
     if (t.program && !players[player].advTech) return false;
+    if (chosenType(unitType) && time < CHOSEN_OPEN) return false;   // (no Chosen in the opening: see CHOSEN_OPEN)
     return prereqMet(player, t.requires_);
 }
 bool Sim::buildAvailable(int player, int buildType) const {
@@ -466,6 +485,10 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
             if (t->isBuilding() && (t->constructed || t->district >= 0) && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
         }
+        if (e->isUnit() && chosenType(e->type) && t->isBuilding()) {   // The Chosen takes a structure it is sent at (a neutral one too); a unit it turns (below)
+            if ((t->constructed || t->district >= 0) && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
+            continue;
+        }
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
         // a player may pour fire on an indestructible structure (an enemy Bastion Wall, an island launcher): it only burns, it never breaks. Nothing
         // ever does that on its own initiative, and the computer armies never order it (see canTarget)
@@ -670,6 +693,7 @@ bool Sim::cmdTrain(Ref building, int unitType) {
     const UnitType& t = UNITS[unitType];
     if (t.builtBy != b->bt().role || !unitAvailable(b->owner, unitType)) return false;
     if (b->queue.size() >= 9) return false;
+    if (chosenType(unitType) && chosenInProduction(b->owner)) { emit(EV_MSG, b->owner, SND_CANT, b->pos, "There is only ever one Chosen"); return false; }
     if (!canAfford(b->owner, t.cost)) { emit(EV_NOFUNDS, b->owner, SND_NOFUNDS, b->pos, "Insufficient funds"); return false; }
     players[b->owner].money -= t.cost;
     players[b->owner].spentOn[unitType] += t.cost;
@@ -1793,6 +1817,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     }
     int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return false;
+    if (w == W_CONVERT) return t.isBuilding() ? (t.constructed && spyMayTake(e.owner, t)) : mayConvert(e, t);   // The Chosen: what it can take or turn
     const Weapon& wp = WEAPONS[w];
     if (t.isAir()) return wp.air;
     return wp.ground;
@@ -1802,7 +1827,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
 // how many enemy anti-air guns cover a target (jets avoid diving into flak when softer targets exist)
 float Sim::aaCover(const Entity& t, int owner) {
     float n = 0;
-    forEachNear(t.pos, 11.0f * TILE, [&](Entity& g) {
+    forEachNearMask(t.pos, 11.0f * TILE, enemyMask(owner), [&](Entity& g) {
         if (g.kind == EK_RESOURCE || !enemies(owner, g.owner) || !g.alive) return;
         if (g.isBuilding() && !g.constructed) return;
         int w = g.weapon();
@@ -1872,18 +1897,29 @@ float Sim::targetScore(const Entity& e, const Entity& t, const Weapon& wp, int w
     return score;
 }
 
+// What The Chosen goes for first: production and command structures, then the most valuable unit in reach (a turned tank fights for it at once)
+float Sim::chosenScore(const Entity& t, float d) const {
+    if (t.isBuilding()) {
+        const BuildRole r = t.bt().role;
+        float w = (r == BR_FACTORY || r == BR_AIRFIELD || r == BR_NAVAL || r == BR_TECH || r == BR_NUKE || r == BR_UNUKE) ? 5.0f : (r == BR_HQ || r == BR_BARRACKS || r == BR_BUNKER) ? 4.0f : (r == BR_TURRET || r == BR_AATURRET) ? 3.5f : 1.5f;
+        return d * 0.5f - w;
+    }
+    return d * 0.6f - std::log((float)t.ut().cost + 60.0f) * 0.7f - (t.weapon() >= 0 ? 0.6f : 0.0f);
+}
+
 Entity* Sim::acquireTarget(Entity& e, float rangeTiles, int wpn, float* scoreOut) {
     int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return nullptr;
     const Weapon& wp = WEAPONS[w];
     Entity* best = nullptr; float bs = 1e9f;
     const bool groundOnly = wpn < 0 && e.isUnit() && e.ut().nukeBomb;   // a nuclear bomber's business is the ground: it never goes after aircraft
-    forEachNear(e.pos, rangeTiles * TILE, [&](Entity& t) {
+    forEachNearMask(e.pos, rangeTiles * TILE, enemyMask(e.owner), [&](Entity& t) {
         if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t, w)) return;   // (auto-acquisition never picks a friend)
         if (groundOnly && t.isAir()) return;
         float d = distToEntity(e.pos, t) / TILE;
+        if (w == W_SHADOW && t.isAir() && d > WEAPONS[W_SHADOW_AA].range + 0.3f) return;   // (the Shadow Guard let an aircraft out of stinger reach be: chasing it only gives them away)
         if (d < wp.minRange) return;
-        float score = targetScore(e, t, wp, wpn, d);
+        float score = w == W_CONVERT ? chosenScore(t, d) : targetScore(e, t, wp, wpn, d);
         if (score < bs) { bs = score; best = &t; }
     });
     if (scoreOut) *scoreOut = bs;
@@ -1922,7 +1958,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
     // A fighter guarding an area takes aircraft and ground forces alike; a Supersonic Bomber guards against the ground only (its bomb cannot
     // hit an aircraft), and once its bomb is gone it has nothing to guard with until it has rearmed.
     if (e.isUnit() && e.ut().nukeBomb && e.ammo <= 0) return nullptr;
-    forEachNear(e.zone, e.zoneR + (wp.range + 1.0f) * TILE, [&](Entity& t) {
+    forEachNearMask(e.zone, e.zoneR + (wp.range + 1.0f) * TILE, enemyMask(e.owner), [&](Entity& t) {
         if (&t == &e || !enemies(e.owner, t.owner) || !canTarget(e, t)) return;
         if (e.isUnit() && e.ut().nukeBomb && t.isAir()) return;
         float d = distToEntity(e.pos, t) / TILE;
@@ -1945,6 +1981,18 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
 bool Sim::tryFire(Entity& e, Entity& tgt) {
     int w = e.weapon();
     if (w < 0) return false;
+    if (w == W_CONVERT) return chosenAct(e, tgt);   // The Chosen: takes or turns, never shoots
+    if (w == W_SHADOW) {   // the Shadow Guard: the weapon the target calls for
+        float d0 = distToEntity(e.pos, tgt) / TILE;
+        w = shadowWeapon(e, tgt, d0);
+        if (d0 > WEAPONS[w].range + 0.15f) return false;
+        Vec2 dir = tgt.pos - e.pos;
+        e.turret = e.angle = std::atan2(dir.y, dir.x);
+        if (e.cooldown > 0) return true;
+        fireWeapon(e, tgt, WEAPONS[w]);
+        e.cooldown = WEAPONS[w].cooldown;
+        return true;
+    }
     const Weapon& wp = WEAPONS[w];
     float d = distToEntity(e.pos, tgt) / TILE;
     if (d > wp.range + 0.15f) return false;
@@ -2118,6 +2166,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
             a->combatValue += value;
             if (a->waveSerial && a->waveSerial == players[attackerOwner].waveSerial) players[attackerOwner].waveCredit += value;
         }
+        if (a && tgt.owner >= 0 && tgt.owner < numPlayers && stealthOf(*a) == ST_CHOSEN && !visibleTo(*a, tgt.owner)) players[tgt.owner].noteChosen(tgt.pos, time);   // unseen Shadow Guard at work
     }
     if (foe) {   // (a human's force fire on an ally raises no alarm)
         Player& pl = players[tgt.owner];
@@ -2125,10 +2174,10 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         if (time - pl.lastNotice > 10.0f) {
             pl.lastNotice = time;
             // shot by something hidden (a sniper, a garrisoned bunker) that none of our detectors has found: say so, it needs a spy drone
-            bool hidden = false;
-            if (attU) { const Entity* src = attU->carrier.valid() ? get(attU->carrier) : attU; hidden = src && stealthOf(*src) && !visibleTo(*src, tgt.owner); }
+            bool hidden = false, shadow = false;
+            if (attU) { const Entity* src = attU->carrier.valid() ? get(attU->carrier) : attU; hidden = src && stealthOf(*src) && !visibleTo(*src, tgt.owner); shadow = hidden && stealthOf(*src) == ST_CHOSEN; }
             char townMsg[96]; if (tgt.district >= 0) snprintf(townMsg, sizeof townMsg, "%s is under attack", districts[tgt.district].name);
-            emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, tgt.district >= 0 ? townMsg : hidden ? (tgt.isBuilding() ? "Our base is under fire from a hidden enemy: a spy drone can find it" : "Our forces are under fire from a hidden enemy: a spy drone can find it") : (tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack"));
+            emit(EV_UNDER_ATTACK, tgt.owner, SND_ATTACKED, tgt.pos, tgt.district >= 0 ? townMsg : shadow ? "Unseen soldiers are firing on us: only a helicopter can find them" : hidden ? (tgt.isBuilding() ? "Our base is under fire from a hidden enemy: a spy drone can find it" : "Our forces are under fire from a hidden enemy: a spy drone can find it") : (tgt.isBuilding() ? "Our base is under attack" : "Our forces are under attack"));
             for (int q = 0; q < numPlayers; q++)   // human teammates hear about it too (an AI ally being hit)
                 if (q != tgt.owner && !players[q].isAI && players[q].team == pl.team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, tgt.pos, tgt.isBuilding() ? "Your ally's base is under attack" : "Your ally's forces are under attack");
         }
@@ -3273,8 +3322,8 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.postOrder = O_IDLE; e.leashed = false; e.autoTask = false;
             break;
         }
-        const Weapon& w = WEAPONS[ut.weapon];
         float d = distToEntity(e.pos, *t) / TILE;
+        const Weapon& w = WEAPONS[ut.weapon == W_SHADOW ? shadowWeapon(e, *t, d) : ut.weapon];   // (the Shadow Guard: the reach of the weapon this target calls for)
         // a zone guard does not chase targets out of its zone (it may still shoot what is already in range)
         if (e.leashed && e.zoneR > 0 && d > w.range + 0.15f && distToEntity(e.zone, *t) > e.zoneR + TILE * 1.5f) {
             e.order = O_GUARDAREA; e.targetEnt = NOREF; e.path.clear(); e.postOrder = O_IDLE; e.leashed = false; break;
@@ -3502,6 +3551,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.angle = e.turret = std::atan2(b->pos.y - e.pos.y, b->pos.x - e.pos.x);
             e.actionTimer += SIM_DT;
             if (tick % 5 == 0) fx.push_back({FX_SPARK, b->pos + Vec2(rng.f(-b->bt().w * 14.0f, b->bt().w * 14.0f), rng.f(-b->bt().h * 14.0f, b->bt().h * 14.0f)), Vec2(), 0, 0.25f, players[e.owner].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
+            if (chosenType(e.type)) { e.cooldown = 0; chosenAct(e, *b); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; break; }   // The Chosen: at once
             if (e.actionTimer >= captureTime(*b)) { Ref bref = refOf(*b); captureBuilding(*b, e); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; (void)bref; }
         } else {
             e.actionTimer = 0;
@@ -3605,6 +3655,7 @@ void Sim::spawnFromQueue(Entity& b) {
     }
     else cmdMove({r}, rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
     emit(EV_UNIT_READY, owner, SND_UNIT_READY, u.pos, ut.name);
+    if (chosenType(type)) emit(EV_MSG, owner, SND_NONE, u.pos, "The Chosen is ready: only helicopters can see it (C calls its Shadow Guard)");
 }
 
 void Sim::updateBuilding(Entity& b) {
@@ -3694,10 +3745,10 @@ static const float TURRET_INFIL_DETECT = 7.0f;
 
 void Sim::updateDetection() {
     auto sweep = [&](const Entity& d, Vec2 at, float range, int mask, bool sensor) {
-        forEachNear(at, range * TILE, [&](Entity& t) {
+        forEachNearMask(at, range * TILE, enemyMask(d.owner), [&](Entity& t) {
             int cls = stealthOf(t);
             if (!cls || !(mask & (1 << (cls - 1))) || !enemies(d.owner, t.owner) || (sensor && (!t.isUnit() || dist(t.pos, at) > range * TILE))) return;   // (a sensor finds soldiers, not another bunker)
-            float linger = cls == ST_DRONE ? 1.5f : (cls == ST_INFIL ? 2.0f : 3.0f);   // a sniper, drone or infiltrator is lost again once no detector is close
+            float linger = cls == ST_DRONE ? 1.5f : (cls == ST_INFIL ? 2.0f : (cls == ST_CHOSEN ? CHOSEN_LINGER : 3.0f));   // a sniper, drone, infiltrator or Chosen is lost again once no detector is close
             for (int q = 0; q < numPlayers; q++)
                 if (q == d.owner || players[q].team == players[d.owner].team) t.detUntil[q] = std::max(t.detUntil[q], time + linger);
         });
@@ -3719,9 +3770,10 @@ void Sim::updateDetection() {
             continue;
         }
         if (d.carrier.valid() || d.fall > 0) continue;
+        if (helicopterType(d.ut())) sweep(d, d.pos, CHOSEN_DETECT, DET_CHOSEN, false);   // only a helicopter ever finds The Chosen and its Shadow Guard
         float range = d.ut().detect;
         if (range <= 0) continue;
-        sweep(d, d.pos, range, d.ut().detectMask, false);
+        sweep(d, d.pos, range, d.ut().detectMask & ~DET_CHOSEN, false);
     }
 }
 
@@ -4353,7 +4405,7 @@ void Sim::cmdCapture(const std::vector<Ref>& sel, Ref building) {
     if (!b || !b->isBuilding() || (!b->constructed && b->district < 0)) return;   // (a town is taken through any block, a ruin too)
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || !e->isUnit() || e->ut().role != UR_SPY || e->carrier.valid() || !spyMayTake(e->owner, *b) || !visibleTo(*b, e->owner)) continue;
+        if (!e || !e->isUnit() || (e->ut().role != UR_SPY && !chosenType(e->type)) || e->carrier.valid() || !spyMayTake(e->owner, *b) || !visibleTo(*b, e->owner)) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF;
         e->order = O_CAPTURE; e->postOrder = O_IDLE; e->targetEnt = building; e->engaged = NOREF; e->path.clear(); e->pathIdx = 0; e->repathTimer = 0; e->actionTimer = 0; e->stuckTimer = 0;
     }
@@ -4370,6 +4422,7 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     b.queue.clear(); b.queueProgress = 0; b.hasRally = false; b.engaged = NOREF; b.engaged2 = NOREF; b.forceTarget = NOREF; b.unloading = false;
     b.bunkerQueue = 0;   // (the old owner's Upgrade All queue is not the new owner's to pay for)
     float oldMax = b.maxHp;
+    b.takenFrom = from; b.takenByChosen = spy.isUnit() && chosenType(spy.type);
     b.owner = to;
     if (b.bt().role == BR_ISLANDNUKE) { b.siloTimer = std::max(b.siloTimer, time + ISLAND_NUKE_ARM); players[to].launchersTaken++; }   // the new crew needs a while to take over the launch codes
     b.maxHp = b.bt().hp * (!civilianRole(b.bt().role) && hasUpgrade(to, UPG_RUGGED) ? RUGGED_HP : 1.0f) * (bunkerHas(b, BU_SHELL) ? BUNKER_SHELL_HP : 1.0f);   // (a bunker's own upgrades stay with it)
@@ -4383,14 +4436,14 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     for (int k = 0; k < 10; k++) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-b.radius(), b.radius()), rng.f(-b.radius(), b.radius())), Vec2(), -rng.f(0, 0.4f), 0.5f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 5});
     fx.push_back({FX_RING, b.pos, b.pos, 0, 0.9f, players[to].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), b.radius() * 1.3f});
     char msg[96];
-    snprintf(msg, sizeof msg, ally ? "Took over an ally's %s" : from >= 0 ? "Captured an enemy %s" : "Captured the %s", b.bt().name);
+    snprintf(msg, sizeof msg, ally ? "Took over an ally's %s" : from >= 0 ? (b.takenByChosen ? "The Chosen took an enemy %s" : "Captured an enemy %s") : "Captured the %s", b.bt().name);
     emit(EV_MSG, to, SND_NONE, b.pos, msg);
     emit(EV_SOUND, to, SND_BUILD_DONE, b.pos);
     if (ally) {   // an ally loses it to its own side: no alarm, just word of it
         snprintf(msg, sizeof msg, "Our ally's infiltrator took over our %s", b.bt().name);
         emit(EV_MSG, from, SND_NONE, b.pos, msg);
     } else {
-        snprintf(msg, sizeof msg, "A spy captured our %s", b.bt().name);
+        snprintf(msg, sizeof msg, b.takenByChosen ? "Something unseen took our %s: only a helicopter can find it" : "A spy captured our %s", b.bt().name);
         if (from >= 0) emit(EV_UNDER_ATTACK, from, SND_ATTACKED, b.pos, msg);
         snprintf(msg, sizeof msg, "A spy captured your ally's %s", b.bt().name);
         if (from >= 0) for (int q = 0; q < numPlayers; q++) if (q != from && players[q].team == players[from].team) emit(EV_UNDER_ATTACK, q, SND_ATTACKED, b.pos, msg);
@@ -4539,7 +4592,9 @@ void Sim::separateUnits() {
         Vec2 push;
         for (int gy = std::max(0, cy - 1); gy <= std::min(GRID_H - 1, cy + 1); gy++)
         for (int gx = std::max(0, cx - 1); gx <= std::min(GRID_W - 1, cx + 1); gx++) {
-            for (int j : grid[gy * GRID_W + gx]) {
+            const int gc = gy * GRID_W + gx;
+            for (int k = gridStart[gc], kn = gridStart[gc + 1]; k < kn; k++) {
+                const int j = gridIdx[k];
                 if (j == i) continue;
                 const Sep& b = sp[j];
                 if (!(b.f & 1) || ((b.f & 2) != 0) != air) continue;

@@ -76,7 +76,15 @@ struct Canvas {
     }
 };
 
-struct Sprite { SDL_Texture* tex = nullptr; int w = 0, h = 0; float ox = 0, oy = 0; float dscale = 1; };   // dscale: on-screen size relative to the texture (2x supersampled unit sprites use 0.5)
+// dscale: on-screen size relative to the texture (2x supersampled unit sprites use 0.5). On the GPU most sprites share a few big atlas pages
+// (see Gfx::atlasPlace): src is the sprite's rectangle in its page (w = 0: the whole texture) and blend its blend mode, set on the page per draw.
+struct Sprite {
+    SDL_Texture* tex = nullptr; int w = 0, h = 0; float ox = 0, oy = 0; float dscale = 1;
+    SDL_Rect src = { 0, 0, 0, 0 }; u8 blend = SDL_BLENDMODE_BLEND;
+    u8 radial = 0;   // 1: nothing outside its inscribed circle (a glow, a puff, a disc); 2: a ring with an empty middle too (big ones draw as meshes, see Gfx::drawRadial)
+    const SDL_Rect* srcRect() const { return src.w > 0 ? &src : nullptr; }
+    SDL_Rect sub(int x, int y, int w2, int h2) const { return SDL_Rect{ src.x + x, src.y + y, w2, h2 }; }   // a part of the sprite, in its texture
+};
 
 extern const Color PLAYER_COLOR[MAX_PLAYERS];   // palette slots: blue, red, yellow, green
 extern int g_colorSlot[MAX_PLAYERS];            // which slot each player of the current match uses (an ally takes the friendly green, enemies the warm colours)
@@ -107,8 +115,10 @@ struct Gfx {
     Sprite pile[3];
     Sprite shadowSmall, shadowLarge, blob, disc, vignette;   // vignette: soft dark frame corners (GPU only, like the cloud shadows)
     Sprite blobAdd;                 // additive radial glow (muzzle light, fire glow, beacons)
+    Sprite teamRing;                // a soft white ring (blended, not added): the army-coloured mark on the ground under a unit
     // baked effect sprites: smoke and dust puffs, fireball frames, flame tongues, muzzle stars, sparks, shock rings, beams, debris, scorch decals
-    struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], tread[2], missile, missileK, cloud[3], billow[4]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead
+    struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], tread[2], missile, missileK, cloud[3], billow[4];
+                   Sprite fallout[2][2]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead; fallout[silver][inner ring]: a radiation zone's haze and rings in one sprite
     Sprite waterFx[4];              // seamless animated caustics laid over open water
     Sprite seaSwell[4];             // seamless animated swell over the open ocean (512x512: a quarter per aligned 8x8-tile block)
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)
@@ -119,7 +129,7 @@ struct Gfx {
     // dithered RGB565; only the chunks drawn lately also hold an SDL texture (at most WORLD_RESIDENT, the least recently drawn one is destroyed
     // first), so a low-end machine does not pay for a 400 MB 32-bit copy of the whole world.
     static constexpr int WORLD_CHUNK = 1024;
-    static constexpr int WORLD_RESIDENT = 24;
+    static constexpr int WORLD_RESIDENT = 12;   // (a 1080p view spans at most 9 chunks: 12 keep a margin for scrolling, 24 MB of video memory instead of 48)
     struct WorldChunk { std::vector<u16> px; SDL_Texture* tex = nullptr; int w = 0, h = 0; u32 used = 0; };   // used: the drawWorld call that last drew it
     std::vector<WorldChunk> worldChunks;
     int worldCols = 0, worldRows = 0, worldResident = 0;
@@ -130,11 +140,35 @@ struct Gfx {
     SDL_Texture* miniFog = nullptr;     // the minimap's fog (MAP_W/2 x MAP_H/2 cells, see Game::drawMinimap)
     SDL_Texture* shroudTex = nullptr;   // (MAP_W*SS) x (MAP_H*SS) alpha mask, bilinear-scaled; the edge is displaced by noise so it drifts like cloud
     void updateShroud(const std::vector<u8>& fog, bool force = false);   // fog per tile: 0 never seen, 1 remembered (explored, out of sight), 2 in sight; force: rebuild it all
+    static constexpr int SHROUD_BLK = 8;   // tiles per side of a shroud block
+    std::vector<u8> shroudClear;           // per block: 1 = every texel of it is clear (all in sight), so drawShroud leaves it out
     void rebakeTerrain();           // a new match on a map whose baked ground was edited by the last one: bake it afresh
     void refreshTerrain();          // structures cleared trees / rocks (Map::cleared): repaint and re-upload just that part of the baked world
     bool terrainEdited = false;
     void uploadTerrainPatch(const std::vector<int>& footprint);
     bool softwareRenderer = false;  // no GPU: skip purely atmospheric full-screen blends (cloud shadows)
+    // Texture atlas (GPU only). SDL draws a run of copies from one texture with one blend mode as a single GL call, and every change of texture
+    // starts a new one: with a texture per sprite a battle frame was 330 draw calls. Sprites, the effects and a white block (fills and thick lines
+    // go through it) share skyline-packed 4096 px pages instead, so whole layers draw in a handful of calls. Sprites a caller tiles or cuts with its
+    // own source rectangles (water, swell, the shroud, the font, the vignette) keep textures of their own.
+    struct AtlasPage { SDL_Texture* tex = nullptr; std::vector<SDL_Point> sky; long used = 0; int h = 0; };   // sky: the skyline (x, top y) segments, left to right; h: the page's height
+    std::vector<AtlasPage> atlas;
+    int atlasSize = 4096;
+    bool useAtlas = false;
+    Sprite whiteBlock;              // a 4x4 opaque white block in the first page (fills sample its middle)
+    bool atlasPlace(int w, int h, SDL_Texture*& tex, SDL_Rect& at);   // finds room for a w x h rectangle (2 px apart from the rest)
+    Sprite fromCanvasSolo(Canvas& c, float ox, float oy, bool smooth, SDL_BlendMode mode = SDL_BLENDMODE_BLEND);   // a texture of its own (tiled / cut by its caller), never the atlas
+    long atlasPixels = 0;           // (texels the sprites in the atlas cover: ONEHOUR_ATLASDBG prints how full the pages are)
+    // Additive draws (glows, sparks, muzzle flashes) mixed in among ordinary ones flip the blend mode, and every flip starts a new batch: inside a
+    // pass that sets deferAdd they are queued instead and drawn together by flushAdd (light adds up the same whatever the order).
+    struct AddDraw { SDL_Texture* tex; SDL_Rect src; SDL_FRect dst; float angleDeg; SDL_FPoint c; bool hasC; Color mod; u8 alpha; float inner = -1; };   // inner >= 0: a drawRadial
+    std::vector<AddDraw> addQueue;
+    bool deferAdd = false;
+    void beginAdd() { static const bool off = getenv("ONEHOUR_NODEFER") != nullptr; if (!softwareRenderer && !off) deferAdd = true; }
+    void flushAdd();
+    void bind(const Sprite& s, Color mod, u8 alpha) {   // colour, opacity and blend mode of the next copy of s
+        SDL_SetTextureColorMod(s.tex, mod.r, mod.g, mod.b); SDL_SetTextureAlphaMod(s.tex, alpha); SDL_SetTextureBlendMode(s.tex, (SDL_BlendMode)s.blend);
+    }
     double fillPx = 0;   // (profiling: screen pixels covered by sprite draws so far; see ONEHOUR_FILLDBG)
     int userScale = 0;              // 0 = pick the UI scale from the window size
     int refreshHz = 60;             // the display's refresh rate (the main loop never runs faster)
@@ -168,6 +202,11 @@ struct Gfx {
     const Pix* pixelsOf(SDL_Texture* t, int level);
 
     void discFill(float cx, float cy, float r, Color c);  // flat translucent disc with a soft edge
+    // A round sprite (a glow, a disc, a ring: nothing outside its inscribed circle) stretched to rx x ry, drawn as a fan of triangles - or a band
+    // from 'inner' (share of the radius) out, for a ring with an empty middle - instead of its square: the corners (a fifth of the square) and the
+    // empty middle are never blended. Big ones only, on the GPU; small ones and the CPU renderer draw the plain square.
+    void drawRadial(const Sprite& s, float cx, float cy, float rx, float ry, float inner, Color mod, u8 alpha, float angle = 0);
+    void radialNow(SDL_Texture* tex, const SDL_Rect& src, float cx, float cy, float rx, float ry, float inner, Color mod, u8 alpha, float angle);
     void dashedCircle(float cx, float cy, float r, Color c, float phase, float dash = 9, float gap = 6);
     Sprite fromCanvasSmooth(Canvas& c, float ox, float oy);   // bilinear-filtered texture (supersampled sprites)
     Sprite fromCanvasAdd(Canvas& c, float ox, float oy);      // bilinear + additive blending
@@ -185,5 +224,6 @@ private:
     void makeChunkTexture(WorldChunk& ch, u32 stamp);   // gives a chunk its SDL texture, first freeing the least recently drawn one if the cap is reached
     void uploadChunkRect(WorldChunk& ch, int x, int y, int w, int h);   // copies a rectangle of the chunk's RGB565 pixels into its texture (if it has one)
     void buildEffects();
+    Sprite makeSprite(Canvas& c, float ox, float oy, bool smooth, SDL_BlendMode mode);
 };
 extern Gfx g_gfx;

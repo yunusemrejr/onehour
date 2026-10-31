@@ -595,7 +595,30 @@ void Game::drawSeaLife() {
 void Game::drawWeatherTint() {
     Gfx& g = g_gfx;
     Color t = ambientTint();
-    if (t.r < 252 || t.g < 252 || t.b < 252) {   // one multiply over the battlefield (nothing at all in plain daylight)
+    if (g.vignette.tex && !g.softwareRenderer) {
+        // The light of the hour and the soft dark corners in ONE multiply over the view: a small texture holding the tint times the vignette's
+        // darkening, stretched bilinearly (both are smooth). It was two full-screen passes, the vignette's a blend over everything at the end.
+        static SDL_Texture* lit = nullptr; static Color last{ 0, 0, 0, 0 };
+        const int LW = 64, LH = 40;
+        if (!lit) {
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+            lit = SDL_CreateTexture(g.ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, LW, LH);
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+            if (lit) SDL_SetTextureBlendMode(lit, SDL_BLENDMODE_MOD);
+        }
+        if (lit && (t.r != last.r || t.g != last.g || t.b != last.b || last.a == 0)) {
+            static u32 px[LW * LH];
+            for (int y = 0; y < LH; y++) for (int x = 0; x < LW; x++) {
+                float dx = (x + 0.5f) / LW * 2 - 1, dy = (y + 0.5f) / LH * 2 - 1, d = std::sqrt(dx * dx + dy * dy);
+                float a = clampf((d - 0.62f) / 0.75f, 0, 1); a = a * a * (3 - 2 * a) * (105.0f / 255.0f);   // (the vignette's own falloff)
+                float k = 1.0f - a;
+                px[y * LW + x] = Canvas::pack(Color{ (u8)(t.r * k), (u8)(t.g * k), (u8)(t.b * k), 255 });
+            }
+            SDL_UpdateTexture(lit, nullptr, px, LW * 4);
+            last = t; last.a = 255;
+        }
+        if (lit) { SDL_Rect r = { 0, 0, SCREEN_W, VIEW_H }; SDL_RenderCopy(g.ren, lit, nullptr, &r); }
+    } else if (t.r < 252 || t.g < 252 || t.b < 252) {   // one multiply over the battlefield (nothing at all in plain daylight)
         SDL_SetRenderDrawBlendMode(g.ren, SDL_BLENDMODE_MOD);
         SDL_SetRenderDrawColor(g.ren, t.r, t.g, t.b, 255);
         SDL_Rect r = { 0, 0, SCREEN_W, VIEW_H };

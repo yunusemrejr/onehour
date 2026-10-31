@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -155,6 +155,11 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             int sp = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, sd = pl.faction == F_CYBER ? U_C_SDRONE : U_K_SDRONE, sn = pl.faction == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
             int caps = pl.structuresKilled;   // (captures count as structures taken)
             printf("      special forces bought: spies %d, spy drones %d, snipers %d (structures taken or destroyed %d)\n", (int)(pl.spentOn[sp] / UNITS[sp].cost), (int)(pl.spentOn[sd] / UNITS[sd].cost), (int)(pl.spentOn[sn] / UNITS[sn].cost), caps);
+            {   // The Chosen (the update's own line: what it did, and how the commander fared against an enemy's)
+                int ct = pl.faction == F_CYBER ? U_C_CHOSEN : U_K_CHOSEN, ht = pl.faction == F_CYBER ? U_C_HELI : U_K_AIR;
+                printf("      The Chosen: trained %d, Shadow Guard calls %d, units turned %d, structures taken %d (sold %d); lost to an enemy's: %d units; helicopters %d, hunts %d, feints %d\n",
+                       (int)(pl.spentOn[ct] / UNITS[ct].cost), pl.shadowCalls, pl.converted, pl.chosenTaken, g_ai.ais[p].chosenSold, pl.convertedLost, (int)(pl.spentOn[ht] / UNITS[ht].cost), g_ai.ais[p].heliHunts, g_ai.ais[p].feints);
+            }
             int jp = pl.faction == F_CYBER ? U_C_JEEP : U_K_JEEP, ds = pl.faction == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER, cr = pl.faction == F_CYBER ? U_C_CRUISER : U_K_CRUISER;
             printf("      navy and jeeps: destroyers %d, cruisers %d (yards %d), jeeps %d, anti-nuke defences %d, guard drones %d\n", (int)(pl.spentOn[ds] / UNITS[ds].cost), (int)(pl.spentOn[cr] / UNITS[cr].cost), g_sim.countRole(p, BR_NAVAL, false), (int)(pl.spentOn[jp] / UNITS[jp].cost), g_sim.countRole(p, BR_ANTINUKE, false), (int)pl.upg[UPG_DRONES]);
         }
@@ -262,11 +267,13 @@ static int evalAi(int games, u64 seed, int difficulty) {
         static const int baseMask = getenv("ONEHOUR_BASEMASK") ? atoi(getenv("ONEHOUR_BASEMASK")) : FEAT_DEFAULT;   // the baseline side plays with only these pro features
         static const int newMask = getenv("ONEHOUR_NEWMASK") ? atoi(getenv("ONEHOUR_NEWMASK")) : FEAT_DEFAULT;   // and the new side only these
         for (int p = 0; p < 4; p++) g_ai.featMask[p] = (p == (flip ? 0 : 1)) ? baseMask : newMask;
+        static const int baseMask2 = getenv("ONEHOUR_BASEMASK2") ? atoi(getenv("ONEHOUR_BASEMASK2")) : F2_DEFAULT, newMask2 = getenv("ONEHOUR_NEWMASK2") ? atoi(getenv("ONEHOUR_NEWMASK2")) : F2_DEFAULT;   // (the second feature set, AiFeat2)
+        for (int p = 0; p < 4; p++) g_ai.featMask2[p] = (p == (flip ? 0 : 1)) ? baseMask2 : newMask2;
         // ONEHOUR_BRAIN2=path|prior: the baseline side consults a different brain (a saved one, or the untrained prior), to measure what learning is worth
         static Brain baseBrain; static bool baseLoaded = false;
         if (!baseLoaded) { baseLoaded = true; const char* b2 = getenv("ONEHOUR_BRAIN2"); if (b2 && strcmp(b2, "prior") != 0) baseBrain.load(b2); baseBrain.learning = false; }
         for (int p = 0; p < 4; p++) g_ai.brainOverride[p] = (getenv("ONEHOUR_BRAIN2") && p == (flip ? 0 : 1)) ? &baseBrain : nullptr;
-        if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK") || getenv("ONEHOUR_BRAIN2")) { pro[0] = pro[1] = true; }
+        if (getenv("ONEHOUR_BASEMASK") || getenv("ONEHOUR_NEWMASK") || getenv("ONEHOUR_BASEMASK2") || getenv("ONEHOUR_NEWMASK2") || getenv("ONEHOUR_BRAIN2")) { pro[0] = pro[1] = true; }
         static const int oldDiff = getenv("ONEHOUR_OLDDIFF") ? atoi(getenv("ONEHOUR_OLDDIFF")) : difficulty;   // the baseline may play at another difficulty
         static const bool oldMicro = getenv("ONEHOUR_OLDMICRO") != nullptr;   // the baseline's units without the micro update (Player::micro 0)
         for (int p = 0; p < 4; p++) g_playMicro[p] = (oldMicro && p == (flip ? 0 : 1)) ? 0 : -1;
@@ -275,7 +282,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
         int w;
         if (teams2v2) {
             Faction fac4[4] = { fac[0], fac[1], fac[1], fac[0] }; bool pro4[4] = { !flip, flip, !flip, flip }; int team4[4] = { 0, 1, 0, 1 };
-            for (int p = 0; p < 4; p++) { g_ai.featMask[p] = (pro4[p] ? newMask : baseMask); g_ai.brainOverride[p] = nullptr; }
+            for (int p = 0; p < 4; p++) { g_ai.featMask[p] = (pro4[p] ? newMask : baseMask); g_ai.featMask2[p] = (pro4[p] ? newMask2 : baseMask2); g_ai.brainOverride[p] = nullptr; }
             w = playAiGame(seed + i * 31, 4, fac4, brainOn, difficulty, 1500, team4, nullptr, nullptr, pro4);
         } else
         w = playAiGame(seed + i * 31, 2, fac, brainOn, difficulty, 1500, nullptr, smart, diffs, pro);
@@ -665,6 +672,7 @@ bool fleetTest(u64 seed);        // tests17.cpp: the Fleet Call (a battle fleet 
 bool bunkerUpdateTest(u64 seed); // tests18.cpp: nuclear-hardened bunkers, 200/5 garrison, per-bunker upgrades, shift-drag lines, the smarter Waymaker
 bool duelMatrix(u64 seed);       // tests17.cpp: sharp fire against plain fire in mirrored battles
 bool microMatrix(u64 seed);
+bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
@@ -2123,7 +2131,12 @@ static bool uiTest() {
         if (firstAi >= 0) {
             int d0 = g_sim.players[firstAi].difficulty;
             key(SDLK_ESCAPE);
-            for (int i = 0; i < 4; i++) key(SDLK_DOWN);
+            for (int i = 0; i < 3; i++) key(SDLK_DOWN);   // the frame rate row: Right and Left step through Balanced / Full / Power saver
+            { int m0 = g_game.fpsMode; key(SDLK_RIGHT); if (g_game.fpsMode == m0) return fail("the frame rate row did not change the setting");
+              if (g_game.targetFps(144, false) <= 0 || g_game.targetFps(144, true) > 30) return fail("a frame rate setting asked for no frames, or more than 30 in the background");
+              key(SDLK_LEFT); if (g_game.fpsMode != m0) return fail("Left did not step the frame rate back"); }
+            if (g_game.targetFps(144, false) != 72 || g_game.targetFps(60, false) != 60) return fail("Balanced is not every refresh up to 75 Hz and every second one above");
+            for (int i = 0; i < 2; i++) key(SDLK_DOWN);
             key(SDLK_RIGHT);
             if (g_sim.players[firstAi].difficulty != d0) return fail("raising an army's difficulty did not ask for confirmation");
             key(SDLK_RIGHT);
@@ -2135,7 +2148,7 @@ static bool uiTest() {
         }
         // surrender needs a second confirmation and ends the game as a defeat
         key(SDLK_ESCAPE);
-        for (int i = 0; i < 5 + armies; i++) key(SDLK_DOWN);
+        for (int i = 0; i < 6 + armies; i++) key(SDLK_DOWN);   // (Resume, speed, sound, frame rate, help, the armies, restart: then surrender)
         key(SDLK_RETURN);
         if (g_game.state != GS_PLAYING) return fail("surrender did not ask for confirmation");
         key(SDLK_RETURN);
@@ -2616,7 +2629,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 35);
+            int c = rng.range(0, 36);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2660,6 +2673,17 @@ static bool fuzzTest(u64 seed, int seconds) {
                 else if (k == 1) g_sim.cmdTankDrop(b2, where(), rng.range(0, 1) == 0);
                 else if (k == 2) g_sim.cmdBunkerUpgradeAll(rng.range(-1, 4));
                 else g_sim.cancelBunkerQueue(rng.range(0, 3));
+                break;
+            }
+            case 36: {   // The Chosen and its Shadow Guard, for whoever: calls, turnings and captures of anything (aircraft, loans, structures, other Chosen)
+                int ow = rng.range(0, 3);
+                Ref ch = g_sim.chosenOf(ow);
+                if (!ch.valid() || rng.range(0, 3) == 0) ch = g_sim.spawnUnit(rng.range(0, 1) ? U_C_CHOSEN : U_K_CHOSEN, ow, g_map.nearestFree(g_sim.players[rng.range(0, 3)].basePos + Vec2(rng.f(-300, 300), rng.f(-300, 300)), 10));
+                if (rng.range(0, 2) == 0) g_sim.players[ow].shadowReady = 0;
+                g_sim.cmdShadowCall(rng.range(-1, 4), rng.range(0, 1) ? ch : anyEnt(-2, 3));
+                Entity* ce = g_sim.get(ch); Entity* t = g_sim.get(anyEnt(-2, 3));
+                if (ce && t) { ce->cooldown = 0; if (rng.range(0, 1)) g_sim.chosenAct(*ce, *t); else g_sim.cmdAttack({ch}, g_sim.refOf(*t)); }
+                if (ce && t && t->isUnit() && rng.range(0, 3) == 0) g_sim.convertUnit(*t, rng.range(0, 3), ce);
                 break;
             }
             case 34: { int bt = rng.range(0, 1) ? B_C_FWALL : B_K_FWALL; int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 2) == 0 ? rng.range(-1, 1) : 0, tx, ty, rng.range(0, 1) == 0); break; }   // Bastion Walls, any owner
@@ -2772,6 +2796,11 @@ int main(int argc, char** argv) {
         else if (a == "--uitest") { headless = true; software = true; shot = nullptr; ticks = -1; }
         else if (a == "--autostart") autostart = true;
         else if (a == "--bench") { benchFrames = 300; if (i + 1 < argc && argv[i + 1][0] != '-') benchFrames = atoi(argv[++i]); headless = true; software = true; }
+        else if (a == "--gpubench") {   // the same scene through the real (GPU) renderer in a window: what the GPU path costs (run it on a display, or Xvfb + llvmpipe)
+            benchFrames = 300; if (i + 1 < argc && argv[i + 1][0] != '-') benchFrames = atoi(argv[++i]);
+            if (reqW <= 0) { reqW = 1920; reqH = 1080; }
+            SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+        }
         else if (a == "--latebench") { lateMin = 30; if (i + 1 < argc && argv[i + 1][0] != '-') lateMin = atoi(argv[++i]); headless = true; software = true; }
         else if (a == "--scenario") { g_map.generate(); return scenarioTest(seed) ? 0 : 1; }
         else if (a == "--econtest") { g_map.generate(); return econTest(seed) ? 0 : 1; }
@@ -2821,6 +2850,7 @@ int main(int argc, char** argv) {
         else if (a == "--duelmatrix") { g_map.generate(); return duelMatrix(seed) ? 0 : 1; }
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
         else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
+        else if (a == "--chosentest") { g_map.generate(); return chosenTest(seed) ? 0 : 1; }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }
@@ -2955,6 +2985,40 @@ int main(int argc, char** argv) {
                 int t = ids[i / 4][i % 4]; float x = 460 + i * 66, y = 600;
                 g.draw(g.unitBody[t][i / 4], x, y, 0, 1);
                 if (UNITS[t].naval) { ShipMounts m = shipMounts(t == U_C_CRUISER || t == U_K_CRUISER); for (int k = 0; k < m.n; k++) g.draw(g.unitTurret[t][i / 4], x + m.x[k] * UNIT_SCALE * artScale(t), y + m.y[k] * UNIT_SCALE * artScale(t), 0.4f, 1); }
+            }
+            g_game.screenshot(sheetPath);
+            printf("wrote %s\n", sheetPath);
+            g_gfx.shutdown(); SDL_Quit(); return 0;
+        }
+        if (getenv("ONEHOUR_CHOSEN_SPRITES")) {   // the Chosen and Shadow Guard art: Cyber and Clanker in team colours 0 and 1, at 4.5x (row 1 the Chosen, row 2 the Shadow Guard); a 1x strip against the laser commando and a trooper at in-game scale; walk frames 0/1/2 at 2x
+            const float CHOSEN_ART_SCALE = 1.12f, SHADOW_ART_SCALE = 1.0f;   // their artScale once wired: the Chosen the commando's footprint, the Shadow Guard a trooper's
+            Sprite ch[2][2][3], sh[2][2][3], cmd[2];   // [0 Cyber, 1 Clanker][team slot][walk frame]; the sprites carry their in-game dscale
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 2; p++) for (int fr = 0; fr < 3; fr++) {
+                Canvas cc(64, 64), sc(64, 64);
+                artChosenBody(cc, PLAYER_COLOR[p], f == 0, fr);
+                artShadowBody(sc, PLAYER_COLOR[p], f == 0, fr);
+                ch[f][p][fr] = g.fromCanvasSmooth(cc, 32, 32); ch[f][p][fr].dscale = UNIT_SCALE * CHOSEN_ART_SCALE;
+                sh[f][p][fr] = g.fromCanvasSmooth(sc, 32, 32); sh[f][p][fr].dscale = UNIT_SCALE * SHADOW_ART_SCALE;
+            }
+            for (int f = 0; f < 2; f++) {
+                Canvas kc(64, 64); artCommandoBody(kc, PLAYER_COLOR[0], f == 0, 0);
+                cmd[f] = g.fromCanvasSmooth(kc, 32, 32); cmd[f].dscale = UNIT_SCALE * 1.12f;   // the laser commando's artScale
+            }
+            for (int f = 0; f < 2; f++) for (int p = 0; p < 2; p++) {   // rows 1 and 2 at 4.5x: Cyber then Clanker, team colour 0 then 1
+                float x = 150 + (f * 2 + p) * 240;
+                g.draw(ch[f][p][0], x, 110, 0, 4.5f);
+                g.draw(sh[f][p][0], x, 322, 0, 4.5f);
+            }
+            for (int f = 0; f < 2; f++) {   // row 3 at 1x (in-game size): Cyber on the left, Clanker on the right; Chosen, Shadow Guard, laser commando, trooper
+                float x0 = 80 + f * 500, y = 470;
+                g.draw(ch[f][0][0], x0, y, 0, 1.0f);
+                g.draw(sh[f][0][0], x0 + 110, y, 0, 1.0f);
+                g.draw(cmd[f], x0 + 220, y, 0, 1.0f);
+                g.draw(g.unitBody[f == 0 ? U_C_INF1 : U_K_INF1][0], x0 + 330, y, 0, 1.0f);
+            }
+            for (int u = 0; u < 4; u++) for (int fr = 0; fr < 3; fr++) {   // row 4: walk frames 0/1/2 at 2x (team 0): Chosen Cyber, Chosen Clanker, Shadow Cyber, Shadow Clanker
+                const Sprite& s = u == 0 ? ch[0][0][fr] : u == 1 ? ch[1][0][fr] : u == 2 ? sh[0][0][fr] : sh[1][0][fr];
+                g.draw(s, 50 + (u * 3 + fr) * 83, 590, 0, 2.0f);
             }
             g_game.screenshot(sheetPath);
             printf("wrote %s\n", sheetPath);
@@ -3095,6 +3159,11 @@ int main(int argc, char** argv) {
     }
     if (benchFrames > 0) {
         // a busy scene: four AI armies eight minutes in, the camera sweeping across the battle, every frame fully rendered (software renderer: no GPU help)
+        const bool onIsland = !g_gfx.softwareRenderer || getenv("ONEHOUR_BENCHISLAND");   // (--gpubench: four armies, everyone against everyone, the camera on the fighting)
+        if (onIsland) {
+            g_game.menu.enemyFaction[0] = 1; g_game.menu.enemyFaction[1] = 1; g_game.menu.enemyFaction[2] = 0; g_game.menu.enemiesAllied = false;
+            g_game.menu.enemyDiff[0] = 3; g_game.menu.enemyDiff[1] = 2; g_game.menu.enemyDiff[2] = 2;
+        }
         g_game.startGame(); g_sim.players[0].isAI = true; g_ai.init(seed);
         int crowd = getenv("ONEHOUR_BENCHCROWD") ? atoi(getenv("ONEHOUR_BENCHCROWD")) : 0;   // a massed clash instead: N infantry and tanks a side, on screen
         Vec2 crowdAt;
@@ -3111,8 +3180,9 @@ int main(int argc, char** argv) {
                 }
                 g_sim.cmdMove(army, crowdAt + Vec2(side ? -6.0f * TILE : 6.0f * TILE, 0), true);
             }
-        } else for (int t = 0; t < 9600; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
+        } else for (int t = 0, warm = getenv("ONEHOUR_BENCHMIN") ? atoi(getenv("ONEHOUR_BENCHMIN")) * 60 * SIM_HZ : 9600; t < warm; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
         std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
+        Vec2 fight = g_sim.players[0].basePos, camAt = fight;   // (--gpubench: the camera glides to the latest fighting, picked again every 2 s)
         u64 f0 = SDL_GetPerformanceFrequency(); double worst = 0, total = 0, updTotal = 0, updWorst = 0;
         double simTotal = 0, simWorst = 0;
         for (int fr = 0; fr < benchFrames; fr++) {
@@ -3134,11 +3204,17 @@ int main(int argc, char** argv) {
             float u = fr / (float)benchFrames;
             g_game.cam = Vec2(clampf(200 + u * 1500, 0, WORLD_W - SCREEN_W), clampf(300 + std::sin(u * 6.0f) * 700 + 700, 0, WORLD_H - VIEW_H));
             if (crowd > 0) g_game.cam = Vec2(clampf(crowdAt.x - SCREEN_W * 0.5f + std::sin(u * 3.0f) * 300, 0, WORLD_W - SCREEN_W), clampf(crowdAt.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
+            else if (onIsland) {
+                if (fr % 40 == 0) { float best = -1; for (auto& e : g_sim.ents) if (e.alive && e.lastDamaged > best) { best = e.lastDamaged; fight = e.pos; } }
+                camAt = camAt + (fight - camAt) * 0.08f;
+                g_game.cam = Vec2(clampf(camAt.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(camAt.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
+            }
             g_game.renderAlpha = 1; g_game.wallTime += 1.0f / 60; g_game.frameDt = 1.0f / 60;
             u64 t0 = SDL_GetPerformanceCounter();
             g_game.update(1.0f / 60);
             u64 t1 = SDL_GetPerformanceCounter();
             g_game.render();
+            if (fr == benchFrames - 1 && getenv("ONEHOUR_GPUSHOT")) g_game.screenshot(getenv("ONEHOUR_GPUSHOT"));   // (the last frame as the GPU path drew it)
             g_gfx.present();   // SDL queues draw calls until present: the frame only costs what it costs once flushed
             double ms = (SDL_GetPerformanceCounter() - t0) * 1000.0 / f0, ums = (t1 - t0) * 1000.0 / f0;
             total += ms; worst = std::max(worst, ms); updTotal += ums; updWorst = std::max(updWorst, ums);
@@ -3146,6 +3222,7 @@ int main(int argc, char** argv) {
         }
         printf("bench: %d frames, avg %.2f ms, worst %.2f ms (software renderer; of which update/sim avg %.2f ms, worst %.2f ms), particles %zu, fx %zu, entities %zu\n", benchFrames, total / benchFrames, worst, updTotal / benchFrames, updWorst, g_game.parts.size(), g_sim.fx.size(), g_sim.ents.size());
         printf("bench: simulation tick + AI avg %.2f ms, worst %.2f ms (mass move orders included)\n", simTotal / benchFrames, simWorst);
+        { long pages = 0, rss = 0; FILE* f = fopen("/proc/self/statm", "r"); if (f) { if (fscanf(f, "%ld %ld", &pages, &rss) != 2) rss = 0; fclose(f); } printf("bench: resident memory now %.0f MB\n", rss * 4096.0 / 1048576.0); }
         g_gfx.shutdown(); SDL_Quit(); return 0;
     }
     if (shot) {
@@ -3240,6 +3317,23 @@ int main(int argc, char** argv) {
                     if (after > 0) printf("town boom: %d frames after the %s, avg %.2f ms per frame (software renderer)\n", after, n.deep ? "silver warhead" : "ramp's warhead", ms / after);
                     stealthCam = g_game.cam;
                 } else if (first.valid()) { g_game.selection.clear(); g_game.selection.push_back(first); }
+            }
+            if (const char* cs = getenv("ONEHOUR_CHOSEN")) {   // ONEHOUR_CHOSEN=1: the viewed army's Chosen with its Shadow Guard at an enemy outpost; =spotted: an enemy helicopter has found it
+                const bool spotted = std::string(cs) == "spotted";   // (then the Chosen is the enemy's, and one of your helicopters hovers over it)
+                int vp = std::min(viewPlayer, g_sim.numPlayers - 1), foe = vp == 0 ? 1 : 0;
+                if (spotted) std::swap(vp, foe);
+                Faction f = g_sim.players[vp].faction, ff = g_sim.players[foe].faction;
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                Vec2 c = g_map.nearestFree(b + (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - b).norm() * 520.0f, 12);
+                Ref ch = g_sim.spawnUnit(f == F_CYBER ? U_C_CHOSEN : U_K_CHOSEN, vp, c);
+                if (!spotted) g_sim.cmdShadowCall(vp, ch);   // (its guard would shoot the helicopter down: the spotted scene shows the Chosen alone)
+                g_sim.cmdStop({ch});
+                std::vector<Ref> foes;
+                for (int k = 0; k < 4; k++) foes.push_back(g_sim.spawnUnit(firstUnitOf(ff) + (k == 0 ? 5 : 2), foe, g_map.nearestFree(c + Vec2(260.0f + k * 26.0f, -60.0f + k * 40.0f), 8)));
+                if (spotted) { Ref h = g_sim.spawnUnit(ff == F_CYBER ? U_C_HELI : U_K_AIR, foe, c + Vec2(70, -60)); g_sim.get(h)->alt = 1; g_sim.cmdStop({h}); for (Ref r : foes) g_sim.cmdStop({r}); }
+                for (int t = 0; t < 20 * 3; t++) { g_sim.step(); g_sim.events.clear(); }
+                stealthCam = Vec2(clampf(c.x - SCREEN_W / 2 + 120, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); haveStealthCam = true;
+                g_game.selection.clear(); if (!spotted) g_game.selection.push_back(ch);
             }
             if (const char* hs = getenv("ONEHOUR_HELI")) {   // ONEHOUR_HELI=N: N helicopters of the viewed army hover over its base, a few more parked at an airfield
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), ht = g_sim.players[vp].faction == F_CYBER ? (int)U_C_HELI : (int)U_K_AIR, n = std::max(1, atoi(hs));
@@ -3885,6 +3979,11 @@ int main(int argc, char** argv) {
         last = now;
         if (dt > 0.1f) dt = 0.1f;
         g_game.update(dt);
+        // a minimised (or hidden) window draws nothing at all: the match runs on, the GPU rests
+        const u32 wf = SDL_GetWindowFlags(g_gfx.win);
+        const bool hidden = (wf & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN)) != 0;
+        const bool idle = g_game.state != GS_PLAYING || g_game.menuOpen || g_game.paused || !(wf & SDL_WINDOW_INPUT_FOCUS);
+        if (hidden) { SDL_Delay(30); continue; }
         const u64 r0 = SDL_GetPerformanceCounter();
         g_game.render();
         g_gfx.present();
@@ -3896,8 +3995,9 @@ int main(int argc, char** argv) {
         }
         // Never spin faster than the display: without vsync (the software renderer, a GPU fallback, a driver or compositor that ignores it) the
         // loop would otherwise draw hundreds of frames a second, and a laptop that heats up throttles its CPU into stutter
-        const double spent = (SDL_GetPerformanceCounter() - now) / (double)freq, frame = 1.0 / std::max(60, g_gfx.refreshHz);
-        if (spent < frame - 0.0015) SDL_Delay((Uint32)((frame - spent) * 1000.0));
+        // and never faster than the frame rate setting asks (see Game::targetFps): with vsync the present then waits for the next refresh
+        const double spent = (SDL_GetPerformanceCounter() - now) / (double)freq, frame = 1.0 / std::max(20, g_game.targetFps(g_gfx.refreshHz, idle));
+        if (spent < frame - 0.0015) SDL_Delay((Uint32)((frame - spent) * 1000.0 - 1.0));
     }
     leaveMatchLearning();
     g_audio.shutdown();

@@ -529,9 +529,8 @@ Sprite shrinkSprite(Gfx& g, const Sprite& src, float maxDim) {
     SDL_Texture* cur = src.tex;
     int cw = src.w, ch = src.h;
     bool own = false;
-    SDL_SetTextureScaleMode(cur, SDL_ScaleModeLinear);
-    SDL_SetTextureColorMod(cur, 255, 255, 255);
-    SDL_SetTextureAlphaMod(cur, 255);
+    if (!g.useAtlas) SDL_SetTextureScaleMode(cur, SDL_ScaleModeLinear);   // (an atlas page is bilinear already)
+    g.bind(src, rgb(255, 255, 255), 255);
     do {
         int nw = cw > 2 * W ? std::max(W, (cw + 1) / 2) : W;
         int nh = ch > 2 * H ? std::max(H, (ch + 1) / 2) : H;
@@ -543,11 +542,18 @@ Sprite shrinkSprite(Gfx& g, const Sprite& src, float maxDim) {
         SDL_SetRenderDrawColor(g.ren, 0, 0, 0, 0);
         SDL_RenderClear(g.ren);
         SDL_FRect dst = { 0, 0, (float)nw, (float)nh };
-        SDL_RenderCopyF(g.ren, cur, nullptr, &dst);
+        SDL_RenderCopyF(g.ren, cur, own ? nullptr : src.srcRect(), &dst);
         SDL_SetRenderTarget(g.ren, nullptr);
         if (own) SDL_DestroyTexture(cur);
         cur = t; own = true; cw = nw; ch = nh;
     } while (cw != W || ch != H);
+    if (g.useAtlas) {   // read the thumbnail back into the atlas: the build menu's pictures then draw in one batch with the rest of the HUD
+        Canvas c(W, H);
+        SDL_SetRenderTarget(g.ren, cur);
+        bool ok = SDL_RenderReadPixels(g.ren, nullptr, SDL_PIXELFORMAT_ABGR8888, c.px.data(), W * 4) == 0;
+        SDL_SetRenderTarget(g.ren, nullptr);
+        if (ok) { SDL_DestroyTexture(cur); out = g.fromCanvasSmooth(c, W * 0.5f, H * 0.5f); return out; }
+    }
     out.tex = cur; out.w = W; out.h = H;
     return out;
 }

@@ -13,7 +13,8 @@ enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_ST
        BK_BUNKERPARA,   // a bunker's Para Backup call
        BK_BUNKERRAIN,   // a bunker's Rain Nukes
        BK_TANKDROP,     // a bunker's Tank Drop
-       BK_BUNKERALL };  // Upgrade All Bunkers (id 1: cancel what it queued)
+       BK_BUNKERALL,    // Upgrade All Bunkers (id 1: cancel what it queued)
+       BK_SHADOWCALL }; // The Chosen calls its Shadow Guard
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -43,6 +44,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_BUNKERRAIN: return "J";
     case BK_TANKDROP: return "D";
     case BK_BUNKERALL: return "A";
+    case BK_SHADOWCALL: return "C";
     }
     return nullptr;
 }
@@ -57,6 +59,7 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_POWER: return f == F_CYBER ? ICO_EMP : ICO_SHELLSTORM;
     case BK_SCAN: return f == F_CYBER ? ICO_SCAN_ORBITAL : ICO_SCAN_RECON;
     case BK_DROP: return ICO_PARADROP;
+    case BK_SHADOWCALL: return ICO_PARADROP;
     case BK_AID: return ICO_AID;
     case BK_AIRSTRIKE: return ICO_AIRSTRIKE;
     case BK_FLEET: return ICO_FLEET;
@@ -381,10 +384,11 @@ void Game::issueRightClick(Vec2 w) {
         g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
-    if (t && t->isBuilding() && (t->constructed || t->district >= 0) && ((Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD) || g_sim.allyTakeable(g_sim.humanPlayer, *t)) && selectionHasRole(UR_SPY)) {
-        // nobody's island launcher or Bastion Wall, or an ally's structure: the infiltrators go and take it (swimming out to an island), everybody else goes along
+    bool chosenSel = false; for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o->isUnit() && chosenType(o->type)) chosenSel = true; }
+    if (t && t->isBuilding() && (t->constructed || t->district >= 0) && ((Sim::neutralTakeable(*t) && t->bt().role != BR_STRONGHOLD) || g_sim.allyTakeable(g_sim.humanPlayer, *t)) && (selectionHasRole(UR_SPY) || chosenSel)) {
+        // nobody's island launcher or Bastion Wall, or an ally's structure: the infiltrators (and The Chosen) go and take it (swimming out to an island), everybody else goes along
         std::vector<Ref> spies, rest;
-        for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && o->ut().role == UR_SPY ? spies : rest).push_back(r); }
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && (o->ut().role == UR_SPY || chosenType(o->type)) ? spies : rest).push_back(r); }
         g_sim.cmdCapture(spies, g_sim.refOf(*t));
         if (!rest.empty()) g_sim.cmdMove(rest, t->pos, false);
         g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
@@ -528,6 +532,16 @@ void Game::buildButtonsRaw() {
             const UnitType& ut = UNITS[u];
             if (ut.faction != pl.faction || ut.builtBy != role) continue;
             bool ok = g_sim.unitAvailable(g_sim.humanPlayer, u);
+            if (ok && chosenType(u) && g_sim.chosenInProduction(g_sim.humanPlayer)) {   // one at a time: it says why it is greyed out
+                snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s  (You already have The Chosen, in the field or in training: only one at a time)", ut.name, ut.cost, ut.hotkey, ut.desc);
+                add(BK_TRAIN, u, false, ut.name, tip);
+                continue;
+            }
+            if (!ok && chosenType(u) && g_sim.time < CHOSEN_OPEN && g_sim.prereqMet(g_sim.humanPlayer, ut.requires_)) {
+                snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s  (Ready to train %d minutes into the match: %d s from now)", ut.name, ut.cost, ut.hotkey, ut.desc, (int)(CHOSEN_OPEN / 60), (int)std::ceil(CHOSEN_OPEN - g_sim.time));
+                add(BK_TRAIN, u, false, ut.name, tip);
+                continue;
+            }
             const char* need = ok ? "" : (ut.program && !pl.advTech ? "  Requires the Advanced Program (tech structure)" : (ut.requires_ >= 0 ? "  Requires " : ""));
             snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", ut.name, ut.cost, ut.hotkey, ut.desc, need, (!ok && !(ut.program && !pl.advTech) && ut.requires_ >= 0) ? BUILDS[ut.requires_].name : "");
             add(BK_TRAIN, u, ok, ut.name, tip);
@@ -681,6 +695,15 @@ void Game::buildButtonsRaw() {
         add(BK_UNLOAD, 0, aboard, "Unload", "Unload  [U]  The jeep stops and everybody climbs out. Load it by right-clicking it with soldiers selected: seven seats, and the soldiers shoot from inside");
     }
     bool haul = selectionHasRole(UR_HARVESTER);
+    for (auto r : selection) {   // The Chosen: its Shadow Guard call (the button keeps its place; it greys out while the call recharges)
+        Entity* e = g_sim.get(r);
+        if (!e || !e->isUnit() || !chosenType(e->type)) continue;
+        float wait = std::max(0.0f, pl.shadowReady - g_sim.time);
+        if (wait > 0) snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters see them. Ready in %d s", CHOSEN_SQUAD, (int)std::ceil(wait));
+        else snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen right now; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters see them (once every %d s)", CHOSEN_SQUAD, (int)CHOSEN_CALL_COOLDOWN);
+        add(BK_SHADOWCALL, 0, wait <= 0, "Call Shadow Guard", tip);
+        break;
+    }
     if (combat) add(BK_ATTACKMOVE, 0, true, "Attack Move", "Attack-move: engage everything on the way  [A]");
     if (combat) add(BK_FORCE, 0, true, "Force Fire", "Force fire: click any unit or structure, your own or an ally's included, to attack it on purpose (or hold Ctrl and right-click). Allies never shoot back  [F]");
     if (combat || haul) add(BK_AREA, 0, true, combat && haul ? "Guard/Gather" : (haul ? "Gather Area" : "Guard Area"),
@@ -784,6 +807,11 @@ void Game::cmdSelection(int kind, int id) {
         break;
     }
     case BK_DROPOFF: cancelModes(); dropoffMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_SHADOWCALL: {
+        Ref c = NOREF; for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && chosenType(e->type)) { c = r; break; } }
+        g_audio.play(g_sim.cmdShadowCall(g_sim.humanPlayer, c) ? SND_CLICK : SND_CANT, Vec2(), true);
+        break;
+    }
     case BK_CANCEL: placingType = -1; break;
     }
 }
@@ -1070,7 +1098,7 @@ void Game::gameEvent(const SDL_Event& e) {
 void Game::render() {
     switch (state) {
     case GS_MENU: renderMenu(); break;
-    case GS_PLAYING: renderWorld(); renderHud(); if (menuOpen) renderPauseMenu(); break;
+    case GS_PLAYING: { static const bool noHud = getenv("ONEHOUR_SKIPLAYER") && (atoi(getenv("ONEHOUR_SKIPLAYER")) & 256); renderWorld(); if (!noHud) renderHud(); if (menuOpen) renderPauseMenu(); break; }
     case GS_GAMEOVER: renderWorld(); renderHud(); renderGameOver(); break;
     }
 }
@@ -1175,10 +1203,28 @@ void Game::drawShroud() {
     }
     int tx0 = std::max(0, tileOf(cam.x)), ty0 = std::max(0, tileOf(cam.y));
     int tx1 = std::min(MAP_W - 1, tileOf(cam.x + SCREEN_W)), ty1 = std::min(MAP_H - 1, tileOf(cam.y + VIEW_H));
-    const int SS = Gfx::SHROUD_SS;
-    SDL_Rect src = { tx0 * SS, ty0 * SS, (tx1 - tx0 + 1) * SS, (ty1 - ty0 + 1) * SS };
-    SDL_FRect dst = { tx0 * TILE - cam.x, ty0 * TILE - cam.y, (float)(tx1 - tx0 + 1) * TILE, (float)(ty1 - ty0 + 1) * TILE };
-    g.copyScaled(g.shroudTex, &src, dst);
+    const int SS = Gfx::SHROUD_SS, B = Gfx::SHROUD_BLK, BW = (MAP_W + B - 1) / B;
+    if (g.softwareRenderer || g.shroudClear.empty()) {
+        SDL_Rect src = { tx0 * SS, ty0 * SS, (tx1 - tx0 + 1) * SS, (ty1 - ty0 + 1) * SS };
+        SDL_FRect dst = { tx0 * TILE - cam.x, ty0 * TILE - cam.y, (float)(tx1 - tx0 + 1) * TILE, (float)(ty1 - ty0 + 1) * TILE };
+        g.copyScaled(g.shroudTex, &src, dst);
+        return;
+    }
+    // Only the blocks with fog in them: ground in sight is clear, and drawing a transparent veil over it was a full screen of blending a frame.
+    // Each row of blocks goes in runs (one copy per run of foggy blocks; the copies share a texture, so they are one batch anyway).
+    for (int by = ty0 / B; by <= ty1 / B; by++) {
+        const int ry0 = std::max(ty0, by * B), ry1 = std::min(ty1, by * B + B - 1);
+        for (int bx = tx0 / B; bx <= tx1 / B;) {
+            if (g.shroudClear[(size_t)by * BW + bx]) { bx++; continue; }
+            int run = bx;
+            while (run + 1 <= tx1 / B && !g.shroudClear[(size_t)by * BW + run + 1]) run++;
+            const int rx0 = std::max(tx0, bx * B), rx1 = std::min(tx1, run * B + B - 1);
+            SDL_Rect src = { rx0 * SS, ry0 * SS, (rx1 - rx0 + 1) * SS, (ry1 - ry0 + 1) * SS };
+            SDL_FRect dst = { rx0 * TILE - cam.x, ry0 * TILE - cam.y, (float)(rx1 - rx0 + 1) * TILE, (float)(ry1 - ry0 + 1) * TILE };
+            g.copyScaled(g.shroudTex, &src, dst);
+            bx = run + 1;
+        }
+    }
 }
 
 
@@ -1560,9 +1606,9 @@ void Game::drawEntity(Entity& e) {
             int rows = (int)(s.h * prog);
             if (rows > 0) {
                 float d = s.dscale;
-                SDL_Rect src = { 0, s.h - rows, s.w, rows };
+                SDL_Rect src = s.sub(0, s.h - rows, s.w, rows);
                 SDL_FRect dst = { p.x - s.ox * d, p.y - s.oy * d + (s.h - rows) * d, s.w * d, rows * d };
-                SDL_SetTextureColorMod(s.tex, 255, 255, 255); SDL_SetTextureAlphaMod(s.tex, 255);
+                g.bind(s, rgb(255, 255, 255), 255);
                 g.copyScaled(s.tex, &src, dst);
                 Color wl = hudAccent(bt.faction);
                 g.fill((int)(fx - 2), (int)dst.y, (int)(fw + 4), 1, rgb(wl.r, wl.g, wl.b, 200));
@@ -1737,14 +1783,23 @@ void Game::drawEntity(Entity& e) {
         } else {
             g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
             if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
+            if (owner >= 0 && fallK <= 0 && detail >= 1) {   // a faint ring of the army's colour on the ground: who is who in a melee at a glance (warmer for an enemy)
+                float rr = e.radius() * 2.5f + 4.0f;
+                bool foe = g_sim.enemies(g_sim.humanPlayer, owner);
+                g.drawSized(g.teamRing, p.x, p.y + 2, rr, rr * 0.62f, 0, playerColor(owner), (u8)((foe ? 92 : 64) * clampf(e.fade, 0, 1) * (Sim::stealthOf(e) ? 0.6f : 1.0f)));
+            }
         }
         p.y -= lift;
     }
     if (Sim::stealthOf(e) && e.owner >= 0 && g_sim.players[e.owner].team != g_sim.players[g_sim.humanPlayer].team) {   // a stealthy enemy one of your detectors has found: marked while it is spotted
         float pulse = 0.65f + 0.35f * std::sin(wallTime * 7.0f + (float)e.gen);
         float gy = p.y + (air ? 14 * alt : 0) + 2;
-        g.circle(p.x, gy, e.radius() + 6 + 2 * pulse, rgb(110, 230, 255), 18);
-        g.text((int)p.x - 12, (int)(p.y - e.radius() - 20), "SPOTTED", rgb(110, 230, 255));
+        const bool ch = Sim::stealthOf(e) == ST_CHOSEN;   // The Chosen and its guard: violet, and the Chosen named (every gun nearby can now see it)
+        const Color mc = ch ? rgb(214, 160, 255) : rgb(110, 230, 255);
+        g.circle(p.x, gy, e.radius() + 6 + 2 * pulse, mc, 18);
+        if (chosenType(e.type)) g.circle(p.x, gy, ut.radius + 11 + 3 * pulse, Color{ mc.r, mc.g, mc.b, 150 }, 24);
+        const char* lab = chosenType(e.type) ? "THE CHOSEN" : "SPOTTED";
+        g.text((int)p.x - g.textW(lab) / 2, (int)(p.y - e.radius() - 20), lab, mc);
     }
     if (selected && ut.detect > 0 && ut.role == UR_SCOUT) {   // a selected spy drone shows how far it finds hidden snipers and bunkers
         float gy = p.y + (air ? 14 * alt : 0);
@@ -1974,6 +2029,7 @@ struct RenderProf {
 
 void Game::renderWorld() {
     RenderProf rp;
+    static const int skipL = getenv("ONEHOUR_SKIPLAYER") ? atoi(getenv("ONEHOUR_SKIPLAYER")) : 0;   // (profiling: leave layers out to see what they cost)
     Gfx& g = g_gfx;
     g.refreshTerrain();   // trees and rocks cleared for new structures since the last frame
     updateWeather();
@@ -1996,11 +2052,11 @@ void Game::renderWorld() {
     {
         int sx0 = clampi((int)cam.x, 0, WORLD_W - 1), sy0 = clampi((int)cam.y, 0, WORLD_H - 1);
         int sw = std::min(SCREEN_W + 1, WORLD_W - sx0), sh = std::min(VIEW_H + 1, WORLD_H - sy0);
-        g.drawWorld(sx0, sy0, sw, sh, sx0 - (int)cam.x, sy0 - (int)cam.y);
+        if (!(skipL & 1)) g.drawWorld(sx0, sy0, sw, sh, sx0 - (int)cam.x, sy0 - (int)cam.y);
     } rp.mark("terrain");
     // water: seamless animated caustics over open water. Interior water is pre-grouped by the map into aligned 4x4 blocks
     // (one 128 px draw each) plus the leftover shore-side tiles, so a lake filling the screen costs dozens of draws, not hundreds.
-    {
+    if (!(skipL & 2)) {
         int fr = ((int)(wallTime * 3.0f)) & 3;
         const Sprite& w = g.waterFx[fr];
         SDL_SetTextureColorMod(w.tex, 255, 255, 255);
@@ -2050,7 +2106,8 @@ void Game::renderWorld() {
         }
     }
     drawSeaLife(); rp.mark("water+sealife");
-    drawGroundFx(); rp.mark("groundfx");
+    if (!(skipL & 4)) { g.beginAdd(); drawGroundFx(); g.flushAdd(); }   // (the embers in the ruins and the fires on wrecks: one additive batch)
+    rp.mark("groundfx");
     // placement ghost
     if (placingType >= 0 && bulkDrag) {   // a shift-dragged line: every footprint of it, green where it goes up, red where it cannot (or the money runs out)
         Vec2 w = screenToWorld(mouseX, mouseY);
@@ -2240,6 +2297,7 @@ void Game::renderWorld() {
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
+    g.beginAdd();   // (the lights, flashes and glows of the structures and units: drawn together after them, see Gfx::flushAdd)
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
@@ -2250,7 +2308,8 @@ void Game::renderWorld() {
         else ground.push_back(&e);
     }
     std::sort(ground.begin(), ground.end(), [](Entity* a, Entity* b) { return a->pos.y < b->pos.y; });
-    for (auto* e : ground) drawEntity(*e);
+    if (!(skipL & 8)) for (auto* e : ground) drawEntity(*e);
+    g.flushAdd();
     rp.mark("entities");
     // flags: every finished structure flies its owner's flag from a mast on the roof edge (over units, under aircraft)
     for (auto& e : g_sim.ents) {
@@ -2267,9 +2326,10 @@ void Game::renderWorld() {
         g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
     }
     drawClouds(); rp.mark("flags+clouds");
-    drawWeatherTint();   // the light of the hour over the ground world; what follows (fire, tracers, aircraft) is lit on its own
+    if (!(skipL & 16)) drawWeatherTint();   // the light of the hour over the ground world; what follows (fire, tracers, aircraft) is lit on its own
     rp.mark("tint");
     // projectiles: hot streaks for bullets and rockets, a lobbed shell with a ground shadow
+    g.beginAdd();   // (their streaks and glows, the flashes of the effects and the sparks: one additive batch after the smoke and fire)
     for (auto& p : g_sim.projs) {
         const Weapon& w = WEAPONS[p.weapon];
         Vec2 s = worldToScreen(p.prevPos + (p.pos - p.prevPos) * renderAlpha);
@@ -2311,18 +2371,27 @@ void Game::renderWorld() {
             g.glowAdd(s.x, s.y, 4.5f, Color{w.color.r, w.color.g, w.color.b, 110});
         }
     }
-    drawParticles(0); rp.mark("projs+parts0");
-    drawFx(); rp.mark("fx");
-    drawParticles(1); rp.mark("parts1");
+    smokeFill = 0;
+    if (!(skipL & 32)) { drawParticles(0); rp.mark("projs+parts0"); drawFx(); rp.mark("fx"); drawParticles(1); rp.mark("parts1"); }
+    g.flushAdd();
+    {   // the smoke budget for the next frame (see smokeCut): about one and a half screens of smoke, the faint puffs go past it
+        static const float SMOKE_BUDGET = getenv("ONEHOUR_SMOKEBUDGET") ? (float)atof(getenv("ONEHOUR_SMOKEBUDGET")) : 1.5f;
+        const double budget = SMOKE_BUDGET * SCREEN_W * VIEW_H;
+        if (smokeFill > budget) smokeCut = std::min(110.0f, smokeCut + 5.0f + 20.0f * (float)std::min(1.0, smokeFill / budget - 1.0));
+        else if (smokeFill < budget * 0.7) smokeCut = std::max(0.0f, smokeCut - 2.0f);
+    }
     drawNukes(); rp.mark("nukes");
+    g.beginAdd();
     for (auto* e : air) drawEntity(*e);
+    g.flushAdd();
     rp.mark("air");
     drawAirlifts(); rp.mark("airlifts");
-    drawShroud(); rp.mark("shroud");
+    if (!(skipL & 64)) drawShroud();
+    rp.mark("shroud");
     drawDistrictLabels();
     drawAidDrops();
     drawRain(); rp.mark("labels+aid+rain");
-    if (!g.softwareRenderer && g.vignette.tex) g.drawRect(g.vignette, 0, 0, SCREEN_W, VIEW_H);   // soft dark corners frame the battlefield (one draw, GPU only)
+    // (the soft dark corners that frame the battlefield are part of the light-of-the-hour multiply now: see drawWeatherTint)
     // drag box
     if (dragging) {
         Vec2 a = worldToScreen(dragStart), b = worldToScreen(dragNow);
@@ -2567,9 +2636,15 @@ void Game::renderHud() {
                     g.text(INFO_X + 86, hy + 70, buf, rgb(240, 205, 90));
                 }
                 if (ut.role == UR_SPY) g.text(INFO_X + 86, hy + 70, "Right-click an enemy or neutral structure to take it (swims to islands)", rgb(240, 205, 90));
+                if (chosenType(e->type)) {
+                    float wait = std::max(0.0f, g_sim.players[e->owner].shadowReady - g_sim.time);
+                    if (wait > 0) snprintf(buf, sizeof buf, "Takes structures at once, turns units in %.1f tiles   Shadow Guard in %d s", WEAPONS[W_CONVERT].range, (int)std::ceil(wait));
+                    else snprintf(buf, sizeof buf, "Takes structures at once, turns units in %.1f tiles   Shadow Guard READY [C]", WEAPONS[W_CONVERT].range);
+                    g.text(INFO_X + 86, hy + 70, buf, rgb(226, 206, 255));
+                }
                 if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
-                else if (ut.kind == UK_INF && ut.weapon >= 0) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
-                if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : "STEALTH: only enemy spy drones see it", rgb(150, 220, 255));
+                else if (ut.kind == UK_INF && ut.weapon >= 0 && !chosenType(e->type)) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
+                if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : (ut.stealth == ST_CHOSEN ? "STEALTH: helicopters only" : "STEALTH: only enemy spy drones see it"), ut.stealth == ST_CHOSEN ? rgb(226, 206, 255) : rgb(150, 220, 255));
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);
@@ -3060,15 +3135,29 @@ void Game::closePauseMenu() {
 }
 
 // The pause menu's rows: the fixed ones, and after "Controls help" one row per computer army whose difficulty can be raised (never lowered) mid-match.
-enum PmRow { PMR_RESUME = 0, PMR_SPEED, PMR_SOUND, PMR_HELP, PMR_ARMY, PMR_RESTART, PMR_SURRENDER, PMR_MENU, PMR_QUIT };
+enum PmRow { PMR_RESUME = 0, PMR_SPEED, PMR_SOUND, PMR_FPS, PMR_HELP, PMR_ARMY, PMR_RESTART, PMR_SURRENDER, PMR_MENU, PMR_QUIT };
 struct PmItem { PmRow kind; int player; };
 static std::vector<PmItem> pmRows() {
-    std::vector<PmItem> r = { {PMR_RESUME, -1}, {PMR_SPEED, -1}, {PMR_SOUND, -1}, {PMR_HELP, -1} };
+    std::vector<PmItem> r = { {PMR_RESUME, -1}, {PMR_SPEED, -1}, {PMR_SOUND, -1}, {PMR_FPS, -1}, {PMR_HELP, -1} };
     for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.players[p].isAI && g_sim.players[p].alive) r.push_back({PMR_ARMY, p});
     for (PmRow k : {PMR_RESTART, PMR_SURRENDER, PMR_MENU, PMR_QUIT}) r.push_back({k, -1});
     return r;
 }
-static const char* PM_LABEL[PMR_QUIT + 1] = { "Resume", "Game speed", "Sound", "Controls help", "", "Restart match", "Surrender (end game)", "Quit to main menu", "Quit to desktop" };
+static const char* PM_LABEL[PMR_QUIT + 1] = { "Resume", "Game speed", "Sound", "Frame rate", "Controls help", "", "Restart match", "Surrender (end game)", "Quit to main menu", "Quit to desktop" };
+// Frame rate: how often a frame is drawn. Balanced (the default) draws as often as the display shows up to 75 Hz, and every second refresh
+// on a faster one (72 on 144 Hz: an even pace, half the GPU work of drawing all 144); Full draws every refresh; Power saver 30. Whatever the
+// setting, the menus, the pause menu, the end screen and a window in the background draw 30 a second, and a minimised window none.
+int Game::targetFps(int refreshHz, bool idle) const {
+    int full = std::max(30, refreshHz);
+    int fps = fpsMode == 1 ? full : (fpsMode == 2 ? 30 : (full <= 75 ? full : std::max(60, full / 2)));
+    return idle ? std::min(fps, 30) : fps;
+}
+const char* Game::fpsLabel(int refreshHz) const {
+    static char buf[48];
+    snprintf(buf, sizeof buf, "%s (%d)", fpsMode == 1 ? "Full" : (fpsMode == 2 ? "Power saver" : "Balanced"), targetFps(refreshHz, false));
+    return buf;
+}
+
 static int pmY0(int rows) { return std::max(70, SCREEN_H / 2 - 178 - std::max(0, rows - 8) * 17); }
 static const int PM_W = 440, PM_RH = 34;
 
@@ -3085,6 +3174,7 @@ void Game::pauseMenuActivate(int row) {
     case PMR_RESUME: closePauseMenu(); break;
     case PMR_SPEED: stepSpeed(1); break;
     case PMR_SOUND: g_audio.setMuted(!g_audio.isMuted()); break;
+    case PMR_FPS: fpsMode = (fpsMode + 1) % 3; g_audio.play(SND_CLICK, Vec2(), true); break;
     case PMR_HELP: closePauseMenu(); showHelp = true; break;
     case PMR_ARMY:
         if (g_ai.raiseDifficulty(it.player)) {
@@ -3118,8 +3208,8 @@ void Game::pauseMenuEvent(const SDL_Event& e) {
         if (k == SDLK_ESCAPE) { if (menuConfirm >= 0) menuConfirm = -1; else closePauseMenu(); return; }
         if (k == SDLK_UP) { menuCursor = (menuCursor + N - 1) % N; menuConfirm = -1; }
         else if (k == SDLK_DOWN) { menuCursor = (menuCursor + 1) % N; menuConfirm = -1; }
-        else if (k == SDLK_LEFT) { if (kind == PMR_SPEED) stepSpeed(-1); else if (kind == PMR_SOUND) g_audio.setMuted(!g_audio.isMuted()); else if (kind == PMR_ARMY) g_audio.play(SND_CANT, Vec2(), true); }   // (a difficulty never goes down)
-        else if (k == SDLK_RIGHT) { if (kind == PMR_SPEED) stepSpeed(1); else if (kind == PMR_SOUND) g_audio.setMuted(!g_audio.isMuted()); else if (kind == PMR_ARMY) pauseMenuActivate(menuCursor); }
+        else if (k == SDLK_LEFT) { if (kind == PMR_SPEED) stepSpeed(-1); else if (kind == PMR_SOUND) g_audio.setMuted(!g_audio.isMuted()); else if (kind == PMR_FPS) fpsMode = (fpsMode + 2) % 3; else if (kind == PMR_ARMY) g_audio.play(SND_CANT, Vec2(), true); }   // (a difficulty never goes down)
+        else if (k == SDLK_RIGHT) { if (kind == PMR_SPEED) stepSpeed(1); else if (kind == PMR_SOUND) g_audio.setMuted(!g_audio.isMuted()); else if (kind == PMR_FPS) fpsMode = (fpsMode + 1) % 3; else if (kind == PMR_ARMY) pauseMenuActivate(menuCursor); }
         else if (k == SDLK_MINUS || k == SDLK_KP_MINUS) stepSpeed(-1);
         else if (k == SDLK_EQUALS || k == SDLK_PLUS || k == SDLK_KP_PLUS) stepSpeed(1);
         else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
@@ -3186,6 +3276,7 @@ void Game::renderPauseMenu() {
         if (kind == PMR_RESUME) g.text(x0 + PM_W - 12 - g.textW("Esc"), y + 9, "Esc", hudDim());
         if (kind == PMR_SOUND) g.text(x0 + PM_W - 12 - g.textW(g_audio.isMuted() ? "Off" : "On"), y + 9, g_audio.isMuted() ? "Off" : "On", g_audio.isMuted() ? rgb(255, 150, 120) : accent);
         if (kind == PMR_HELP) g.text(x0 + PM_W - 12 - g.textW("F1"), y + 9, "F1", hudDim());
+        if (kind == PMR_FPS) { const char* fl = fpsLabel(g_gfx.refreshHz); g.text(x0 + PM_W - 12 - g.textW(fl), y + 9, fl, fpsMode == 2 ? rgb(150, 220, 150) : accent); }
         if (kind == PMR_SPEED) {
             int sx = x0 + 190, sw = PM_W - 200, ty = y + 13;
             g.fill(sx, ty, sw, 3, shade(base, 0.5f));

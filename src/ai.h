@@ -44,6 +44,15 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
                  | FEAT_PRESS | FEAT_MEASURED | FEAT_MEDEVAC | FEAT_REASSESS | FEAT_ADAPT | FEAT_DOCPICK
                  | FEAT_TUNED | FEAT_PUNISH | FEAT_PROFILE };   // what ships
 
+// The second set of commander features (the first set is full), each switchable for --evalai (ONEHOUR_BASEMASK2 / ONEHOUR_NEWMASK2)
+enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a tech structure stands, sent on a war of its own - the enemy's production taken
+                                  // (and sold off, far from home), its armies turned, the Shadow Guard called in where it hurts - and pulled out of a helicopter's eye
+               F2_HELIHUNT = 2,   // helicopters against an enemy Chosen: a watch over the base once one could exist, a hunt where the unseen struck
+               F2_GUILE = 4,      // the waves are harder to read: a fast detachment feints at the enemy's economy as the main wave sets off (a random pace
+                                  // for the first waves was tried too: it lost 41-50 to the trained timing, so the timing stays as trained)
+               F2_ALL = 7,
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_GUILE };
+
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
 // care for the towns round the lake and for infiltrators, and how they treat a beaten enemy.
@@ -171,6 +180,22 @@ struct AiPlayer {
     void announce(const char* what, Vec2 at);   // a computer ally tells the human teammate what it is doing
 
     bool on(int f) const { return pro && (feat & f) != 0; }
+    int feat2 = F2_DEFAULT;         // the second set (AiFeat2)
+    bool on2(int f) const { return pro && (feat2 & f) != 0; }
+    // ---- The Chosen (ai_chosen.cpp)
+    Ref chosenGoal;                 // the structure or the spot it is after
+    Vec2 chosenGoalPos; float chosenGoalAt = -100, chosenFleeUntil = -100, nextChosenLook = 0, nextShadowOrder = 0, nextHeliOrder = 0, nextSellLook = 0;
+    Ref chosenBadGoal; float chosenBadAt = -1000;   // a goal it could not reach (walled in, out on the water): left alone for a while
+    std::vector<Ref> shadows;       // its Shadow Guard (led apart from the waves)
+    std::vector<Ref> feint;         // F2_GUILE: the detachment feinting at the enemy's economy, and until when
+    float feintUntil = -100;
+    int chosenSold = 0, feints = 0, heliHunts = 0;   // (statistics)
+    int chosenBought = 0; bool chosenAlive = false; float chosenLostAt = -1000;   // Chosen trained so far, and when the last one fell
+    void chosenOps(Ref chosen, Entity* threat);
+    void shadowOps(Ref chosen, Entity* threat, const std::vector<Ref>& shadowNow);
+    void heliHunt(const std::vector<Ref>& aircraft, const std::vector<Entity*>& airfields, int reserve, bool hunting);
+    void sellTaken();               // structures the Chosen took deep in enemy ground are sold off (the enemy loses them, the money is ours)
+    bool launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget);
     void init(int p, u64 seed);
     void endWave(float remainingValue);
     void learnOutcomes();
@@ -201,6 +226,7 @@ struct AiManager {
     bool proEnabled[MAX_PLAYERS] = { true, true, true, true };
     Brain* brainOverride[MAX_PLAYERS] = {};   // (--evalai: the baseline side plays with its own brain)
     int featMask[MAX_PLAYERS] = { FEAT_DEFAULT, FEAT_DEFAULT, FEAT_DEFAULT, FEAT_DEFAULT };
+    int featMask2[MAX_PLAYERS] = { F2_DEFAULT, F2_DEFAULT, F2_DEFAULT, F2_DEFAULT, F2_DEFAULT };
     void init(u64 seed);
     void update();
     void finish(int winnerTeam);        // the match is over: every commander's doctrine learns whether it won

@@ -1351,3 +1351,6 @@ void terrainOverview(const Canvas& world, Canvas& out) {
         out.px[y * out.w + x] = Canvas::pack(Color{(u8)clampf(r / 9.0f, 0, 255), (u8)clampf(g / 9.0f, 0, 255), (u8)clampf(b / 9.0f, 0, 255), 255});
     }
 }
+
+// (the bake's row splitter for the rest of the renderer: see terrain.h)
+void bakeRows(int rows, const std::function<void(int, int)>& f) { parallelRows(rows, f); }

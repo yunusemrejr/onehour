@@ -175,6 +175,8 @@ struct Entity {
     int visKey = -1;                  // the tile and owner its sight was last written from (explored ground is never forgotten: unmoved, it is skipped)
     int district = -1;                // a block of one of the civilian areas round the lake (index into Sim::districts), -1 for anything else
     int riot = -1;                    // a rioter: the id of the crowd it marches with (see Sim::riots)
+    int takenFrom = -1;               // a structure an infiltrator or The Chosen took: the army it was taken from (-1: never taken)
+    bool takenByChosen = false;       // ... and whether The Chosen took it
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -252,6 +254,10 @@ struct Player {
     int mined = 0;                // income from Oil Wells / Bitcoin Datacenters
     int unitsBuilt = 0, unitsLost = 0, unitsKilled = 0, structuresLost = 0, structuresKilled = 0, harvested = 0;
     int islandLaunches = 0, bomberCalls = 0, launchersTaken = 0;   // the October update's strategic assets used (self-play reports)
+    float shadowReady = 0;      // sim time the Chosen can call its Shadow Guard again
+    float chosenAlarmT = -100; Vec2 chosenAlarmAt;   // the last time (and place) an unseen Chosen or Shadow Guard hurt, turned or took something of ours
+    void noteChosen(Vec2 at, float t) { chosenAlarmT = t; chosenAlarmAt = at; }
+    int converted = 0, convertedLost = 0, chosenTaken = 0, shadowCalls = 0;   // units its Chosen turned / it lost that way, structures the Chosen took, calls made
     float valueDealt[U_COUNT] = {};   // enemy value destroyed by each of our unit types (AI adapts composition to this)
     float spentOn[U_COUNT] = {};
     std::vector<UnitOutcome> unitOutcomes;   // bounded completed trials, drained by the commander
@@ -416,8 +422,16 @@ struct Sim {
     // spatial grid
     static constexpr int GRID_CELL = 64;
     static constexpr int GRID_W = WORLD_W / GRID_CELL, GRID_H = WORLD_H / GRID_CELL;
-    std::vector<int> grid[GRID_W * GRID_H];
+    static constexpr int GRID_N = GRID_W * GRID_H;
+    // The grid is packed: the entity indices of every cell lie together in gridIdx (cell c from gridStart[c] to gridStart[c + 1], in index order),
+    // and gridOwners[c] has bit (owner + 1) set for every owner with something in the cell (bit 0: nobody's). A search for enemies skips the cells
+    // that hold only friends without touching their entities (see forEachNearMask): a vector per cell, cleared and refilled each tick, and every
+    // idle unit in a base looking through its own neighbours for a target, were the biggest part of a crowded tick.
+    std::vector<int> gridStart, gridIdx;
+    std::vector<u8> gridOwners;
     std::vector<int> heliList;   // living helicopters (rebuilt with the grid every tick)
+    std::vector<int> pdList;     // every wall and anti-nuke defence (rebuilt with the grid, extended as they are placed): what antiNukeLinked looks through
+    u8 enemyMask(int p) const { u8 m = 0; for (int q = 0; q < MAX_PLAYERS; q++) if (enemies(p, q)) m |= (u8)(1u << (q + 1)); return m; }   // gridOwners bits of p's enemies
     std::vector<float> incoming; // per entity index: damage already on its way in projectiles (rebuilt with the grid every tick; sharp fire skips the doomed)
 
     void init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed);
@@ -494,6 +508,16 @@ struct Sim {
     // computer army - an ally's structure (the human takes it over; the ally is not asked)
     bool allyTakeable(int player, const Entity& b) const { return b.isBuilding() && player >= 0 && b.owner >= 0 && b.owner != player && !players[player].isAI && !enemies(player, b.owner); }
     bool spyMayTake(int player, const Entity& b) const { return enemies(player, b.owner) || neutralTakeable(b) || allyTakeable(player, b); }
+    // ---- The Chosen and its Shadow Guard (sim_chosen.cpp)
+    void convertUnit(Entity& u, int to, const Entity* by);   // u (and whoever rides in it) changes sides on the spot
+    bool mayConvert(const Entity& by, const Entity& t) const;   // can a Chosen of by's army turn t (an enemy soldier, vehicle or ship; never aircraft, a loan or another Chosen)
+    bool chosenAct(Entity& e, Entity& t);                    // The Chosen "fires" at t: takes a structure, turns a unit (in reach; false if it cannot)
+    int shadowWeapon(const Entity& e, const Entity& t, float dTiles) const;   // the Shadow Guard's weapon for this target
+    bool cmdShadowCall(int player, Ref chosen = NOREF);      // the Chosen calls CHOSEN_SQUAD Shadow Guard round itself (CHOSEN_CALL_COOLDOWN)
+    float shadowWait(int player) const;                      // seconds until the next call (-1: the army has no Chosen)
+    Ref chosenOf(int player) const;                          // the army's Chosen, if it has one in the field
+    bool chosenInProduction(int player) const;               // one trained or queued already: no second one
+    float chosenScore(const Entity& t, float d) const;       // its target choice (lower is first)
     void heatUp(Entity& b, float amount);   // an indestructible structure takes a hit: it burns hotter (flames, smoke), nothing else changes
     // ---- the Island Nuke Launchers: neutral at the start, an infiltrator takes one, its army fires small nukes from it on a bunker's cooldown
     bool cmdIslandNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);
@@ -615,15 +639,19 @@ struct Sim {
     Entity* nearestEntity(Vec2 p, float maxDist, bool (*pred)(const Entity&, void*), void* ctx);
     // Every live entity whose edge is within r px of p. A template so the per-entity callback inlines (a std::function call per neighbour was a
     // seventh of a crowded tick); the distance test is done on squares first, without a square root.
-    template <class F> void forEachNear(Vec2 p, float r, F&& fn) {
+    template <class F> void forEachNear(Vec2 p, float r, F&& fn) { forEachNearMask(p, r, 0xFF, fn); }
+    // the same, visiting only cells that hold something of an owner in 'mask' (gridOwners bits): exact for a search that rejects every other owner
+    template <class F> void forEachNearMask(Vec2 p, float r, u8 mask, F&& fn) {
+        if (gridStart.empty() || !mask) return;
         float rr = r + 96;  // buildings are inserted at their center; widen the cell search
         int x0 = clampi((int)((p.x - rr) / GRID_CELL), 0, GRID_W - 1), x1 = clampi((int)((p.x + rr) / GRID_CELL), 0, GRID_W - 1);
         int y0 = clampi((int)((p.y - rr) / GRID_CELL), 0, GRID_H - 1), y1 = clampi((int)((p.y + rr) / GRID_CELL), 0, GRID_H - 1);
         const float r2 = r * r;
         for (int cy = y0; cy <= y1; cy++) for (int cx = x0; cx <= x1; cx++) {
-            const std::vector<int>& cell = grid[cy * GRID_W + cx];
-            for (size_t k = 0; k < cell.size(); k++) {
-                Entity& e = ents[cell[k]];
+            const int c = cy * GRID_W + cx;
+            if (!(gridOwners[c] & mask)) continue;
+            for (int k = gridStart[c], kn = gridStart[c + 1]; k < kn; k++) {
+                Entity& e = ents[gridIdx[k]];
                 if (!e.alive) continue;
                 if (e.kind == EK_BUILDING) {
                     const BuildType& b = BUILDS[e.type];

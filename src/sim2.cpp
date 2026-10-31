@@ -124,7 +124,7 @@ bool Sim::interceptProjectile(Projectile& p) {
     // projectile that is not aimed at the defence's enemies is engaged, whichever one is closest and ready takes the shot.
     if (w.proj == PJ_ROCKET || w.proj == PJ_SHELL || w.proj == PJ_BOMB) {
         Entity* def = nullptr; float bd = 1e18f;
-        forEachNear(p.pos, (WALL_PD_COVER + 3.0f) * TILE, [&](Entity& b) {
+        forEachNearMask(p.pos, (WALL_PD_COVER + 3.0f) * TILE, p.owner >= 0 ? enemyMask(p.owner) : (u8)0, [&](Entity& b) {
             if (!b.isBuilding() || !antiNukeWorking(b) || time < b.pdAt || !enemies(b.owner, p.owner)) return;
             Entity* t = get(p.target);
             if (t && enemies(b.owner, t->owner)) return;   // it is aimed at somebody on the defence's side only if that somebody is not its enemy
@@ -267,10 +267,12 @@ float Sim::antiNukeCover(const Entity& b, float scale) const {
     if (b.bt().faction != F_CYBER) return ANTINUKE_COVER_K * TILE;
     return ANTINUKE_COVER_C * TILE + nukeRadius(probe);   // a laser has no blind ring at the edge: a blast that would reach into its circle is engaged
 }
+// (among the walls and anti-nuke defences only, pdList: walking every entity of the map for each rocket a wall engaged was a twentieth of a battle tick)
 int Sim::antiNukeLinked(const Entity& b) const {
     if (isAntiRocketWall(b)) {
         int n = 0;
-        for (auto& o : ents) {
+        for (int i : pdList) {
+            const Entity& o = ents[i];
             if (&o == &b || o.owner != b.owner || !isAntiRocketWall(o) || dist(o.pos, b.pos) > ANTINUKE_LINK * TILE) continue;
             if (++n >= ANTINUKE_LINK_MAX) break;
         }
@@ -278,7 +280,8 @@ int Sim::antiNukeLinked(const Entity& b) const {
     }
     if (b.bt().faction != F_CYBER) return 0;
     int n = 0;
-    for (auto& o : ents) {
+    for (int i : pdList) {
+        const Entity& o = ents[i];
         if (&o == &b || o.owner != b.owner || !antiNukeWorking(o) || o.bt().faction != F_CYBER || dist(o.pos, b.pos) > ANTINUKE_LINK * TILE) continue;
         if (++n >= ANTINUKE_LINK_MAX) break;
     }
@@ -332,7 +335,7 @@ void Sim::updatePointDefenseAir(Entity& b) {
     if (!wall && players[b.owner].lowPower() && b.bt().power < 0) return;
     float range = wall ? WALL_PD_COVER * TILE : (b.bt().faction == F_CYBER ? ANTINUKE_COVER_C : ANTINUKE_COVER_K) * TILE;
     Entity* best = nullptr; float bd = range;
-    forEachNear(b.pos, range, [&](Entity& e) {
+    forEachNearMask(b.pos, range, enemyMask(b.owner), [&](Entity& e) {
         if (!e.isUnit() || !e.isAir() || !enemies(b.owner, e.owner) || !visibleTo(e, b.owner)) return;
         float d = dist(e.pos, b.pos);
         if (d < bd) { bd = d; best = &e; }

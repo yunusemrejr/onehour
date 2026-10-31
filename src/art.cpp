@@ -66,6 +66,8 @@ static int unitLocal(int type) {
     if (type == U_C_CARGOSHIP || type == U_K_CARGOSHIP) return 30;      // cargo ships (art_ocean.cpp, 128 px canvas)
     if (type == U_C_CARRIERJET || type == U_K_CARRIERJET) return 31;    // carrier jets (art_ocean.cpp)
     if (type == U_C_LASERCMD || type == U_K_LASERCMD) return 32;        // laser commandos (art_commando.cpp)
+    if (chosenType(type)) return 33;                                    // The Chosen (art_chosen.cpp)
+    if (shadowType(type)) return 34;                                    // its Shadow Guard (art_chosen.cpp)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }
@@ -1213,6 +1215,8 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 30: artCargoShipBody(c, team, cy); break;          // cargo ship (art_ocean.cpp)
     case 31: artCarrierJetBody(c, team, cy); break;         // carrier jet (art_ocean.cpp)
     case 32: artCommandoBody(c, team, cy, frame); break;    // laser commando (art_commando.cpp)
+    case 33: artChosenBody(c, team, cy, frame); break;      // The Chosen (art_chosen.cpp)
+    case 34: artShadowBody(c, team, cy, frame); break;      // Shadow Guard (art_chosen.cpp)
     case 28: artRioterBody(c, team, type == U_FIREBOMBER ? 1 : 0, frame); break;   // civilian rioters (art_riot.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
@@ -1580,6 +1584,7 @@ float artScale(int type) {
     if (local == 10) return 1.26f;   // Aegis Titan / Behemoth
     if (local == 11) return 1.28f;   // supersonic jets: long and slender, drawn large enough to read at a glance
     if (local == 9) return 1.06f;    // elite infantry
+    if (local == 33) return 1.12f;   // The Chosen: a laser commando's footprint
     if (local == 17) return 2.0f;    // cargo lifters: the biggest airframes on the field
     if (local == 18) return 1.2f;    // jeeps
     if (local == 19) return 1.75f;   // destroyers

@@ -42,9 +42,11 @@ enum UnitRole { UR_COMBAT = 0, UR_DOZER, UR_HARVESTER, UR_HEALER,
 // own detectors is close enough. Detector masks say which classes a unit can see.
 enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone finds them (buildings are never stealthy)
                     ST_DRONE = 2,                    // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
-                    ST_INFIL = 3 };                  // infiltrators / spies (a class c is found by detector bit 1 << (c - 1)): only snipers, drones, aircraft (not the heavy bombers), jeeps, other
+                    ST_INFIL = 3,                    // infiltrators / spies (a class c is found by detector bit 1 << (c - 1)): only snipers, drones, aircraft (not the heavy bombers), jeeps, other
                                                      // infiltrators and the light defence turrets (Laser Turret / Gun Nest) find them
-static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4;
+                    ST_CHOSEN = 4 };                 // The Chosen and its Shadow Guard: ONLY helicopters find them (gunships and lifters, not drones, planes,
+                                                     // snipers, turrets, bunkers or scans), firing or not; see helicopterType and CHOSEN_DETECT
+static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4, DET_CHOSEN = 8;
 static const float INFIL_DETECT = 5.0f;   // tiles: how close an ordinary infiltrator-spotter (infantry, jeep, aircraft) has to be to find one
 // Infiltrators swim: one sent somewhere it cannot walk to (an island launcher out in the lake, the far bank of a river with no crossing near)
 // paddles across on a small inflatable raft. Land is preferred: a water tile costs SWIM_COST in the route search, and the raft is slow.
@@ -75,6 +77,10 @@ enum UnitTypeId {
     U_C_CARGOSHIP, U_K_CARGOSHIP,   // military cargo ships: carry a whole battalion (vehicles, dozers, infantry) over the sea and land it on any shore
     U_C_CARRIERJET, U_K_CARRIERJET, // a carrier's jets: never built, they take off from their carrier, fight round it and land on it again (Sim::carrierJetRun)
     U_C_LASERCMD, U_K_LASERCMD,     // laser commandos: never built (no barracks trains them), they only jump with a bunker's Para Backup (see W_TOXIC_LANCE)
+    U_C_CHOSEN, U_K_CHOSEN,         // The Chosen: one per army at a time (barracks + tech structure), seen only by helicopters; takes any structure on the spot and turns
+                                    // enemy soldiers, vehicles and ships to its side (never aircraft); calls its Shadow Guard (see CHOSEN_*)
+    U_C_SHADOW, U_K_SHADOW,         // Shadow Guard: never built, CHOSEN_SQUAD of them answer a Chosen's call; seen only by helicopters; rifle, marksman shot, rocket or
+                                    // anti-air missile, whichever the target needs (see W_SHADOW and Sim::shadowWeapon)
     U_COUNT
 };
 
@@ -146,6 +152,8 @@ struct UnitType {
     int nukeBomb;       // 1 = a nuclear bomber: its single bomb is a compact silver warhead with an Underground Nuke's damage (see W_NUKE_BOMB)
     float sprintSpeed;  // px/s: the top speed while it still carries its payload (0 = no sprint); it drops to 'speed' once the payload is gone
 };
+// gunships and lifters (spy drones hover too, but they are drones): the only things that find The Chosen and its Shadow Guard (ST_CHOSEN)
+inline bool helicopterType(const UnitType& u) { return u.heli && u.role != UR_SCOUT && u.kind == UK_AIR; }
 // Cargo slots a unit takes in a transport: infantry 1, light vehicles 4, tanks 6, super-heavy walkers 10 (aircraft cannot be carried)
 inline int cargoSize(const UnitType& u) { return u.kind == UK_INF ? 1 : (u.kind == UK_VEH ? (u.hp >= 1500 ? 10 : (u.armor == AR_HEAVY ? 6 : 4)) : 0); }
 
@@ -558,6 +566,26 @@ static const float TANK_DROP_ARMOR = 2.5f;
 // The laser commandos of a Para Backup: ten times a Laser Trooper's health and firepower, and their Toxic Lance leaves a small toxic cloud
 // where it hits (a short-lived Fallout zone that poisons only enemy ground units); BUNKER_PARA_COMMANDOS of them in every drop
 static const int   W_TOXIC_LANCE = 54;            // WEAPONS index of their lance
+
+// ---- The Chosen and its Shadow Guard
+// The Chosen's "weapon" is its will: W_CONVERT reaches CHOSEN reach and never hurts anybody. Aimed at a structure it takes it on the spot (as an infiltrator
+// does, at once); aimed at an enemy soldier, vehicle or ship it turns it to the Chosen's army (aircraft never). Each turning costs a moment
+// (CHOSEN_CONVERT_BASE plus a little per credit of what it turned) before the next one.
+static const int   W_CONVERT = 55;
+static const float CHOSEN_CONVERT_BASE = 0.7f;    // s between two turnings ...
+static const float CHOSEN_CONVERT_PER_K = 0.4f;   // ... plus this per 1000 credits of the unit it just turned (a Behemoth: 1.9 s)
+static const float CHOSEN_TAKE_GAP = 2.0f;        // s after taking a structure (on the spot) before it can take or turn the next
+static const float CHOSEN_CALL_COOLDOWN = 120.0f; // s between two calls of the Shadow Guard
+static const int   CHOSEN_SQUAD = 30;             // Shadow Guard soldiers that answer a call (they appear round the Chosen)
+static const float CHOSEN_DETECT = 6.0f;          // tiles: how close a helicopter has to be to find The Chosen or a Shadow Guard
+static const float CHOSEN_LINGER = 2.5f;          // s it stays found once the helicopter is gone
+static const float CHOSEN_OPEN = 480.0f;          // s into a match before any army can train one (time to raise an airfield and helicopters first)
+// The Shadow Guard carry four weapons in one: W_SHADOW is what they look for targets with (every target, ground and air, out to 7.5 tiles);
+// the shot itself is the one the target calls for (Sim::shadowWeapon): the carbine at soldiers close by, the marksman shot at soldiers further
+// off, a rocket at vehicles, ships and structures, a stinger missile at aircraft.
+static const int   W_SHADOW = 56, W_SHADOW_RIFLE = 57, W_SHADOW_SNIPER = 58, W_SHADOW_ROCKET = 59, W_SHADOW_AA = 60;
+inline bool chosenType(int t) { return t == U_C_CHOSEN || t == U_K_CHOSEN; }
+inline bool shadowType(int t) { return t == U_C_SHADOW || t == U_K_SHADOW; }
 static const int   BUNKER_PARA_COMMANDOS = 5;
 static const float TOXIC_RADIUS = 1.6f;           // tiles
 static const float TOXIC_LIFE = 6.0f;             // seconds a cloud lasts (another hit nearby renews it)

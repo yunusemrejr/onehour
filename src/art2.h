@@ -57,6 +57,14 @@ void artRioterBody(Canvas& c, Color team, int kind, int frame);
 // toxic green. Cyber is pale ceramic with a cyan visor; Clanker is olive and rust with a gas mask. Paints, sharpens and outlines itself.
 void artCommandoBody(Canvas& c, Color team, bool cyber, int frame);
 
+// The Chosen (one elite operative per army): a lone hooded operative in a long cloak that trails behind it, with a slim long rifle. 64x64 canvas,
+// facing +x, centred at (32,32), with the walk cycle in frame 0 / 1 / 2 as the troopers. Cyber is pearl-white with cyan seams; Clanker is near-black
+// with a crimson lining and brass trim. A faint faction halo sits behind it. Paints, sharpens and outlines itself.
+void artChosenBody(Canvas& c, Color team, bool cyber, int frame);
+// The Shadow Guard (the Chosen's stealth squads): a slim matte stealth suit with a short cowl and a multi-role rifle (scope on top, a launcher tube
+// under the barrel). 64x64 canvas, facing +x, centred at (32,32), walk cycle as the troopers. Paints, sharpens and outlines itself.
+void artShadowBody(Canvas& c, Color team, bool cyber, int frame);
+
 // Sea art (art_ocean.cpp). The big ships are 128x128 (ART_BIG), the hull lies along x with the bow at +x, centred at (64,64).
 static const int ART_BIG = 128;
 // The Aircraft Carrier: about 120 px long, a 34 px flight deck with an angled landing deck to port, the island on the starboard side (y > 64)

@@ -79,7 +79,7 @@ void AiPlayer::flushMoves() {
         for (; i < pm.units.size() && go.size() < budget; i++) {
             const Pending& u = pm.units[i];
             const Entity* e = g_sim.get(u.ref);
-            if (e && e->order == u.order && e->target.x == u.target.x && e->target.y == u.target.y && e->targetEnt == u.targetEnt) go.push_back(u.ref);   // (else: dead, or given another order since)
+            if (e && e->owner == player && e->order == u.order && e->target.x == u.target.x && e->target.y == u.target.y && e->targetEnt == u.targetEnt) go.push_back(u.ref);   // (else: dead, turned by an enemy's Chosen, or given another order since)
         }
         pm.units.erase(pm.units.begin(), pm.units.begin() + i);
         if (!go.empty()) g_sim.cmdMove(go, pm.to, pm.attack);
@@ -106,6 +106,7 @@ static CompCache g_comp[MAX_PLAYERS];
 
 // ONEHOUR_FEATOFF=bits: switch these pro features off for every computer army (headless balance runs: what does a feature do to the games?)
 static int featOff() { static const int off = getenv("ONEHOUR_FEATOFF") ? atoi(getenv("ONEHOUR_FEATOFF")) : 0; return off; }
+static int featOff2() { static const int off = getenv("ONEHOUR_FEATOFF2") ? atoi(getenv("ONEHOUR_FEATOFF2")) : 0; return off; }
 
 const char* const TUNE_NAME[TU_COUNT] = { "thr", "first", "launch", "cap", "def", "walls", "reassess", "retreat", "reinforce", "guard", "harv", "counter", "punishThr", "punishRa" };
 const float TUNE_HAND[TU_COUNT] = { 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.8f, 1.9f, 0.6f, 0.0f, 1.0f, 1.2f, 0.5f, 1.15f };
@@ -141,7 +142,7 @@ void AiManager::init(u64 seed) {
         bool ub = ais[p].useBrain;
         ais[p] = AiPlayer();
         ais[p].useBrain = ub;
-        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].brain = brainOverride[p] ? brainOverride[p] : &g_brain; ais[p].feat = featMask[p] & ~featOff(); ais[p].init(p, seed + p * 7919); }
+        if (g_sim.players[p].active && g_sim.players[p].isAI) { ais[p].useBrain = brainEnabled[p]; ais[p].smart = smartEnabled[p]; ais[p].pro = proEnabled[p] && smartEnabled[p]; ais[p].brain = brainOverride[p] ? brainOverride[p] : &g_brain; ais[p].feat = featMask[p] & ~featOff(); ais[p].feat2 = featMask2[p] & ~featOff2(); ais[p].init(p, seed + p * 7919); }
     }
 }
 // ONEHOUR_AIPROF=ms: report any think() that takes longer than that, section by section (each mark names the section that just ended; a profiling
@@ -809,6 +810,12 @@ void AiPlayer::think() {
     nextThink = S.time + cadence;
     const bool wits = pl.difficulty >= 1 || on(FEAT_EASYWIT);   // sensible play (not economy): Normal and up, and Easy with FEAT_EASYWIT
     tu = tuneFor(pl.difficulty);   // (again here: the human may raise an army's difficulty mid-match)
+    {   // units The Chosen turned are the enemy's now: they leave every list of the commander's (it would go on giving them orders)
+        auto lost = [&](Ref r) { const Entity* e = S.get(r); return !e || e->owner != player; };
+        wave.erase(std::remove_if(wave.begin(), wave.end(), lost), wave.end());
+        escort.erase(std::remove_if(escort.begin(), escort.end(), lost), escort.end());
+        feint.erase(std::remove_if(feint.begin(), feint.end(), lost), feint.end());
+    }
     if (!pendingMoves.empty()) flushMoves();   // the rest of a big group order given in an earlier think
     // The survey below keeps plain pointers into the entity array (hq, yards, factories, ...) and the orders it gives may place construction
     // sites: room for them up front, so a site placed mid-think can never move the array under those pointers.
@@ -852,7 +859,8 @@ void AiPlayer::think() {
     prof.mark("setup");
     // ---------- survey
     int dozers = 0, civDozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0, fleetValue = 0;
-    std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps, decon;
+    std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps, decon, shadowNow;
+    Ref chosen;   // The Chosen and its Shadow Guard are led apart from the army (ai_chosen.cpp)
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
     int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0, walls = 0, masts = 0;
@@ -866,6 +874,9 @@ void AiPlayer::think() {
             if (ut.role == UR_DOZER) { if (civicDozerType(e.type)) civDozers++; else dozers++; }   // (a civilian dozer raises only the town: it is counted apart)
             else if (ut.role == UR_HARVESTER) { harvesters++; haulers.push_back(S.refOf(e)); }
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
+            else if (chosenType(e.type) && on2(F2_CHOSEN)) chosen = S.refOf(e);
+            else if (shadowType(e.type) && on2(F2_CHOSEN)) shadowNow.push_back(S.refOf(e));
+            else if (S.time < feintUntil && std::find(feint.begin(), feint.end(), S.refOf(e)) != feint.end()) {}   // (a feint is on its own errand for a while)
             else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and coordinate as a swarm
             else if (ut.role == UR_TRANSPORT) {}                             // (the commander has no use for cargo choppers)
             else if (ut.role == UR_DECON) decon.push_back(S.refOf(e));       // anti-radiation trucks scrub fallout off the base: never part of a wave
@@ -1366,6 +1377,13 @@ void AiPlayer::think() {
         if ((int)scouts.size() + queued < wantDrones)
             for (auto* a : airfields) if (a->constructed && a->queue.empty() && S.cmdTrain(S.refOf(*a), droneType)) break;
     }
+    // The Chosen (F2_CHOSEN): Normal and up, once the tech structure stands and the treasury can spare it; one at a time
+    if (on2(F2_CHOSEN) && pl.difficulty >= 1 && techs > 0 && !barracks.empty() && S.time > CHOSEN_OPEN + (pl.difficulty >= 3 ? 0.0f : (pl.difficulty == 2 ? 120.0f : 240.0f)) && !recovering) {
+        const int ct = pl.faction == F_CYBER ? U_C_CHOSEN : U_K_CHOSEN;
+        const bool rebuy = chosenBought > 0;   // (one that was found and killed: the next waits a while and wants more in the bank)
+        if (!S.chosenInProduction(player) && pl.money - reserve > UNITS[ct].cost + (rebuy ? 2500 : 600) && (!rebuy || S.time - chosenLostAt > 150.0f) && S.unitAvailable(player, ct))
+            for (auto* b : barracks) if (b->constructed && b->queue.size() < 2 && S.cmdTrain(S.refOf(*b), ct)) { chosenBought++; break; }
+    }
     // spies: two of them on Hard and Brutal, to take structures nobody is guarding
     if (on(FEAT_SPECIAL) && pl.difficulty >= 2 && techs > 0 && tm > 6.5f && armyCount >= 8 && pl.money - reserve > 1500) {
         int spyType = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY, queued = 0;
@@ -1697,6 +1715,11 @@ void AiPlayer::think() {
         if (S.time - lastAllyNote > 20.0f) { lastAllyNote = S.time; S.emit(EV_MSG, frontHuman, SND_NONE, frontTarget->pos, "Ally: joining your attack"); }
     }
 
+    if (on2(F2_CHOSEN)) {
+        if (chosen.valid()) chosenAlive = true; else if (chosenAlive && !S.chosenInProduction(player)) { chosenAlive = false; chosenLostAt = S.time; }
+        chosenOps(chosen, threat); shadowOps(chosen, threat, shadowNow); if (S.time > nextSellLook) { nextSellLook = S.time + 3.0f; sellTaken(); }
+    }
+    if (on2(F2_HELIHUNT)) heliHunt(aircraft, airfields, reserve, hunting);
     prof.mark("army_team");
     // defense has priority
     if (threat && threatCount > 0 && S.time - lastDefend > 3.0f) {
@@ -1910,6 +1933,7 @@ void AiPlayer::think() {
                     for (size_t k = 0; k < c.size(); k++) { if ((int)k < stay) home.push_back(c[k].second); else { wave.push_back(c[k].second); waveValue += unitValue(*S.get(c[k].second)); } }
                     S.cmdGuardArea(home, rally, clampf((4.0f + stay * 0.2f) * TILE, 5.0f * TILE, 8.0f * TILE));
                 }
+                if (on2(F2_GUILE) && pl.difficulty >= 1) launchFeint(wave, tgt);   // a fast detachment pulls the defence elsewhere first
                 memcpy(waveX, x, sizeof x); waveHasSample = true; beginWaveLearning();
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d (home guard %d) -> %s at %d,%d\n", player, S.time, waveValue, (int)wave.size(), (int)(army.size() - wave.size()), tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
                 groupMove(wave, tgt->pos, true);
