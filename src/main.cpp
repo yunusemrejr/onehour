@@ -305,6 +305,10 @@ static int evalAi(int games, u64 seed, int difficulty) {
             printf("    P%d %s: $%d inf %d veh %d air %d dozers %d haulers %d | structures %d (factories %d barracks %d turrets %d) alive %d wave=%d\n", p, p == (flip ? 1 : 0) ? "new" : "old", pl.money, inf, veh, air, dz, hv, g_sim.countBuildings(p, -1, false), g_sim.countRole(p, BR_FACTORY, false), g_sim.countRole(p, BR_BARRACKS, false), g_sim.countRole(p, BR_TURRET, false) + g_sim.countRole(p, BR_AATURRET, false), (int)pl.alive, (int)g_ai.ais[p].attacking);
         }
         printf("  game %2d (%s%s vs %s%s): %s at %.0f s, doctrine %s\n", i + 1, flip ? "old " : "new ", FACTION_NAME[fac[0]], flip ? "new " : "old ", FACTION_NAME[fac[1]], res, g_sim.time, DOCTRINE_NAME[g_ai.ais[flip ? 1 : 0].doctrine]);
+        if (getenv("ONEHOUR_EVALCHOSEN")) for (int p = 0; p < 2; p++) {   // (what each side's Chosen did)
+            const Player& pl = g_sim.players[p]; const AiPlayer& a = g_ai.ais[p];
+            printf("    P%d %s: chosen bought %d first %.0f, calls %d, turned %d, taken %d, sold %d, lost to the enemy's %d, hunts %d, feints %d\n", p, p == newTeam ? "new" : "old", a.chosenBought, a.chosenFirstAt, pl.shadowCalls, pl.converted, pl.chosenTaken, a.chosenSold, pl.convertedLost, a.heliHunts, a.feints);
+        }
         fflush(stdout);
     }
     printf("new AI vs previous generation: %d wins, %d losses, %d unresolved (of %d)%s\n", wins, losses, draws, games, "");

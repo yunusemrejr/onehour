@@ -106,6 +106,12 @@ static CompCache g_comp[MAX_PLAYERS];
 
 // ONEHOUR_FEATOFF=bits: switch these pro features off for every computer army (headless balance runs: what does a feature do to the games?)
 static int featOff() { static const int off = getenv("ONEHOUR_FEATOFF") ? atoi(getenv("ONEHOUR_FEATOFF")) : 0; return off; }
+// how long after CHOSEN_OPEN a commander trains its first Chosen (ONEHOUR_CHOSENDELAY=s overrides it for every difficulty: evaluation)
+static float chosenDelay(int difficulty) {
+    static const float env = getenv("ONEHOUR_CHOSENDELAY") ? (float)atof(getenv("ONEHOUR_CHOSENDELAY")) : -1.0f;
+    if (env >= 0) return env;
+    return difficulty >= 3 ? 0.0f : (difficulty == 2 ? 120.0f : 300.0f);
+}
 static int featOff2() { static const int off = getenv("ONEHOUR_FEATOFF2") ? atoi(getenv("ONEHOUR_FEATOFF2")) : 0; return off; }
 
 const char* const TUNE_NAME[TU_COUNT] = { "thr", "first", "launch", "cap", "def", "walls", "reassess", "retreat", "reinforce", "guard", "harv", "counter", "punishThr", "punishRa" };
@@ -115,11 +121,27 @@ float TUNE_TRAINED[TU_COUNT] = { 1.187f, 0.568f, -0.056f, 0.643f, 1.190f, 0.886f
 // Normal plays a slower economy (the spending engine at half strength), and the Brutal-trained numbers only broke even there: it has a table of its
 // own, trained the same way at Normal (4 generations of 12 candidates x 48 matches, starting from the Brutal table)
 float TUNE_TRAINED_N[TU_COUNT] = { 1.298f, 0.524f, 0.036f, 0.606f, 1.474f, 0.446f, 0.894f, 1.835f, 0.444f, 0.174f, 1.000f, 1.021f, 0.341f, 1.269f };
+// F2_CAND (training only): the side being trained plays TUNE_CAND - today's trained numbers with ONEHOUR_TUNECAND's changes - while the other
+// side keeps today's numbers (ONEHOUR_TUNE would change both). (A Hard table of its own was trained this way against the commander before the
+// Chosen update: +0.17 on the training seeds, but 39-53 and 42-46 on held-out ones against 50-42 and 49-44 baselines - noise, not shipped)
+float TUNE_CAND[TU_COUNT] = {};
 // ONEHOUR_TUNE="thr=0.9,cap=1.2": the trainer's candidate replaces those trained numbers (headless runs only; read once)
 static void readTuneEnv() {
     static bool done = false;
     if (done) return;
     done = true;
+    for (int i = 0; i < TU_COUNT; i++) TUNE_CAND[i] = TUNE_TRAINED[i];
+    if (const char* c = getenv("ONEHOUR_TUNECAND")) {
+        std::string all(c); size_t at = 0;
+        while (at < all.size()) {
+            size_t end = all.find(',', at); if (end == std::string::npos) end = all.size();
+            std::string kv = all.substr(at, end - at); at = end + 1;
+            size_t eq = kv.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = kv.substr(0, eq); float v = (float)atof(kv.c_str() + eq + 1);
+            for (int i = 0; i < TU_COUNT; i++) if (k == TUNE_NAME[i] && std::isfinite(v)) TUNE_CAND[i] = v;
+        }
+    }
     const char* e = getenv("ONEHOUR_TUNE");
     if (!e) return;
     std::string all(e);
@@ -1343,6 +1365,16 @@ void AiPlayer::think() {
     if (smart) armyCap = (int)(armyCap * style.army * tu[TU_CAP] + 0.5f);
     if (opp && opp->firstHit < 480.0f && S.time > opp->firstHit - 100.0f) armyCap = std::max(armyCap, pl.difficulty >= 2 ? 16 : 10);   // ready for the early attack
     if (on(FEAT_MACRO) && pl.difficulty >= 1) armyCap += (int)(ease * clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f));   // surplus credits become soldiers, not a bank balance
+    // The Chosen (F2_CHOSEN): Normal and up, once the tech structure stands and the treasury can spare it; one at a time
+    if (on2(F2_CHOSEN) && pl.difficulty >= 1 && techs > 0 && !barracks.empty() && S.time > CHOSEN_OPEN + chosenDelay(pl.difficulty) && !recovering) {
+        const int ct = pl.faction == F_CYBER ? U_C_CHOSEN : U_K_CHOSEN;
+        const bool rebuy = chosenBought > 0;   // (one that was found and killed: the next waits a while and wants more in the bank)
+        // it comes before the savings for a nuke ramp or an income structure (it takes more from the enemy than either brings): only the
+        // money the base itself needs (power, a hub, a Command structure, recovery) is kept back
+        const int need = (hubs == 0 || pl.powerMade < pl.powerUsed) ? 1600 : 0;
+        if (!S.chosenInProduction(player) && pl.money - need > UNITS[ct].cost + (rebuy ? 1500 : 200) && (!rebuy || S.time - chosenLostAt > 150.0f) && S.unitAvailable(player, ct))
+            for (auto* b : barracks) if (b->constructed && b->queue.size() < 2 && S.cmdTrain(S.refOf(*b), ct)) { chosenBought++; break; }
+    }
     int queuedArmy = 0;
     for (auto* b : barracks) queuedArmy += (int)b->queue.size();
     for (auto* f : factories) queuedArmy += (int)f->queue.size();
@@ -1376,13 +1408,6 @@ void AiPlayer::think() {
         if (pl.money > 8000 && pl.difficulty >= 2) wantDrones++;
         if ((int)scouts.size() + queued < wantDrones)
             for (auto* a : airfields) if (a->constructed && a->queue.empty() && S.cmdTrain(S.refOf(*a), droneType)) break;
-    }
-    // The Chosen (F2_CHOSEN): Normal and up, once the tech structure stands and the treasury can spare it; one at a time
-    if (on2(F2_CHOSEN) && pl.difficulty >= 1 && techs > 0 && !barracks.empty() && S.time > CHOSEN_OPEN + (pl.difficulty >= 3 ? 0.0f : (pl.difficulty == 2 ? 120.0f : 240.0f)) && !recovering) {
-        const int ct = pl.faction == F_CYBER ? U_C_CHOSEN : U_K_CHOSEN;
-        const bool rebuy = chosenBought > 0;   // (one that was found and killed: the next waits a while and wants more in the bank)
-        if (!S.chosenInProduction(player) && pl.money - reserve > UNITS[ct].cost + (rebuy ? 2500 : 600) && (!rebuy || S.time - chosenLostAt > 150.0f) && S.unitAvailable(player, ct))
-            for (auto* b : barracks) if (b->constructed && b->queue.size() < 2 && S.cmdTrain(S.refOf(*b), ct)) { chosenBought++; break; }
     }
     // spies: two of them on Hard and Brutal, to take structures nobody is guarding
     if (on(FEAT_SPECIAL) && pl.difficulty >= 2 && techs > 0 && tm > 6.5f && armyCount >= 8 && pl.money - reserve > 1500) {
@@ -1716,8 +1741,9 @@ void AiPlayer::think() {
     }
 
     if (on2(F2_CHOSEN)) {
+        if (chosen.valid() && chosenFirstAt < 0) chosenFirstAt = S.time;
         if (chosen.valid()) chosenAlive = true; else if (chosenAlive && !S.chosenInProduction(player)) { chosenAlive = false; chosenLostAt = S.time; }
-        chosenOps(chosen, threat); shadowOps(chosen, threat, shadowNow); if (S.time > nextSellLook) { nextSellLook = S.time + 3.0f; sellTaken(); }
+        chosenOps(chosen, threat, threatValue); shadowOps(chosen, threat, threatValue, shadowNow); if (S.time > nextSellLook) { nextSellLook = S.time + 3.0f; sellTaken(); }
     }
     if (on2(F2_HELIHUNT)) heliHunt(aircraft, airfields, reserve, hunting);
     prof.mark("army_team");

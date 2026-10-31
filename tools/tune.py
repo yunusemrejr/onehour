@@ -20,6 +20,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FEAT_TUNED = 0x1000
+F2_CAND = 8   # AiFeat2: the side being trained plays TUNE_CAND (ONEHOUR_TUNECAND), the other today's numbers
+# today's trained numbers (TUNE_TRAINED in src/ai.cpp): where a run against today's commander starts
+TRAINED = {"thr": 1.187, "first": 0.568, "launch": -0.056, "cap": 0.643, "def": 1.190, "walls": 0.886, "reassess": 0.868, "retreat": 1.602,
+           "reinforce": 0.536, "guard": 0.107, "harv": 1.000, "counter": 1.177, "punishThr": 0.453, "punishRa": 1.313}
 
 # name: (hand-set value, sigma of the first generation, lowest, highest) - the trainer's search space
 SPACE = {
@@ -92,6 +96,11 @@ def cmd_cem(a):
         if log: log.write(s + "\n"); log.flush()
     mask = int(a.newmask or a.mask) | FEAT_TUNED
     base = {"ONEHOUR_NEWMASK": str(mask), "ONEHOUR_BASEMASK": str(int(a.mask))}
+    tune_var = "ONEHOUR_TUNE"
+    if a.vs_current:   # against today's commander: both sides play every feature and today's trained numbers; only the trained side plays the candidate
+        base = {"ONEHOUR_NEWMASK2": str(a.newmask2 | F2_CAND), "ONEHOUR_BASEMASK2": str(a.basemask2)}
+        tune_var = "ONEHOUR_TUNECAND"
+        if not a.init: mean.update(TRAINED)
     for g in range(a.gens):
         seeds = seed_list(a.series, a.seedmul, a.seedadd, 1 + g * a.series + a.offset)   # fresh seeds every generation, the same for its candidates
         cands = [dict(mean)]   # the current mean is always one of them (how good is it on this generation's seeds?)
@@ -104,7 +113,7 @@ def cmd_cem(a):
         # every series of every candidate in one pool: the cores stay busy until the generation's last match
         envs = []
         for c in cands:
-            env = dict(base); env["ONEHOUR_TUNE"] = ",".join("%s=%.4f" % (k, v) for k, v in c.items()); envs.append(env)
+            env = dict(base); env[tune_var] = ",".join("%s=%.4f" % (k, v) for k, v in c.items()); envs.append(env)
         tasks = [(i, sd) for i in range(len(cands)) for sd in seeds]
         tots = [[0] * 6 for _ in cands]
         with ThreadPoolExecutor(max_workers=a.jobs) as ex:
@@ -114,7 +123,7 @@ def cmd_cem(a):
         for i, c in enumerate(cands):
             t = tots[i]
             results.append((score(t), i, c, t))
-            say("gen %d cand %d score %+.3f  (%d-%d, %d unresolved, tiebreak %d-%d, counterattacks %d)  %s" % (g, i, score(t), t[0], t[1], t[2], t[3], t[4], t[5], envs[i]["ONEHOUR_TUNE"]))
+            say("gen %d cand %d score %+.3f  (%d-%d, %d unresolved, tiebreak %d-%d, counterattacks %d)  %s" % (g, i, score(t), t[0], t[1], t[2], t[3], t[4], t[5], envs[i][tune_var]))
         results.sort(key=lambda r: -r[0])
         elite = [r[2] for r in results[:a.elite]]
         for n in names:
@@ -148,6 +157,9 @@ def main():
     p.add_argument("--elite", type=int, default=3)
     p.add_argument("--offset", type=int, default=100, help="cem: seeds start this many series in (keeps them apart from the evaluation seeds)")
     p.add_argument("--rseed", type=int, default=1)
+    p.add_argument("--vs-current", action="store_true", help="cem: train against today's commander (F2_CAND) instead of the hand-set one")
+    p.add_argument("--newmask2", type=int, default=7, help="cem --vs-current: the trained side's AiFeat2 bits")
+    p.add_argument("--basemask2", type=int, default=0, help="cem --vs-current: the other side's AiFeat2 bits (0: the commander before the Chosen update)")
     p.add_argument("--out", default="")
     a = p.parse_args()
     (cmd_eval if a.mode == "eval" else cmd_cem)(a)

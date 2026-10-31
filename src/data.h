@@ -579,7 +579,7 @@ static const float CHOSEN_CALL_COOLDOWN = 120.0f; // s between two calls of the 
 static const int   CHOSEN_SQUAD = 30;             // Shadow Guard soldiers that answer a call (they appear round the Chosen)
 static const float CHOSEN_DETECT = 6.0f;          // tiles: how close a helicopter has to be to find The Chosen or a Shadow Guard
 static const float CHOSEN_LINGER = 2.5f;          // s it stays found once the helicopter is gone
-static const float CHOSEN_OPEN = 480.0f;          // s into a match before any army can train one (time to raise an airfield and helicopters first)
+static const float CHOSEN_OPEN = 300.0f;          // s into a match before any army can train one (time to raise an airfield and helicopters first)
 // The Shadow Guard carry four weapons in one: W_SHADOW is what they look for targets with (every target, ground and air, out to 7.5 tiles);
 // the shot itself is the one the target calls for (Sim::shadowWeapon): the carbine at soldiers close by, the marksman shot at soldiers further
 // off, a rocket at vehicles, ships and structures, a stinger missile at aircraft.

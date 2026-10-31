@@ -36,7 +36,7 @@ static Entity* heliNear(int player, Vec2 p, float r) {
     return best;
 }
 
-void AiPlayer::chosenOps(Ref chosen, Entity* threat) {
+void AiPlayer::chosenOps(Ref chosen, Entity* threat, float threatValue) {
     Sim& S = g_sim;
     Entity* c = S.get(chosen);
     if (!c || c->carrier.valid() || c->fall > 0) return;
@@ -58,10 +58,25 @@ void AiPlayer::chosenOps(Ref chosen, Entity* threat) {
         return;
     }
     if (S.time < chosenFleeUntil) return;
-    // a raid on the base: the Chosen turns the raiders (a few seconds' walk from wherever it is near home)
-    if (threat && dist(c->pos, pl.basePos) < 34.0f * TILE && dist(threat->pos, pl.basePos) < 24.0f * TILE) {
-        if (c->targetEnt != S.refOf(*threat) || c->order != O_ATTACK) { S.cmdAttack({chosen}, S.refOf(*threat)); chosenGoal = NOREF; }
-        return;
+    // a raid on the base: the Chosen turns the raiders it can turn (soldiers, vehicles, ships at the shore: never aircraft), the most valuable first.
+    // A real wave at the base (more than a raid) calls it home from wherever it is: turning a wave's tanks against it is the best defence there is
+    const bool wave = threat && threatValue >= 2500.0f;
+    if (threat && (dist(c->pos, pl.basePos) < 34.0f * TILE || wave) && dist(threat->pos, pl.basePos) < 26.0f * TILE) {
+        Entity* best = nullptr; float bv = 0;
+        S.forEachNearMask(threat->pos, 12.0f * TILE, S.enemyMask(player), [&](Entity& e) {
+            if (!S.mayConvert(*c, e) || !S.visibleTo(e, player) || !g_map.sameGround(c->pos, g_map.nearestFree(e.pos, 3))) return;
+            float v = (float)e.ut().cost / (1.0f + dist(e.pos, c->pos) / (10.0f * TILE));
+            if (v > bv) { bv = v; best = &e; }
+        });
+        if (best) {
+            if (c->targetEnt != S.refOf(*best) || c->order != O_ATTACK) { S.cmdAttack({chosen}, S.refOf(*best)); chosenGoal = NOREF; }
+            return;
+        }
+        if (wave && dist(c->pos, threat->pos) > 14.0f * TILE) {   // nothing it can turn in reach of the wave yet: on its way home, turning what it meets
+            if (c->order != O_ATTACKMOVE || dist(c->target, threat->pos) > 8.0f * TILE) S.cmdMove({chosen}, g_map.nearestFree(threat->pos, 6), true);
+            chosenGoal = NOREF;
+            return;
+        }
     }
     if (S.time < nextChosenLook) return;
     nextChosenLook = S.time + 1.5f;
@@ -82,6 +97,7 @@ void AiPlayer::chosenOps(Ref chosen, Entity* threat) {
         if (!S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
         float v = takeValue(e);
         if (v <= 0 || (S.refOf(e) == chosenBadGoal && S.time - chosenBadAt < 150.0f)) continue;
+        if (!g_map.sameGround(c->pos, g_map.nearestFree(e.pos + (c->pos - e.pos).norm() * (e.radius() + 20.0f), 4))) continue;   // (it walks: no island, no walled-in yard)
         if (e.owner == mainEnemy) v *= 1.3f;
         if (waveAt && dist(e.pos, waveAt->pos) < 14.0f * TILE) {
             BuildRole r = e.bt().role;
@@ -104,7 +120,7 @@ void AiPlayer::chosenOps(Ref chosen, Entity* threat) {
 
 // The Shadow Guard: called when the Chosen is in the thick of it (near its goal or among enemies), or when it has been ready a while; led to the
 // Chosen's goal (or onto raiders at home), and once the Chosen is gone, onto the main enemy
-void AiPlayer::shadowOps(Ref chosen, Entity* threat, const std::vector<Ref>& shadowNow) {
+void AiPlayer::shadowOps(Ref chosen, Entity* threat, float threatValue, const std::vector<Ref>& shadowNow) {
     Sim& S = g_sim;
     Player& pl = S.players[player];
     for (Ref r : shadowNow) if (std::find(shadows.begin(), shadows.end(), r) == shadows.end()) shadows.push_back(r);
@@ -123,10 +139,12 @@ void AiPlayer::shadowOps(Ref chosen, Entity* threat, const std::vector<Ref>& sha
     nextShadowOrder = S.time + 4.0f;
     Vec2 to; bool have = false;
     if (threat && dist(threat->pos, pl.basePos) < 22.0f * TILE) {
-        // the base is raided: the guard nearest home (half of it at most) goes for the raiders
+        // the base is raided: the guard nearest home (half of it at most) goes for the raiders; a real wave brings all of it home
+        const bool wave = threatValue >= 2500.0f;
         std::vector<Ref> home;
-        for (Ref r : shadows) if (Entity* e = S.get(r)) if (dist(e->pos, threat->pos) < 30.0f * TILE && home.size() < shadows.size() / 2 + 1) home.push_back(r);
+        for (Ref r : shadows) if (Entity* e = S.get(r)) if ((wave || dist(e->pos, threat->pos) < 30.0f * TILE) && (wave || home.size() < shadows.size() / 2 + 1)) home.push_back(r);
         if (!home.empty()) groupMove(home, threat->pos, true);
+        if (wave) return;
     }
     if (Entity* g = S.get(chosenGoal)) { to = g->pos; have = true; }
     else if (c && c->order != O_IDLE) { to = c->target; have = true; }
@@ -160,7 +178,7 @@ void AiPlayer::heliHunt(const std::vector<Ref>& aircraft, const std::vector<Enti
     Sim& S = g_sim;
     Player& pl = S.players[player];
     const bool alarm = S.time - pl.chosenAlarmT < 30.0f;
-    const bool watch = pl.difficulty >= 2 && S.time > 9.0f * 60.0f;
+    const bool watch = pl.difficulty >= 1 && S.time > CHOSEN_OPEN + (pl.difficulty >= 2 ? 30.0f : 120.0f);   // (as soon as an enemy could have one)
     if (!alarm && !watch && !hunting) return;
     const int heliType = pl.faction == F_CYBER ? U_C_HELI : U_K_AIR;
     std::vector<Ref> helis;

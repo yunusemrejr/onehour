@@ -50,8 +50,9 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_HELIHUNT = 2,   // helicopters against an enemy Chosen: a watch over the base once one could exist, a hunt where the unseen struck
                F2_GUILE = 4,      // the waves are harder to read: a fast detachment feints at the enemy's economy as the main wave sets off (a random pace
                                   // for the first waves was tried too: it lost 41-50 to the trained timing, so the timing stays as trained)
+               F2_CAND = 8,       // (training only, never shipped: plays TUNE_CAND, see readTuneEnv in ai.cpp)
                F2_ALL = 7,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_GUILE };
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -92,6 +93,7 @@ enum TuneId {
 extern const char* const TUNE_NAME[TU_COUNT];
 extern const float TUNE_HAND[TU_COUNT];   // the hand-set numbers (every commander before the training played with these)
 extern float TUNE_TRAINED[TU_COUNT];      // FEAT_TUNED, Hard and Brutal; ONEHOUR_TUNE="name=value,..." replaces some of them in a headless run (the trainer's candidates)
+extern float TUNE_CAND[TU_COUNT];         // F2_CAND: the candidate of a training run against today's commander (ONEHOUR_TUNECAND)
 extern float TUNE_TRAINED_N[TU_COUNT];    // FEAT_TUNED, Normal (trained on its own: a slower economy); Easy keeps TUNE_HAND
 
 struct AiPlayer {
@@ -119,7 +121,7 @@ struct AiPlayer {
 
     Brain* brain = &g_brain;    // the learned components this commander consults (a different one per army only in --evalai)
     const float* tu = TUNE_HAND;   // its numbers (see TuneId)
-    const float* tuneFor(int difficulty) const { return !on(FEAT_TUNED) || difficulty < 1 ? TUNE_HAND : (difficulty == 1 ? TUNE_TRAINED_N : TUNE_TRAINED); }
+    const float* tuneFor(int difficulty) const { return on2(F2_CAND) && difficulty >= 2 ? TUNE_CAND : (!on(FEAT_TUNED) || difficulty < 1 ? TUNE_HAND : (difficulty == 1 ? TUNE_TRAINED_N : TUNE_TRAINED)); }
     // ---- the learning update: the counterattack (FEAT_PUNISH) and what the opponent model is told at the end of the match (FEAT_PROFILE)
     float raidPeak = 0, lastRaidT = -100, punishUntil = -1;   // the biggest enemy force at the base during the raid under way, when it was last there,
                                                               // and until when a counterattack may go in
@@ -190,9 +192,9 @@ struct AiPlayer {
     std::vector<Ref> feint;         // F2_GUILE: the detachment feinting at the enemy's economy, and until when
     float feintUntil = -100;
     int chosenSold = 0, feints = 0, heliHunts = 0;   // (statistics)
-    int chosenBought = 0; bool chosenAlive = false; float chosenLostAt = -1000;   // Chosen trained so far, and when the last one fell
-    void chosenOps(Ref chosen, Entity* threat);
-    void shadowOps(Ref chosen, Entity* threat, const std::vector<Ref>& shadowNow);
+    int chosenBought = 0; bool chosenAlive = false; float chosenLostAt = -1000, chosenFirstAt = -1;   // Chosen trained so far, when the last one fell, when the first took the field
+    void chosenOps(Ref chosen, Entity* threat, float threatValue);
+    void shadowOps(Ref chosen, Entity* threat, float threatValue, const std::vector<Ref>& shadowNow);
     void heliHunt(const std::vector<Ref>& aircraft, const std::vector<Entity*>& airfields, int reserve, bool hunting);
     void sellTaken();               // structures the Chosen took deep in enemy ground are sold off (the enemy loses them, the money is ours)
     bool launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget);
