@@ -27,6 +27,7 @@ static void usage() {
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
+           "  --variety [N]    the same match N times, only the commanders' own random choices changed: how much their attacks vary (ONEHOUR_VARYMASK2)\n"
            "  --faction c|k    your faction for --shot/--selftest\n");
 }
 
@@ -189,6 +190,32 @@ static int playAiGame(u64 seed, int players, const Faction* fac, const bool* bra
     if (g_sim.gameOver) g_ai.finish(g_sim.winnerTeam);
     else g_ai.left();   // (an unresolved match still teaches the opponent model what it showed)
     return g_sim.gameOver ? g_sim.winnerTeam : -1;
+}
+
+// How predictable a commander is: the same match (same map, seed and armies) played N times, only the commanders' own random choices changed
+// (g_aiSalt). For army 0 it prints when its first waves went and what they went for, then how much that varied: the distinct objectives of the
+// first wave (by kind and place), the distinct orders of the first three, and the spread of the first wave's time. ONEHOUR_VARYMASK2 sets both
+// commanders' AiFeat2 bits (default: what ships).
+extern int g_aiSalt;
+static int varietyTest(int n, u64 seed, int difficulty) {
+    const int mask2 = getenv("ONEHOUR_VARYMASK2") ? atoi(getenv("ONEHOUR_VARYMASK2")) : F2_DEFAULT;
+    std::vector<std::string> firsts, seqs; std::vector<float> times; int wins = 0;
+    for (int k = 0; k < n; k++) {
+        g_aiSalt = k + 1;
+        Faction fac[4] = { F_CYBER, F_CLANKER, F_CYBER, F_CLANKER }; bool brain[4] = { false, false, false, false };
+        for (int p = 0; p < 4; p++) { g_ai.featMask2[p] = mask2; g_ai.brainOverride[p] = nullptr; }
+        int w = playAiGame(seed, 2, fac, brain, difficulty, 900);
+        const AiPlayer& a = g_ai.ais[0];
+        char f[64] = "none", s[160] = "";
+        if (a.wavesLogged > 0) snprintf(f, sizeof f, "%d@%d,%d", a.waveRole[0], tileOf(a.waveLog[0].x) / 8, tileOf(a.waveLog[0].y) / 8);
+        for (int i = 0; i < std::min(3, a.wavesLogged); i++) { char b[40]; snprintf(b, sizeof b, "%s%d@%d,%d", i ? ">" : "", a.waveRole[i], tileOf(a.waveLog[i].x) / 8, tileOf(a.waveLog[i].y) / 8); strcat(s, b); }
+        printf("  run %2d: first wave %4.0f s -> %s | first three %s | %s\n", k + 1, a.firstWaveT, f, s, w == 0 ? "army 0 won" : (w < 0 ? "unresolved" : "army 1 won"));
+        firsts.push_back(f); seqs.push_back(s); if (a.firstWaveT >= 0) times.push_back(a.firstWaveT); if (w == 0) wins++;
+    }
+    auto distinct = [](std::vector<std::string> v) { std::sort(v.begin(), v.end()); return (int)(std::unique(v.begin(), v.end()) - v.begin()); };
+    double m = 0, sd = 0; for (float t : times) m += t; m /= std::max<size_t>(1, times.size()); for (float t : times) sd += (t - m) * (t - m); sd = std::sqrt(sd / std::max<size_t>(1, times.size()));
+    printf("variety (mask2 %d, %d runs): %d distinct first objectives, %d distinct first-three orders, first wave at %.0f s +- %.0f s, army 0 won %d\n", mask2, n, distinct(firsts), distinct(seqs), m, sd, wins);
+    return 0;
 }
 
 // Self-play training: every AI shares and updates the brain; the result is saved for later games.
@@ -636,7 +663,9 @@ static bool hqTest(u64 seed) {
     // the computer opponent rebuilds a lost Command Core by itself: it banks the price and sends its dozer
     for (int fi = 0; fi < 2; fi++) {
         Faction fac[2] = { (Faction)fi, (Faction)(1 - fi) };
-        bool ai[2] = { true, true }; int diff[2] = { 2, 2 }; int team[2] = { 0, 1 };
+        // (the enemy plays Easy: against a Hard one whose first wave flattened the half-built post and every dozer, nothing could be rebuilt, though
+        // the post was placed 4 s after the loss - this checks the rebuilding, not whether the base survives the next attack)
+        bool ai[2] = { true, true }; int diff[2] = { 2, 0 }; int team[2] = { 0, 1 };
         g_sim.init(2, fac, ai, diff, team, seed + 10 + fi);
         g_ai.init(seed);
         int hqType = firstBuildOf(fac[0]) + BR_HQ;
@@ -2855,6 +2884,7 @@ int main(int argc, char** argv) {
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
         else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
         else if (a == "--chosentest") { g_map.generate(); return chosenTest(seed) ? 0 : 1; }
+        else if (a == "--variety") { int n = 20; if (i + 1 < argc && argv[i + 1][0] != '-') n = atoi(argv[++i]); g_map.generate(); return varietyTest(n, seed, d0 >= 0 && d0 <= 3 ? d0 : 2); }
         else if (a == "--movetest") return moveTest(seed) ? 0 : 1;
         else if (a == "--jettest") { g_map.generate(); return jetTest(seed) ? 0 : 1; }
         else if (a == "--nuketest") { g_map.generate(); return nukeTest(seed) ? 0 : 1; }

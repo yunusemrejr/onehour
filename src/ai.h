@@ -48,11 +48,17 @@ enum AiFeat { FEAT_MACRO = 1, FEAT_LAUNCH = 2, FEAT_COMP = 4, FEAT_ECON = 8, FEA
 enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a tech structure stands, sent on a war of its own - the enemy's production taken
                                   // (and sold off, far from home), its armies turned, the Shadow Guard called in where it hurts - and pulled out of a helicopter's eye
                F2_HELIHUNT = 2,   // helicopters against an enemy Chosen: a watch over the base once one could exist, a hunt where the unseen struck
-               F2_GUILE = 4,      // the waves are harder to read: a fast detachment feints at the enemy's economy as the main wave sets off (a random pace
-                                  // for the first waves was tried too: it lost 41-50 to the trained timing, so the timing stays as trained)
+               F2_GUILE = 4,      // the waves are harder to read: a fast detachment feints at the enemy's economy as the main wave sets off
+               F2_SHARP = 16,     // a sharper Normal commander: it thinks as often as Hard's and spends with the full engine (no economy or build-speed
+                                  // bonus: those stay Brutal's). Measured with F2_VARY: Normal 59-32 and 69-26 against 41-51 and 45-44 baselines; on Hard,
+                                  // thinking at Brutal's pace lost 43-53 against 50-42; Brutal's economy rules (44-45), holding the first wave home for the
+                                  // enemy's (32-61) and an earlier first wave (43-48, 45-49) did not help either: Hard keeps its trained play
+               F2_VARY = 32,      // a commander that is hard to read: every wave weighs the objectives that score about equally well with a taste of its own
+                                  // (a different one each wave, up to 7 tiles' worth), so it hits the hub one time and the airfield the next, never a clearly
+                                  // worse target; and the first wave's pace differs a little from match to match (0.92 to 1.08: a +-18% pace lost 41-50)
                F2_CAND = 8,       // (training only, never shipped: plays TUNE_CAND, see readTuneEnv in ai.cpp)
-               F2_ALL = 7,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_ALL = 7 | 16 | 32,
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -192,6 +198,9 @@ struct AiPlayer {
     std::vector<Ref> feint;         // F2_GUILE: the detachment feinting at the enemy's economy, and until when
     float feintUntil = -100;
     int chosenSold = 0, feints = 0, heliHunts = 0;   // (statistics)
+    u32 waveTaste = 0; float pace = 1.0f;   // F2_VARY: this wave's taste among near-equal objectives, the first wave's pace this match (0.92 .. 1.08)
+    Rng varyRng{ 1 };                       // (their own random stream: everything else plays as before)
+    float firstWaveT = -1; int wavesLogged = 0; Vec2 waveLog[4]; int waveRole[4] = { -1, -1, -1, -1 }; float waveAt[4] = {};   // (--variety: what the first waves went for)
     int chosenBought = 0; bool chosenAlive = false; float chosenLostAt = -1000, chosenFirstAt = -1;   // Chosen trained so far, when the last one fell, when the first took the field
     void chosenOps(Ref chosen, Entity* threat, float threatValue);
     void shadowOps(Ref chosen, Entity* threat, float threatValue, const std::vector<Ref>& shadowNow);

@@ -156,8 +156,10 @@ static void readTuneEnv() {
     }
 }
 
+int g_aiSalt = 0;   // (--variety: the same match replayed with only the commanders' own random choices changed)
 void AiManager::init(u64 seed) {
     readTuneEnv();
+    seed ^= (u64)g_aiSalt * 0x2545F4914F6CDD1Dull;
     for (int t = 0; t < MAX_PLAYERS; t++) focus[t] = -1;
     focusAt = 0;
     for (int p = 0; p < MAX_PLAYERS; p++) {
@@ -273,6 +275,7 @@ void AiPlayer::observe(int enemyInf, int enemyVeh, int enemyAir, float threatVal
 }
 void AiPlayer::init(int p, u64 seed) {
     player = p; rng = Rng(seed);
+    varyRng = Rng(seed * 0x9E3779B97F4A7C15ull + 0x5EED); waveTaste = (u32)varyRng.next(); pace = 0.92f + 0.16f * (varyRng.next() % 1001) / 1000.0f;
     tu = tuneFor(g_sim.players[p].difficulty);
     nextThink = 2.0f + p * 0.37f;
     if (smart) {
@@ -665,6 +668,7 @@ Entity* AiPlayer::pickAttackTarget(const Vec2* from) {
         if (Sim::districtRuin(e) || e.owner == RIOT_PLAYER) continue;   // (a razed town block is rubble; rioters are met on the way, never an objective)
         if (!(g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) continue;
         float s = dist(e.pos, from ? *from : (hasFront ? humanFront : base)) / TILE;   // (with a teammate's push under way, near their front rather than near home)
+        if (on2(F2_VARY)) { u32 h = (u32)(&e - &g_sim.ents[0]) * 2654435761u ^ waveTaste ^ e.gen * 40503u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; s += (h & 1023) / 1023.0f * 7.0f; }   // (this wave's taste: up to 7 tiles' worth)
         if (e.isBuilding()) {
             BuildRole r = e.bt().role;
             if (e.district >= 0) s += on(FEAT_TOWNS) ? -4.0f : -12.0f;   // a town round the lake: worth hitting (its holder stops earning), but an infiltrator takes it back cheaper
@@ -829,6 +833,7 @@ void AiPlayer::think() {
     if (S.time < nextThink) return;
     ThinkProf prof(player);
     float cadence = pl.difficulty >= 3 ? 0.35f : (pl.difficulty == 2 ? 0.5f : (pl.difficulty == 1 ? 0.8f : 1.3f));
+    if (on2(F2_SHARP) && pl.difficulty == 1) cadence = 0.5f;   // (Hard thinking at Brutal's pace lost 43-53 against a 50-42 baseline: Normal only)
     nextThink = S.time + cadence;
     const bool wits = pl.difficulty >= 1 || on(FEAT_EASYWIT);   // sensible play (not economy): Normal and up, and Easy with FEAT_EASYWIT
     tu = tuneFor(pl.difficulty);   // (again here: the human may raise an army's difficulty mid-match)
@@ -870,7 +875,7 @@ void AiPlayer::think() {
     }
     // a commander with money in the bank does not wait for the clock: the timed gates for tech, airfields, upgrades and nukes run on 'effective' minutes
     float tm = minutes;
-    const float ease = pl.difficulty >= 2 ? 1.0f : 0.5f;   // Normal uses the spending engine at half strength: the full engine is Hard and Brutal's
+    const float ease = (pl.difficulty >= 2 || (on2(F2_SHARP) && pl.difficulty == 1)) ? 1.0f : 0.5f;   // Normal uses the spending engine at half strength: the full engine is Hard and Brutal's
     if (on(FEAT_MACRO) && pl.difficulty >= 1) tm += ease * clampf((pl.money - 4000.0f) / 2500.0f, 0.0f, 6.0f);
     if (on(FEAT_MACRO) && S.time - incomeT >= 10.0f) {   // credits per second coming in (hauled supplies and income structures)
         float inc = (float)(pl.harvested + pl.mined), r = (inc - incomeAt) / (S.time - incomeT);
@@ -1700,7 +1705,7 @@ void AiPlayer::think() {
     float waveThreshold = 3200.0f + minutes * 320.0f;
     if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.6f;
     waveThreshold = std::min(waveThreshold * style.thr * tu[TU_THR] * (on(FEAT_PERSONA) ? pers().patience : 1.0f), 11000.0f);
-    float firstWaveAt = (pl.difficulty >= 3 ? 165.0f : (pl.difficulty == 2 ? 270.0f : (pl.difficulty == 1 ? 360.0f : 480.0f))) * style.first * tu[TU_FIRST];
+    float firstWaveAt = (pl.difficulty >= 3 ? 165.0f : (pl.difficulty == 2 ? 270.0f : (pl.difficulty == 1 ? 360.0f : 480.0f))) * style.first * tu[TU_FIRST] * (on2(F2_VARY) ? pace : 1.0f);
 
     // medics keep up with the army (the healer's own AI handles the last few tiles: it drifts to wounded friends)
     if (smart && !medics.empty()) {
@@ -1944,6 +1949,9 @@ void AiPlayer::think() {
             prof.mark("launch_rule"); if (tgt && go) {
                 if (punish) { punishUntil = -1; punishes++; if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] COUNTERATTACK after the raid\n", player, S.time); }
                 attacking = true; waveValue = armyValue; attackStarted = S.time; attackTarget = S.refOf(*tgt); reassessed = false;
+                waveTaste = (u32)varyRng.next();   // (the next wave weighs its objectives anew)
+                if (wavesLogged < 4) { waveLog[wavesLogged] = tgt->pos; waveRole[wavesLogged] = tgt->isBuilding() ? (int)tgt->bt().role : 100; waveAt[wavesLogged] = S.time; wavesLogged++; }
+                if (firstWaveT < 0) firstWaveT = S.time;
                 wave = army;
                 // a home guard stays behind: the commander's own habit (an Iron Wall keeps a quarter home), and more of it while order at home is low
                 // and crowds may rise against the base (FEAT_RIOT). The ones nearest home stay; they hold the rally point.
