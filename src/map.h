@@ -17,8 +17,9 @@ struct RoadSeg { float x0, y0, x1, y1, halfW; };
 struct DistrictBlock { int kind, tx, ty; };
 struct DistrictSpot { const char* name; bool city; float cx, cy; std::vector<DistrictBlock> blocks; };   // tile units; kept so the baked terrain can paint centre lines
 
-// The second island off the main island's east coast (Map::seaIslands[0]): an ellipse RX x RY tiles round (SEA_ISLE_X, the map's middle row)
-static const float SEA_ISLE_X = ISLE_X0 + ISLE_W + 23.0f, SEA_ISLE_RX = 15.0f, SEA_ISLE_RY = 38.0f;
+// The second island out in the eastern sea (Map::seaIslands[0]): a squarish oval RX x RY tiles round (SEA_ISLE_X, the map's middle row), set midway
+// between the main island's east coast (its headlands reach about ISLE_X0 + ISLE_W) and the map's edge, so open water lies on both sides of it
+static const float SEA_ISLE_X = (ISLE_X0 + ISLE_W + MAP_W) * 0.5f, SEA_ISLE_RX = 13.0f, SEA_ISLE_RY = 40.0f;
 float mainIslandInland(int x, int y);   // tiles inland from the main island's coast (<= 0: the sea)
 float seaIslandInland(int x, int y);    // ... from the second island's coast
 

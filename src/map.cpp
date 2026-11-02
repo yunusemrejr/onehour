@@ -67,15 +67,13 @@ float mainIslandInland(int x, int y) {
               + (fbm(x * 0.16f, y * 0.16f, SEED + 402) - 0.5f) * 2.5f;
     return d - 4.0f + wob;
 }
-// The same for the second island: an ellipse with a wandering coast and a harbour bay biting into its east side (roughly in tiles)
+// The same for the second island: a squarish oval (a superellipse, so the flat top has room to build on) with a gently wandering coast (roughly in tiles)
 float seaIslandInland(int x, int y) {
     const u32 SEED = 1979;
-    float dx = (x + 0.5f - SEA_ISLE_X) / SEA_ISLE_RX, dy = (y + 0.5f - MAP_H * 0.5f) / SEA_ISLE_RY;
-    float e = std::sqrt(dx * dx + dy * dy);
-    float wob = (fbm(x * 0.08f + 11, y * 0.08f + 23, SEED + 420) - 0.5f) * 0.30f;
-    float inland = (1.0f + wob - e) * SEA_ISLE_RX;
-    float bx = x + 0.5f - (SEA_ISLE_X + SEA_ISLE_RX * 0.8f), by = y + 0.5f - (MAP_H * 0.5f + 7.0f);
-    return std::min(inland, std::sqrt(bx * bx + by * by) - 6.0f);   // (the bay)
+    float dx = std::fabs(x + 0.5f - SEA_ISLE_X) / SEA_ISLE_RX, dy = std::fabs(y + 0.5f - MAP_H * 0.5f) / SEA_ISLE_RY;
+    float e = std::cbrt(dx * dx * dx + dy * dy * dy);
+    float wob = (fbm(x * 0.08f + 11, y * 0.08f + 23, SEED + 420) - 0.5f) * 0.16f;
+    return (1.0f + wob - e) * SEA_ISLE_RX;
 }
 
 void Map::generate() {
@@ -265,10 +263,6 @@ void Map::generate() {
     // ---- the sea. The old map is the main island: its coast wanders a few tiles inside the old border (headlands push out a little), the corners
     // are rounded off, and a beach or a band of cliffs rings it (where the coast is high, and wherever a ridge runs into the sea). The rivers keep
     // flowing out through the beach: their mouths open into the ocean.
-    auto baseTile = [&](int x, int y) -> u8 {   // the island's ground before anything else is laid on it (the same noise as the first pass)
-        float n = fbm(x * 0.07f, y * 0.07f, SEED);
-        return n > 0.62f ? T_DIRT : (n < 0.40f ? T_GRASS2 : T_GRASS);
-    };
     auto coastBand = [&](int x, int y, float inland, float beachW, float cliffK) {   // a land tile 'inland' tiles from the water: beach, cliff or as it is
         u8& t = tiles[y * MAP_W + x];
         if (inland >= beachW || t == T_WATER || t == T_ROAD) return;   // (a river runs on out to its mouth; no road reaches the beach)
@@ -280,21 +274,25 @@ void Map::generate() {
         if (d <= 0) { tiles[y * MAP_W + x] = T_WATER; continue; }
         coastBand(x, y, d, 1.7f + 1.6f * fbm(x * 0.11f + 7, y * 0.11f + 70, SEED + 412), 0.55f);
     }
-    // The second island off the east coast: far smaller than the main island but many times the lake's islands. A long green ridge of land with beaches
-    // and northern cliffs, a harbour bay biting into its east side, a rocky knoll, woods (the forest pass below), three rich supply piles and three
-    // old strongholds. Nothing drives there: transports, cargo ships and lifters bring armies over, infiltrators swim.
+    // The second island out in the eastern sea, midway between the main island and the map's edge: far smaller than the main island but many times
+    // the lake's islands. A bare plateau of flat sand - no grass, no trees - ringed all round by a rocky edge one or two tiles thick, with three rich
+    // supply piles and three old strongholds on top. Nothing drives there: cargo ships land troops over the rocks, lifters fly them in.
     seaIslands.clear();
     {
         const float SX = SEA_ISLE_X, SY = C, RX = SEA_ISLE_RX, RY = SEA_ISLE_RY;
         seaIslands.push_back({ SX, SY, RX, RY });
-        for (int y = (int)(SY - RY - 4); y <= (int)(SY + RY + 4); y++) for (int x = (int)(SX - RX - 4); x <= (int)(SX + RX + 4); x++) {
-            if (!inMap(x, y)) continue;
-            float inland = seaIslandInland(x, y);
-            if (inland <= 0) continue;
-            tiles[y * MAP_W + x] = baseTile(x, y);
-            coastBand(x, y, inland, 1.5f + 1.2f * fbm(x * 0.13f + 3, y * 0.13f + 9, SEED + 413), y < SY - RY * 0.55f ? 0.48f : 0.66f);   // (cliffs mostly on the north end)
+        const int x0 = std::max(0, (int)(SX - RX - 4)), x1 = std::min(MAP_W - 1, (int)(SX + RX + 4));
+        const int y0 = std::max(0, (int)(SY - RY - 4)), y1 = std::min(MAP_H - 1, (int)(SY + RY + 4));
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) if (seaIslandInland(x, y) > 0) tiles[y * MAP_W + x] = T_SAND;
+        // the rocky edge: every tile of the island within 1.5 - 2.4 tiles of the sea (measured to the nearest water tile, so it is as thick at the
+        // narrow ends as on the long sides)
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {   // (only water counts, so painting rock as it goes changes nothing)
+            if (tiles[y * MAP_W + x] != T_SAND || seaIslandInland(x, y) <= 0) continue;
+            float w = 1.5f + 0.9f * fbm(x * 0.15f + 5, y * 0.15f + 31, SEED + 414), near = 9.0f;
+            for (int j = -3; j <= 3; j++) for (int i = -3; i <= 3; i++)
+                if (inMap(x + i, y + j) && tiles[(y + j) * MAP_W + x + i] == T_WATER) near = std::min(near, std::sqrt((float)(i * i + j * j)));
+            if (near <= w) tiles[y * MAP_W + x] = T_ROCK;
         }
-        paintDisc(*this, SX - 3.5f, SY - 9.0f, 2.6f, T_ROCK);   // a rocky knoll (small: a structure may still quarry it)
     }
     // Islets scattered round the sea: sand cays with a few trees, bare rock stacks. Kept well off both islands' coasts and the edge of the map.
     {
@@ -660,7 +658,7 @@ void Map::generate() {
             int tx = (int)C - 4, ty = (int)C + 1;
             if (landmarkFits(tx, ty, 2, 2)) { landmarks.push_back({ tx, ty, 2 }); setStructure(tx, ty, 2, 2, true); }
         }
-        // the second island's old strongholds: a castle over the harbour bay, a watchtower on the cliffs at the north end, a civilian bunker in the south
+        // the second island's old strongholds: a castle in the middle, a watchtower at the north end, a civilian bunker in the south
         static const struct { int dx, dy, w, h, kind; } SEA[3] = { { -5, 5, 4, 4, 0 }, { -1, -29, 2, 2, 2 }, { -2, 27, 3, 3, 1 } };
         for (auto& L : SEA) {
             int tx = (int)SEA_ISLE_X + L.dx, ty = (int)C + L.dy, bx = -1, by = -1;

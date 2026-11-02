@@ -3655,7 +3655,7 @@ void Sim::spawnFromQueue(Entity& b) {
     }
     else cmdMove({r}, rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
     emit(EV_UNIT_READY, owner, SND_UNIT_READY, u.pos, ut.name);
-    if (chosenType(type)) emit(EV_MSG, owner, SND_NONE, u.pos, "The Chosen is ready: only helicopters can see it (C calls its Shadow Guard)");
+    if (chosenType(type)) emit(EV_MSG, owner, SND_NONE, u.pos, "The Chosen is ready: only helicopters and snipers can see it (C calls its Shadow Guard)");
 }
 
 void Sim::updateBuilding(Entity& b) {
@@ -3770,10 +3770,10 @@ void Sim::updateDetection() {
             continue;
         }
         if (d.carrier.valid() || d.fall > 0) continue;
-        if (helicopterType(d.ut())) sweep(d, d.pos, CHOSEN_DETECT, DET_CHOSEN, false);   // only a helicopter ever finds The Chosen and its Shadow Guard
+        if (helicopterType(d.ut())) sweep(d, d.pos, CHOSEN_DETECT, DET_CHOSEN, false);   // a helicopter finds The Chosen and its Shadow Guard...
         float range = d.ut().detect;
         if (range <= 0) continue;
-        sweep(d, d.pos, range, d.ut().detectMask & ~DET_CHOSEN, false);
+        sweep(d, d.pos, range, d.ut().detectMask, false);   // ... and so does a sniper's scope (the only other detector with DET_CHOSEN)
     }
 }
 

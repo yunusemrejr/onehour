@@ -81,6 +81,21 @@ static bool mapTest16() {
     float lakeIsle = 3.1416f * big.r * big.r;
     CHECK16(isle > lakeIsle * 4.0f, "the second island is not much bigger than the lake's islands");
     CHECK16(isle * 8 < main, "the second island is not much smaller than the main island");
+    // ... a bare sand plateau with a rocky edge all round, out in the middle of the sea between the main island and the map's edge
+    int isleSand = 0, isleGreen = 0, isleEdge = 0, isleEdgeRock = 0, gapWest = 1 << 20, gapEast = 1 << 20;
+    for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++) {
+        u8 t = g_map.tile(x, y);
+        if (t == T_WATER || seaIslandInland(x, y) <= 0) continue;
+        if (t == T_SAND) isleSand++; else if (t != T_ROCK) isleGreen++;
+        if (g_map.tile(x + 1, y) == T_WATER || g_map.tile(x - 1, y) == T_WATER || g_map.tile(x, y + 1) == T_WATER || g_map.tile(x, y - 1) == T_WATER) { isleEdge++; if (t == T_ROCK) isleEdgeRock++; }
+        gapEast = std::min(gapEast, MAP_W - 1 - x);
+        for (int x2 = x - 1; x2 >= 0; x2--) if (g_map.tile(x2, y) != T_WATER && mainIslandInland(x2, y) > 0) { gapWest = std::min(gapWest, x - x2 - 1); break; }
+    }
+    CHECK16(isleGreen == 0, "the second island is not bare sand and rock (grass, dirt or trees on it)");
+    CHECK16(isleEdge > 100 && isleEdgeRock == isleEdge, "the second island's edge is not rock all round");
+    CHECK16(isleSand > 1000, "the second island has too little open sand to build on");
+    CHECK16(gapWest >= 12, "the second island lies too close to the main island");
+    CHECK16(std::abs(gapWest - gapEast) <= 8, "the second island is not out in the middle of the sea");
     int islets = 0;
     for (size_t k = 1; k < g_map.seaIslands.size(); k++) islets++;
     CHECK16(islets >= 12, "too few islets in the sea");
@@ -100,8 +115,8 @@ static bool mapTest16() {
     int seaForts = 0;
     for (auto& L : g_map.landmarks) if (seaIslandInland(L.tx, L.ty) > 0) seaForts++;
     CHECK16(seaForts >= 2, "the second island has no old strongholds");
-    printf("oceantest map: ok (%d ocean / %d lake water tiles, coast %d tiles (%d beach, %d cliff), second island %d tiles (main %d), %d islets, %d piles out there)\n",
-           g_map.waterSize[g_map.oceanComp], g_map.waterSize[g_map.lakeComp], coast, beach, cliff, isle, main, islets, onIsle);
+    printf("oceantest map: ok (%d ocean / %d lake water tiles, coast %d tiles (%d beach, %d cliff), second island %d tiles (main %d; %d sand, %d-tile rock edge, %d tiles of sea to the main island / %d to the edge), %d islets, %d piles out there)\n",
+           g_map.waterSize[g_map.oceanComp], g_map.waterSize[g_map.lakeComp], coast, beach, cliff, isle, main, isleSand, isleEdge, gapWest, gapEast, islets, onIsle);
     return true;
 }
 

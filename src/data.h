@@ -44,8 +44,9 @@ enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone
                     ST_DRONE = 2,                    // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
                     ST_INFIL = 3,                    // infiltrators / spies (a class c is found by detector bit 1 << (c - 1)): only snipers, drones, aircraft (not the heavy bombers), jeeps, other
                                                      // infiltrators and the light defence turrets (Laser Turret / Gun Nest) find them
-                    ST_CHOSEN = 4 };                 // The Chosen and its Shadow Guard: ONLY helicopters find them (gunships and lifters, not drones, planes,
-                                                     // snipers, turrets, bunkers or scans), firing or not; see helicopterType and CHOSEN_DETECT
+                    ST_CHOSEN = 4 };                 // The Chosen and its Shadow Guard: only helicopters (gunships and lifters, see helicopterType and
+                                                     // CHOSEN_DETECT) and snipers (their scope, DET_CHOSEN in detectMask) find them - not drones, planes,
+                                                     // turrets, bunkers or scans - firing or not
 static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4, DET_CHOSEN = 8;
 static const float INFIL_DETECT = 5.0f;   // tiles: how close an ordinary infiltrator-spotter (infantry, jeep, aircraft) has to be to find one
 // Infiltrators swim: one sent somewhere it cannot walk to (an island launcher out in the lake, the far bank of a river with no crossing near)
@@ -578,7 +579,7 @@ static const float CHOSEN_TAKE_GAP = 2.0f;        // s after taking a structure 
 static const float CHOSEN_CALL_COOLDOWN = 120.0f; // s between two calls of the Shadow Guard
 static const int   CHOSEN_SQUAD = 30;             // Shadow Guard soldiers that answer a call (they appear round the Chosen)
 static const float CHOSEN_DETECT = 6.0f;          // tiles: how close a helicopter has to be to find The Chosen or a Shadow Guard
-static const float CHOSEN_LINGER = 2.5f;          // s it stays found once the helicopter is gone
+static const float CHOSEN_LINGER = 2.5f;          // s it stays found once the helicopter (or sniper) is gone
 static const float CHOSEN_OPEN = 300.0f;          // s into a match before any army can train one (time to raise an airfield and helicopters first)
 // The Shadow Guard carry four weapons in one: W_SHADOW is what they look for targets with (every target, ground and air, out to 7.5 tiles);
 // the shot itself is the one the target calls for (Sim::shadowWeapon): the carbine at soldiers close by, the marksman shot at soldiers further

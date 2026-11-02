@@ -1,4 +1,4 @@
-// One Hour - headless tests 21: The Chosen and its Shadow Guard (only helicopters find them; instant captures; units turned; the 30-man call;
+// One Hour - headless tests 21: The Chosen and its Shadow Guard (only helicopters and snipers find them; a sniper takes them down; instant captures; units turned; the 30-man call;
 // four weapons in one; one Chosen at a time) and the computer commanders using it and hunting it
 #include "ai.h"
 #include "testutil.h"
@@ -30,11 +30,10 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     Vec2 mid = openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.42f), 9);
     flattenArena(mid, 14, 14);
     const int uf = firstUnitOf(foe);
-    // ---- nothing but a helicopter finds it: a sniper, a spy drone, a jet overhead, a jeep, a Laser Turret / Gun Nest and a bunker all look through it
+    // ---- nothing but a helicopter or a sniper finds it: a spy drone, a jet overhead, a jeep and a Laser Turret / Gun Nest all look through it
     Ref ch = at21(chosenT(me), 0, mid);
     Entity* C = g_sim.get(ch);
     VERIFY21(C && C->ut().stealth == ST_CHOSEN && C->weapon() == W_CONVERT, "The Chosen is not a stealthy converter");
-    Ref sn = at21(foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER, 1, mid + Vec2(6 * TILE, 0));
     Ref sd = at21(foe == F_CYBER ? U_C_SDRONE : U_K_SDRONE, 1, mid + Vec2(2 * TILE, -2 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
     Ref jet = at21(foe == F_CYBER ? U_C_FIGHTER : U_K_FIGHTER, 1, mid + Vec2(1 * TILE, 0)); if (Entity* a = g_sim.get(jet)) a->alt = 1;
     Ref jp = at21(foe == F_CYBER ? U_C_JEEP : U_K_JEEP, 1, mid + Vec2(-8 * TILE, 0));
@@ -42,7 +41,7 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     g_sim.updatePowerPublic(); for (auto& p : g_sim.players) p.powerMade = 200;
     g_sim.cmdStop({ch});
     run21(3);
-    VERIFY21(g_sim.get(ch) && !g_sim.visibleTo(*g_sim.get(ch), 1), "something other than a helicopter found The Chosen");
+    VERIFY21(g_sim.get(ch) && !g_sim.visibleTo(*g_sim.get(ch), 1), "something other than a helicopter or a sniper found The Chosen");
     // a helicopter within CHOSEN_DETECT finds it, and once found the enemy can shoot it; it is lost again moments after the helicopter leaves
     Ref heli = at21(foe == F_CYBER ? U_C_HELI : U_K_AIR, 1, mid + Vec2(4 * TILE, 0)); if (Entity* a = g_sim.get(heli)) { a->alt = 1; a->order = O_IDLE; }
     run21(0.5f);
@@ -50,8 +49,30 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     g_sim.destroy(*g_sim.get(heli), false);
     run21(CHOSEN_LINGER + 1.0f);
     VERIFY21(g_sim.get(ch) && !g_sim.visibleTo(*g_sim.get(ch), 1), "The Chosen stayed found long after the helicopter was gone");
-    for (Ref r : { sn, sd, jet, jp }) if (Entity* e = g_sim.get(r)) g_sim.destroy(*e, false);
+    for (Ref r : { sd, jet, jp }) if (Entity* e = g_sim.get(r)) g_sim.destroy(*e, false);
     if (Entity* t = g_sim.get(tur)) g_sim.destroy(*t, false);
+    // ---- a sniper's scope finds it too (7 tiles) and its rounds bring it down (five of them); it is lost again once the sniper is gone
+    {
+        const int snT = foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER;
+        Ref sn = NOREF;
+        for (Vec2 off : { Vec2(5, 0), Vec2(-5, 0), Vec2(0, 5), Vec2(0, -5), Vec2(4, 4), Vec2(-4, -4) }) {   // (a free spot within its scope, wherever the arena is open)
+            Vec2 p = g_map.nearestFree(g_sim.get(ch)->pos + off * TILE, 2);
+            if (dist(p, g_sim.get(ch)->pos) < 6.5f * TILE && dist(p, g_sim.get(ch)->pos) > 4.8f * TILE) { sn = g_sim.spawnUnit(snT, 1, p); break; }
+        }
+        VERIFY21(sn.valid(), "no spot for a sniper near The Chosen");
+        const float hp0 = g_sim.get(ch)->hp;
+        run21(0.5f);
+        if (getenv("ONEHOUR_TESTDBG")) { Entity* S = g_sim.get(sn); Entity* C = g_sim.get(ch); printf("  sniper %s at %.1f tiles, owner %d, Chosen %s\n", S ? "alive" : "gone", S && C ? dist(S->pos, C->pos) / TILE : -1.0f, S ? S->owner : -1, C ? "alive" : "gone"); }
+        VERIFY21(g_sim.get(ch) && g_sim.visibleTo(*g_sim.get(ch), 1), "a sniper 5 tiles away did not find The Chosen");
+        run21(4.0f);
+        const float round = WEAPONS[UNITS[snT].weapon].dmg;
+        if (getenv("ONEHOUR_TESTDBG")) printf("  sniper vs Chosen: hp %.0f -> %.0f (a plain round %.0f)\n", hp0, g_sim.get(ch) ? g_sim.get(ch)->hp : 0.0f, round);
+        VERIFY21(g_sim.get(ch) && g_sim.get(ch)->hp <= hp0 - round * 0.9f, "a sniper that found The Chosen did not shoot it");
+        if (Entity* e = g_sim.get(sn)) g_sim.destroy(*e, false);
+        run21(CHOSEN_LINGER + 1.0f);
+        VERIFY21(g_sim.get(ch) && !g_sim.visibleTo(*g_sim.get(ch), 1), "The Chosen stayed found long after the sniper was gone");
+        if (Entity* c = g_sim.get(ch)) c->hp = c->maxHp;
+    }
     // ---- it turns soldiers and vehicles at once, never aircraft (a gunship hovering over it stays the enemy's)
     Ref tank = at21(uf + 5, 1, mid + Vec2(3 * TILE, 0));
     Ref inf = at21(uf + 2, 1, mid + Vec2(-3 * TILE, 1 * TILE));
@@ -115,6 +136,23 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     VERIFY21(foesLeft == 0, "a Shadow Guard squad did not finish a tank and four soldiers in 12 s");
     VERIFY21(!seen, "the enemy saw a Shadow Guard while it fired (no helicopter near)");
     VERIFY21(squadHp1 >= squadHp0 - 1.0f, "the blind enemy still hurt the Shadow Guard");
+    // ---- a sniper finds the Shadow Guard and picks them off (they cannot see it to shoot back)
+    {
+        Entity* g0 = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) { g0 = &e; break; }
+        VERIFY21(g0, "no Shadow Guard left for the sniper");
+        int guards0 = 0; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) guards0++;
+        Ref sn = at21(foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER, 1, g0->pos + Vec2(0, 6 * TILE));
+        bool found = false;
+        for (int t = 0; t < 12 * SIM_HZ; t++) {
+            g_sim.step(); g_sim.events.clear();
+            for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me) && g_sim.visibleTo(e, 1)) found = true;
+        }
+        int guards1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) guards1++;
+        if (getenv("ONEHOUR_TESTDBG")) printf("  sniper vs Shadow Guard: %d -> %d, sniper %s\n", guards0, guards1, g_sim.get(sn) ? "alive" : "dead");
+        VERIFY21(found, "a sniper did not find the Shadow Guard round it");
+        VERIFY21(guards1 <= guards0 - 2, "a sniper did not take down two Shadow Guard in 12 s");
+        if (Entity* e = g_sim.get(sn)) g_sim.destroy(*e, false);
+    }
     // ---- one Chosen at a time: the barracks refuses a second while it lives, trains one again once it is gone
     if (g_sim.time < CHOSEN_OPEN) {   // (none in the opening)
         Ref b0 = place21(firstBuildOf(me) + BR_BARRACKS, 0, g_sim.players[0].basePos + Vec2(-8 * TILE, 0));
@@ -129,7 +167,7 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     g_sim.destroy(*g_sim.get(ch), true);
     VERIFY21(g_sim.cmdTrain(myBar, chosenT(me)), "no new Chosen could be trained after the first fell");
     VERIFY21(!g_sim.cmdTrain(myBar, chosenT(me)), "two Chosen could be queued at once");
-    printf("chosentest %s vs %s: only helicopters find it, units turned, structures taken at once (%d ticks), 30-man call with a 2 min wait, four weapons, unseen while firing, one at a time\n", FACTION_NAME[me], FACTION_NAME[foe], ticks);
+    printf("chosentest %s vs %s: helicopters and snipers find it, snipers take it and its guard down, units turned, structures taken at once (%d ticks), 30-man call with a 2 min wait, four weapons, unseen while firing, one at a time\n", FACTION_NAME[me], FACTION_NAME[foe], ticks);
     return true;
 }
 

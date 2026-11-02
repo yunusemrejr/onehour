@@ -699,8 +699,8 @@ void Game::buildButtonsRaw() {
         Entity* e = g_sim.get(r);
         if (!e || !e->isUnit() || !chosenType(e->type)) continue;
         float wait = std::max(0.0f, pl.shadowReady - g_sim.time);
-        if (wait > 0) snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters see them. Ready in %d s", CHOSEN_SQUAD, (int)std::ceil(wait));
-        else snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen right now; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters see them (once every %d s)", CHOSEN_SQUAD, (int)CHOSEN_CALL_COOLDOWN);
+        if (wait > 0) snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters and snipers see them. Ready in %d s", CHOSEN_SQUAD, (int)std::ceil(wait));
+        else snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen right now; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters and snipers see them (once every %d s)", CHOSEN_SQUAD, (int)CHOSEN_CALL_COOLDOWN);
         add(BK_SHADOWCALL, 0, wait <= 0, "Call Shadow Guard", tip);
         break;
     }
@@ -2644,7 +2644,7 @@ void Game::renderHud() {
                 }
                 if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
                 else if (ut.kind == UK_INF && ut.weapon >= 0 && !chosenType(e->type)) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
-                if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : (ut.stealth == ST_CHOSEN ? "STEALTH: helicopters only" : "STEALTH: only enemy spy drones see it"), ut.stealth == ST_CHOSEN ? rgb(226, 206, 255) : rgb(150, 220, 255));
+                if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : (ut.stealth == ST_CHOSEN ? "STEALTH: helicopters & snipers only" : "STEALTH: only enemy spy drones see it"), ut.stealth == ST_CHOSEN ? rgb(226, 206, 255) : rgb(150, 220, 255));
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);

@@ -4,7 +4,7 @@
 //    factory, the airfield, the tech structure, the nuke ramps, the Command structure. Far from home a taken structure is sold on the spot (the enemy
 //    loses it for good, the commander gets half its price); a turret or a bunker is kept and fights for its new owner where it stands. On the way it
 //    turns whatever enemy fighters come into reach. When it is in the thick of it, it calls its Shadow Guard, who wreck everything round its goal.
-//    The moment an enemy helicopter comes near - or it is found at all - it slips away, and it comes home to turn a raid on its own base.
+//    The moment an enemy helicopter (or a sniper it can see) comes near - or it is found at all - it slips away, and it comes home to turn a raid on its own base.
 //  * Against an enemy that could have one, a helicopter keeps watch over the base; where something unseen turns, takes or shoots the commander's
 //    own things, helicopters go and sweep the spot so the guns can see what they are shooting at.
 //  * Feints: as a big wave sets off, a fast detachment goes for the enemy's economy somewhere else, to pull the defence apart.
@@ -26,11 +26,11 @@ static float takeValue(const Entity& b) {
     }
 }
 
-// the nearest enemy helicopter the commander can see within r of p (nullptr: none)
+// the nearest enemy helicopter or sniper (the two things that find The Chosen) the commander can see within r of p (nullptr: none)
 static Entity* heliNear(int player, Vec2 p, float r) {
     Entity* best = nullptr; float bd = r;
     g_sim.forEachNear(p, r, [&](Entity& e) {
-        if (!e.isUnit() || !helicopterType(e.ut()) || !g_sim.enemies(player, e.owner) || !g_sim.visibleTo(e, player)) return;
+        if (!e.isUnit() || !(helicopterType(e.ut()) || (e.ut().detectMask & DET_CHOSEN)) || !g_sim.enemies(player, e.owner) || !g_sim.visibleTo(e, player)) return;
         float d = dist(e.pos, p); if (d < bd) { bd = d; best = &e; }
     });
     return best;
