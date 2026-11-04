@@ -1809,7 +1809,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, spy drones)
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
-    if (hardened(t) && t.hatch <= 0 && t.hp <= t.maxHp * (BUNKER_FLOOR + BUNKER_FLOOR_MARGIN) + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;   // (the margin: a bunker mends a little under fire, and aircraft must not hover over it plinking at that trickle)
+    if (hardened(t) && hardFloor(t.bt().role) > 0 && t.hatch <= 0 && t.hp <= t.maxHp * (hardFloor(t.bt().role) + BUNKER_FLOOR_MARGIN) + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;   // (the margin: a bunker mends a little under fire, and aircraft must not hover over it plinking at that trickle)
     if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper
     if (!enemies(e.owner, t.owner) && !burnOrder) {   // a friendly is only a legal target for the one the human ordered it to hit
         if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
@@ -2145,7 +2145,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     }
     tgt.hp -= real;
     if (bunker && !nuke && !(attU && attU->isUnit() && attU->ut().kind != UK_AIR)) {
-        float floorHp = tgt.maxHp * BUNKER_FLOOR;
+        float floorHp = tgt.maxHp * hardFloor(tgt.bt().role);
         tgt.hp = std::max(tgt.hp, std::min(hpBefore, floorHp));
     }
     tgt.lastDamaged = time;

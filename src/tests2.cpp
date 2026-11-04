@@ -214,14 +214,14 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     CHECK(!alive(tk) || hpOf(tk) < tk0 * 0.8f, "the garrison did not shoot an enemy tank");
     CHECK(!alive(air) || hpOf(air) < air0 * 0.9f, "the rocket troopers in the bunker did not shoot an aircraft");
     CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "a bunker firing its guns should stay plainly visible");
-    // ---- three direct nukes wreck the hatch and scrape the bunker, but the garrison inside is untouched (the hatch guns fall silent)
+    // ---- three direct nukes wreck the hatch and take most of the bunker, but the garrison inside is untouched (the hatch guns fall silent)
     Ref tk2 = spawnAt(tankFoe, 1, bp + Vec2(12 * TILE, 0));
     for (int k = 0; k < 3; k++) g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false});
     run(0.2f); g_sim.fallouts.clear();
     CHECK(alive(bk), "three nukes destroyed an underground bunker outright");
     B = g_sim.get(bk);
     CHECK(B->hatch <= 0, "three direct nukes left the surface hatch intact");
-    CHECK(B->hp < B->maxHp && B->hp > B->maxHp * 0.8f, "three nukes did not just scrape the bunker");
+    CHECK(B->hp < B->maxHp * 0.55f && B->hp > B->maxHp * 0.15f, "three nukes did not take about a fifth of the bunker each");
     CHECK(g_sim.garrisonInfantry(*B) == BUNKER_INF_CAP, "a nuke killed soldiers sheltering underground");
     Ref tk3 = spawnAt(tankFoe, 1, bp + Vec2(4 * TILE, 3 * TILE));
     {   // (the pop-up rocket pod still answers the tank: only the garrison and the hatch guns are silenced, so watch the hatch's own fire)
@@ -242,13 +242,13 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     float t31 = hpOf(tk4); run(10);
     CHECK(!alive(tk4) || hpOf(tk4) < t31, "the garrison did not resume fire after the hatch was patched");
     (void)tk2;
-    // ---- a barrage of some 20-30 warheads destroys a bunker (nukes ignore the floor) and the garrison spills out
+    // ---- a handful of warheads destroys a bunker (bunkers are fragile now: about a fifth each) and the garrison spills out
     {
         int shells = 0;
         while (alive(bk) && shells < 40) { g_sim.nukes.push_back({g_sim.players[1].basePos, g_sim.get(bk)->pos, 1, Sim::NUKE_FLIGHT - 0.05f, false}); run(0.2f); g_sim.fallouts.clear(); shells++; }
         CHECK(!alive(bk), "a long barrage of nukes could not destroy the bunker");
-        if (shells < 18 || shells > 32) fprintf(stderr, "stealthtest: the bunker fell to warhead %d\n", shells);
-        CHECK(shells >= 18 && shells <= 32, "a bunker did not take some 20-30 warheads to destroy");
+        if (shells < 1 || shells > 8) fprintf(stderr, "stealthtest: the bunker fell to warhead %d\n", shells);
+        CHECK(shells >= 1 && shells <= 8, "a bunker did not fall to a handful of warheads");
     }
     int exposed = 0; for (Ref r : inf) if (alive(r) && !g_sim.get(r)->carrier.valid()) exposed++;
     CHECK(exposed >= 40, "the garrison did not spill out onto the ground when nukes destroyed the bunker");
@@ -256,7 +256,7 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     Ref bk2 = placeAt(bunkerType, 0, bp + Vec2(-22 * TILE, 0));
     CHECK(bk2.valid(), "no second spot for the tank-grind bunker");
     Entity* B2 = g_sim.get(bk2);
-    B2->hp = B2->maxHp * BUNKER_FLOOR + 200.0f; B2->hatch = 0; B2->lastDamaged = g_sim.time;   // (pre-damaged near the floor so the grind fits the test)
+    B2->hp = B2->maxHp * (BUNKER_FLOOR + 0.6f); B2->hatch = 0; B2->lastDamaged = g_sim.time;   // (pre-damaged so the grind fits the test)
     Ref sd = spawnAt(sdroneFoe, 1, bp + Vec2(-22 * TILE, 5 * TILE)); if (Entity* a = g_sim.get(sd)) a->alt = 1;
     std::vector<Ref> tanks;
     for (int i = 0; i < 14; i++) tanks.push_back(spawnAt(tankFoe, 1, bp + Vec2(-22 * TILE + ((i % 7) - 3) * 30.0f, 4 * TILE + (i / 7) * 30.0f)));
@@ -544,7 +544,7 @@ static bool bunkerFloorTest(Faction me, Faction foe, u64 seed) {
     freshScene(me, foe, seed);
     Vec2 mid = openField();
     int bunkerFoe = foe == F_CYBER ? B_C_BUNKER : B_K_BUNKER, sdroneMe = me == F_CYBER ? U_C_SDRONE : U_K_SDRONE;
-    int gunship = me == F_CYBER ? U_C_HELI : U_K_AIR, tankMe = firstUnitOf(me) + 5;
+    int gunship = me == F_CYBER ? U_C_HELI : U_K_AIR;
     Ref bk = placeAt(bunkerFoe, 1, mid);
     CHECK(bk.valid(), "no spot for the bunker");
     Vec2 bp = g_sim.get(bk)->pos;
@@ -563,27 +563,14 @@ static bool bunkerFloorTest(Faction me, Faction foe, u64 seed) {
     g_sim.cmdAttack({heli}, bk);
     CHECK(g_sim.get(heli)->order == O_ATTACK, "a gunship could not be ordered to attack a revealed bunker");
     Entity* B = g_sim.get(bk);
-    B->hatch = 600; B->hp = B->maxHp * BUNKER_FLOOR;
+    B->hatch = 600; B->hp = B->maxHp * 0.5f;
     run(4);
-    CHECK(g_sim.get(bk)->hatch < 600, "a gunship did not shoot the hatch of a bunker at its floor");
-    // ---- the hatch is gone: the gunship gives up instead of hovering over the bunker
-    B = g_sim.get(bk); B->hatch = 0; B->lastDamaged = g_sim.time; B->hp = B->maxHp * BUNKER_FLOOR;
-    run(4);
-    // (the contract is that the bunker stops being its target; with the field this close to a corner base the gunship may
-    // legitimately pick a fight with the enemy HQ in its sight instead — that is not it hovering over the bunker)
-    CHECK(alive(heli) && g_sim.get(heli)->targetEnt != bk, "a gunship kept attacking a bunker it can no longer hurt");
-    B = g_sim.get(bk); B->hp = B->maxHp * BUNKER_FLOOR; B->lastDamaged = g_sim.time;   // (it mends a little: back at its floor, just hit)
-    float floorHp = g_sim.get(bk)->hp;
+    CHECK(alive(bk) && g_sim.get(bk)->hatch < 600, "a gunship did not shoot the hatch of a bunker");
+    // ---- bunkers have no floor any more (the fragile-bunker pass): with the hatch gone a gunship finishes a badly hurt bunker
+    B = g_sim.get(bk); B->hatch = 0; B->lastDamaged = g_sim.time; B->hp = B->maxHp * 0.04f;
     g_sim.cmdAttack({heli}, bk);
-    run(2);
-    CHECK(g_sim.get(heli)->targetEnt != bk, "a gunship was ordered onto a bunker it cannot hurt and stayed on it");
-    CHECK(g_sim.get(bk)->hp >= floorHp, "a gunship damaged a bunker below its floor");
-    // ---- tanks on the ground still grind the bunker below the floor (outpacing the trickle it mends under fire)
-    std::vector<Ref> tanks;
-    for (int k = 0; k < 4; k++) tanks.push_back(spawnAt(tankMe, 0, bp + Vec2(3 * TILE, (k - 1.5f) * TILE)));
-    g_sim.cmdAttack(tanks, bk);
-    run(12);
-    CHECK(!alive(bk) || g_sim.get(bk)->hp < floorHp, "a tank could not hurt a bunker at its floor");
+    run(20);
+    CHECK(!alive(bk), "a gunship could not finish off a bunker with its hatch gone");
     printf("stealthtest %s: bunker floor ok\n", FACTION_NAME[me]);
     return true;
 }
@@ -608,11 +595,11 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(earned >= BUNKER_INCOME * 11 && earned <= BUNKER_INCOME * 13, "a lone bunker did not earn about one payout every five seconds");
     CHECK(g_sim.players[0].mined == earned, "a bunker's income is not counted as mined money");
     CHECK(BUNKER_INCOME < INCOME_CLANKER / 4, "a bunker should earn only a little");
-    // ---- it mends itself: a little while it is being hit (BUNKER_REGEN_HOT), then fast once left alone
+    // ---- it mends itself: not at all while it is being hit (BUNKER_REGEN_HOT is 0 since the fragile-bunker pass), then slowly once left alone
     B->hp = B->maxHp * 0.5f; B->lastDamaged = g_sim.time;
     run(BUNKER_REGEN_DELAY - 1.0f);
     float hot = (B->hp - B->maxHp * 0.5f) / B->maxHp;
-    CHECK(hot > 0 && hot * B->maxHp < BUNKER_REGEN_HOT * (BUNKER_REGEN_DELAY - 1.0f) * 1.5f, "a bunker under fire did not mend at its reduced rate");
+    CHECK(hot >= 0 && hot * B->maxHp <= BUNKER_REGEN_HOT * (BUNKER_REGEN_DELAY - 1.0f) * 1.5f + 1.0f, "a bunker under fire mended faster than its reduced rate");
     run(21);
     float gain = (B->hp - B->maxHp * 0.5f) / B->maxHp;
     CHECK(gain > BUNKER_REGEN * 16 && gain < BUNKER_REGEN * 22, "a bunker did not mend by itself at its own rate");
@@ -668,7 +655,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     Ref centre = spawnAt(tankFoe, 1, gz), rim = spawnAt(tankFoe, 1, gz + Vec2(0.7f * NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE), 0));
     Ref outside = spawnAt(tankFoe, 1, gz + Vec2(1.25f * NUKE_RADIUS * TILE * std::sqrt(MINI_NUKE_SCALE) + 40.0f, 0));
     Ref wide = spawnAt(tankFoe, 1, gz + Vec2(0.7f * NUKE_RADIUS * TILE, 0));   // inside a full warhead's circle, far outside the small one
-    for (Ref r : {centre, rim, outside, wide}) if (Entity* a = g_sim.get(r)) a->disabledUntil = g_sim.time + 30;   // (held where they stand: this is about the blast's reach, not about running from it)
+    for (Ref r : {centre, rim, outside, wide}) if (Entity* a = g_sim.get(r)) a->disabledUntil = g_sim.time + 1e6f;   // (held where they stand for the whole scene: this is about the blast's reach, and a free tank would shell the now fragile bunker through the long reload)
     CHECK(!g_sim.cmdMiniNuke(1, gz), "an army without a bunker launched a bunker missile");
     CHECK(g_sim.cmdMiniNuke(0, gz), "a lone bunker could not launch its missile");
     CHECK(g_sim.nukes.size() == 1 && g_sim.nukes[0].scale == MINI_NUKE_SCALE && Sim::nukeRadius(g_sim.nukes[0]) < NUKE_RADIUS * TILE * 0.5f, "the bunker's missile is not a small one");
@@ -676,7 +663,8 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "a launch did not give the bunker away");
     // the salvo: the same missile again, one gap later, at the same spot and scale
     run(MINI_NUKE_SALVO_GAP + 0.1f);
-    CHECK(g_sim.nukes.size() == 2 && dist(g_sim.nukes[1].pos, g_sim.nukes[0].pos) < 1.0f && g_sim.nukes[1].scale == MINI_NUKE_SCALE, "a bunker's salvo did not follow with a second missile at the same spot");
+    if (MINI_NUKE_SALVO > 1) CHECK(g_sim.nukes.size() == 2 && dist(g_sim.nukes[1].pos, g_sim.nukes[0].pos) < 1.0f && g_sim.nukes[1].scale == MINI_NUKE_SCALE, "a bunker's salvo did not follow with a second missile at the same spot");
+    else CHECK(g_sim.nukes.size() == 1, "a single-missile bunker fired a second missile");
     run(Sim::NUKE_FLIGHT + 1.0f + MINI_NUKE_SALVO_GAP);   // (both missiles land)
     CHECK(!alive(centre), "a mini nuke did not destroy a tank at ground zero");
     if (getenv("ONEHOUR_DEBUG") && alive(rim)) fprintf(stderr, "rim tank: hp %.0f of %.0f, %.1f tiles from ground zero (circle %.1f)\n", hpOf(rim), g_sim.get(rim)->maxHp, dist(g_sim.get(rim)->pos, gz) / TILE, NUKE_RADIUS * std::sqrt(MINI_NUKE_SCALE));
@@ -685,7 +673,7 @@ static bool bunkerSelfTest(Faction me, Faction foe, u64 seed) {
     CHECK(hpOf(wide) == g_sim.get(wide)->maxHp, "a mini nuke hurt a tank outside its small circle");
     g_sim.fallouts.clear();
     run(MINI_NUKE_REVEAL);
-    CHECK(g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker must stay visible: underground bunkers are no longer stealthy");
+    CHECK(alive(bk) && g_sim.visibleTo(*g_sim.get(bk), 1), "the bunker must stay visible: underground bunkers are no longer stealthy");
     CHECK(alive(bk) && g_sim.miniNukesReady(0) == 0, "the bunker is gone or reloaded too early");
     run(MINI_NUKE_COOLDOWN);
     CHECK(g_sim.miniNukesReady(0) == 1, "the bunker's missile did not reload");
@@ -833,7 +821,7 @@ static bool bunkerOverdriveAndRadTest(Faction me, Faction foe, u64 seed) {
     float airHp0 = hpOf(air), f1Hp0 = hpOf(f1), allyHp0 = hpOf(ally);
     g_sim.cmdAttack({f1, f2, f3}, bk);
     // Deal heavy hits while surrounded so automatic radiation triggers
-    g_sim.applyDamagePublic(*g_sim.get(bk), 1800.0f, 1, f1);
+    g_sim.applyDamagePublic(*g_sim.get(bk), BUNKER_HATCH_HP * 0.66f, 1, f1);   // (heavy, but the hatch stands: the vents are on it)
     run(2.5f);
     Entity* B = g_sim.get(bk);
     CHECK(B && B->surrounded, "bunker surrounded state did not engage with 4 enemies around it");

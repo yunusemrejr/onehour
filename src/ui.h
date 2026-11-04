@@ -116,6 +116,7 @@ struct Game {
     void screenshot(const char* path);
     void spawnFromFx();
     void updateParticles(float dt);
+    void updateAmbience();                    // ui_audio.cpp: the sea, rain, storm and battle beds follow the view and the sky
     friend bool uiNewTest(Faction, Faction, u64);   // tests2.cpp drives the real input code
     // ---- weather.cpp: the day and the weather (cosmetic only: nothing in the simulation sees them) and the lake's wildlife
     struct Weather {

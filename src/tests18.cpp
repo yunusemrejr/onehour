@@ -43,16 +43,24 @@ static bool hardeningTest18(u64 seed) {
     Ref br = bunkerAt18(0, g_sim.players[0].basePos + Vec2(14.0f * TILE, 6.0f * TILE));
     run18(0.2f);
     Vec2 at = g_sim.get(br)->pos, from = g_sim.players[1].basePos;
-    for (int k = 0; k < 10; k++) g_sim.nukes.push_back({from, at, 1, Sim::NUKE_FLIGHT - 0.05f});
+    for (int k = 0; k < 2; k++) g_sim.nukes.push_back({from, at, 1, Sim::NUKE_FLIGHT - 0.05f});
     run18(0.3f);
-    CHECK18(g_sim.get(br), "ten warheads at once destroyed a bunker");
+    CHECK18(g_sim.get(br), "two warheads at once destroyed a bunker");
     float f = frac18(br);
-    if (f < 0.5f || f > 0.7f) { fprintf(stderr, "bunkertest: after ten direct hits the bunker has %.2f of its health (want about 0.6)\n", f); return fail18("ten warheads did not take about 4% each"); }
-    CHECK18(g_sim.get(br)->hatch <= 0, "ten direct hits left the hatch standing");
-    // left alone it mends itself fast, and the blown hatch is refitted
-    run18(BUNKER_REGEN_DELAY + 10.0f);
+    if (f < 0.45f || f > 0.65f) { fprintf(stderr, "bunkertest: after two direct hits the bunker has %.2f of its health (want about 0.56)\n", f); return fail18("two warheads did not take about a fifth each"); }
+    CHECK18(g_sim.get(br)->hatch <= 0, "two direct hits left the hatch standing");
+    {   // bunkers are fragile now: a handful of warheads landing together destroys one
+        Ref b2 = bunkerAt18(0, g_sim.players[0].basePos + Vec2(-14.0f * TILE, 8.0f * TILE));
+        run18(0.2f);
+        Vec2 at2 = g_sim.get(b2)->pos;
+        for (int k = 0; k < 6; k++) g_sim.nukes.push_back({from, at2, 1, Sim::NUKE_FLIGHT - 0.05f});
+        run18(0.3f);
+        CHECK18(!g_sim.get(b2), "six warheads at once did not destroy a bunker");
+    }
+    // left alone it mends itself slowly, and the blown hatch is refitted
+    run18(std::max(BUNKER_REGEN_DELAY, BUNKER_HATCH_REFIT) + 10.0f);
     float f2 = frac18(br);
-    if (f2 < f + 0.12f) { fprintf(stderr, "bunkertest: mended %.3f -> %.3f in %.0f s\n", f, f2, BUNKER_REGEN_DELAY + 10.0f); return fail18("the bunker does not mend itself fast"); }
+    if (f2 < f + 0.02f || f2 > f + 0.5f) { fprintf(stderr, "bunkertest: mended %.3f -> %.3f\n", f, f2); return fail18("the bunker does not mend itself slowly"); }
     CHECK18(g_sim.get(br)->hatch > 0, "the blown hatch was never refitted");
     // radiation never hurts it, and its scrubbers wash the zone out
     {
@@ -131,7 +139,7 @@ static bool upgradeTest18(u64 seed) {
         // Para Backup: 35 paratroopers, no infiltrators, once a minute
         Vec2 zone = openGroundNear(pl.basePos + Vec2(-12.0f * TILE, 10.0f * TILE), 5);
         std::vector<int> load = g_sim.bunkerParaManifest(0);
-        CHECK18((int)load.size() == BUNKER_PARA_TROOPS && BUNKER_PARA_TROOPS == 35, "a Para Backup does not carry 35 soldiers");
+        CHECK18((int)load.size() == BUNKER_PARA_TROOPS && BUNKER_PARA_TROOPS == 20, "a Para Backup does not carry 20 soldiers");
         for (int t : load) CHECK18(UNITS[t].kind == UK_INF && UNITS[t].role != UR_SPY, "a Para Backup carries something other than line infantry");
         int before = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.ut().kind == UK_INF && !e.carrier.valid()) before++;
         CHECK18(g_sim.cmdBunkerPara(A, zone), "a ready Para Backup was refused");
@@ -139,7 +147,7 @@ static bool upgradeTest18(u64 seed) {
         CHECK18(!g_sim.cmdBunkerPara(B, zone), "a bunker without the radio mast called a Para Backup");
         run18(40.0f);
         int after = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.ut().kind == UK_INF && !e.carrier.valid() && dist(e.pos, zone) < 9.0f * TILE) after++;
-        if (after < 30) { fprintf(stderr, "bunkertest: %d paratroopers on the ground at the zone (%d infantry before)\n", after, before); return fail18("the Para Backup did not land its troops"); }
+        if (after < BUNKER_PARA_TROOPS * 6 / 7) { fprintf(stderr, "bunkertest: %d paratroopers on the ground at the zone (%d infantry before)\n", after, before); return fail18("the Para Backup did not land its troops"); }
         CHECK18(g_sim.cmdBunkerPara(A, zone) == false || g_sim.time >= g_sim.get(A)->paraReady - BUNKER_PARA_COOLDOWN, "Para Backup cooldown");
         // field hospital: a damaged tank nearby is mended, even while under fire
         int tank = fi == 0 ? U_C_TANK : U_K_TANK;

@@ -74,10 +74,10 @@ static bool constantsTest(Faction me, u64 seed) {
     CHECK8(sb.sprintSpeed == SBOMBER_DASH && sb.speed == SBOMBER_SLOW && SBOMBER_DASH > 800.0f && SBOMBER_SLOW < 450.0f && SBOMBER_DASH > sb.speed * 2.0f, "the Supersonic Bomber is not very fast with its payload and slow without it");
     CHECK8(WEAPONS[W_NUKE_BOMB].proj == PJ_BOMB && std::string(WEAPONS[W_NUKE_BOMB].name) == "Nuclear Bomb", "there is no compact nuclear bomb weapon");
     CHECK8(SBOMBER_BOMB_SCALE > 0.0f && SBOMBER_BOMB_SCALE < UNUKE_SCALE * 0.5f, "the nuclear bomb's fireball is not much smaller than a silver warhead's");
-    CHECK8(std::fabs(UNUKE_DAMAGE - 2.7f) < 1e-5f, "the Underground Nuke's damage is not 10% weaker (2.7x)");
+    CHECK8(UNUKE_DAMAGE > 1.5f && UNUKE_DAMAGE < 2.7f, "the Underground Nuke's damage is not between 1.5x and its old 2.7x");
     CHECK8(std::fabs(ANTINUKE_LASER_NUKE_MUL - 0.60f) < 1e-5f && std::fabs(WALL_PD_NUKE_MUL - 0.30f) < 1e-5f, "the anti-nuke laser / wall warhead nerfs are not 40% / 70%");
-    CHECK8(std::fabs(BUILDS[bunker].hp - 11000.0f) < 0.01f, "the underground bunkers are not 11,000 hp");
-    CHECK8(BUILDS[bunker].hp > BUILDS[tech].hp, "a bunker is not tougher than the tech structure");
+    CHECK8(std::fabs(BUILDS[bunker].hp - 6000.0f) < 0.01f, "the underground bunkers are not 6,000 hp (the fragile-bunker pass)");
+    CHECK8(BUILDS[bunker].hp < BUILDS[tech].hp && BUILDS[bunker].hp > BUILDS[me == F_CYBER ? B_C_WALL : B_K_WALL].hp, "a bunker is not between the wall and the tech structure in toughness");
     // durability pass: walls, the Command structure and the tech structure are far less tough; the Underground Nuke silo (doubled in the riot update)
     // is now the toughest structure of all and its armoured silver warhead is harder to shoot down
     int wall = me == F_CYBER ? B_C_WALL : B_K_WALL, hq = firstBuildOf(me), silo = me == F_CYBER ? B_C_UNUKE : B_K_UNUKE;
@@ -86,8 +86,8 @@ static bool constantsTest(Faction me, u64 seed) {
     CHECK8(BUILDS[silo].hp >= 28000.0f && BUILDS[silo].hp > BUILDS[hq].hp, "the Underground Nuke silo is not twice as tough (28,000 / 29,000)");
     CHECK8(UNUKE_DOOR_HP >= 10000.0f, "the Underground Nuke silo's blast doors are not 10,000 hp");
     CHECK8(UNUKE_INTERCEPT_RESIST > 0.0f && UNUKE_INTERCEPT_RESIST < 1.0f, "the silver warhead is not armoured against interception");
-    CHECK8(BUILDS[silo].hp > BUILDS[hq].hp && BUILDS[hq].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[wall].hp,
-           "the silo / Command / bunker / tech / wall durability order is wrong");
+    CHECK8(BUILDS[silo].hp > BUILDS[hq].hp && BUILDS[hq].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[wall].hp,
+           "the silo / Command / tech / bunker / wall durability order is wrong");
     // not stealthy: an enemy can see it and target it like any other building
     Ref bk = place8(bunker, 0, openGroundNear(Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f), 12));
     CHECK8(bk.valid(), "no spot for the test bunker");

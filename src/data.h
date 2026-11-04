@@ -13,7 +13,8 @@ enum Sound {
     SND_NONE = 0, SND_RIFLE, SND_MG, SND_LASER, SND_LASER_HEAVY, SND_ARC, SND_CANNON, SND_ROCKET,
     SND_RAIL, SND_EXPLODE_S, SND_EXPLODE_L, SND_HIT, SND_SELECT, SND_ORDER, SND_PLACE,
     SND_BUILD_DONE, SND_UNIT_READY, SND_NOFUNDS, SND_LOWPOWER, SND_ATTACKED, SND_VICTORY, SND_DEFEAT,
-    SND_CLICK, SND_EMP, SND_SUPPLY, SND_AIR, SND_CANT, SND_JET, SND_COUNT
+    SND_CLICK, SND_EMP, SND_SUPPLY, SND_AIR, SND_CANT, SND_JET,
+    SND_EXPLODE_M, SND_NUKE, SND_THUNDER, SND_SPLASH, SND_SHIPHORN, SND_COLLAPSE, SND_SHELL_IMPACT, SND_COUNT
 };
 
 struct Weapon {
@@ -199,7 +200,7 @@ static const int UPG_STRUCTURE_COUNT = UPG_DRONES;   // the first three change w
 struct UpgradeType { const char* name; const char* hotkey; const char* desc; int cost; float time; };
 extern const UpgradeType UPGRADES[F_COUNT][UPG_COUNT];
 static const float RUGGED_HP = 1.5f;          // Rugged: structure health multiplier
-static const float RUGGED_ARMOR = 0.5f;       // Rugged: fraction of incoming damage a structure takes
+static const float RUGGED_ARMOR = 0.7f;       // Rugged: fraction of incoming damage a structure takes
 static const float RUGGED_SWAMP_LO = 0.03f;  // Rugged: the plating starts to give once this share of max health lands within ~2 s ...
 static const float RUGGED_SWAMP_HI = 0.11f;  // ... and is overwhelmed (full damage) from this share on: only a massive assault breaks through
 static const float RUGGED_NUKE = 0.55f;       // Rugged: fraction of max health one warhead takes at ground zero (two close nukes bring it down)
@@ -208,12 +209,12 @@ static const float RUGGED_NUKE = 0.55f;       // Rugged: fraction of max health 
 // silver Underground Nuke), so a warhead can only finish structures that were already damaged. Damage that would exceed the cap is stopped by
 // the plating.
 static const float HYPER_HP = 2.0f;           // structure health multiplier
-static const float HYPER_ARMOR = 0.40f;       // fraction of conventional damage a protected structure takes
+static const float HYPER_ARMOR = 0.60f;       // fraction of conventional damage a protected structure takes
 static const float HYPER_NUKE = 0.42f;        // hard ceiling: one warhead takes at most this share of max health
 // The Command Core / Post is the keystone: the highest health pool in the game, heavy armour against conventional fire, and a high
 // per-warhead ceiling - three direct hits bring it down and nothing less. The Underground Nuke silo is second, the bunker third, the
 // tech structure fourth (Hyper Protection and Rugged Nanoshell multiply every structure the same way, so the order holds).
-static const float HQ_ARMOR = 0.35f;          // fraction of conventional damage a Command structure takes
+static const float HQ_ARMOR = 0.5f;          // fraction of conventional damage a Command structure takes
 static const float HQ_NUKE = 0.40f;           // hard ceiling: one warhead takes at most this share of its max health (three direct hits kill it)
 // Walls: a cheap, unlimited 1x1 segment. Sturdy enough to soak small arms and light vehicles (their armour), but a warhead flattens one
 // at ground zero like any other small structure; Hyper Protection doubles its pool and caps a single warhead.
@@ -258,7 +259,7 @@ static const float FORTRESS_REACH = 1.5f;     // tiles of extra reach its garris
 // Island Nuke Launchers: two on each lake island, neutral at the start. Indestructible (fire and fallout only make them burn), taken only by an
 // infiltrator, and the only way to silence one is to take it back. Each launch is a Super Nuke (see ISLAND_NUKE_SCALE and the rest below the
 // Underground Nuke). Its laser chamber flares when something hits it.
-static const float ISLAND_NUKE_ARM = 30.0f;          // seconds after the match starts (or after a capture) before it can fire
+static const float ISLAND_NUKE_ARM = 240.0f;          // seconds after the match starts (or after a capture) before it can fire
 // Indestructible structures catch fire instead of losing health: heat rises with every hit (a warhead sets it ablaze at once) and bleeds away.
 static const float HEAT_PER_DAMAGE = 1.0f / 700.0f;  // heat added per point of weapon damage that hits it (two tanks firing set a segment ablaze within seconds;
                                                      // a lone rifleman's fire barely outpaces the cooling)
@@ -298,8 +299,8 @@ static const float SBOMBER_BOMB_FALL = 0.9f;      // seconds the compact bomb ta
 // target at altitude, drops one mid-sized nuclear bomb and flies on off the map. It is not an army unit (nobody commands it); strong anti-air
 // (Patriots, Rocket Batteries, Anti-Nuke Lasers' point defence, Anti-Rocket walls, fighters) can bring it down before the drop.
 static const float NUKEBOMBER_SCALE = 0.55f;      // share of a full warhead's blast area: between a bunker missile and a Nuke Ramp
-static const float NUKEBOMBER_COOLDOWN = 210.0f;  // seconds, per tech structure
-static const float NUKEBOMBER_OPEN = 240.0f;      // seconds into the match before the first call can be made
+static const float NUKEBOMBER_COOLDOWN = 420.0f;  // seconds, per tech structure
+static const float NUKEBOMBER_OPEN = 420.0f;      // seconds into the match before the first call can be made
 static const float NUKEBOMBER_FALL = 1.4f;        // seconds the bomb falls from the bomber to the ground
 static const float NUKEBOMBER_LIFE = 45.0f;       // seconds after which a bomber still on the map is withdrawn
 // Anti-Radiation Truck (both armies, built at the Assembly Plant / War Factory): an unarmed support vehicle with a decontamination field.
@@ -451,9 +452,11 @@ static const float AID_RADIUS = 3.0f;         // tiles: the crates come down wit
 // Underground Bunker: a deep, hidden shelter that holds up to 200 infantry and five dozers. The garrison fires from a metal hatch on the surface;
 // the hatch can be blown off (a nuke does it) which silences the bunker, but only infantry and vehicles can ever destroy the bunker itself.
 static const int   BUNKER_INF_CAP = 200, BUNKER_DOZER_CAP = 5;
-static const float BUNKER_HATCH_HP = 3200.0f;     // the surface opening (reinforced plating)
-static const float BUNKER_PLATING = 0.25f;        // share of the damage that reaches the buried bunker once the hatch is gone
-static const float BUNKER_FLOOR = 0.10f;          // aircraft, structures, shells from the sky and radiation can never take it below this share of its health - nuclear warheads ignore it entirely (a direct hit or a barrage destroys the bunker)
+static const float BUNKER_HATCH_HP = 1800.0f;     // the surface opening (reinforced plating)
+static const float BUNKER_PLATING = 0.55f;        // share of the damage that reaches the buried bunker once the hatch is gone
+static const float BUNKER_FLOOR = 0.0f;          // aircraft, structures, shells from the sky and radiation can never take it below this share of its health - nuclear warheads ignore it entirely (a direct hit or a barrage destroys the bunker)
+static const float SILO_FLOOR = 0.10f;            // the Underground Nuke silo keeps the old floor: aircraft, structures and radiation cannot take it below this share (bunkers have none now)
+inline float hardFloor(BuildRole r) { return r == BR_BUNKER ? BUNKER_FLOOR : SILO_FLOOR; }
 static const float BUNKER_FLOOR_MARGIN = 0.05f;   // aircraft and structures give up on a bunker within this share above its floor (it mends a little even under fire)
 static const float BUNKER_UNLOAD_GAP = 0.12f;     // seconds between two soldiers climbing out
 // Dozers: a direct order holds off their own repair rounds for a while; a site they are pulled away from is kept and resumed.
@@ -465,19 +468,19 @@ static const float SCOUT_MANUAL_HOLD = 10.0f;     // seconds a spy drone holds a
 static const float SCOUT_SWARM_SEP = 18.0f;       // tiles: friendly spy drones coordinate as a swarm and spread their search sectors at least this far apart
 // A bunker runs by itself, needing no power, no other structure and no supplies: it earns a little money, mends itself, mounts two
 // miniguns on its hatch and keeps a salvo of small nuclear missiles (a fifth of a Nuke Ramp's warhead) ready.
-static const int   BUNKER_INCOME = 85;            // credits per payout
+static const int   BUNKER_INCOME = 60;            // credits per payout
 static const float BUNKER_INCOME_INTERVAL = 5.0f; // seconds between payouts
-static const float BUNKER_REGEN = 0.015f;         // fraction of max health the body mends per second ...
-static const float BUNKER_HATCH_REGEN = 0.03f;    // ... and the hatch: both at full rate once the bunker has been left alone for BUNKER_REGEN_DELAY seconds
-static const float BUNKER_REGEN_DELAY = 3.0f;
-static const float BUNKER_HATCH_REFIT = 12.0f;   // a blown-off hatch is refitted by the bunker itself this long after the last hit (a dozer does it faster)
+static const float BUNKER_REGEN = 0.004f;         // fraction of max health the body mends per second ...
+static const float BUNKER_HATCH_REGEN = 0.01f;    // ... and the hatch: both at full rate once the bunker has been left alone for BUNKER_REGEN_DELAY seconds
+static const float BUNKER_REGEN_DELAY = 10.0f;
+static const float BUNKER_HATCH_REFIT = 30.0f;   // a blown-off hatch is refitted by the bunker itself this long after the last hit (a dozer does it faster)
 static const int   BUNKER_GUNS = 2;               // miniguns on the hatch (they stop when the hatch is blown off, like the garrison)
 static const int   W_BUNKER_MINIGUN = 32;         // WEAPONS index of those miniguns
 static const float MINI_NUKE_SCALE = 0.2f;        // a bunker's missile: a fifth of the blast area (radius NUKE_RADIUS * sqrt(scale)), same strength per spot
-static const float MINI_NUKE_COOLDOWN = 90.0f;    // seconds between two launches of one bunker
-static const float MINI_NUKE_ARM = 30.0f;         // seconds after a bunker is finished before its first missile is ready
+static const float MINI_NUKE_COOLDOWN = 240.0f;    // seconds between two launches of one bunker
+static const float MINI_NUKE_ARM = 120.0f;         // seconds after a bunker is finished before its first missile is ready
 static const float MINI_NUKE_REVEAL = 10.0f;      // seconds a launch is announced to the enemy (the missile climbs out of its hatch); the bunker itself is always visible
-static const int   MINI_NUKE_SALVO = 2;           // missiles per launch: the same warhead twice, one after the other ...
+static const int   MINI_NUKE_SALVO = 1;           // missiles per launch: the same warhead twice, one after the other ...
 static const float MINI_NUKE_SALVO_GAP = 1.2f;    // ... this many seconds apart
 // A bunker that is being worn down does not sit still: while it has been hit in the last BUNKER_RETALIATE seconds a rocket pod pops up (even with the
 // hatch blown off) and answers whoever is shooting at it, and the hatch guns go for the attackers first and swat rockets and shells aimed at it.
@@ -485,7 +488,7 @@ static const float BUNKER_RETALIATE = 6.0f;
 static const int   W_BUNKER_ROCKETS = 40;         // WEAPONS index of the rocket pod
 static const float BUNKER_CIWS_RANGE = 4.2f;      // tiles from the bunker an incoming rocket or shell is engaged
 static const float BUNKER_CIWS_GAP = 0.42f;       // seconds between two swats
-static const float BUNKER_CIWS_CHANCE = 0.62f;
+static const float BUNKER_CIWS_CHANCE = 0.40f;
 // Surrounded bunker overdrive: when enemy forces surround a bunker, heavy pop-up lasers / quad-machineguns engage aircraft, incoming nukes,
 // tanks and infantry; if the surrounded bunker is taking heavy damage, it automatically vents a ring of radiation around itself.
 static const int   W_BUNKER_LASER = 41;           // WEAPONS index of Cyber bunker overdrive laser
@@ -497,7 +500,7 @@ static const float BUNKER_RAD_RADIUS = 7.5f;      // tiles: radius of the bunker
 static const float BUNKER_RAD_COOLDOWN = 16.0f;   // seconds between automatic radiation vents
 static const float BUNKER_ANTINUKE_COVER = 16.0f; // tiles around the bunker protected against incoming enemy nuclear warheads
 static const float BUNKER_ANTINUKE_WINDOW = 5.8f; // seconds before impact the bunker's lasers/guns open fire on an incoming warhead
-static const float BUNKER_ANTINUKE_CHANCE = 0.85f;// base interception chance (1.0 when surrounded in overdrive)
+static const float BUNKER_ANTINUKE_CHANCE = 0.50f;// base interception chance (1.0 when surrounded in overdrive)
 // A bunker also watches over the structures around it, the civilian town included: it answers whoever attacks them as if they attacked the bunker,
 // its seismic sensors find hidden enemies nearby, and its crew mends what is damaged around it once the shooting stops.
 static const float BUNKER_GUARD_RADIUS = 9.0f;    // tiles: friendly structures it protects
@@ -507,15 +510,15 @@ static const float BUNKER_SENSOR = 7.0f;          // tiles: seismic sensors find
 // Nuclear hardening: the shelter is dug deep and sealed, so a warhead only scrapes it. A direct hit by an ordinary warhead (a ramp's, a bomber's,
 // a bunker's own) takes BUNKER_NUKE_SHARE of its full health and a share of the hatch; the big warheads (Underground / Super Nuke) count up to
 // twice as much. So it takes some 20-30 warheads landing together to destroy one - and between barrages it heals itself (BUNKER_REGEN).
-static const float BUNKER_NUKE_SHARE = 0.04f;     // share of max health one direct hit takes (the rim of the blast takes less)
-static const float BUNKER_NUKE_HATCH = 0.34f;     // share of the hatch one direct hit wrecks (three silence the garrison until it is refitted)
-static const float BUNKER_NUKE_STUN = 3.0f;       // seconds the pulse of a direct hit knocks it offline (an ordinary structure: twelve)
+static const float BUNKER_NUKE_SHARE = 0.22f;     // share of max health one direct hit takes (the rim of the blast takes less)
+static const float BUNKER_NUKE_HATCH = 0.6f;     // share of the hatch one direct hit wrecks (three silence the garrison until it is refitted)
+static const float BUNKER_NUKE_STUN = 8.0f;       // seconds the pulse of a direct hit knocks it offline (an ordinary structure: twelve)
 // Anti-radiation: filtered air, sealed doors and scrubber stacks. Fallout never hurts a bunker or anyone inside, and it scrubs the fallout round it.
 static const float BUNKER_SCRUB_RADIUS = 6.0f;    // tiles
 static const float BUNKER_SCRUB = 0.08f;          // share of a fallout zone's strength and radius scrubbed per second (a truck does RADTRUCK_SCRUB)
-static const float BUNKER_REGEN_HOT = 15.0f;      // health per second it still mends while it is being hit (a flat trickle: the shell and Hyper Protection do not scale it)
-static const float BUNKER_HATCH_HOT = 0.2f;       // share of the hatch's rate it keeps under fire
-static const float BUNKER_REGEN_UPG = 1.75f;      // the army's Repair Crews make its own mending this much faster (it needs no upgrade to mend)
+static const float BUNKER_REGEN_HOT = 0.0f;      // health per second it still mends while it is being hit (a flat trickle: the shell and Hyper Protection do not scale it)
+static const float BUNKER_HATCH_HOT = 0.0f;       // share of the hatch's rate it keeps under fire
+static const float BUNKER_REGEN_UPG = 1.5f;      // the army's Repair Crews make its own mending this much faster (it needs no upgrade to mend)
 // Per-bunker upgrades: bought for one bunker at a time (select it, pick one), one fitting at a time. Each changes how that bunker looks
 // (artBunkerUpgrade) and what it does; nothing carries over to the army's other bunkers, and a captured bunker keeps what was fitted to it.
 enum BunkerUpg { BU_SHELL = 0,   // super-thick shell: more health and a heavier hatch, less damage from guns and from warheads
@@ -529,25 +532,25 @@ enum BunkerUpg { BU_SHELL = 0,   // super-thick shell: more health and a heavier
                  BU_COUNT };     // (Entity.bunkerUpg is a u8: eight at most)
 struct BunkerUpgType { const char* name; const char* tag; const char* hotkey; const char* desc; int cost; float time; };   // tag: a short name for the info panel
 extern const BunkerUpgType BUNKER_UPGS[BU_COUNT];
-static const float BUNKER_SHELL_HP = 1.8f;        // super-thick shell: max health multiplier ...
+static const float BUNKER_SHELL_HP = 1.4f;        // super-thick shell: max health multiplier ...
 static const float BUNKER_SHELL_HATCH = 2.5f;     // ... hatch multiplier ...
-static const float BUNKER_SHELL_ARMOR = 0.55f;    // ... share of conventional damage it still takes ...
-static const float BUNKER_SHELL_NUKE = 0.6f;      // ... and of what a warhead takes
+static const float BUNKER_SHELL_ARMOR = 0.75f;    // ... share of conventional damage it still takes ...
+static const float BUNKER_SHELL_NUKE = 0.8f;      // ... and of what a warhead takes
 static const int   W_BUNKER_SKYLASER = 53;        // WEAPONS index of the laser battery's two roof lasers
 static const float BUNKER_LASER_COVER = 24.0f;    // tiles round it the laser battery guards against warheads
-static const float BUNKER_LASER_NUKE = 0.97f;     // its chance to burn down an ordinary warhead (an Underground / Super Nuke's resist still applies)
+static const float BUNKER_LASER_NUKE = 0.75f;     // its chance to burn down an ordinary warhead (an Underground / Super Nuke's resist still applies)
 static const float BUNKER_LASER_CIWS_RANGE = 7.0f;// tiles: rockets, shells and bombs aimed at it or at anything of its army this close are burned
-static const float BUNKER_LASER_CIWS_CHANCE = 0.95f;
+static const float BUNKER_LASER_CIWS_CHANCE = 0.70f;
 static const float BUNKER_LASER_CIWS_GAP = 0.12f;
 static const float BUNKER_MED_RADIUS = 8.0f;      // tiles: field hospital reach
-static const float BUNKER_MED_UNIT = 0.05f;       // share of max health per second it gives units ...
-static const float BUNKER_MED_STRUCT = 0.015f;    // ... and structures (both under fire too)
+static const float BUNKER_MED_UNIT = 0.03f;       // share of max health per second it gives units ...
+static const float BUNKER_MED_STRUCT = 0.008f;    // ... and structures (both under fire too)
 static const int   BUNKER_TRIPLE_SALVO = 3;       // missiles per launch with triple tubes (out together, spread over the target)
 static const float BUNKER_TRIPLE_SPREAD = 2.4f;   // tiles between the three aim points
 static const float BUNKER_SWIFT_FLIGHT = 0.5f;    // swift warheads: share of the usual flight time ...
 static const float BUNKER_SWIFT_RESIST = 0.3f;    // ... and of every defence's chance to shoot one down
-static const int   BUNKER_PARA_TROOPS = 35;       // paratroopers in one Para Backup ...
-static const float BUNKER_PARA_COOLDOWN = 60.0f;  // ... and seconds between two calls of one bunker
+static const int   BUNKER_PARA_TROOPS = 20;       // paratroopers in one Para Backup ...
+static const float BUNKER_PARA_COOLDOWN = 150.0f;  // ... and seconds between two calls of one bunker
 // Rain Nukes (BU_RAIN): RAIN_NUKES small warheads leave the bunker a beat apart and come down at random spots inside a circle of RAIN_NUKE_AREA
 // tiles (at least RAIN_NUKE_SPACING apart). They fly a fifth of a nuke's usual time and every defence's chance against them is RAIN_NUKE_RESIST of it
 static const int   RAIN_NUKES = 5;
@@ -557,12 +560,12 @@ static const float RAIN_NUKE_SPACING = 3.2f;      // tiles between two impact po
 static const float RAIN_NUKE_FLIGHT = 0.2f;       // share of the usual flight time (NUKE_FLIGHT)
 static const float RAIN_NUKE_RESIST = 0.06f;      // share of every defence's usual chance to shoot one down
 static const float RAIN_NUKE_GAP = 0.15f;         // seconds between two launches of one rain
-static const float RAIN_NUKE_COOLDOWN = 120.0f;   // seconds between two rains of one bunker
+static const float RAIN_NUKE_COOLDOWN = 360.0f;   // seconds between two rains of one bunker
 // Tank Drop (BU_TANKS): a heavy cargo plane drops TANK_DROP_TANKS tanks (the army's main battle tank; its super-heavy for some once unlocked) and
 // one medic vehicle on the spot. Like any airlift it can be shot down on the way, but it is TANK_DROP_ARMOR times as tough
 static const int   TANK_DROP_TANKS = 10;
 static const int   TANK_DROP_HEAVY = 3;           // tanks of the drop that are the super-heavy kind once the army has unlocked it
-static const float TANK_DROP_COOLDOWN = 150.0f;   // seconds between two drops of one bunker
+static const float TANK_DROP_COOLDOWN = 240.0f;   // seconds between two drops of one bunker
 static const float TANK_DROP_ARMOR = 2.5f;
 // The laser commandos of a Para Backup: ten times a Laser Trooper's health and firepower, and their Toxic Lance leaves a small toxic cloud
 // where it hits (a short-lived Fallout zone that poisons only enemy ground units); BUNKER_PARA_COMMANDOS of them in every drop
@@ -587,7 +590,7 @@ static const float CHOSEN_OPEN = 300.0f;          // s into a match before any a
 static const int   W_SHADOW = 56, W_SHADOW_RIFLE = 57, W_SHADOW_SNIPER = 58, W_SHADOW_ROCKET = 59, W_SHADOW_AA = 60;
 inline bool chosenType(int t) { return t == U_C_CHOSEN || t == U_K_CHOSEN; }
 inline bool shadowType(int t) { return t == U_C_SHADOW || t == U_K_SHADOW; }
-static const int   BUNKER_PARA_COMMANDOS = 5;
+static const int   BUNKER_PARA_COMMANDOS = 3;
 static const float TOXIC_RADIUS = 1.6f;           // tiles
 static const float TOXIC_LIFE = 6.0f;             // seconds a cloud lasts (another hit nearby renews it)
 static const float TOXIC_POWER = 1.0f;            // strength (a fallout zone's 'power')
@@ -622,11 +625,11 @@ static const int   CIVIC_DOZER_CAP = 5;           // no free dozers once the arm
 // doors and deep plating (only soldiers and vehicles can take it below BUNKER_FLOOR; warheads ignore the floor and can destroy it), and only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can
 // shoot its warhead down at all - and the armoured silver warhead halves even that chance (UNUKE_INTERCEPT_RESIST).
 static const float UNUKE_SCALE = 9.0f;            // share of a full warhead's blast AREA: radius NUKE_RADIUS * sqrt(9) = three times a ramp's
-static const float UNUKE_DAMAGE = 2.7f;           // damage multiplier over a ramp's warhead (10% weaker than the original 3x)
+static const float UNUKE_DAMAGE = 2.2f;           // damage multiplier over a ramp's warhead (10% weaker than the original 3x)
 static const float UNUKE_FALLOUT = 3.0f;          // radiation: strength and duration multiplier
 static const float UNUKE_INTERCEPT_RESIST = 0.5f; // the silver warhead is armoured against interception: every defence's chance to shoot it down is halved
 static const float UNUKE_DOOR_HP = 10000.0f;      // the silo's blast doors (they take the damage first, like a bunker's hatch)
-static const float UNUKE_ARM = 60.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)
+static const float UNUKE_ARM = 180.0f;             // seconds after it is finished before the first warhead is ready (then NUKE_COOLDOWN between launches)
 static const float SILO_REGEN = 0.0022f, SILO_HATCH_REGEN = 0.0075f;   // the silo mends itself slowly (body, blast doors per second) ...
 static const float SILO_REGEN_DELAY = 6.0f, SILO_DOOR_REFIT = 30.0f;    // ... once left alone this long; blown doors are refitted after the second
 static const Color UNUKE_GLOW = rgb(206, 210, 218); // the silver of its warhead, cloud and radiation
@@ -634,10 +637,10 @@ static const Color UNUKE_GLOW = rgb(206, 210, 218); // the silver of its warhead
 // hitting harder still, and very fast (ISLAND_NUKE_FLIGHT instead of a ramp's seven seconds). Bunkers and interceptor missiles cannot touch it;
 // only a laser (an Anti-Nuke Laser or an Anti-Rocket wall) can try, and every such chance is five times smaller than against an Underground Nuke.
 static const float ISLAND_NUKE_SCALE = UNUKE_SCALE * 4.0f;   // share of a full warhead's blast AREA: radius twice an Underground Nuke's (NUKE_RADIUS * 6)
-static const float ISLAND_NUKE_DAMAGE = 3.0f;        // damage multiplier over a ramp's warhead (an Underground Nuke's is UNUKE_DAMAGE)
+static const float ISLAND_NUKE_DAMAGE = 2.4f;        // damage multiplier over a ramp's warhead (an Underground Nuke's is UNUKE_DAMAGE)
 static const float ISLAND_NUKE_FLIGHT = 2.6f;        // seconds from launch to impact (Sim::NUKE_FLIGHT for every other warhead)
 static const float ISLAND_NUKE_INTERCEPT_RESIST = UNUKE_INTERCEPT_RESIST / 5.0f;   // each laser's chance to shoot it down, as a share of its usual chance
-static const float ISLAND_NUKE_COOLDOWN = 75.0f;     // seconds between two launches of one launcher
+static const float ISLAND_NUKE_COOLDOWN = 300.0f;     // seconds between two launches of one launcher
 static const float ISLAND_NUKE_FALLOUT_R = 0.45f;    // its fallout zone's radius, as a share of the blast radius (the outer blast is a pressure wave, not a crater)
 static const Color ISLAND_NUKE_GLOW = rgb(255, 120, 210);   // the magenta-white of its warhead, fireball and radiation
 // Civilian areas: the towns and cities round the lake (Map::districts). Every one starts neutral; an infiltrator of any army takes the WHOLE area
@@ -677,7 +680,7 @@ static const int START_CASH = 10000;
 static const int SUPPLY_PER_TRIP = 300;
 static const float HARVEST_TIME = 3.0f;   // seconds at pile
 static const float UNLOAD_TIME = 1.0f;
-static const float NUKE_COOLDOWN = 360.0f;    // seconds between launches, per Nuke Ramp (and Underground Nuke)
+static const float NUKE_COOLDOWN = 600.0f;    // seconds between launches, per Nuke Ramp (and Underground Nuke)
 static const float NUKE_RADIUS = 11.0f;        // tiles
 static const float INCOME_INTERVAL = 5.0f;    // seconds between payouts of an income structure
 static const int   INCOME_CYBER = 450;        // credits per payout of a Bitcoin Datacenter

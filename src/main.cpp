@@ -704,6 +704,10 @@ bool oceanTest(u64 seed);        // tests16.cpp: the island map in the sea, the 
 bool fleetTest(u64 seed);        // tests17.cpp: the Fleet Call (a battle fleet from the map border), carrier deck operations
 bool bunkerUpdateTest(u64 seed); // tests18.cpp: nuclear-hardened bunkers, 200/5 garrison, per-bunker upgrades, shift-drag lines, the smarter Waymaker
 bool duelMatrix(u64 seed);       // tests17.cpp: sharp fire against plain fire in mirrored battles
+bool balanceMatrix(u64 seed);    // tests22.cpp: equal-money fights of every combat unit against every other
+bool assaultMatrix(u64 seed);    // tests22.cpp: a budget of each combat unit against one turret
+bool navalTrace(u64 seed);       // tests22.cpp: how ship-like two fleets move in a fight
+Vec2 navalBattleScene(std::vector<Ref> side[2]);
 bool microMatrix(u64 seed);
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
@@ -1058,6 +1062,7 @@ static bool jetTest(u64 seed) {
         Vec2 sf = spot(bb + BR_FACTORY, 5); g_sim.placeBuilding(bb + BR_FACTORY, 0, (int)sf.x, (int)sf.y, true);
         Vec2 st = spot(bb + BR_TECH, 5); Ref tech = g_sim.placeBuilding(bb + BR_TECH, 0, (int)st.x, (int)st.y, true); (void)tech;
         Vec2 sa = spot(bb + BR_AIRFIELD, 5); Ref af = g_sim.placeBuilding(bb + BR_AIRFIELD, 0, (int)sa.x, (int)sa.y, true);
+        if (Entity* A = g_sim.get(af)) { A->maxHp = A->hp = 1e6f; }   // (the enemy tanks of the order-mode scenes shoot at it too: it must outlast every mode)
         g_sim.updatePowerPublic();
         if (!g_sim.cmdTrain(af, jetType)) return fail("jet not trainable at the airfield with a tech structure standing");
         Ref jet;
@@ -1103,6 +1108,7 @@ static bool jetTest(u64 seed) {
             for (int t = 0; t < 20 * 25; t++) { g_sim.step(); g_sim.events.clear(); }   // back on the pad, rearmed
             jj = g_sim.get(jet);
             if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "  after settle: pos %.0f,%.0f pad %.0f,%.0f ammo %d order %d alt %.2f\n", jj->pos.x, jj->pos.y, g_sim.get(af)->pos.x, g_sim.get(af)->pos.y, jj->ammo, (int)jj->order, jj->alt);
+            if (!g_sim.get(af)) return fail("the airfield was lost between modes");
             Vec2 base = g_sim.get(af)->pos;
             Vec2 where = g_map.nearestFree(base + Vec2((mode == 0 ? 7.0f : 16.0f) * TILE, 3 * TILE), 40);
             std::vector<Ref> vs;
@@ -1149,6 +1155,7 @@ static bool allyTest(u64 seed) {
         int foe = 2; if (dist(g_sim.players[3].basePos, g_sim.players[0].basePos) < dist(g_sim.players[2].basePos, g_sim.players[0].basePos)) foe = 3;
         Vec2 fb = g_sim.players[foe].basePos;
         Vec2 toMe = (g_sim.players[0].basePos - fb).norm();
+        for (auto& e : g_sim.ents) if (e.alive && e.owner == foe && e.isBuilding() && e.bt().role == BR_HQ) { e.maxHp *= 4; e.hp = e.maxHp; }   // (tank shells hit structures hard: the front must outlast the scene)
         std::vector<Ref> column;
         for (int k = 0; k < 12; k++) column.push_back(g_sim.spawnUnit(firstUnitOf(F_CYBER) + 5, 0, g_map.nearestFree(fb + toMe * (20 * TILE) + Vec2((k % 4) * 30.0f, (k / 4) * 30.0f), 6)));
         for (int k = 0; k < 12; k++) g_sim.spawnUnit(firstUnitOf(F_CLANKER) + 5, 1, g_map.nearestFree(g_sim.players[1].basePos + (fb - g_sim.players[1].basePos).norm() * (6 * TILE) + Vec2((k % 4) * 30.0f, (k / 4) * 30.0f), 6));
@@ -2468,7 +2475,7 @@ static bool upgradeTest(u64 seed) {
             perTank[big] = (h0 - b->hp) / n;
         }
         if (perTank[0] <= 0) return fail("the tanks never hit the rugged structure");
-        if (perTank[1] < perTank[0] * 1.5f) { fprintf(stderr, "upgradetest: a massive assault did not swamp the plating (%.0f vs %.0f per tank)\n", perTank[1], perTank[0]); return false; }
+        if (perTank[1] < perTank[0] * (1.0f + 0.5f * (1.0f / RUGGED_ARMOR - 1.0f))) { fprintf(stderr, "upgradetest: a massive assault did not swamp the plating (%.0f vs %.0f per tank)\n", perTank[1], perTank[0]); return false; }
     }
     // ---- dozers share out the repairs
     for (int fi = 0; fi < 2; fi++) {
@@ -2881,6 +2888,9 @@ int main(int argc, char** argv) {
         else if (a == "--fleettest") { g_map.generate(); return fleetTest(seed) ? 0 : 1; }
         else if (a == "--bunkertest") { g_map.generate(); return bunkerUpdateTest(seed) ? 0 : 1; }
         else if (a == "--duelmatrix") { g_map.generate(); return duelMatrix(seed) ? 0 : 1; }
+        else if (a == "--balancematrix") { g_map.generate(); return balanceMatrix(seed) ? 0 : 1; }
+        else if (a == "--assaultmatrix") { g_map.generate(); return assaultMatrix(seed) ? 0 : 1; }
+        else if (a == "--navaltrace") { g_map.generate(); return navalTrace(seed) ? 0 : 1; }
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
         else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
         else if (a == "--chosentest") { g_map.generate(); return chosenTest(seed) ? 0 : 1; }
@@ -3595,6 +3605,16 @@ int main(int argc, char** argv) {
                 g_game.cam = Vec2(clampf(sea.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(sea.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
                 for (int t = 0; t < n; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 if (getenv("ONEHOUR_OCEANSEL")) g_game.selection = { std::string(getenv("ONEHOUR_OCEANSEL")) == "cargo" ? cargo : car };
+            }
+            if (getenv("ONEHOUR_NAVAL")) {   // showcase: two fleets meeting in the open sea (ONEHOUR_NAVAL=N ticks after the order); the camera follows the fight
+                for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
+                std::vector<Ref> side[2];
+                Vec2 sea = navalBattleScene(side);
+                g_game.cam = Vec2(clampf(sea.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(sea.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                int nt = atoi(getenv("ONEHOUR_NAVAL")); if (nt < 1) nt = 60;
+                for (int t = 0; t < nt; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
+                Vec2 c; int n = 0; for (int s = 0; s < 2; s++) for (Ref r : side[s]) if (Entity* e = g_sim.get(r)) { c += e->pos; n++; }
+                if (n) { c = c * (1.0f / n); g_game.cam = Vec2(clampf(c.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); }
             }
             if (getenv("ONEHOUR_FLEET")) {   // showcase: a Fleet Call off the main island's west coast, N ticks after the call (ONEHOUR_FLEETCAM=entry|goal, ONEHOUR_FLEETPICK=1: the targeting overlay)
                 for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);

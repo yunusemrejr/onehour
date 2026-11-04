@@ -144,7 +144,7 @@ static bool deepNukeTest(Faction me, Faction foe, u64 seed) {
     g_sim.nukes.clear();
     // ---- the silo is as hard as a bunker: doors first, plating, and nothing but troops take it below the floor with conventional attack
     // (warheads are different: they ignore the floor, so enough direct hits destroy even the silo - verified right after)
-    float floorHp = S->maxHp * BUNKER_FLOOR;
+    float floorHp = S->maxHp * SILO_FLOOR;
     g_sim.applyDamagePublic(*S, 1e7f, 1, NOREF);   // (an aircraft, a structure, a shell: no ground unit behind it)
     S = g_sim.get(sr);
     CHECK6(S && S->hatch == 0 && S->hp >= floorHp - 0.5f, "something other than troops took the silo below its floor");
@@ -223,6 +223,7 @@ static bool bunkerWardTest(Faction me, Faction foe, u64 seed) {
     int bk = me == F_CYBER ? B_C_BUNKER : B_K_BUNKER, house = me == F_CYBER ? B_C_HOUSE : B_K_HOUSE;
     Ref b = place6(bk, 0, mid + Vec2(-5 * TILE, 0)), h = place6(house, 0, mid + Vec2(-1 * TILE, 0));
     CHECK6(b.valid() && h.valid(), "no room for the bunker and the house");
+    { Entity* H = g_sim.get(h); H->maxHp *= 6; H->hp = H->maxHp; }   // (tank shells hit structures hard: the house must outlast the scene)
     Vec2 bp = g_sim.get(b)->pos, hp = g_sim.get(h)->pos;
     Vec2 tp = g_map.nearestFree(bp + Vec2(9.0f * TILE, 0), 6);
     Ref tank = spawn6(firstUnitOf(foe) + 5, 1, tp);

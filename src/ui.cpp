@@ -200,6 +200,7 @@ void Game::update(float dt) {
     processEvents();
     cleanSelection();
     g_audio.setListener(cam, SCREEN_W, VIEW_H);
+    updateAmbience();
     if (g_sim.gameOver && state == GS_PLAYING) {
         state = GS_GAMEOVER; gameOverAt = wallTime;
         if (!g_brainPath.empty()) { g_ai.finish(g_sim.winnerTeam); g_brain.games++; g_brain.save(g_brainPath.c_str()); }   // each commander's doctrine learns whether it won

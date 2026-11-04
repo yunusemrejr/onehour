@@ -53,7 +53,7 @@ static bool constantsTest(Faction me, Faction foe, u64 seed) {
     int wall = me == F_CYBER ? B_C_WALL : B_K_WALL, air = hq + BR_AIRFIELD;
     CHECK7(BUILDS[wall].role == BR_WALL && BUILDS[wall].w == 1 && BUILDS[wall].h == 1 && BUILDS[wall].faction == me, "the wall is not a 1x1 structure of this army");
     CHECK7(BUILDS[wall].hp == WALL_HP && BUILDS[wall].hp < BUILDS[tech].hp, "the wall does not have its health pool");
-    CHECK7(BUILDS[hq].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[wall].hp, "the Command / bunker / tech / wall durability order is wrong");
+    CHECK7(BUILDS[hq].hp > BUILDS[tech].hp && BUILDS[tech].hp > BUILDS[bunker].hp && BUILDS[bunker].hp > BUILDS[wall].hp, "the Command / tech / bunker / wall durability order is wrong");   // (bunkers were made fragile: below the tech structure)
     CHECK7(BUILDS[air].w == 10 && BUILDS[air].h == 7 && AIRFIELD_CAP == 25, "the airfield is not the larger 10x7 / 25-pad airbase");
     CHECK7(BUILDS[me == F_CYBER ? B_C_WALL : B_K_WALL].role == BR_WALL, "the other army has no wall");
     CHECK7(BARRACKS_SPEED == 3.0f && HYPER_HP == 2.0f && HYPER_NUKE < 1.0f && HQ_NUKE < HYPER_NUKE, "the new durability constants are not the intended ones");
