@@ -25,4 +25,23 @@ void Game::updateAmbience() {
     }
     float battle = clampf(blasts / 6.0f, 0, 1);
     g_audio.setAmbience(sea, rain, storm, battle);
+    // the sounds of what just happened on the battlefield: every blast by its size, a nuke's detonation, a structure falling in, a ship going
+    // down (the sim adds an effect the tick it happens; anything younger than the ticks run since the last frame is new)
+    static u32 lastTick = 0;
+    const u32 now = g_sim.tick;
+    if (now < lastTick) lastTick = 0;   // (a new match)
+    const float fresh = (now - lastTick) * SIM_DT + 1e-4f;
+    lastTick = now;
+    if (fresh > 1.0f) return;   // (the first frame of a match, or after a long stall: no burst of old sounds)
+    int n = 0;
+    for (const Fx& f : g_sim.fx) {
+        if (f.t > fresh) continue;
+        switch (f.type) {
+        case FX_EXPLODE: if (f.vel.y >= 0 && ++n <= 6) g_audio.explosion(f.a, f.size); break;   // (a carpet-bomb flash marked "light" makes no extra boom)
+        case FX_MUSHROOM: g_audio.nuke(f.a); break;
+        case FX_RUBBLE: g_audio.play(SND_COLLAPSE, f.a, false, 0.9f); break;
+        case FX_WRECK: if (f.vel.y > 1.5f) { g_audio.play(SND_SPLASH, f.a, false, 0.9f); g_audio.play(SND_COLLAPSE, f.a, false, 0.6f); } break;   // (a ship going down; vel.y 1 marks a fallen soldier)
+        default: break;
+        }
+    }
 }

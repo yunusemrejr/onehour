@@ -34,3 +34,7 @@ bool artHealAntenna(Canvas& c, Canvas& mask, bool cyber, u32 seed);
 bool artBunker(Canvas& c, Canvas& mask, int type);
 // What one per-bunker upgrade (BunkerUpg) adds to that apron, painted alone on a clear canvas of the bunker's size (drawn over the bunker sprite).
 void artBunkerUpgrade(Canvas& c, int type, int upg);
+// The finishing pass (art_finish.cpp): cavity shading, occlusion, sky light and rim, weathering, emitter bloom and a contact shadow, applied
+// to a painted structure canvas before the realism grade. 'overlay' is the lighter variant for a bunker upgrade drawn over the apron (no
+// contact shadow, no weathering: the bunker underneath already has both). Changes colour inside the shape and adds alpha only outside it.
+void finishBuilding(Canvas& c, int type, u32 seed, bool overlay = false);

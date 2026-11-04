@@ -2821,7 +2821,7 @@ int main(int argc, char** argv) {
         else if (a == "--size" && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &reqW, &reqH) != 2) { reqW = reqH = 0; } }
         else if (a == "--software") software = true;
         else if (a == "--selftest") { selftestSecs = 600; if (i + 1 < argc && argv[i + 1][0] != '-') selftestSecs = atoi(argv[++i]); }
-        else if (a == "--shot" && i + 1 < argc) { shot = argv[++i]; headless = true; software = true; }
+        else if (a == "--shot" && i + 1 < argc) { shot = argv[++i]; headless = true; software = !getenv("ONEHOUR_SHOTGPU"); }   // (ONEHOUR_SHOTGPU=1: through the GPU renderer, on an X server)
         else if (a == "--sheet" && i + 1 < argc) { sheetPath = argv[++i]; headless = true; software = true; }
         else if (a == "--ticks" && i + 1 < argc) ticks = atoi(argv[++i]);
         else if (a == "--seed" && i + 1 < argc) seed = (u64)atoll(argv[++i]);
@@ -4005,6 +4005,7 @@ int main(int argc, char** argv) {
             if (g_game.selection.empty()) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && !e.queue.empty()) { g_game.selection.push_back(g_sim.refOf(e)); break; }
             if (g_game.selection.empty()) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER) { g_game.selection.push_back(g_sim.refOf(e)); break; }
         }
+        if (getenv("ONEHOUR_BOLT")) { g_game.wallTime += 3.0f; g_game.lightningStrike(); g_game.weather.boltT = g_game.wallTime - (float)atof(getenv("ONEHOUR_BOLT")); g_game.weather.bolt = 0.7f; }   // a lightning strike ONEHOUR_BOLT seconds before the shot
         g_game.render();
         g_game.screenshot(shot);
         printf("wrote %s\n", shot);

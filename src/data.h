@@ -362,9 +362,10 @@ extern const StrikeType STRIKES[F_COUNT];
 // take up a formation round it. The fleet is always the same - FLEET_PATROLS patrol boats, FLEET_WARSHIPS of each warship (destroyers and missile
 // cruisers) and one aircraft carrier with its full wing; never a cargo ship - and once in they are ordinary ships under your command. Free of charge,
 // once per paradrop cooldown per tech structure (more Data Centers / Arms Labs: more fleets); computer armies call it too.
-static const int   FLEET_PATROLS = 10;
+static const int   FLEET_PATROLS = 5;
 static const int   FLEET_WARSHIPS = 3;          // of each medium warship
 static const int   FLEET_CARRIERS = 1;
+static const float FLEET_COOLDOWN = 360.0f;     // seconds between two fleets of one tech structure (at least: never sooner than the paradrops' own cooldown)
 static const float FLEET_FADE = 3.2f;           // seconds a ship takes to come out of the sea haze at the border (it cannot be targeted while it is mostly haze)
 static const float FLEET_LANE = 3.4f;           // tiles between two lanes of the column coming in
 static const float FLEET_GAP = 1.7f;            // seconds between two warships entering on the same lane (a patrol boat: 70% of it)

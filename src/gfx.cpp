@@ -82,7 +82,13 @@ bool Gfx::init(int scale, bool software, int reqW, int reqH) {
     }
     { Canvas c(2, 2); c.fillRect(0, 0, 2, 2, rgb(255, 255, 255)); white = fromCanvasSolo(c, 0, 0, false).tex; }
     if (useAtlas) { Canvas c(4, 4); c.fillRect(0, 0, 4, 4, rgb(255, 255, 255)); whiteBlock = fromCanvas(c, 2, 2); whiteBlock.src = whiteBlock.sub(1, 1, 2, 2); whiteBlock.w = whiteBlock.h = 2; whiteBlock.ox = whiteBlock.oy = 1; }
-    buildFont(); bakeTerrain(); buildUnits(); buildBuildings(); buildMisc(); buildEffects(); buildMinimap();
+    {   // (ONEHOUR_INITPROF=1: how long each part of the startup bake takes)
+        static const bool prof = getenv("ONEHOUR_INITPROF") != nullptr;
+        u64 t0 = SDL_GetPerformanceCounter();
+        auto lap = [&](const char* what) { if (!prof) return; u64 t1 = SDL_GetPerformanceCounter(); fprintf(stderr, "[init] %-14s %7.0f ms\n", what, (t1 - t0) * 1000.0 / SDL_GetPerformanceFrequency()); t0 = t1; };
+        buildFont(); lap("font"); bakeTerrain(); lap("terrain"); buildUnits(); lap("units"); buildBuildings(); lap("buildings");
+        buildMisc(); lap("misc"); buildEffects(); lap("effects"); buildMinimap();
+    }
     iconsInit(*this);
     if (getenv("ONEHOUR_ATLASDBG")) {
         int top = 0; for (auto& pg : atlas) for (auto& p : pg.sky) top = std::max(top, (int)p.y);
@@ -586,8 +592,8 @@ void Gfx::buildFont() {
 static u16 dithered565(u32 argb, int wx, int wy) {
     static const int BAYER[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
     Color col = Canvas::unpack(argb);
-    int dth = BAYER[(wy & 3) * 4 + (wx & 3)] - 8;
-    int r = clampi((int)col.r + dth / 4, 0, 255) >> 3, gg = clampi((int)col.g + dth / 8, 0, 255) >> 2, b = clampi((int)col.b + dth / 4, 0, 255) >> 3;
+    const float u = (BAYER[(wy & 3) * 4 + (wx & 3)] + 0.5f) / 16.0f;   // a full-step ordered threshold: smooth gradients (sea depth, dusk light) show no bands
+    int r = std::min(31, (int)(col.r * (31.0f / 255.0f) + u)), gg = std::min(63, (int)(col.g * (63.0f / 255.0f) + u)), b = std::min(31, (int)(col.b * (31.0f / 255.0f) + u));
     return (u16)((r << 11) | (gg << 5) | b);
 }
 // The colour grade every baked ground pixel gets, and every repainted patch with it: a touch more colour and depth than the painter's own palette,
@@ -611,6 +617,10 @@ static u32 gradeGround(u32 argb, int wx, int wy) {
     r = MID + (r - MID) * C; g = MID + (g - MID) * C; b = MID + (b - MID) * C;   // a little more depth
     float w = (groundLight(wx, wy) - 0.5f) * 0.14f;   // +-7%: warm sunlit patches, cooler shaded ones
     r *= 1.0f + w; g *= 1.0f + w * 0.55f; b *= 1.0f - w * 0.7f;
+    // daylight exposure: the painter's palette sat low (a sunny field averaged a third of full brightness); lift the darks and mids, keep the
+    // highlights where they are, so the ground reads as sunlit and the shadows of things on it have room to show
+    auto lift = [](float v) { float x = clampf(v / 255.0f, 0, 1); x = x + 0.42f * x * (1.0f - x) * (1.0f - 0.35f * x); return x * 255.0f * 1.04f; };
+    r = lift(r); g = lift(g); b = lift(b);
     return Canvas::pack(Color{ (u8)clampf(r, 0, 255), (u8)clampf(g, 0, 255), (u8)clampf(b, 0, 255), c.a });
 }
 
@@ -869,7 +879,8 @@ static void gradeArt(Canvas& c, u32 seed, float desat, float grime) {
         u32 h = (u32)((x >> 1) * 73856093u) ^ (u32)((y >> 1) * 19349663u) ^ (seed * 83492791u);
         h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
         float n = ((h & 1023) / 1023.0f - 0.5f) * 2.0f, k = 1.0f + grime * n * (0.6f + 0.4f * (lum / 255.0f));
-        o.r = (u8)clampf(r * k, 0, 255); o.g = (u8)clampf(g * k, 0, 255); o.b = (u8)clampf(b * k, 0, 255);
+        auto lift = [](float v) { float x = clampf(v / 255.0f, 0, 1); return (x + 0.30f * x * (1.0f - x)) * 255.0f; };   // (daylight on the hardware: matches the lifted ground)
+        o.r = (u8)clampf(lift(r * k), 0, 255); o.g = (u8)clampf(lift(g * k), 0, 255); o.b = (u8)clampf(lift(b * k), 0, 255);
         px = Canvas::pack(o);
     }
 }
@@ -929,7 +940,8 @@ void Gfx::buildBuildings() {
         BArtSize sz = artBuildingSize(t);
         Canvas c(sz.w, sz.h), m(sz.w, sz.h);
         artBuilding(c, m, t);
-        gradeArt(c, 3301u + (u32)t, BUILDS[t].role == BR_CIVIC ? 0.04f : 0.08f, 0.05f);
+        finishBuilding(c, t, 3201u + (u32)t);
+        gradeArt(c, 3301u + (u32)t, BUILDS[t].role == BR_CIVIC ? 0.04f : 0.08f, BUILDS[t].faction == F_CYBER ? 0.03f : 0.05f);   // (Cyber's ceramic and glass are cleaner than Clanker's field metal)
         // cropped to the painted area like the team masks: the padding round a footprint is mostly empty sky, and the
         // saved texture memory (a third or more of every structure sprite) pays for the bigger world texture
         building[t] = cropToSprite(*this, c, sz.cx, sz.cy, 1.0f / BART_K);
@@ -941,6 +953,7 @@ void Gfx::buildBuildings() {
         if (BUILDS[t].role == BR_BUNKER) for (int u = 0; u < BU_COUNT; u++) {
             Canvas a(sz.w, sz.h);
             artBunkerUpgrade(a, t, u);
+            finishBuilding(a, t, 3401u + (u32)(t * 8 + u), true);
             gradeArt(a, 3401u + (u32)(t * 8 + u), 0.08f, 0.05f);
             bunkerUpg[BUILDS[t].faction][u] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K);
         }

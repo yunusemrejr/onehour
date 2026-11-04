@@ -60,6 +60,16 @@ void pylon(Bld& b, float x, float base, float h) {
     }
 }
 
+// corrugated sheet roof: each rib has a lit north-west face, a shadowed south-east face and a dark trough, so the sheets read as formed metal
+void ribRoof(Bld& b, const Roof& r, float pitch, Color dark, int alpha = 90) {
+    float top = r.y + 1, hh = r.h - 2;
+    for (float x = r.x; x + pitch <= r.x + r.w + 0.01f; x += pitch) {
+        b.a.rect(x + 0.4f, top, pitch * 0.5f - 0.4f, hh, 0, rgba(WHITE, 26), 1, 0);                  // lit face
+        b.a.rect(x + pitch * 0.5f, top, pitch * 0.5f, hh, 0, rgba(dark, alpha * 0.55f), 1, 0);       // shadowed face
+        b.a.line(x + pitch * 0.5f, top, x + pitch * 0.5f, top + hh, 0.5f, rgba(dark, alpha));        // trough
+    }
+}
+
 // ---------------------------------------------------------------- Command Core
 // a blast-hardened concrete bunker with a steel upper floor of tinted glass, a radome, dishes and a comms mast
 void hqCyber(Bld& b) {
@@ -133,7 +143,7 @@ void supplyCyber(Bld& b) {
     b.hazard(4, 62.2f, 70, 2.2f);
     // warehouse: corrugated steel roof with skylights, wall cladding and three roll-up doors
     Roof wh = b.block(6, 6, 64, 46, 16, R_STEEL_L, R_STEEL);
-    b.corrugated(wh, 4, R_STEEL_D, 80);
+    ribRoof(b, wh, 4, R_STEEL_D, 80);
     b.skylights(wh, 4, R_GLASS_T, R_STEEL_D);
     b.wallSeams(wh, 16, 16);
     for (int i = 0; i < 3; i++) {
@@ -149,8 +159,8 @@ void supplyCyber(Bld& b) {
     b.antenna(88, 2, 10, C_RED); b.light(90, 27, 0.8f, C_CYAN, 70);
     // stacked containers (blocks with ribbed lids) and loose containers in the yard
     Color cA = rgb(78, 100, 118), cB = rgb(96, 110, 124), cC = rgb(118, 126, 134);
-    Roof s1 = b.block(8, 80, 24, 10, 9, cA, shade(cA, 0.72f)); b.corrugated(s1, 3, R_DARK, 60);
-    Roof s2 = b.block(36, 80, 24, 10, 9, cB, shade(cB, 0.72f)); b.corrugated(s2, 3, R_DARK, 60);
+    Roof s1 = b.block(8, 80, 24, 10, 9, cA, shade(cA, 0.72f)); ribRoof(b, s1, 3, R_DARK, 60);
+    Roof s2 = b.block(36, 80, 24, 10, 9, cB, shade(cB, 0.72f)); ribRoof(b, s2, 3, R_DARK, 60);
     b.container(8, 90, 24, 6, cC); b.container(36, 90, 24, 6, cA);
     // pallets stacked by the dock
     Color tim = rgb(150, 132, 102);
@@ -481,13 +491,13 @@ void hqClanker(Bld& b) {
     for (int i = 0; i < 3; i++) { P tp = b.cyl(34 + i * 30.0f, 22, 8, 8, shade(K_STEEL, 1.1f), K_RUST); b.a.ring(tp.x, tp.y, 5, 0.8f, K_DARK, 0.6f, 0.2f); b.a.dot(tp.x, tp.y, 1.3f, K_YEL); }
     // radio shack, generator shed and the main bunker
     Roof rs = b.block(8, 44, 24, 28, 10, K_ROOF, K_OLIVE_D);
-    b.corrugated(rs, 3.2f, K_DARK); b.windows(rs, 10, 2, rgb(255, 214, 120), 0.5f);
+    ribRoof(b, rs, 3.2f, K_DARK); b.windows(rs, 10, 2, rgb(255, 214, 120), 0.5f);
     Roof gs = b.block(96, 48, 24, 32, 10, K_ROOF, K_OLIVE_D);
-    b.corrugated(gs, 3.2f, K_DARK); b.a.circle(gs.x + 8, gs.y + 8, 4, K_STEEL, 1.6f, 0.55f); b.a.dot(gs.x + 8, gs.y + 8, 1.6f, K_DARK);
+    ribRoof(b, gs, 3.2f, K_DARK); b.a.circle(gs.x + 8, gs.y + 8, 4, K_STEEL, 1.6f, 0.55f); b.a.dot(gs.x + 8, gs.y + 8, 1.6f, K_DARK);
     b.pipe(gs.x + 8, gs.y + 8, gs.x + 8, gs.y - 12, 2.2f, K_STEEL);
     Roof mb = b.block(34, 36, 60, 56, 16, K_KHAKI, K_OLIVE);
     b.a.rect(mb.x + 3, mb.y + 3, mb.w - 6, mb.h - 6, 2, K_ROOF, 1.8f, 0.5f);
-    b.corrugated(Roof{mb.x + 3, mb.y + 3, mb.w - 6, mb.h - 6}, 4.0f, K_DARK);
+    ribRoof(b, Roof{mb.x + 3, mb.y + 3, mb.w - 6, mb.h - 6}, 4.0f, K_DARK);
     b.a.rect(mb.x + 6, mb.y + 6, 12, 9, 1, K_STEEL, 1.4f, 0.5f); b.a.line(mb.x + 12, mb.y + 6, mb.x + 12, mb.y + 15, 0.6f, rgba(K_DARK, 160));   // roof hatch
     b.a.circle(mb.x + mb.w - 12, mb.y + 12, 5, K_STEEL, 1.6f, 0.55f); b.a.dot(mb.x + mb.w - 12, mb.y + 12, 2, K_DARK);                              // vent stack
     b.a.rect(mb.x + 6, mb.y + mb.h - 14, 22, 8, 1, K_OLIVE_D, 1.4f, 0.4f);
@@ -510,7 +520,7 @@ void powerClanker(Bld& b) {
     b.pad(K_PAD, K_SEAM, 0.16f, 3);
     b.oilStain(30, 54, 14, 4);
     Roof hall = b.block(5, 12, 62, 38, 14, K_ROOF, K_OLIVE_D);
-    b.corrugated(hall, 3.2f, K_DARK); b.rust(hall.x, hall.y, hall.x + hall.w, hall.y + hall.h, 7, 80);
+    ribRoof(b, hall, 3.2f, K_DARK); b.rust(hall.x, hall.y, hall.x + hall.w, hall.y + hall.h, 7, 80);
     b.vent(hall.x + 5, hall.y + 6, 16, 8, rgba(WHITE, 90));
     b.windows(hall, 14, 4, rgb(255, 214, 120), 0.5f); b.wallSeams(hall, 14, 14);
     b.door(36, hall.y + hall.h + 14, 20, 12, K_DARK, rgb(24, 22, 18)); b.hazard(26, hall.y + hall.h + 14 + 1.2f, 20, 3);
@@ -528,7 +538,7 @@ void supplyClanker(Bld& b) {
     b.pad(K_PAD, K_SEAM, 0.16f, 3);
     b.rust(4, 50, W - 4.0f, H - 4.0f, 10, 45);
     Roof wh = b.block(8, 8, W - 16.0f, 42, 14, K_ROOF, K_OLIVE_D);
-    b.corrugated(wh, 3.4f, K_DARK); b.a.line(wh.x + 1, wh.y + wh.h * 0.5f, wh.x + wh.w - 1, wh.y + wh.h * 0.5f, 1.0f, rgba(WHITE, 40));
+    ribRoof(b, wh, 3.4f, K_DARK); b.a.line(wh.x + 1, wh.y + wh.h * 0.5f, wh.x + wh.w - 1, wh.y + wh.h * 0.5f, 1.0f, rgba(WHITE, 40));
     b.rust(wh.x, wh.y, wh.x + wh.w, wh.y + wh.h, 8, 80);
     b.wallSeams(wh, 14, 10);
     b.door(28, wh.y + wh.h + 14, 24, 12, K_DARK, rgb(22, 20, 16)); b.door(64, wh.y + wh.h + 14, 16, 11, K_DARK, rgb(22, 20, 16));
@@ -550,7 +560,7 @@ void barracksClanker(Bld& b) {
     // pitched roof: the north slope catches the light, the south slope sits in shade, a ridge between
     b.a.rect(hut.x, hut.y + hut.h * 0.5f, hut.w, hut.h * 0.5f, 1.2f, shade(K_ROOF, 0.78f), 1.4f, 0.4f);
     b.a.line(hut.x + 1, hut.y + hut.h * 0.5f, hut.x + hut.w - 1, hut.y + hut.h * 0.5f, 1.4f, rgba(WHITE, 60));
-    b.corrugated(hut, 3.2f, K_DARK, 70); b.rust(hut.x, hut.y, hut.x + hut.w, hut.y + hut.h, 6, 70);
+    ribRoof(b, hut, 3.2f, K_DARK, 70); b.rust(hut.x, hut.y, hut.x + hut.w, hut.y + hut.h, 6, 70);
     b.wallSeams(hut, 12, 12); b.windows(hut, 12, 6, rgb(255, 214, 120), 0.4f);
     b.door(W * 0.5f, hut.y + hut.h + 12, 12, 10, K_DARK, rgb(22, 20, 16));
     P ch = b.cyl(hut.x + 12, hut.y + 12, 3.4f, 9, rgb(50, 46, 42), K_BRICK); (void)ch;
@@ -629,7 +639,7 @@ void techClanker(Bld& b) {
     int W = b.W, H = b.H;
     b.pad(K_PAD, K_SEAM, 0.16f, 3);
     Roof lab = b.block(8, 30, 54, 44, 14, K_ROOF, K_OLIVE_D);
-    b.corrugated(lab, 3.4f, K_DARK); b.rust(lab.x, lab.y, lab.x + lab.w, lab.y + lab.h, 6, 70);
+    ribRoof(b, lab, 3.4f, K_DARK); b.rust(lab.x, lab.y, lab.x + lab.w, lab.y + lab.h, 6, 70);
     b.wallSeams(lab, 14, 11); b.windows(lab, 14, 4, rgb(255, 214, 120), 0.5f);
     b.door(lab.x + 14, lab.y + lab.h + 14, 12, 11, K_DARK, rgb(22, 20, 16)); b.hazard(lab.x + 8, lab.y + lab.h + 14 + 1.2f, 12, 3);
     b.mark(lab.x + 3, lab.y + lab.h - 5.4f, 20, 3.4f);
@@ -703,7 +713,7 @@ void nukeClanker(Bld& b) {   // launch ramp with a missile on its rail, exhaust 
     // fuel tanks, a blockhouse and sandbag revetments
     b.cyl(74, 74, 7, 9, K_STEEL, K_OLIVE); b.cyl(58, 80, 6, 8, K_STEEL, K_RUST); b.pipe(74, 67, 64, 30, 1.0f, K_STEEL);
     Roof bk = b.block(6, 10, 22, 18, 10, K_ROOF, K_OLIVE_D);
-    b.corrugated(bk, 3.2f, K_DARK); b.windows(bk, 10, 2, rgb(255, 214, 120), 0.5f);
+    ribRoof(b, bk, 3.2f, K_DARK); b.windows(bk, 10, 2, rgb(255, 214, 120), 0.5f);
     b.mark(bk.x + 3, bk.y + bk.h - 5, 16, 3);
     b.sandbags(4, H - 10.0f, 30, H - 10.0f); b.sandbags(66, 8, W - 4.0f, 8);
     b.antenna(bk.x + bk.w - 4, bk.y + 4, 16, K_RED);

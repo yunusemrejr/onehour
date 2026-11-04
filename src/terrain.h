@@ -12,5 +12,8 @@ void terrainOverview(const Canvas& world, Canvas& out);
 // baked world there: the felled trees and bushes vanish (the ground they stood on comes back with the trees round it redrawn), quarried rock becomes
 // bare earth. 'out' gets the final pixels of the world rectangle (x, y, w, h) to upload; false when nothing visible changed.
 bool terrainRepaint(const std::vector<int>& cleared, int& x, int& y, int& w, int& h, std::vector<u32>& out);
+// The bake's own water coverage, one sample per 8 x 8 world pixels (0 dry land .. 255 water), filled by terrainBake: the moving water (water.cpp)
+// lines its surf up with the painted shoreline from it. 'stamp' grows with every bake.
+const std::vector<u8>& terrainWaterCover(int& w, int& h, u32& stamp);
 // Runs f(y0, y1) over [0, rows) split across the machine's cores (the bake's helper, shared)
 void bakeRows(int rows, const std::function<void(int, int)>& f);

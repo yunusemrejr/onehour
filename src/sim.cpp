@@ -378,11 +378,48 @@ static void formationOffsets(const std::vector<Entity*>& units, Vec2 dest, std::
     (void)dest;
 }
 
+// Ships keep station like a squadron, not a crowd: columns in line ahead, facing the way they are going, several hull lengths apart, the
+// biggest hulls (carriers, transports, cruisers) in the middle and the small escorts round them.
+static void navalFormation(const std::vector<Entity*>& ships, Vec2 dest, std::vector<Vec2>& out) {
+    int n = (int)ships.size();
+    out.assign(n, Vec2());
+    if (n <= 1) return;
+    float rmax = 0; Vec2 c;
+    for (auto* s : ships) { rmax = std::max(rmax, s->radius()); c += s->pos; }
+    c = c * (1.0f / n);
+    Vec2 f = dest - c; float fl = f.len();
+    f = fl > 1.0f ? f * (1.0f / fl) : Vec2(1, 0);
+    const Vec2 side(-f.y, f.x);
+    const float across = std::max(3.5f * TILE, rmax * 3.2f), along = std::max(4.0f * TILE, rmax * 3.8f);
+    const int cols = n <= 3 ? n : (n <= 8 ? 2 + (n > 5) : 3 + (n > 12));
+    const int rows = (n + cols - 1) / cols;
+    std::vector<Vec2> slots;
+    for (int r = 0; r < rows; r++) for (int k = 0; k < cols; k++) {
+        float stag = (k & 1) ? 0.35f : 0.0f;   // alternate columns a little astern: an echelon, nobody right beside a neighbour's guns
+        slots.push_back(side * ((k - (cols - 1) * 0.5f) * across) - f * ((r - (rows - 1) * 0.5f + stag) * along));
+    }
+    std::vector<int> bySize(n), bySlot(slots.size());
+    for (int i = 0; i < n; i++) bySize[i] = i;
+    for (size_t i = 0; i < slots.size(); i++) bySlot[i] = (int)i;
+    std::stable_sort(bySize.begin(), bySize.end(), [&](int a, int b) { return ships[a]->radius() > ships[b]->radius(); });
+    std::stable_sort(bySlot.begin(), bySlot.end(), [&](int a, int b) { return slots[a].len2() < slots[b].len2(); });
+    for (int i = 0; i < n; i++) out[bySize[i]] = slots[bySlot[i]];
+}
+
 void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     std::vector<Entity*> ground, air;
     for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && !e->carrier.valid() && !e->ut().temp) (e->isAir() ? air : ground).push_back(e); }   // (a Hotline Strike fighter takes no orders)
     std::vector<Vec2> offs;
-    formationOffsets(ground, dest, offs);
+    {   // land units in a block; ships of the order in their own squadron formation
+        std::vector<Entity*> land, ships;
+        for (auto* e : ground) (e->ut().naval ? ships : land).push_back(e);
+        std::vector<Vec2> lo, so;
+        formationOffsets(land, dest, lo);
+        navalFormation(ships, dest, so);
+        offs.resize(ground.size());
+        size_t li = 0, si = 0;
+        for (size_t i = 0; i < ground.size(); i++) offs[i] = ground[i]->ut().naval ? so[si++] : lo[li++];
+    }
     // A big group shares routes: a unit standing near one that has just been routed to a slot near its own follows that route (straight on to
     // its first waypoint, off to its own slot at the end) instead of planning the same long path again. A mass order of hundreds of units used
     // to plan every path in one tick.
@@ -3387,6 +3424,23 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             if ((players[e.owner].micro & MICRO_KITE) && e.order == O_ATTACK) kiteStep(e, *t, w, d);
         } else {
             // approach; repath if the target moved away from the path end
+            if (ut.naval) {   // a warship closes to a firing station inside its reach, on its own bearing (spread a little per hull), not onto the target
+                Vec2 away = e.pos - t->pos; float al = away.len();
+                away = al > 1.0f ? away * (1.0f / al) : Vec2(1, 0);
+                float spread = ((int)(e.gen % 7) - 3) * 0.16f, cs = std::cos(spread), sn = std::sin(spread);
+                away = Vec2(away.x * cs - away.y * sn, away.x * sn + away.y * cs);
+                float standOff = std::max(w.minRange + 1.0f, w.range * 0.8f) * TILE + t->radius();
+                bool need = e.pathIdx >= e.path.size();
+                if (need || e.repathTimer <= 0) {   // (the station is looked up only when the route may be replanned: nearestWater is not free)
+                    Vec2 station = g_map.nearestWater(t->pos + away * standOff, 6, true, g_map.compAt(e.pos));
+                    if (!need && dist(e.path.back(), station) > TILE * 2.5f) need = true;
+                    if (need) requestPath(e, station); else e.repathTimer = PATH_INTERVAL;
+                }
+                moveAlong(e, ut.speed);
+                if (e.postOrder == O_GUARDPOS && dist(e.pos, e.guardPos) > (ut.sight + 4) * TILE) { e.order = O_GUARDPOS; e.targetEnt = NOREF; e.path.clear(); }
+                if (e.leashed && e.zoneR > 0 && dist(e.pos, e.zone) > e.zoneR + (ut.sight + 2) * TILE) { e.order = O_GUARDAREA; e.targetEnt = NOREF; e.path.clear(); e.postOrder = O_IDLE; e.leashed = false; }
+                break;
+            }
             bool need = e.pathIdx >= e.path.size();
             if (!need && e.repathTimer <= 0 && dist(e.path.back(), t->pos) > TILE * 1.2f) need = true;
             if (need) requestPath(e, t->pos);
@@ -4602,6 +4656,7 @@ void Sim::separateUnits() {
                 if (!air && ((fa | b.f) & 16)) continue;  // a jammed unit slips past
                 float rr = ra + b.r;
                 if (air && (fa & 8) && (b.f & 8)) rr = HELI_SPACE;   // helicopters keep a small gap between their hulls
+                if (!air && (fa & 4)) rr *= 1.45f;                    // ships keep sea room round their hulls
                 Vec2 d(a.pos.x - b.x, a.pos.y - b.y);
                 float l2 = d.len2();
                 if (l2 >= rr * rr || l2 < 1e-4f) { if (l2 < 1e-4f) push += Vec2(rng.f(-1, 1), rng.f(-1, 1)); continue; }
@@ -4614,6 +4669,11 @@ void Sim::separateUnits() {
         if (air && !a.ut().heli) {   // planes in the air only drift apart sideways: the push never slows or stops a fixed-wing craft
             Vec2 n(-std::sin(a.angle), std::cos(a.angle));
             push = n * (push.x * n.x + push.y * n.y);
+        } else if (!air && (fa & 4) && push.len2() > 0.01f) {   // a ship is not shoved about: it edges aside a little and eases off when a hull is close ahead
+            Vec2 f(std::cos(a.angle), std::sin(a.angle)), n(-f.y, f.x);
+            float ahead = push.x * f.x + push.y * f.y;
+            if (ahead < 0) a.airspeed *= std::max(0.94f, 1.0f + ahead * 0.004f);
+            push = n * ((push.x * n.x + push.y * n.y) * 0.3f) + f * (std::min(0.0f, ahead) * 0.1f);
         }
         if (push.len2() > 0.01f) {
             Vec2 np = a.pos + push * SIM_DT * 14.0f;

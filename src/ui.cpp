@@ -1573,6 +1573,44 @@ static void hpBar(Gfx& g, float x, float y, float w, float frac, bool big = fals
     g.fill((int)x + 1, (int)y + 1, (int)((w - 2) * clampf(frac, 0, 1)), h - 2, c);
 }
 
+// The sun's shadows of the structures: each one's own silhouette laid on the ground several times, a little further out each time, so it reads as
+// a shadow cast by a solid with height (not a flat copy floating beside it). The art is lit from the north-west, so the shadows stay on the
+// south-east side and only swing a little: long and slanting at dawn and dusk, short at noon, faint under a rain sky and by moonlight.
+void Game::drawSunShadows(float vx0, float vy0, float vx1, float vy1) {
+    Gfx& g = g_gfx;
+    float p = dayPhase();
+    float day = clampf((p - 0.03f) / 0.56f, 0, 1);                       // 0 sunrise .. 1 sunset
+    bool lit = p > 0.03f && p < 0.62f;
+    float elev = lit ? std::sin(day * 3.14159f) : 0.35f;                  // the sun's height (the moon's, at night)
+    float az = 0.785f + (day - 0.5f) * 1.1f;                              // shadow bearing: south-east, swinging east-south-east .. south-south-east
+    float len = lit ? (0.55f + 1.7f * (1.0f - elev)) : 0.7f;              // length per px of height
+    float alpha = (lit ? 78.0f - 20.0f * (1.0f - elev) : 26.0f) * (1.0f - 0.7f * clampf(weather.rain * 1.3f, 0, 1));
+    if (alpha < 6) return;
+    const Vec2 dir(std::cos(az), std::sin(az));
+    const int steps = detail >= 2 ? 3 : 2;
+    for (auto& e : g_sim.ents) {
+        if (!e.alive || !e.isBuilding() || !e.constructed) continue;
+        if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
+        if (!g_sim.shownToHuman(e)) continue;
+        const BuildType& bt = e.bt();
+        float h;
+        switch (bt.role) {
+        case BR_HQ: h = 22; break;            case BR_TECH: h = 20; break;          case BR_FACTORY: h = 17; break;
+        case BR_POWER: h = 16; break;         case BR_NUKE: h = 15; break;          case BR_ANTINUKE: h = 18; break;
+        case BR_HEALANT: h = 24; break;       case BR_TURRET: case BR_AATURRET: h = 12; break;
+        case BR_AIRFIELD: h = 5; break;       case BR_BUNKER: case BR_UNUKE: case BR_WAYMAKER: h = 3; break;
+        case BR_WALL: h = 9; break;           default: h = 13; break;
+        }
+        if (h * len < 2.5f) continue;
+        const Sprite& s = g.building[e.type];
+        Vec2 q = worldToScreen(entPos(e));
+        for (int k = 1; k <= steps; k++) {
+            float o = h * len * k / steps;
+            g.draw(s, q.x + dir.x * o, q.y + dir.y * o, 0, 1, rgb(0, 0, 0), (u8)(alpha / steps * (1.15f - 0.1f * k)));
+        }
+    }
+}
+
 void Game::drawEntity(Entity& e) {
     Gfx& g = g_gfx;
     if (e.carrier.valid()) return;   // aboard a carrier
@@ -2075,14 +2113,28 @@ void Game::renderWorld() {
         }
         // the ocean, all of it, shore to open sea: one slow swell (the 512 px pattern at full size, 16 tiles before it repeats) laid in the
         // biggest aligned pieces that fit, so there is no seam anywhere; then its shallows get caustics tile by tile, fading out with depth
-        const Sprite& sw = g.seaSwell[((int)(wallTime * 1.6f)) & 3];
-        SDL_SetTextureAlphaMod(sw.tex, (u8)(170 + 26 * std::sin(wallTime * 0.4f)));
+        const float storm = stormLevel();
+        const Sprite& sw = g.seaSwell[((int)(wallTime * (1.6f + 1.4f * storm))) & 3];
+        SDL_SetTextureAlphaMod(sw.tex, (u8)clampf(150 + 26 * std::sin(wallTime * 0.4f) + 90 * storm, 0, 255));
+        // the swell drifts downwind (the 512 px pattern tiles, so a piece that runs off its edge wraps round in up to four copies)
+        const float drift = wallTime * (7.0f + 16.0f * storm);
+        const int sox = ((int)std::floor(drift * std::cos(weather.wind)) % 512 + 512) % 512, soy = ((int)std::floor(drift * std::sin(weather.wind) * 0.6f) % 512 + 512) % 512;
         auto swell = [&](int idx, int n) {
             int tx = idx % MAP_W, ty = idx / MAP_W;
             if (tx + n - 1 < tx0 || tx > tx1 || ty + n - 1 < ty0 || ty > ty1) return;
             if (!rev && !ex[(ty + n / 2) * MAP_W + tx + n / 2] && !ex[ty * MAP_W + tx] && !ex[(ty + n - 1) * MAP_W + tx + n - 1]) return;
-            SDL_Rect src = { (tx & 15) * 32, (ty & 15) * 32, n * 32, n * 32 }, dst = { (int)(tx * TILE - cam.x), (int)(ty * TILE - cam.y), n * TILE, n * TILE };
-            SDL_RenderCopy(g.ren, sw.tex, &src, &dst);
+            const int S = n * 32, x0 = ((tx & 15) * 32 - sox + 512) % 512, y0 = ((ty & 15) * 32 - soy + 512) % 512;
+            const int dx0 = (int)(tx * TILE - cam.x), dy0 = (int)(ty * TILE - cam.y);
+            for (int py = 0; py < S;) {
+                int sy = (y0 + py) % 512, hgt = std::min(S - py, 512 - sy);
+                for (int pxx = 0; pxx < S;) {
+                    int sx = (x0 + pxx) % 512, wid = std::min(S - pxx, 512 - sx);
+                    SDL_Rect src = { sx, sy, wid, hgt }, dst = { dx0 + pxx, dy0 + py, wid, hgt };
+                    SDL_RenderCopy(g.ren, sw.tex, &src, &dst);
+                    pxx += wid;
+                }
+                py += hgt;
+            }
         };
         for (int idx : g_map.seaBlocks) swell(idx, 8);
         for (int idx : g_map.seaQuads) swell(idx, 4);
@@ -2106,7 +2158,10 @@ void Game::renderWorld() {
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
     }
-    drawSeaLife(); rp.mark("water+sealife");
+    if (!(skipL & 2)) drawWaterOverlay();   // the surf, the wash at the waterline and the storm sea
+    drawSeaLife();
+    if (!(skipL & 2)) { drawWhitecaps(); drawWaterGlitter(); }
+    rp.mark("water+sealife");
     if (!(skipL & 4)) { g.beginAdd(); drawGroundFx(); g.flushAdd(); }   // (the embers in the ruins and the fires on wrecks: one additive batch)
     rp.mark("groundfx");
     // placement ghost
@@ -2298,6 +2353,7 @@ void Game::renderWorld() {
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
+    if (!(skipL & 8)) drawSunShadows(vx0, vy0, vx1, vy1);   // cast shadows of the structures, under everything standing on the ground
     g.beginAdd();   // (the lights, flashes and glows of the structures and units: drawn together after them, see Gfx::flushAdd)
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;

@@ -178,23 +178,32 @@ bool Sim::interceptProjectile(Projectile& p) {
 // A ship has weight: it turns at a limited rate, builds up speed along its heading and eases off before a stop or a sharp turn, and it sails
 // where it points (so the hull always lines up with its wake). It never leaves open water: a shore ahead stops it and it finds another way.
 void Sim::moveShip(Entity& e, float speed) {
-    const float turnRate = 1.05f;
+    // A hull handles by its size: a patrol boat turns and gets going quickly, a carrier needs a long run to build up way and a wide arc to come
+    // round. The rudder only bites with water flowing past it, so a ship at a standstill barely turns (a little from its bow thrusters), and it
+    // eases off ahead of a sharp turn and coasts to a stop at the end of its run instead of braking dead.
+    const float size = clampf((e.radius() - 13.0f) / 31.0f, 0.0f, 1.0f);   // 0 a patrol boat .. 1 a carrier
+    const float turnRate = lerpf(0.95f, 0.30f, size), accel = speed * lerpf(0.55f, 0.16f, size), decel = speed * lerpf(0.85f, 0.30f, size);
+    float v = e.airspeed;
+    const float arc = std::max(v, speed * 0.35f) / turnRate;   // turning radius at the present way: waypoints are taken that far out
     for (int guard = 0; guard < 3 && e.pathIdx < e.path.size(); guard++) {
         bool last = e.pathIdx + 1 >= e.path.size();
-        if (dist(e.path[e.pathIdx], e.pos) > (last ? 10.0f : 28.0f)) break;
+        if (dist(e.path[e.pathIdx], e.pos) > (last ? 10.0f + e.radius() * 0.3f : std::max(28.0f, arc * 0.8f))) break;
         e.pathIdx++;
     }
-    float v = e.airspeed;
     bool steering = e.pathIdx < e.path.size();
     if (steering) {
         Vec2 d = e.path[e.pathIdx] - e.pos; float len = d.len();
         bool last = e.pathIdx + 1 >= e.path.size();
-        float want = std::atan2(d.y, d.x), turn = turnRate * SIM_DT;
+        float want = std::atan2(d.y, d.x);
+        float bite = clampf(0.2f + 0.8f * v / std::max(1.0f, speed), 0.2f, 1.0f);   // rudder authority grows with way on
+        float turn = turnRate * bite * SIM_DT, off = std::abs(angDelta(e.angle, want));
         e.angle = wrapAng(e.angle + clampf(angDelta(e.angle, want), -turn, turn));
-        float vt = speed * clampf(1.15f - std::abs(angDelta(e.angle, want)) / 1.2f, 0.12f, 1.0f);
-        if (last) vt = std::min(vt, std::max(speed * 0.12f, len * 1.1f));
-        v = v < vt ? std::min(vt, v + speed * 0.7f * SIM_DT) : std::max(vt, v - speed * 1.2f * SIM_DT);
-    } else v = std::max(0.0f, v - speed * 1.2f * SIM_DT);   // nothing to steer for: glide to a halt
+        float vt = speed * clampf(1.1f - off / 1.6f, 0.3f, 1.0f);   // slows into a hard turn, but keeps steerage way
+        float rest = len;   // distance left to the end of the run (the route's remaining legs too)
+        for (size_t k = e.pathIdx + 1; k < e.path.size() && rest < 2000.0f; k++) rest += dist(e.path[k - 1], e.path[k]);
+        vt = std::min(vt, std::max(speed * (last ? 0.08f : 0.3f), std::sqrt(2.0f * decel * std::max(0.0f, rest - 6.0f))));   // coasts in to stop on the spot
+        v = v < vt ? std::min(vt, v + accel * SIM_DT) : std::max(vt, v - decel * SIM_DT);
+    } else v = std::max(0.0f, v - decel * 0.6f * SIM_DT);   // nothing to steer for: drifts to a halt
     e.airspeed = v;
     if (v > 0.5f) {
         const Vec2 step = Vec2(std::cos(e.angle), std::sin(e.angle)) * (v * SIM_DT);
@@ -1032,7 +1041,7 @@ bool Sim::cmdFleetCall(int player, Vec2 pos) {
     if (!tech) return false;
     Vec2 goal, entry, n;
     if (!fleetEntry(pos, goal, entry, n)) return false;
-    tech->fleetTimer = time + DROP_TIERS[dropTier(player)].cooldown;   // the paradrops' own cooldown
+    tech->fleetTimer = time + std::max(FLEET_COOLDOWN, DROP_TIERS[dropTier(player)].cooldown);   // a fleet is a big thing: far rarer than a paradrop
     const Vec2 along(-n.y, n.x);
     const int ocean = g_map.oceanComp;
     auto slot = [&](float fwd, float side) {   // a place in the formation round the goal (tiles ahead along the way in, tiles to the side)

@@ -127,6 +127,10 @@ struct Game {
         float lastT = -1;                    // sim time of the last update
         bool forced = false;                 // ONEHOUR_WEATHER fixed the sky (screenshots): it never changes
         Rng rng{ 0x5EA5 };
+        std::vector<Vec2> boltPath;          // the last lightning strike (world px): its main channel, side forks, where it hit, and the wall time it struck
+        std::vector<std::vector<Vec2>> boltBranches;
+        Vec2 boltAt; float boltT = -1;
+        float wind = 0.4f, windTo = 0.4f;    // the wind's direction (radians) and where it is turning: rain and the storm sea follow it
     } weather;
     // The sea life (weather.cpp): whales, dolphin pods, sharks and fish schools swim the open water of the big bodies of water and never leave
     // the one they spawned in. The big animals are shaded body pieces bent along a spine (drawSeaLife); the fish are boids.
@@ -160,6 +164,15 @@ struct Game {
     void drawSeaLife();                       // fins, backs and spouts in the open lake (under the ships)
     void drawWeatherTint();                   // the light of the hour and the weather over the ground world, then the lights of the night
     void drawRain();                          // streaks, splashes and lightning over everything on the battlefield
+    // ---- water.cpp: the living water over the baked sea (surf, wash, storm sea, glitter) and the lightning
+    void waterFieldUpdate();                  // the shore-distance field follows a new bake of the world
+    float stormLevel() const;                 // 0 calm .. 1 a full storm (from the rain)
+    void drawSunShadows(float vx0, float vy0, float vx1, float vy1);   // ui.cpp: the structures' shadows on the ground, by the hour
+    void drawWaterOverlay();                  // surf, the wash at the waterline and the storm sea: one quarter-resolution overlay of the view
+    void drawWaterGlitter();                  // sun glints winking on open water by day
+    void drawWhitecaps();                     // short breaking crests over open water in a blow
+    void lightningStrike();                   // a new forked bolt in or near the view, and its thunder
+    void drawLightning();
 private:
     float accumulator = 0;
     void processEvents();

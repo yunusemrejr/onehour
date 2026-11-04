@@ -41,6 +41,7 @@ static int countShips17(int p, int* byType = nullptr) {
 }
 static float borderDist17(Vec2 q) { return std::min(std::min(q.x, WORLD_W - q.x), std::min(q.y, WORLD_H - q.y)); }
 
+static const int FLEET_SIZE17 = FLEET_PATROLS + 2 * FLEET_WARSHIPS + FLEET_CARRIERS;   // the whole fleet of one call
 static bool fleetTest17(u64 seed) {
     for (int fi = 0; fi < 2; fi++) {
         Faction me = (Faction)fi;
@@ -50,11 +51,11 @@ static bool fleetTest17(u64 seed) {
         int counts[U_COUNT] = {};
         for (int t : g_sim.fleetManifest(0)) counts[t]++;
         const bool cy = me == F_CYBER;
-        CHECK17(counts[cy ? U_C_PATROL : U_K_PATROL] == FLEET_PATROLS && FLEET_PATROLS == 10, "the fleet does not bring ten patrol boats");
+        CHECK17(counts[cy ? U_C_PATROL : U_K_PATROL] == FLEET_PATROLS && FLEET_PATROLS == 5, "the fleet does not bring five patrol boats");
         CHECK17(counts[cy ? U_C_DESTROYER : U_K_DESTROYER] == 3 && counts[cy ? U_C_CRUISER : U_K_CRUISER] == 3, "the fleet does not bring three of each warship");
         CHECK17(counts[cy ? U_C_CARRIER : U_K_CARRIER] == 1, "the fleet does not bring one carrier");
         CHECK17(counts[U_C_CARGOSHIP] + counts[U_K_CARGOSHIP] == 0, "a cargo ship came with the fleet");
-        CHECK17(g_sim.fleetManifest(0).size() == 17, "the fleet is not seventeen ships");
+        CHECK17(g_sim.fleetManifest(0).size() == (size_t)(FLEET_PATROLS + 2 * FLEET_WARSHIPS + FLEET_CARRIERS), "the fleet is not five patrol boats, six warships and a carrier");
         // no tech structure, or too early: no fleet
         Vec2 sea = g_map.nearestWater(Vec2((ISLE_X0 - 30) * TILE, WORLD_H * 0.45f), 10, true, g_map.oceanComp);
         CHECK17(!g_sim.cmdFleetCall(0, sea) && g_sim.fleetsReady(0) == 0, "a fleet came without a tech structure");
@@ -74,7 +75,7 @@ static bool fleetTest17(u64 seed) {
         CHECK17(g_sim.fleetEntry(sea, goal, entry, n) && borderDist17(entry) < 3.0f * TILE, "the fleet's entry is not on the map border");
         CHECK17(g_sim.cmdFleetCall(0, sea), "the fleet call on the ocean was refused");
         CHECK17(!g_sim.cmdFleetCall(0, sea) && g_sim.fleetsReady(0) == 0, "one tech structure called two fleets at once");
-        CHECK17(std::abs(g_sim.fleetWait(0) - DROP_TIERS[g_sim.dropTier(0)].cooldown) < 0.5f, "the fleet's cooldown is not the paradrop's");
+        CHECK17(std::abs(g_sim.fleetWait(0) - std::max(FLEET_COOLDOWN, DROP_TIERS[g_sim.dropTier(0)].cooldown)) < 0.5f, "the fleet's cooldown is not FLEET_COOLDOWN");
         CHECK17(countShips17(0) == 0, "ships appeared the moment the fleet was called");
         // they come out of the haze at the border, one after another
         std::vector<u32> seen(1, 0); int appeared = 0; float firstFade = 1; bool farSpawn = false, gradual = false;
@@ -93,9 +94,9 @@ static bool fleetTest17(u64 seed) {
                 firstFade = std::min(firstFade, e.fade);
                 if (!firstRef.valid()) firstRef = g_sim.refOf(e);
             }
-            if (now > 0 && now < 17) gradual = true;
+            if (now > 0 && now < FLEET_SIZE17) gradual = true;
         }
-        CHECK17(appeared == 17 && countShips17(0) == 17, "the whole fleet did not come in");
+        CHECK17(appeared == FLEET_SIZE17 && countShips17(0) == FLEET_SIZE17, "the whole fleet did not come in");
         CHECK17(!farSpawn, "a ship appeared away from the map border");
         CHECK17(firstFade < 0.2f, "the ships did not come out of the haze (no fade-in)");
         CHECK17(gradual, "the fleet appeared all at once instead of ship after ship");
@@ -115,7 +116,7 @@ static bool fleetTest17(u64 seed) {
         run17(75);
         int near = 0, total = 0;
         for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.ut().naval) { total++; if (dist(e.pos, goal) < 15.0f * TILE) near++; }
-        CHECK17(total == 17 && near >= 15, "the fleet did not form up round the called spot");
+        CHECK17(total == FLEET_SIZE17 && near >= FLEET_SIZE17 - 2, "the fleet did not form up round the called spot");
         // ordinary ships: they take orders
         std::vector<Ref> all; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.ut().naval) all.push_back(g_sim.refOf(e));
         Vec2 dest = g_map.nearestWater(goal + Vec2(0, 18 * TILE), 12, true, g_map.oceanComp);
@@ -123,16 +124,16 @@ static bool fleetTest17(u64 seed) {
         for (Ref r : all) CHECK17(g_sim.get(r)->order == O_MOVE, "a fleet ship ignored a move order");
         run17(40);
         int moved = 0; for (Ref r : all) if (Entity* e = g_sim.get(r)) if (dist(e->pos, dest) < 16.0f * TILE) moved++;
-        CHECK17(moved >= 14, "the fleet did not sail where it was sent");
+        CHECK17(moved >= FLEET_SIZE17 - 2, "the fleet did not sail where it was sent");
         // two tech structures: two fleets at once (after the cooldown the first one is ready again)
-        for (int t = 0; t < 200 * SIM_HZ && g_sim.fleetsReady(0) == 0; t++) { g_sim.step(); g_sim.events.clear(); }
+        for (int t = 0; t < (int)(FLEET_COOLDOWN + 40) * SIM_HZ && g_sim.fleetsReady(0) == 0; t++) { g_sim.step(); g_sim.events.clear(); }
         CHECK17(g_sim.fleetsReady(0) == 1, "the fleet never came off its cooldown");
         Ref tech2 = techNear17(0, 10);
         CHECK17(g_sim.get(tech2) && g_sim.fleetsReady(0) == 2, "a second tech structure does not offer its own fleet");
         CHECK17(g_sim.cmdFleetCall(0, sea + Vec2(0, -20 * TILE)) && g_sim.cmdFleetCall(0, sea + Vec2(0, 20 * TILE)), "two tech structures did not call two fleets");
         CHECK17(!g_sim.cmdFleetCall(0, sea) && g_sim.fleetsReady(0) == 0, "two tech structures called a third fleet");
         run17(12);
-        CHECK17(countShips17(0) >= 17 * 3, "the two fleets did not both come in");
+        CHECK17(countShips17(0) >= FLEET_SIZE17 * 3 - 2, "the two fleets did not both come in");
         printf("fleettest %s: ok (entry %.0f px from the border, %d ships formed up, then took orders)\n", FACTION_NAME[me], borderDist17(entry), near);
     }
     // a computer army calls its fleet too
@@ -144,7 +145,7 @@ static bool fleetTest17(u64 seed) {
         g_sim.players[1].dropReady = 0;
         int before = countShips17(1);
         run17(30, true);
-        CHECK17(countShips17(1) >= before + 15, "the computer army did not call its fleet");
+        CHECK17(countShips17(1) >= before + FLEET_SIZE17 - 2, "the computer army did not call its fleet");
         printf("fleettest AI %s: ok (%d ships came in)\n", FACTION_NAME[g_sim.players[1].faction], countShips17(1) - before);
     }
     return true;

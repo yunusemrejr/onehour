@@ -516,10 +516,15 @@ void Game::updateWeather() {
     float step = dt / 18.0f;   // the sky turns over about 18 s
     weather.rain += clampf(weather.rainTo - weather.rain, -step, step);
     weather.bolt *= std::exp(-dt * 7.0f);
-    if (weather.rain > 0.75f && now >= weather.nextBolt) {
-        weather.bolt = 1.0f; weather.nextBolt = now + r.f(10, 32);
-        g_audio.play(SND_EXPLODE_L, Vec2(), true, 0.18f);   // the thunder rolls in a moment later: a low distant boom
+    if (weather.rain > 0.72f && now >= weather.nextBolt) {   // a storm: forked lightning, the sky flashes, the thunder follows (later the further off)
+        float st = stormLevel();
+        weather.bolt = 0.6f + 0.4f * st; weather.nextBolt = now + r.f(5, 14) + (1.0f - st) * r.f(6, 18);
+        lightningStrike();
+        weather.boltT = wallTime;
     }
+    // the wind wanders; a storm blows harder and swings it about more
+    if (r.f() < dt * 0.05f) weather.windTo = weather.wind + r.f(-0.9f, 0.9f) * (0.4f + stormLevel());
+    weather.wind += clampf(weather.windTo - weather.wind, -dt * 0.05f, dt * 0.05f);
     seaUpdate(dt);   // the creatures swim on whether anybody looks or not
 }
 
@@ -650,9 +655,10 @@ void Game::drawWeatherTint() {
             for (int k = 0; k < n; k++) {
                 float hx = (hashf(e.gen * 31u + k * 7u + 1u) - 0.5f) * bt.w * TILE * 0.7f, hy = (hashf(e.gen * 17u + k * 13u + 5u) - 0.5f) * bt.h * TILE * 0.5f - 6;
                 float flick = 0.85f + 0.15f * std::sin(wallTime * 2.3f + k + e.gen);
-                g.glowAdd(p.x + hx, p.y + hy, 9.0f + 3.0f * (k & 1), Color{lc.r, lc.g, lc.b, (u8)(110 * night * flick)});
+                g.glowAdd(p.x + hx, p.y + hy, 11.0f + 4.0f * (k & 1), Color{lc.r, lc.g, lc.b, (u8)(150 * night * flick)});
+                g.glowAdd(p.x + hx, p.y + hy, 3.0f, Color{255, 250, 235, (u8)(170 * night * flick)});   // the lit pane itself
             }
-            g.glowAdd(p.x, p.y, std::max(bt.w, bt.h) * TILE * 0.55f, Color{lc.r, lc.g, lc.b, (u8)(26 * night)});   // light spilling onto the yard
+            g.glowAdd(p.x, p.y + bt.h * TILE * 0.35f, std::max(bt.w, bt.h) * TILE * 0.7f, Color{lc.r, lc.g, lc.b, (u8)(44 * night)});   // light spilling onto the yard
         } else if (e.isUnit() && e.ut().kind == UK_VEH) {
             Vec2 f(std::cos(e.angle), std::sin(e.angle));
             float r = e.radius();
@@ -667,9 +673,11 @@ void Game::drawRain() {
     Gfx& g = g_gfx;
     float w = weather.rain;
     if (w > 0.02f) {
-        int n = (int)(280 * w);
+        const float st = stormLevel();
+        int n = (int)((280 + 220 * st) * w * (detail >= 2 ? 1.0f : 0.6f));
         float t = wallTime;
-        const float fall = 900.0f, wind = 170.0f;   // px/s down and across the screen
+        const float gust = 1.0f + 0.35f * st * std::sin(t * 0.7f) * std::sin(t * 1.9f + 1.0f);
+        const float fall = 900.0f + 250.0f * st, wind = (120.0f + 420.0f * st) * gust * std::cos(weather.wind) / std::max(0.35f, std::abs(std::cos(weather.wind)));   // px/s down and across the screen
         Color c = rgb(196, 210, 226, (int)(70 + 70 * w));
         for (int i = 0; i < n; i++) {
             float sx = hashf(i * 2654435761u + 11u), sy = hashf(i * 2246822519u + 7u), sp = 0.75f + 0.5f * hashf(i * 3266489917u + 3u);
@@ -677,7 +685,7 @@ void Game::drawRain() {
             float y = std::fmod(sy * (VIEW_H + 120) + t * fall * sp - cam.y * 0.25f, (float)(VIEW_H + 120)) - 60;
             if (x < -100) x += SCREEN_W + 200;
             if (y < -60) y += VIEW_H + 120;
-            float len = 12.0f * sp;
+            float len = (12.0f + 10.0f * st) * sp;
             g.line(x, y, x - wind / fall * len, y - len, c);
         }
         // splashes: rings that flash on the ground where drops land, a fresh set every tenth of a second
@@ -688,6 +696,7 @@ void Game::drawRain() {
             g.drawSized(g.fxs.ring, x, y, 5.0f + 6.0f * (1 - a), 2.5f + 3.0f * (1 - a), 0, rgb(220, 232, 244), (u8)(80 * a * w));   // (a ripple that widens as it fades)
         }
     }
+    drawLightning();
     if (weather.bolt > 0.02f) {   // lightning: the whole field flashes white for an instant
         SDL_SetRenderDrawBlendMode(g.ren, SDL_BLENDMODE_ADD);
         SDL_SetRenderDrawColor(g.ren, 200, 210, 255, (u8)(150 * weather.bolt));
