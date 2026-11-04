@@ -3,7 +3,7 @@
 // mult order: INF, LIGHT, HEAVY, STRUCT, AIR
 const Weapon WEAPONS[] = {
     /* 0 */ { "Pulse Rifle",     11, 5.0f, 0, 0.55f, PJ_BULLET, 0,    true, false, {1.0f, 0.35f, 0.20f, 0.15f, 0.0f}, 1, 900,  SND_RIFLE,       rgb(140, 230, 255) },
-    /* 1 */ { "Laser Rifle",     54, 6.0f, 0, 1.50f, PJ_LASER,  0,    true, true,  {0.4f, 1.00f, 1.00f, 0.60f, 0.9f}, 1, 0,    SND_LASER,       rgb(90, 220, 255) },
+    /* 1 */ { "Laser Rifle",     58, 6.0f, 0, 1.50f, PJ_LASER,  0,    true, true,  {0.4f, 1.00f, 1.00f, 0.60f, 0.9f}, 1, 0,    SND_LASER,       rgb(90, 220, 255) },
     /* 2 */ { "Arc Caster",      20, 4.2f, 0, 0.85f, PJ_ARC,    0.6f, true, false, {1.5f, 0.30f, 0.15f, 0.20f, 0.0f}, 1, 0,    SND_ARC,         rgb(190, 220, 255) },
     /* 3 */ { "Photon Cannon",   66, 6.5f, 0, 1.50f, PJ_LASER,  0,    true, false, {0.6f, 1.00f, 0.90f, 1.30f, 0.0f}, 1, 0,    SND_LASER_HEAVY, rgb(80, 200, 255) },
     /* 4 */ { "Volt Coil",       28, 5.0f, 0, 0.95f, PJ_ARC,    0.8f, true, true,  {1.6f, 0.45f, 0.25f, 0.30f, 0.7f}, 1, 0,    SND_ARC,         rgb(200, 230, 255) },
@@ -25,7 +25,7 @@ const Weapon WEAPONS[] = {
     /* 20 */{ "Twin Ion Cannon", 74, 7.5f, 0, 1.30f, PJ_LASER,  0,    true, true,  {0.7f, 1.10f, 1.10f, 1.20f, 0.7f}, 2, 0,    SND_LASER_HEAVY, rgb(120, 240, 255) },
     /* 21 */{ "Grenade Launcher",64, 6.5f, 1.5f, 2.20f, PJ_SHELL, 1.1f, true, false, {1.4f, 0.90f, 0.70f, 1.20f, 0.0f}, 1, 330,  SND_CANNON,      rgb(255, 190, 110) },
     /* 22 */{ "Behemoth Cannon", 78, 6.8f, 0, 2.00f, PJ_SHELL,  0.7f, true, false, {0.6f, 1.00f, 1.10f, 1.40f, 0.0f}, 2, 520,  SND_CANNON,      rgb(255, 200, 110) },
-    /* 23 */{ "Plasma Lances",   60, 6.0f, 0, 2.10f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 0.90f, 0.85f, 2.0f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
+    /* 23 */{ "Plasma Lances",   50, 6.0f, 0, 2.10f, PJ_LASER,  0,    true, true,  {0.9f, 1.10f, 0.90f, 0.85f, 2.0f}, 6, 0,    SND_LASER_HEAVY, rgb(150, 245, 255) },
     /* 24 */{ "Sidewinder Salvo",78, 7.0f, 0, 2.10f, PJ_ROCKET, 0.55f,true, true,  {1.0f, 1.10f, 1.00f, 1.00f, 1.9f}, 4, 880,  SND_ROCKET,      rgb(255, 214, 140) },
     /* 25 */{ "Plasma Bombs",   150, 1.0f, 0, 0.00f, PJ_BOMB,   2.0f, true, false, {1.2f, 1.25f, 1.00f, 1.50f, 0.0f}, 4, 0,    SND_EXPLODE_L,   rgb(120, 230, 255) },
     /* 26 */{ "Carpet Bombs",   165, 1.0f, 0, 0.00f, PJ_BOMB,   2.1f, true, false, {1.3f, 1.20f, 1.00f, 1.60f, 0.0f}, 4, 0,    SND_EXPLODE_L,   rgb(255, 176, 90) },
@@ -56,7 +56,7 @@ const Weapon WEAPONS[] = {
     /* 51 */{ "Close-In Guns",    15, 7.0f, 0, 0.10f, PJ_BULLET, 0,    true, true,  {1.0f, 0.55f, 0.25f, 0.20f, 1.9f}, 1, 1300, SND_MG,          rgb(255, 228, 150) },
     /* 52 */{ "Strike Bombs",    125, 1.0f, 0, 0.00f, PJ_BOMB,   1.7f, true, false, {1.25f, 1.20f, 1.00f, 1.40f, 0.0f}, 1, 0,    SND_EXPLODE_L,   rgb(255, 196, 120) },
     /* 53 */{ "Bunker Sky Laser",  140, 12.0f,0, 0.55f, PJ_LASER,  0,    true, true,  {1.2f, 1.10f, 0.95f, 0.50f, 2.6f}, 1, 0,    SND_LASER_HEAVY, rgb(130, 250, 255) },
-    /* 54 */{ "Toxic Lance",     540, 7.0f, 0, 1.50f, PJ_LASER,  0.9f, true, true,  {0.4f, 1.00f, 1.00f, 0.60f, 0.9f}, 1, 0,    SND_LASER_HEAVY, rgb(150, 255, 80) },   // ten Laser Rifles in one (W 1), a splash and a toxic cloud
+    /* 54 */{ "Toxic Lance",     580, 7.0f, 0, 1.50f, PJ_LASER,  0.9f, true, true,  {0.4f, 1.00f, 1.00f, 0.60f, 0.9f}, 1, 0,    SND_LASER_HEAVY, rgb(150, 255, 80) },   // ten Laser Rifles in one (W 1), a splash and a toxic cloud
     /* 55 */{ "Conversion",        0, 4.5f, 0, CHOSEN_CONVERT_BASE, PJ_LASER, 0, true, false, {1.0f, 1.0f, 1.0f, 1.0f, 0.0f}, 1, 0, SND_EMP,       rgb(236, 210, 255) },   // The Chosen: turns, never hurts (see Sim::chosenAct)
     /* 56 */{ "Shadow Arms",      14, 7.5f, 0, 0.45f, PJ_BULLET, 0,    true, true,  {1.0f, 1.00f, 1.00f, 1.00f, 1.0f}, 1, 1000, SND_RIFLE,       rgb(210, 200, 255) },   // what a Shadow Guard looks for targets with (never fired itself)
     /* 57 */{ "Shadow Carbine",   14, 7.5f, 0, 0.45f, PJ_BULLET, 0,    true, false, {1.0f, 0.35f, 0.20f, 0.15f, 0.0f}, 1, 1000, SND_RIFLE,       rgb(210, 200, 255) },
@@ -73,7 +73,7 @@ const UnitType UNITS[U_COUNT] = {
     { "Trooper",        "R", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   115, 58, 200,  5,  6, 6,  0,  0, BR_BARRACKS, -1,         "Pulse rifle, anti-infantry" },
     { "Laser Trooper",  "L", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   100, 55,  325,  7,  6, 6,  1,  0, BR_BARRACKS, -1,         "Laser rifle, anti-armor and anti-air" },
     { "Shock Trooper",  "S", F_CYBER, UK_INF, UR_COMBAT,    AR_INF,   140, 52,  400,  8,  6, 6,  2,  0, BR_BARRACKS, B_C_TECH,   "Arc caster, shreds infantry groups" },
-    { "Photon Tank",    "T", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 720, 84,  1100,  15, 7, 13, 3,  0, BR_FACTORY,  -1,         "Fast electric tank with photon cannon" },
+    { "Photon Tank",    "T", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 760, 84, 1100,  15, 7, 13, 3,  0, BR_FACTORY,  -1,         "Fast electric tank with photon cannon" },
     { "Volt Walker",    "V", F_CYBER, UK_VEH, UR_COMBAT,    AR_LIGHT, 560, 76,  950,  13, 7, 12, 4,  0, BR_FACTORY,  -1,         "Volt coil, arcs across infantry and drones" },
     { "Railgun Tank",   "G", F_CYBER, UK_VEH, UR_COMBAT,    AR_HEAVY, 700, 62,  1500, 20, 8, 14, 5,  0, BR_FACTORY,  B_C_TECH,   "Long range railgun, punches heavy armor" },
     { "Wraith Drone",   "W", F_CYBER, UK_AIR, UR_COMBAT,    AR_AIR,   520, 340, 850,  12, 9, 10, 6,  12, BR_AIRFIELD, -1,        "Cheap, fast, fragile bomber drone: carpet-bombs ground targets with plasma bombs (12 a sortie), laser kills aircraft", 0, 0, 1, 0, 0, ST_NONE, INFIL_DETECT, DET_DRONE | DET_INFIL },
@@ -84,8 +84,8 @@ const UnitType UNITS[U_COUNT] = {
     { "Dozer",          "D", F_CLANKER, UK_VEH, UR_DOZER,     AR_LIGHT, 420, 82,  1000, 12, 6, 12, -1, 0, BR_HQ,       -1,         "Constructs structures" },
     { "Supply Truck",   "H", F_CLANKER, UK_VEH, UR_HARVESTER, AR_LIGHT, 450, 96,  700,  9,  6, 12, -1, 0, BR_SUPPLY,   -1,         "Hauls supplies to a Supply Depot" },
     { "Rifleman",       "R", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   120, 56,  200,  5,  6, 6,  9,  0, BR_BARRACKS, -1,         "Assault rifle, anti-infantry" },
-    { "RPG Trooper",    "P", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   115, 54,  300,  7,  6, 6,  10, 0, BR_BARRACKS, -1,         "Rocket launcher, anti-armor and anti-air" },
-    { "Gunner",         "G", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   190, 50, 380,  8,  6, 6,  11, 0, BR_BARRACKS, B_K_TECH,   "Heavy machine gun, sustained fire" },
+    { "RPG Trooper",    "P", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   105, 54, 300,  7,  6, 6,  10, 0, BR_BARRACKS, -1,         "Rocket launcher, anti-armor and anti-air" },
+    { "Gunner",         "G", F_CLANKER, UK_INF, UR_COMBAT,    AR_INF,   175, 50, 380,  8,  6, 6,  11, 0, BR_BARRACKS, B_K_TECH,   "Heavy machine gun, sustained fire" },
     { "Brute Tank",     "T", F_CLANKER, UK_VEH, UR_COMBAT,    AR_HEAVY, 900, 74,  1100,  15, 7, 14, 12, 0, BR_FACTORY,  -1,         "Diesel main battle tank, 120mm cannon" },
     { "Gatling Tank",   "A", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 580, 80,  950,  13, 7, 12, 13, 0, BR_FACTORY,  -1,         "Gatling gun, anti-infantry and anti-air" },
     { "Rocket Launcher","M", F_CLANKER, UK_VEH, UR_COMBAT,    AR_LIGHT, 450, 60,  1300, 19, 8, 13, 14, 0, BR_FACTORY,  B_K_TECH,   "Long range rocket artillery" },

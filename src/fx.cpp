@@ -15,6 +15,17 @@ float vn(float x, float y, u32 s) {
 float fb(float x, float y, u32 s) { return vn(x, y, s) * 0.55f + vn(x * 2.1f, y * 2.1f, s + 7) * 0.3f + vn(x * 4.3f, y * 4.3f, s + 13) * 0.15f; }
 float sst(float a, float b, float x) { float t = clampf((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
 Color lerpC(Color a, Color b, float t) { return Color{(u8)lerpf(a.r, b.r, t), (u8)lerpf(a.g, b.g, t), (u8)lerpf(a.b, b.b, t), 255}; }
+// The colour of a hot cloud as it cools: white-hot, yellow, orange, red, dark red-brown, then smoke (sv: the silver of an Underground Nuke, cooling to
+// grey). h: 1 = as hot as it gets, 0 = cold.
+Color heatRamp(float h, bool sv) {
+    static const float P[6] = { 1.0f, 0.82f, 0.6f, 0.38f, 0.16f, 0.0f };
+    static const Color S[6] = { rgb(255, 250, 236), rgb(255, 214, 122), rgb(255, 128, 46), rgb(184, 52, 24), rgb(96, 34, 26), rgb(58, 50, 48) };
+    static const Color V[6] = { rgb(252, 254, 255), rgb(226, 232, 242), rgb(184, 192, 204), rgb(134, 142, 154), rgb(88, 94, 104), rgb(60, 64, 72) };
+    const Color* c = sv ? V : S;
+    h = clampf(h, 0, 1);
+    for (int i = 0; i < 5; i++) if (h >= P[i + 1]) return lerpC(c[i + 1], c[i], (h - P[i + 1]) / (P[i] - P[i + 1]));
+    return c[5];
+}
 
 void puffCanvas(Canvas& c, int v, bool dust) {
     for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
@@ -28,23 +39,38 @@ void puffCanvas(Canvas& c, int v, bool dust) {
         c.px[y * c.w + x] = Canvas::pack(col);
     }
 }
-void fireCanvas(Canvas& c, int f) {
+void fireCanvas(Canvas& c, int f) {   // the fireball's body: a hot orange mass that churns, darkens to red-brown at its ragged edge and cools to smoke
     float R = 14 + f * 2.6f;
     float cool = clampf((f - 3) / 4.0f, 0, 1);
     for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
         float dx = x + 0.5f - 32, dy = y + 0.5f - 32, d = std::sqrt(dx * dx + dy * dy) / R;
         float n = fb(x * 0.12f + f * 2.3f, y * 0.12f - f * 1.1f, 311);
-        float t = d + (n - 0.5f) * 0.62f;
-        if (t >= 1) continue;
+        float n2 = fb(x * 0.33f - f * 1.7f, y * 0.33f + f * 0.9f, 317);   // finer churn: the edge breaks up into lumps
+        float t = d + (n - 0.5f) * 0.62f + (n2 - 0.5f) * 0.34f;
+        if (t >= 1.06f) continue;
         t = std::max(t, 0.0f);
         Color col;
-        if (t < 0.22f) col = lerpC(rgb(255, 252, 214), rgb(255, 238, 160), t / 0.22f);
-        else if (t < 0.5f) col = lerpC(rgb(255, 238, 160), rgb(255, 160, 44), (t - 0.22f) / 0.28f);
-        else if (t < 0.8f) col = lerpC(rgb(255, 160, 44), rgb(196, 58, 20), (t - 0.5f) / 0.3f);
-        else col = lerpC(rgb(196, 58, 20), rgb(66, 34, 24), (t - 0.8f) / 0.2f);
+        if (t < 0.3f) col = lerpC(rgb(255, 190, 90), rgb(255, 138, 40), t / 0.3f);
+        else if (t < 0.6f) col = lerpC(rgb(255, 138, 40), rgb(206, 70, 24), (t - 0.3f) / 0.3f);
+        else if (t < 0.88f) col = lerpC(rgb(206, 70, 24), rgb(108, 32, 22), (t - 0.6f) / 0.28f);
+        else col = lerpC(rgb(108, 32, 22), rgb(52, 36, 32), (t - 0.88f) / 0.18f);
         col = lerpC(col, rgb(62, 56, 52), cool * sst(0.05f, 0.8f, t));
-        float a = clampf(1 - std::pow(t, 2.6f), 0, 1) * (1.0f - 0.18f * cool);
+        float a = clampf((1.0f - t) * 2.4f, 0, 1) * (0.78f + 0.22f * n2) * (1.0f - 0.18f * cool);
         col.a = (u8)(a * 255);
+        c.px[y * c.w + x] = Canvas::pack(col);
+    }
+}
+// the white-hot heart of a fireball, drawn additively over the body: it shrinks and yellows as the blast climbs
+void fireCoreCanvas(Canvas& c, int f) {
+    const float Rc = 20.0f - 7.0f * f / 7.0f;
+    for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
+        float dx = x + 0.5f - 32, dy = y + 0.5f - 32, d = std::sqrt(dx * dx + dy * dy) / Rc;
+        float n = fb(x * 0.2f + f * 3.1f, y * 0.2f - f * 2.2f, 411);
+        float t = d + (n - 0.5f) * 0.7f;
+        if (t >= 1) continue;
+        t = std::max(t, 0.0f);
+        Color col = t < 0.35f ? lerpC(rgb(255, 252, 240), rgb(255, 236, 170), t / 0.35f) : lerpC(rgb(255, 236, 170), rgb(255, 150, 60), clampf((t - 0.35f) / 0.65f, 0, 1));
+        col.a = (u8)(clampf(std::pow(1 - t, 1.2f), 0, 1) * 255);
         c.px[y * c.w + x] = Canvas::pack(col);
     }
 }
@@ -54,28 +80,44 @@ void flameCanvas(Canvas& c, int f) {
         if (v < -0.04f) continue;
         v = std::max(v, 0.0f);
         float width = 9.0f * std::pow(1 - v, 0.65f) * (0.8f + 0.4f * std::sin(f * 1.1f + v * 5));
-        float sway = std::sin(f * 1.05f + v * 3.5f) * 3.6f * v;
+        float sway = std::sin(f * 1.05f + v * 3.5f) * 3.6f * v + (vn(y * 0.42f + f * 1.9f, 0.3f * f, 520) - 0.5f) * 3.4f * v;   // (the licks: the edge wanders row by row)
         for (int x = 0; x < c.w; x++) {
             float u = (x + 0.5f - 16 - sway) / std::max(width, 0.3f);
             if (std::abs(u) >= 1) continue;
             float inner = 1 - std::abs(u);
             float t = v * 0.8f + std::abs(u) * 0.5f;
-            Color col = t < 0.4f ? lerpC(rgb(255, 246, 196), rgb(255, 170, 50), t / 0.4f) : lerpC(rgb(255, 170, 50), rgb(210, 50, 20), clampf((t - 0.4f) / 0.5f, 0, 1));
+            Color col = t < 0.3f ? lerpC(rgb(255, 252, 226), rgb(255, 196, 84), t / 0.3f) : t < 0.6f ? lerpC(rgb(255, 196, 84), rgb(255, 116, 36), (t - 0.3f) / 0.3f)
+                                                                                                    : lerpC(rgb(255, 116, 36), rgb(196, 44, 18), clampf((t - 0.6f) / 0.4f, 0, 1));
             float a = std::pow(inner, 0.7f) * (1 - std::pow(v, 1.5f));
             col.a = (u8)(clampf(a, 0, 1) * 255);
             c.px[y * c.w + x] = Canvas::pack(col);
         }
     }
 }
-void flashCanvas(Canvas& c, int v) {
-    int spikes = 4 + v;
+void flashCanvas(Canvas& c, int v) {   // a muzzle flash or the first light of a blast: a white-hot centre, a yellow shoulder, thin hot rays that taper out
+    int spikes = 5 + v;
     for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
         float dx = x + 0.5f - 24, dy = y + 0.5f - 24, r = std::sqrt(dx * dx + dy * dy), ang = std::atan2(dy, dx);
-        float spike = std::pow(std::abs(std::cos(ang * spikes * 0.5f + v * 0.7f)), 14.0f);
-        float a = std::exp(-r / (2.5f + 17.0f * spike)) + std::exp(-r / 4.5f) * 0.9f;
-        Color col = lerpC(rgb(255, 214, 120), rgb(255, 252, 232), clampf(std::exp(-r / 6.0f), 0, 1));
-        col.a = (u8)(clampf(a, 0, 1) * 255);
+        float rays = std::pow(std::abs(std::cos(ang * spikes * 0.5f + v * 0.9f)), 28.0f) * std::exp(-r / 11.0f);
+        float I = clampf(std::exp(-r / 2.6f) + std::exp(-r / 6.5f) * 0.85f + rays * 1.1f + std::exp(-r / 15.0f) * 0.22f, 0, 1);
+        Color col = lerpC(rgb(255, 128, 36), rgb(255, 222, 132), clampf(std::exp(-r / 8.0f) * 1.2f, 0, 1));
+        col = lerpC(col, rgb(255, 255, 250), clampf(std::exp(-r / 2.6f), 0, 1));
+        col.a = (u8)(I * 255);
         c.px[y * c.w + x] = Canvas::pack(col);
+    }
+}
+// a low ring of dust rolling along the ground (drawn flattened, 2:1): the front is a lit lip on its top side, the underside falls into shade
+void skirtCanvas(Canvas& c, int v) {
+    for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
+        float dx = (x + 0.5f - 64) / 62.0f, dy = (y + 0.5f - 32) / 30.0f, d = std::sqrt(dx * dx + dy * dy);
+        float n = fb(x * 0.11f + v * 13, y * 0.23f + v * 5, 950 + v);
+        float r = d + (n - 0.5f) * 0.24f;
+        float front = std::exp(-std::pow((r - 0.84f) / 0.12f, 2.0f)) * (0.45f + 0.55f * n);
+        float lip = std::exp(-std::pow((r - 0.95f) / 0.035f, 2.0f)) * (dy < 0 ? 0.55f : 0.2f);
+        float a = clampf(front + lip, 0, 1);
+        if (a <= 0.01f) continue;
+        float lum = clampf(176 + 52 * (-dy * 0.6f) + 30 * (n - 0.5f), 60, 240);
+        c.px[y * c.w + x] = Canvas::pack(Color{(u8)lum, (u8)(lum * 0.88f), (u8)(lum * 0.7f), (u8)(a * 230)});
     }
 }
 }  // namespace
@@ -101,6 +143,8 @@ void Gfx::buildEffects() {
         fxs.billow[v] = fromCanvasSmooth(c, 48, 48);
     }
     for (int f = 0; f < 8; f++) { Canvas c(64, 64); fireCanvas(c, f); fxs.fire[f] = fromCanvasSmooth(c, 32, 32); }
+    for (int f = 0; f < 8; f++) { Canvas c(64, 64); fireCoreCanvas(c, f); fxs.core[f] = fromCanvasAdd(c, 32, 32); }
+    for (int v = 0; v < 2; v++) { Canvas c(128, 64); skirtCanvas(c, v); fxs.skirt[v] = fromCanvasSmooth(c, 64, 32); }
     for (int f = 0; f < 6; f++) { Canvas c(32, 48); flameCanvas(c, f); fxs.flame[f] = fromCanvasAdd(c, 16, 44); }
     for (int v = 0; v < 3; v++) { Canvas c(48, 48); flashCanvas(c, v); fxs.flash[v] = fromCanvasAdd(c, 24, 24); }
     { Canvas c(16, 4); for (int y = 0; y < 4; y++) for (int x = 0; x < 16; x++) { float a = std::pow(x / 15.0f, 2.0f) * (1 - std::abs((y + 0.5f - 2) / 2.0f) * 0.7f); c.px[y * 16 + x] = Canvas::pack(Color{255, (u8)(200 + x * 3), (u8)(120 + x * 8), (u8)(clampf(a, 0, 1) * 255)}); } fxs.streak = fromCanvasAdd(c, 15, 2); }
@@ -129,15 +173,18 @@ void Gfx::buildEffects() {
         a.poly(pts, rgb(150, 150, 150), 2.0f, 0.7f);
         fxs.debris[v] = fromCanvasSmooth(c, 8, 8);
     }
-    for (int v = 0; v < 3; v++) {
+    for (int v = 0; v < 3; v++) {   // a blast's scorch: a charred core, the soot falling off to a ragged fringe with flecks of ash at its rim
         Canvas c(96, 96);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
             float dx = (x + 0.5f - 48) / 46.0f, dy = (y + 0.5f - 48) / 46.0f, d = std::sqrt(dx * dx + dy * dy);
             float n = fb(x * 0.08f + v * 7, y * 0.08f, 505 + v);
             float a = std::pow(clampf(1.25f - d * 1.15f + (n - 0.5f) * 0.9f, 0, 1), 1.4f);
+            float charred = clampf(1.0f - d * 1.5f, 0, 1);
+            if (charred > 0) a = std::max(a, charred * charred * (0.85f + 0.15f * n));
             if (a <= 0) continue;
             Color col = d > 0.62f ? Color{50, 38, 28, 0} : Color{14, 12, 10, 0};
             col.a = (u8)(a * (d > 0.62f ? 120 : 200));
+            if (d > 0.7f && d < 1.0f && hh(x, y, 660 + v) > 0.9f) { col = Color{104, 94, 82, 0}; col.a = 120; }   // ash flecks
             c.px[y * 96 + x] = Canvas::pack(col);
         }
         fxs.scorch[v] = fromCanvasSmooth(c, 48, 48);
@@ -252,14 +299,38 @@ void Game::emitP(float x, float y, float vx, float vy, float life, float s0, flo
     parts.push_back(Particle{ x, y, vx, vy, ay, drag, 0, life, s0, s1, rot, vrot, col, kind, var });
 }
 
+static constexpr float WIND_X = 15.0f;   // the wind that carries smoke (px/s, screen x): smoke puffs relax towards it, so columns lean and drift
+
 void Game::updateParticles(float dt) {
     if (dt <= 0) return;
     nukeFlash = std::max(0.0f, nukeFlash - dt);
+    const float dq = (detail + 1) * 0.25f;   // share of the cosmetic emissions at this detail level (all of them at the top)
     for (auto& p : parts) {
-        p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.ay * dt; p.rot += p.vrot * dt;
+        p.age += dt;
+        if (p.kind == PK_SMOKE) p.vx += (WIND_X - p.vx) * std::min(1.0f, 0.9f * dt);
+        p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.ay * dt; p.rot += p.vrot * dt;
         if (p.drag > 0) { float k = std::exp(-p.drag * dt); p.vx *= k; p.vy *= k; }
     }
+    // a chunk of flying debris trails a little smoke for its first moments (the new puffs are appended, so only the old ones are looked at)
+    const size_t n0 = parts.size();
+    for (size_t i = 0; i < n0; i++) {
+        if (parts[i].kind != PK_DEBRIS || parts[i].age > 0.3f || fxRng.f() >= 2.5f * dq * dt) continue;
+        const Particle d = parts[i];
+        emitP(d.x, d.y, fxRng.f(-6, 6), fxRng.f(-10, -2), fxRng.f(0.9f, 1.4f), 2.6f, 6.0f, rgb(94, 90, 86, 150), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), fxRng.f(-0.2f, 0.2f));
+    }
     for (size_t i = 0; i < parts.size();) { if (parts[i].age >= parts[i].life) { parts[i] = parts.back(); parts.pop_back(); } else i++; }
+    // the smoke columns of big blasts: puffs off the spot for a few seconds, thinning out at the end
+    for (auto& pl : plumes) {
+        pl.t += dt;
+        const float fade = clampf((pl.life - pl.t) / 1.5f, 0, 1);
+        pl.acc += pl.rate * dq * fade * dt;
+        for (; pl.acc >= 1.0f; pl.acc -= 1.0f) {
+            const float s = pl.size;
+            emitP(pl.at.x + fxRng.f(-s * 0.3f, s * 0.3f), pl.at.y + fxRng.f(-s * 0.15f, s * 0.15f), fxRng.f(-5, 5), fxRng.f(-36, -22), fxRng.f(4.0f, 6.5f), s * 0.45f, s * 1.1f,
+                  pl.nuke ? rgb(100, 90, 84, 210) : rgb(88, 84, 80, 185), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.3f, fxRng.f(0, 6), fxRng.f(-0.15f, 0.15f));
+        }
+    }
+    plumes.erase(std::remove_if(plumes.begin(), plumes.end(), [](const Game::Plume& p) { return p.t >= p.life; }), plumes.end());
     for (auto& d : decals) d.age += dt;
     for (auto& t : treads) t.age += dt;
     decals.erase(std::remove_if(decals.begin(), decals.end(), [](const Decal& d) { return d.age >= d.life; }), decals.end());
@@ -267,6 +338,7 @@ void Game::updateParticles(float dt) {
 
 // First sight of a sim effect: add the cosmetic bits that make blasts read as blasts (flying chunks, sparks, a smoke plume, a scorch mark).
 void Game::spawnFromFx() {
+    const float dq = (detail + 1) * 0.25f;   // share of the cosmetic emissions at this detail level
     for (auto& f : g_sim.fx) {
         if (f.seen || f.t < 0) continue;
         f.seen = true;
@@ -283,6 +355,14 @@ void Game::spawnFromFx() {
             int puffs = light ? (r.f() < 0.4f ? 1 : 0) : 1 + (int)(s / 12);
             for (int i = 0; i < puffs; i++) emitP(f.a.x + r.f(-s * 0.3f, s * 0.3f), f.a.y + r.f(-s * 0.3f, s * 0.3f), r.f(-10, 10), r.f(-30, -12), r.f(1.8f, 3.2f), s * r.f(0.35f, 0.55f), s * r.f(0.9f, 1.4f), rgb(52, 50, 48), PK_SMOKE, (u8)r.range(0, 3), 0, 0.6f, r.f(0, 6), r.f(-0.4f, 0.4f));
             if (s >= 20) emitP(f.a.x, f.a.y, 0, 0, 0.6f, s * 0.35f, s * 2.2f, rgb(255, 196, 130), PK_RING);
+            if (!light && s >= 8 && s < 25) for (int i = 0, nd = (int)(2 * dq + 0.5f); i < nd; i++) {   // a small impact: a puff of dust rolls out along the ground
+                float an = r.f(0, 6.283f), sp = r.f(40, 72);
+                emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.45f, r.f(0.45f, 0.8f), s * 0.22f, s * 0.6f, rgb(168, 152, 128, 150), PK_DUST, (u8)r.range(0, 2), 0, 2.2f, r.f(0, 6), r.f(-0.5f, 0.5f));
+            }
+            if (!light && s >= 60) for (int i = 0, ne = (int)((1 + s / 40.0f) * dq + 0.5f); i < ne; i++) {   // embers: hot specks thrown up that hang, drift down and cool
+                emitP(f.a.x + r.f(-s * 0.2f, s * 0.2f), f.a.y + r.f(-s * 0.2f, s * 0.2f), r.f(-45, 45), r.f(-130, -55), r.f(1.0f, 1.9f), 4.6f, 1.4f, rgb(255, 170, 86), PK_GLOW, (u8)r.range(0, 3), 26, 1.5f);
+            }
+            if (!light && s >= 55 && plumes.size() < (s >= 150 ? 12u : 6u)) plumes.push_back(Plume{ f.a, 0.0f, s >= 150 ? 6.0f : 4.5f, s >= 150 ? 3.5f : 3.0f, 0.0f, std::min(s * 0.22f, 40.0f), s >= 150 });   // (puffs no bigger than 1.1x this: a super blast's column stays light to draw)
             if (s >= 55 && s < 150) {   // heavy bomb: a rolling dust ring, a fire column and a plume of smoke climbing from the crater
                 for (int i = 0; i < 12; i++) { float an = i * 0.5236f + r.f(-0.15f, 0.15f), sp = r.f(110, 190) * (s / 70.0f + 0.4f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.5f, r.f(0.7f, 1.2f), s * 0.12f, s * 0.42f, rgb(150, 132, 108, 170), PK_DUST, (u8)r.range(0, 2), 0, 3.4f, r.f(0, 6), r.f(-0.5f, 0.5f)); }
                 for (int i = 0; i < 7; i++) emitP(f.a.x + r.f(-s * 0.15f, s * 0.15f), f.a.y - i * s * 0.1f, r.f(-8, 8), -r.f(70, 150), r.f(0.5f, 0.9f), s * r.f(0.2f, 0.34f), s * 0.08f, rgb(255, 170 + r.range(0, 60), 80), PK_FLAME, (u8)r.range(0, 2), -40, 1.2f);
@@ -306,6 +386,9 @@ void Game::spawnFromFx() {
             for (int i = 0; i < n; i++) { float an = r.f(0, 6.283f), sp = r.f(40, 130); emitP(f.b.x, f.b.y, std::cos(an) * sp, std::sin(an) * sp, r.f(0.15f, 0.35f), r.f(0.9f, 1.4f), 0.3f, f.color, PK_SPARK, 0, 60, 4.0f); }
             break;
         }
+        case FX_FLASH:   // a bigger gun's muzzle flash leaves a wisp of smoke hanging in front of it
+            if (f.size >= 6 && r.f() < 0.35f * dq) emitP(f.a.x, f.a.y, r.f(-4, 4), r.f(-14, -6), r.f(0.5f, 0.8f), f.size * 0.5f, f.size * 1.0f, rgb(226, 222, 214, 150), PK_SMOKE, (u8)r.range(0, 3), 0, 1.4f, r.f(0, 6), r.f(-0.2f, 0.2f));
+            break;
         default: break;
         }
     }
@@ -314,6 +397,9 @@ void Game::spawnFromFx() {
 // ================================================================= drawing
 void Game::drawGroundFx() {
     Gfx& g = g_gfx;
+    const float dq = (detail + 1) * 0.25f;   // share of the cosmetic emissions at this detail level
+    int skirts = 0;                          // dust rings drawn this frame: a few at most, a nuclear exchange has dozens of blasts in view
+    const int skirtMax = detail >= 3 ? (g.softwareRenderer ? 2 : 6) : (detail == 2 ? (g.softwareRenderer ? 1 : 3) : 0);
     static const int DECALS[4] = { 0, 14, 30, 1 << 20 };   // (lower detail: only the newest scorch marks)
     for (size_t i = decals.size() > (size_t)DECALS[detail] ? decals.size() - DECALS[detail] : 0; i < decals.size(); i++) {
         const Decal& d = decals[i];
@@ -347,6 +433,12 @@ void Game::drawGroundFx() {
                 }
                 if (frameDt > 0 && fxRng.f() < 1.4f * frameDt && f.t < 14.0f) emitP(f.a.x + fxRng.f(-0.35f, 0.35f) * w * TILE, f.a.y + fxRng.f(-0.35f, 0.35f) * h * TILE, fxRng.f(-4, 4), fxRng.f(-22, -12), fxRng.f(1.8f, 3.0f), 6, 16, rgb(70, 66, 62), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.2f);
             }
+        } else if (f.type == FX_EXPLODE) {   // a mid-size blast: a low ring of dust rolls out along the ground (a nuke's surge is drawn with its fireball)
+            if (f.t < 0 || k > 0.8f || f.size < 50 || f.size >= 160 || f.vel.y < -0.5f || skirts >= skirtMax || !onScreen(f.a.x, f.a.y, f.size * 1.2f)) continue;
+            Vec2 a = worldToScreen(f.a);
+            const float Rk = f.size * (0.5f + 1.1f * std::sqrt(k));   // races out fast, then slows as the dust settles
+            g.drawSized(g.fxs.skirt[(int)std::fabs(f.a.x) & 1], a.x, a.y, Rk * 2.1f, Rk * 1.05f, 0, rgb(255, 255, 255), (u8)(200 * clampf((0.8f - k) * 3.0f, 0, 1)));
+            skirts++;
         } else if (f.type == FX_WRECK && f.vel.y > 1.5f) {   // a ship going down: the hull settles, tilts and fades into a spreading oil slick and foam
             if (!onScreen(f.a.x, f.a.y, 90)) continue;
             Vec2 a = worldToScreen(f.a);
@@ -381,14 +473,20 @@ void Game::drawGroundFx() {
             if (f.t < 6.0f) {
                 float fade = 1 - f.t / 6.0f; int fr = ((int)(wallTime * 12) + (int)f.a.x) % 6;
                 g.draw(g.fxs.flame[fr], a.x - 2, a.y + 4, 0, 0.55f, rgb(255, 255, 255), (u8)(210 * fade));
+                g.draw(g.fxs.flame[(fr + 3) % 6], a.x + 7, a.y + 1, 0, 0.42f + 0.1f * std::sin(wallTime * 17 + f.a.y), rgb(255, 255, 255), (u8)(170 * fade));   // a second tongue on another beat
                 g.glowAdd(a.x, a.y, 14 + 4 * std::sin(wallTime * 9 + f.a.x), Color{255, 120, 40, (u8)(80 * fade)});
             }
+            if (f.t < 7.0f && frameDt > 0 && fxRng.f() < 0.9f * dq * frameDt)   // a thin column of smoke while it burns
+                emitP(f.a.x + fxRng.f(-5, 5), f.a.y - 4 + fxRng.f(-4, 4), fxRng.f(-4, 4), fxRng.f(-24, -14), fxRng.f(2.0f, 3.2f), 4.5f, 11.0f, rgb(58, 54, 50, 170), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.15f);
         }
     }
 }
 
 void Game::drawFx() {
     Gfx& g = g_gfx;
+    // this frame's white cores and first-light stars, capped: a nuclear exchange has ninety blasts in view, each would add its own big additive draw
+    int cores = 0, flashes = 0;
+    const int coreMax = detail >= 3 ? 8 : (detail == 2 ? 4 : 0), flashMax = detail >= 3 ? 10 : (detail == 2 ? 5 : 2);
     static const bool fillDbg = getenv("ONEHOUR_FILLDBG") != nullptr;
     static double byType[64]; int lastType = -1; double mark = g.fillPx;
     if (fillDbg) for (auto& v : byType) v = 0;
@@ -399,20 +497,25 @@ void Game::drawFx() {
         Vec2 a = worldToScreen(f.a), b = worldToScreen(f.b);
         if ((f.type == FX_BEAM || f.type == FX_RAIL || f.type == FX_ARC || f.type == FX_MUSHROOM || f.type == FX_FALLOUT) ? false : (a.x < -80 || a.y < -80 || a.x > SCREEN_W + 80 || a.y > VIEW_H + 80)) continue;
         switch (f.type) {
-        case FX_BEAM: {   // textured bolt: wide soft glow, bright core, hot white filament
+        case FX_BEAM: {   // textured bolt: a soft halo, a glow, a bright core and a hot white filament; the power crackles and a packet of light runs along it
             float len = hyp(b.x - a.x, b.y - a.y); if (len < 1) break;
-            float ang = std::atan2(b.y - a.y, b.x - a.x), al = (1 - k) * (0.86f + 0.14f * std::sin(wallTime * 90.0f + f.a.x * 0.7f));   // mains flicker
+            float ang = std::atan2(b.y - a.y, b.x - a.x);
+            float crackle = 0.9f + 0.1f * hh((int)(wallTime * 40) + (int)f.a.x, (int)f.a.y, 77);   // the power jumps a little every frame or so
+            float al = (1 - k) * (0.86f + 0.14f * std::sin(wallTime * 90.0f + f.a.x * 0.7f)) * crackle;   // mains flicker
             Vec2 mid = (a + b) * 0.5f;
+            if (!g.softwareRenderer) g.drawSized(g.fxs.beam, mid.x, mid.y, len, 22, ang, f.color, (u8)(60 * al));   // (its halo: a soft band, a few lines on the CPU renderer, which it skips)
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 12, ang, f.color, (u8)(150 * al));
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 5, ang, f.color, (u8)(255 * al));
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 2, ang, rgb(255, 255, 255), (u8)(255 * al));
+            Vec2 pk = a + (b - a) * std::fmod(wallTime * 2.6f + f.a.x * 0.013f, 1.0f);   // a packet of light running from the gun to the target
+            g.glowAdd(pk.x, pk.y, 4.5f, Color{f.color.r, f.color.g, f.color.b, (u8)(150 * al)});
             g.glowAdd(b.x, b.y, 11 * (1 - k * 0.4f), Color{f.color.r, f.color.g, f.color.b, (u8)(170 * al)});
             g.glowAdd(a.x, a.y, 7, Color{f.color.r, f.color.g, f.color.b, (u8)(120 * al)});
             break;
         }
         case FX_RAIL: {
             float len = hyp(b.x - a.x, b.y - a.y); if (len < 1) break;
-            float ang = std::atan2(b.y - a.y, b.x - a.x), al = 1 - k;
+            float ang = std::atan2(b.y - a.y, b.x - a.x), al = (1 - k) * (0.88f + 0.12f * hh((int)(wallTime * 30) + (int)f.a.x, (int)f.a.y, 83));   // (the rail hums: a little flicker)
             Vec2 mid = (a + b) * 0.5f;
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 26 * (1 - k * 0.5f), ang, rgb(110, 190, 255), (u8)(140 * al));
             g.drawSized(g.fxs.beam, mid.x, mid.y, len, 9, ang, f.color, (u8)(255 * al));
@@ -422,8 +525,9 @@ void Game::drawFx() {
             break;
         }
         case FX_ARC: {
-            Color c = f.color; float al = 1 - k;
+            Color c = f.color; float al = (1 - k) * (0.8f + 0.2f * hh((int)(f.t * 1000), (int)f.a.x, 91));
             Rng r((u64)(f.t * 1000) + (u64)f.a.x);
+            if (!g.softwareRenderer) { Vec2 mid = (a + b) * 0.5f, dv = b - a; float dl = hyp(dv.x, dv.y); if (dl >= 1) g.drawSized(g.fxs.beam, mid.x, mid.y, dl, 14, std::atan2(dv.y, dv.x), c, (u8)(55 * al)); }   // the arc's soft halo (GPU only)
             Vec2 prev = a; int segs = 6;
             for (int i = 1; i <= segs; i++) {
                 float t = i / (float)segs; Vec2 q = a + (b - a) * t;
@@ -462,9 +566,12 @@ void Game::drawFx() {
         case FX_EXPLODE: {
             int fr = std::min(7, (int)(k * 8.0f));
             float rr = f.size * (0.35f + 0.65f * std::sqrt(k)), al = 1 - k * k * k;
+            const float rot = std::fmod(f.a.x * 0.37f, 6.28f);
             if (detail >= 2 || rr < 40) g.glowAdd(a.x, a.y, rr * (2.3f + 0.8f * (1 - k)), Color{255, 140, 50, (u8)(150 * (1 - k))});
-            g.drawSized(g.fxs.fire[fr], a.x, a.y, rr * 2.5f, rr * 2.5f, std::fmod(f.a.x * 0.37f, 6.28f), rgb(255, 255, 255), (u8)(255 * al));
+            g.drawSized(g.fxs.fire[fr], a.x, a.y, rr * 2.5f, rr * 2.5f, rot, rgb(255, 255, 255), (u8)(255 * al));   // the churning, darkening body
+            if (k < 0.6f && rr < 150.0f && cores < coreMax) { cores++; g.drawSized(g.fxs.core[fr], a.x, a.y, rr * 1.7f, rr * 1.7f, 0, rgb(255, 255, 255), (u8)(255 * (1 - k / 0.6f))); }   // its white-hot heart
             if (k < 0.2f) g.glowAdd(a.x, a.y, rr * 1.4f, Color{255, 252, 220, (u8)(230 * (1 - k * 5))});
+            if (f.t < 0.14f && rr > 10.0f && flashes < flashMax) { flashes++; g.drawSized(g.fxs.flash[(int)(std::fabs(f.a.x * 7 + f.a.y * 3)) % 3], a.x, a.y, rr * 2.4f, rr * 2.4f, rot, rgb(255, 250, 230), (u8)(255 * (1 - f.t / 0.14f))); }   // the first light: a crisp star
             break;
         }
         case FX_SMOKE: {
@@ -477,10 +584,15 @@ void Game::drawFx() {
             g.drawSized(g.fxs.smoke[v], a.x, a.y, rad * 2, rad * 2, f.t * 0.3f + (float)v, Color{f.color.r, f.color.g, f.color.b, 255}, (u8)(255 * clampf(0.55f * fade * (f.color.r < 120 ? 1.15f : 1.0f), 0, 1) * (al > 0 ? 1 : 1)));
             break;
         }
-        case FX_SPARK: {
+        case FX_SPARK: {   // a hot spot with three quick streaks flung out in their own directions (a hash of the spot: they do not all point one way)
             float al = 1 - k;
             g.glowAdd(a.x, a.y, f.size * 2.6f, Color{f.color.r, f.color.g, f.color.b, (u8)(200 * al)});
             g.glowAdd(a.x, a.y, f.size * 1.0f, Color{255, 255, 255, (u8)(220 * al)});
+            const u32 hs = (u32)(int)f.a.x * 73856093u ^ (u32)(int)f.a.y * 19349663u;
+            for (int i = 0; i < 2; i++) {
+                float an = (float)((hs >> (i * 8)) & 255) * (6.2831853f / 256.0f) + i * 3.1416f, L = f.size * (1.6f + 1.4f * (1 - k));
+                g.drawSized(g.fxs.streak, a.x + std::cos(an) * L * 0.25f, a.y + std::sin(an) * L * 0.25f, L, std::max(1.2f, f.size * 0.4f), an, Color{f.color.r, f.color.g, f.color.b}, (u8)(230 * al));
+            }
             break;
         }
         case FX_DEBRIS: {
@@ -504,16 +616,21 @@ void Game::drawFx() {
             float R = f.size * 0.52f, t = f.t;
             float g1 = clampf(t / 9.0f, 0, 1), grow = 1 - (1 - g1) * (1 - g1) * (1 - g1);
             float fade = clampf((1 - k) * 3.5f, 0, 1);
-            float heat = clampf(1 - t / 7.5f, 0, 1);
+            float heat = clampf(1 - t / 7.5f, 0, 1);   // (the glows fade with this)
+            const float hc = clampf(1 - t / 12.0f, 0, 1);   // the colour cools more slowly: white, then orange, then dark red-brown, before the smoke
             float H = R * 2.05f * grow, Rc = R * (0.2f + 0.78f * grow);
             Vec2 top(a.x, a.y - H);
             auto lerpc = [](Color x, Color y, float u) { u = clampf(u, 0, 1); return Color{(u8)(x.r + (y.r - x.r) * u), (u8)(x.g + (y.g - x.g) * u), (u8)(x.b + (y.b - x.b) * u), 255}; };
             const bool sv = f.color.r != 255 || f.color.g != 255 || f.color.b != 255;   // a tinted cloud: the silver of an Underground Nuke
-            const Color ash = sv ? Color{196, 200, 208, 255} : Color{206, 188, 172, 255}, soot = sv ? Color{122, 126, 134, 255} : Color{118, 108, 102, 255};
-            const Color ember = sv ? Color{236, 240, 250, 255} : Color{255, 150, 66, 255}, lit = sv ? Color{246, 248, 252, 255} : Color{255, 246, 232, 255};
+            const float aged = clampf((t - 4.0f) / 9.0f, 0, 1);   // the smoke darkens as it climbs: from ash grey to dark red-brown
+            const Color ash = sv ? Color{196, 200, 208, 255} : lerpC(Color{206, 188, 172, 255}, Color{104, 76, 66, 255}, aged * 0.8f);
+            const Color soot = sv ? Color{122, 126, 134, 255} : lerpC(Color{118, 108, 102, 255}, Color{70, 52, 48, 255}, aged);
+            const Color lit = sv ? Color{246, 248, 252, 255} : Color{255, 246, 232, 255};
             if (heat > 0) g.glowAdd(a.x, a.y, R * 1.25f * heat, sv ? Color{210, 218, 232, (u8)(160 * heat * fade)} : Color{255, 140, 50, (u8)(180 * heat * fade)});
-            // base surge: a low skirt of dust billows rolling outward along the ground
+            if (t < 0.35f) { float fl = 1 - t / 0.35f; g.drawSized(g.fxs.flash[0], a.x, a.y - H * 0.1f, R * 1.3f, R * 1.3f, 0, sv ? rgb(236, 242, 252) : rgb(255, 246, 228), (u8)(255 * fl * fl)); }   // the first flash
+            // base surge: a low skirt of dust billows rolling outward along the ground, with a dust ring racing out ahead of them
             float sg = clampf(t / 10.0f, 0, 1); sg = 1 - (1 - sg) * (1 - sg);
+            if (detail >= 1) { const float Rs = R * (0.3f + 1.05f * sg); g.drawSized(g.fxs.skirt[0], a.x, a.y + 3, Rs * 2.1f, Rs * 1.05f, 0, sv ? rgb(196, 202, 212) : rgb(190, 168, 140), (u8)(190 * fade * (1.0f - 0.5f * sg))); }
             const int st = detail >= 3 ? 1 : (detail == 2 ? 2 : 3);   // (lower detail: every second or third billow, each a little bigger)
             const float sb = 1.0f + 0.22f * (st - 1);
             for (int i = 0; i < 16; i += st) {
@@ -529,7 +646,7 @@ void Game::drawFx() {
                 float wob = std::sin(t * 1.1f + i * 1.9f) * R * 0.05f * (0.5f + u) + std::sin(t * 0.5f + u * 5.0f) * R * 0.035f;
                 float rad = (R * 0.15f * prof * (0.65f + 0.35f * grow) + 7) * sb;
                 Vec2 p(a.x + wob, a.y - H * u * 0.97f);
-                Color c = lerpc(lerpc(ash, soot, u * 0.4f), ember, clampf(heat * (1 - u * 1.3f), 0, 1) * 0.85f);
+                Color c = lerpc(lerpc(ash, soot, u * 0.4f), heatRamp(hc * (1 - u * 0.9f), sv), clampf(hc * (1.6f - u), 0, 1));   // (the foot is hottest, cooling up the stem)
                 g.drawSized(g.fxs.billow[i & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(235 * fade));
             }
             // condensation collar: a pale ring that opens around the stem and fades
@@ -548,7 +665,8 @@ void Game::drawFx() {
                         float radial = rc + rm * std::cos(phi);
                         Vec2 p(top.x + std::cos(th) * radial, top.y + sn * radial * 0.34f - rm * std::sin(phi) * 0.85f - Rc * (ring ? 0.12f : 0.0f));
                         float up = std::sin(phi) * 0.5f + 0.5f;                                // top of the roll catches the light, the underside glows
-                        Color c = lerpc(lerpc(ash, lit, up * 0.8f), ember, clampf(heat * (1 - up) * (sn > 0 ? 1.0f : 0.6f), 0, 1) * 0.9f);
+                        const float hl = clampf(hc * (0.55f + 0.45f * (1 - up)) * (sn > 0 ? 1.0f : 0.8f), 0, 1);   // the underside of the rolling cap is the hottest part
+                        Color c = lerpc(lerpc(ash, lit, up * 0.8f), heatRamp(hl, sv), clampf(hl * 1.5f, 0, 1));
                         if (up > 0.5f) c = lerpc(c, soot, clampf((t - 8.0f) / 10.0f, 0, 0.6f));
                         float rad = (rm * 1.08f + 9) * sb;
                         g.drawSized(g.fxs.billow[(i + ring) & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(255 * fade));
@@ -558,7 +676,7 @@ void Game::drawFx() {
             torus(false);
             for (int i = 0; i < 10; i += st) {   // dense core of the cap
                 float an = i * 0.628f + t * 0.2f; Vec2 p(top.x + std::cos(an) * Rc * 0.4f, top.y - Rc * 0.14f + std::sin(an) * Rc * 0.16f);
-                g.drawSized(g.fxs.billow[i & 3], p.x, p.y, Rc * 1.15f, Rc * 0.9f, 0, lerpc(lerpc(ash, lit, 0.35f), ember, heat * 0.5f), (u8)(240 * fade));
+                g.drawSized(g.fxs.billow[i & 3], p.x, p.y, Rc * 1.15f, Rc * 0.9f, 0, lerpc(lerpc(ash, lit, 0.35f), heatRamp(hc * 1.1f, sv), clampf(hc * 1.4f, 0, 1)), (u8)(240 * fade));
             }
             torus(true);
             for (int i = 0; i < 9; i += st) {    // pale smooth hat riding on top of the cap
@@ -620,7 +738,8 @@ void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under 
                 if (255 * al * 0.7f < std::max(3.0f, smokeCut * (sz > 12 ? 1.0f : 0.5f))) break;   // (too faint to see, or past the smoke budget: see smokeCut)
                 smokeFill += 4.0f * sz * sz;
                 const Sprite& sp = p.kind == PK_DUST ? g.fxs.dust[p.var % 3] : g.fxs.smoke[p.var & 3];
-                g.drawSized(sp, s.x, s.y, sz * 2, sz * 2, p.rot, Color{(u8)(p.col.r * amb.r / 255), (u8)(p.col.g * amb.g / 255), (u8)(p.col.b * amb.b / 255), 255}, (u8)(255 * al * 0.7f));   // (smoke takes the hour's light)
+                const float dk = p.kind == PK_SMOKE ? 1.0f - 0.5f * sst(0.1f, 1.0f, k) : 1.0f;   // smoke darkens as it climbs: the grey of a fresh puff goes to charcoal
+                g.drawSized(sp, s.x, s.y, sz * 2, sz * 2, p.rot, Color{(u8)(p.col.r * dk * amb.r / 255), (u8)(p.col.g * dk * amb.g / 255), (u8)(p.col.b * dk * amb.b / 255), 255}, (u8)(255 * al * 0.7f));   // (smoke takes the hour's light)
                 break;
             }
             case PK_DEBRIS: {
@@ -645,8 +764,9 @@ void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under 
                 g.drawSized(g.fxs.ring, s.x, s.y, d, d, 0, p.col, (u8)(85 * (1 - k) * (1 - k)));
                 break;
             }
-            case PK_GLOW: {
-                g.glowAdd(s.x, s.y, lerpf(p.s0, p.s1, k), Color{p.col.r, p.col.g, p.col.b, (u8)(p.col.a * (1 - k))});
+            case PK_GLOW: {   // an ember: it flickers as it cools
+                float fl = 0.65f + 0.35f * std::sin(p.age * 29.0f + p.var * 2.1f);
+                g.glowAdd(s.x, s.y, lerpf(p.s0, p.s1, k), Color{p.col.r, p.col.g, p.col.b, (u8)(p.col.a * (1 - k) * fl)});
                 break;
             }
             }

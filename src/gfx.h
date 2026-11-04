@@ -118,7 +118,8 @@ struct Gfx {
     Sprite teamRing;                // a soft white ring (blended, not added): the army-coloured mark on the ground under a unit
     // baked effect sprites: smoke and dust puffs, fireball frames, flame tongues, muzzle stars, sparks, shock rings, beams, debris, scorch decals
     struct FxArt { Sprite smoke[4], dust[3], fire[8], flame[6], flash[3], streak, ring, beam, debris[4], scorch[3], tread[2], missile, missileK, cloud[3], billow[4];
-                   Sprite fallout[2][2]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead; fallout[silver][inner ring]: a radiation zone's haze and rings in one sprite
+                   Sprite fallout[2][2]; Sprite core[8], skirt[2]; } fxs;   // missile: Cyber warhead, missileK: Clanker warhead; fallout[silver][inner ring]: a radiation zone's haze and rings in one sprite;
+                                                                             // core[8]: the white-hot heart of a fireball (additive, one per fire frame); skirt[2]: a low dust ring rolling along the ground
     Sprite waterFx[4];              // seamless animated caustics laid over open water
     Sprite seaSwell[4];             // seamless animated swell over the open ocean (512x512: a quarter per aligned 8x8-tile block)
     Sprite flag[MAX_PLAYERS];       // each player's own flag (shape and emblem differ, not just the colour)

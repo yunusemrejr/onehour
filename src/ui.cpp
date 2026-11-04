@@ -1585,9 +1585,9 @@ void Game::drawSunShadows(float vx0, float vy0, float vx1, float vy1) {
     float az = 0.785f + (day - 0.5f) * 1.1f;                              // shadow bearing: south-east, swinging east-south-east .. south-south-east
     float len = lit ? (0.55f + 1.7f * (1.0f - elev)) : 0.7f;              // length per px of height
     float alpha = (lit ? 78.0f - 20.0f * (1.0f - elev) : 26.0f) * (1.0f - 0.7f * clampf(weather.rain * 1.3f, 0, 1));
-    if (alpha < 6) return;
+    if (alpha < 6 || detail <= 0) return;
     const Vec2 dir(std::cos(az), std::sin(az));
-    const int steps = detail >= 2 ? 3 : 2;
+    const int steps = detail >= 3 ? 2 : 1;   // (each layer is a structure-sized blend: fill rate on a weak GPU)
     for (auto& e : g_sim.ents) {
         if (!e.alive || !e.isBuilding() || !e.constructed) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
@@ -1602,11 +1602,12 @@ void Game::drawSunShadows(float vx0, float vy0, float vx1, float vy1) {
         case BR_WALL: h = 9; break;           default: h = 13; break;
         }
         if (h * len < 2.5f) continue;
+        if ((bt.role == BR_WALL || bt.role == BR_FWALL) && detail < 3) continue;   // (a wall belt is hundreds of pieces)
         const Sprite& s = g.building[e.type];
         Vec2 q = worldToScreen(entPos(e));
         for (int k = 1; k <= steps; k++) {
             float o = h * len * k / steps;
-            g.draw(s, q.x + dir.x * o, q.y + dir.y * o, 0, 1, rgb(0, 0, 0), (u8)(alpha / steps * (1.15f - 0.1f * k)));
+            g.draw(s, q.x + dir.x * o, q.y + dir.y * o, 0, 1, rgb(0, 0, 0), (u8)(alpha * (steps == 1 ? 0.85f : 0.55f)));
         }
     }
 }
@@ -2158,7 +2159,7 @@ void Game::renderWorld() {
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
     }
-    if (!(skipL & 2)) drawWaterOverlay();   // the surf, the wash at the waterline and the storm sea
+    if (!(skipL & 2) && !(skipL & 1024)) drawWaterOverlay();   // the surf, the wash at the waterline and the storm sea (ONEHOUR_SKIPLAYER 1024: none)
     drawSeaLife();
     if (!(skipL & 2)) { drawWhitecaps(); drawWaterGlitter(); }
     rp.mark("water+sealife");
@@ -2353,7 +2354,7 @@ void Game::renderWorld() {
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
     std::vector<Entity*> ground, air;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
-    if (!(skipL & 8)) drawSunShadows(vx0, vy0, vx1, vy1);   // cast shadows of the structures, under everything standing on the ground
+    if (!(skipL & 8) && !(skipL & 512)) drawSunShadows(vx0, vy0, vx1, vy1);   // (ONEHOUR_SKIPLAYER 512: no sun shadows)   // cast shadows of the structures, under everything standing on the ground
     g.beginAdd();   // (the lights, flashes and glows of the structures and units: drawn together after them, see Gfx::flushAdd)
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;

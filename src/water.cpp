@@ -97,7 +97,7 @@ float Game::stormLevel() const { return clampf((weather.rain - 0.55f) / 0.4f, 0.
 void Game::drawWaterOverlay() {
     Gfx& g = g_gfx;
     waterFieldUpdate();
-    if (F.d.empty()) return;
+    if (F.d.empty() || detail <= 0) return;   // (a machine that cannot keep up gets the plain baked sea)
     static SDL_Texture* tex = nullptr; static int tw = 0, th = 0;
     static std::vector<u32> px;
     // screen px per overlay texel: a GPU stretches it smoothly (bilinear), so a quarter resolution is plenty; the software renderer stretches

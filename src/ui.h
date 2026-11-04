@@ -89,6 +89,10 @@ struct Game {
     std::vector<Ping> pings;
     std::vector<Particle> parts;
     std::vector<Decal> decals;
+    // A smoke column still rising from a big blast: it puffs smoke off the spot (rate per second, thinning out over its last seconds) and the
+    // puffs drift with the wind and darken as they climb (see Game::updateParticles). nuke: the warhead's column, not a heavy bomb's.
+    struct Plume { Vec2 at; float t, life, rate, acc, size; bool nuke; };
+    std::vector<Plume> plumes;
     std::vector<Tread> treads;      // ring of fading tread marks (capped)
     size_t treadHead = 0;
     float nukeFlash = 0;            // seconds of white-out left after a tactical nuke goes off on screen
