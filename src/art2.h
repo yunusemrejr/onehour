@@ -30,6 +30,21 @@ ShipMounts patrolMounts();
 void artPatrolBoatBody(Canvas& c, Color team, bool cyber);
 bool artPatrolBoatMount(Canvas& c, Color team, bool cyber);
 
+// Battleship: 128x128 canvas (ART_BIG), bow at +x, centre (64,64), a huge armoured dreadnought about 118 px long and 26 wide, with a tall pagoda
+// bridge, three turrets, two 4x4 vertical-launch blocks (one fore of the bridge, one aft) and an aircraft deck aft. Three rotating main-gun turrets
+// are drawn by the renderer at battleshipMounts() offsets (canvas px from the centre, +x toward the bow); the hull paints empty barbettes there.
+// The turret sprite is 64x64 centred (32,32), barrels toward +x, painted at half the hull's pixel scale (see the renderer's ship mount draw).
+ShipMounts battleshipMounts();
+void artBattleshipBody(Canvas& c, Color team, bool cyber);
+bool artBattleshipMount(Canvas& c, Color team, bool cyber);   // one triple-barrel heavy gun turret, 64x64 canvas centred (32,32), barrels toward +x
+
+// Nuclear submarine: 128x128 canvas (ART_BIG), bow at +x, centre (64,64), a long slim cigar hull about 110 px long and 14 wide with a sail
+// (conning tower) about a third back from the bow, sail planes, a cruciform/X stern with rudder, and a row of ballistic-missile hatches behind the sail.
+// state 0: surfaced (full detail, wet dark hull, the waterline washing over the casing);
+// state 1: submerged as seen by its own side (a dark translucent blue-grey silhouette under the water, only the periscope/sail top breaking the surface: alpha ~90-140);
+// state 2: surfaced with the missile hatches open (one hatch open and glowing: the launch moment).
+void artSubBody(Canvas& c, Color team, bool cyber, int state);
+
 // The special fighter of a Hotline Strike (Valkyrie / Warhawk): long, slender, swept, twin-tailed, weapon pylons under the wings. 64x64 canvas
 // with a wingspan up to about 52 px and a length up to about 62 px. Afterburner flame and contrails are added live by the renderer.
 void artStrikeJetBody(Canvas& c, Color team, bool cyber);

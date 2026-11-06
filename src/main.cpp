@@ -2754,10 +2754,11 @@ bool placementTest(u64 seed);
 bool placementBench(u64 seed);
 
 // ONEHOUR_ARTSHEET=<file.bmp>: headless preview of the sea art (the carrier, the cargo ship and the two carrier jets) for both armies, each in
-// its owner's colour (Cyber PLAYER_COLOR[0], Clanker PLAYER_COLOR[1]), at 2x over sea blue. The big ships are on the top row, the jets below.
+// its owner's colour (Cyber PLAYER_COLOR[0], Clanker PLAYER_COLOR[1]), at 2x over sea blue. The big ships are on the top row, the jets below; then the
+// battleship with its three turrets, and the submarine surfaced, submerged and with a hatch open.
 static void writeArtSheet(const char* path) {
     const int S = 2, GAP = 8, M = 8, bigW = ART_BIG * S, smW = ART_SIZE * S;
-    Canvas out(M * 2 + 4 * bigW + 3 * GAP, M * 2 + bigW + GAP + smW);
+    Canvas out(M * 2 + 4 * bigW + 3 * GAP, M * 2 + bigW + GAP + smW + 2 * (bigW + GAP));   // + two rows: the battleship and the submarine
     for (u32& p : out.px) p = Canvas::pack(rgb(30, 90, 140));
     auto put2x = [&](const Canvas& src, int x0, int y0) {   // nearest-neighbour 2x, alpha-blended onto the sheet
         for (int y = 0; y < src.h * S; y++) for (int x = 0; x < src.w * S; x++) out.set(x0 + x, y0 + y, Canvas::unpack(src.px[(y / S) * src.w + x / S]));
@@ -2773,6 +2774,28 @@ static void writeArtSheet(const char* path) {
         put2x(crg, M + (2 + f) * (bigW + GAP), M);
         put2x(cj, M + f * (bigW + GAP) + (bigW - smW) / 2, M + bigW + GAP);
         put2x(aj, M + (2 + f) * (bigW + GAP) + (bigW - smW) / 2, M + bigW + GAP);
+    }
+    // the battleship (row 3: Cyber, Clanker, then the submarine surfaced for each army) and the submarine's submerged and launch states (row 4); the
+    // turrets are drawn over the hull at their battleshipMounts() offsets, at half the hull's pixel scale (one turret px = one sheet px at 2x)
+    const int rowBB = M + bigW + GAP + smW + GAP, rowSub = rowBB + bigW + GAP;
+    for (int f = 0; f < 2; f++) {
+        bool cy = f == 0;
+        Canvas bb(ART_BIG, ART_BIG), sub0(ART_BIG, ART_BIG), sub1(ART_BIG, ART_BIG), sub2(ART_BIG, ART_BIG);
+        artBattleshipBody(bb, PLAYER_COLOR[f], cy);
+        artSubBody(sub0, PLAYER_COLOR[f], cy, 0);
+        artSubBody(sub1, PLAYER_COLOR[f], cy, 1);
+        artSubBody(sub2, PLAYER_COLOR[f], cy, 2);
+        put2x(bb, M + f * (bigW + GAP), rowBB);
+        put2x(sub0, M + (2 + f) * (bigW + GAP), rowBB);
+        put2x(sub1, M + f * (bigW + GAP), rowSub);
+        put2x(sub2, M + (2 + f) * (bigW + GAP), rowSub);
+        Canvas tur(ART_SIZE, ART_SIZE);
+        artBattleshipMount(tur, PLAYER_COLOR[f], cy);
+        ShipMounts bm = battleshipMounts();
+        for (int i = 0; i < bm.n; i++) {   // the turret centred on its barbette: canvas px from the hull centre, times the sheet scale
+            int cx = M + f * (bigW + GAP) + ART_BIG / 2 * S + (int)(bm.x[i] * S), cy2 = rowBB + ART_BIG / 2 * S + (int)(bm.y[i] * S);
+            for (int y = 0; y < tur.h; y++) for (int x = 0; x < tur.w; x++) out.set(cx - tur.w / 2 + x, cy2 - tur.h / 2 + y, Canvas::unpack(tur.px[y * tur.w + x]));
+        }
     }
     if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(out.px.data(), out.w, out.h, 32, out.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, path); SDL_FreeSurface(sf); }
     printf("wrote %s\n", path);
@@ -2806,9 +2829,34 @@ static void writeBunkerSheet(const char* path) {
     printf("wrote %s\n", path);
 }
 
+// ONEHOUR_RELICUNITS=<file.bmp>: headless preview of the Relic army's special units (Juggernaut, Strider, Thunderhawk) for two owner colours,
+// one row each (blue, then red). Each kind's three frames are drawn at 1x, then the same at 4x; the turret sits on top of the body for kinds 0 and 1.
+static void writeRelicSheet(const char* path) {
+    const int S = 4, M = 8, GAP = 6, GAP4 = 14, T = ART_SIZE, N = 9;
+    const Color team[2] = {rgb(70, 140, 255), rgb(230, 70, 60)};
+    int w1 = N * T + (N - 1) * GAP, w4 = N * T * S + (N - 1) * GAP;
+    Canvas out(M * 2 + w1 + GAP4 + w4, M * 2 + 2 * T * S + GAP4);
+    for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) out.px[y * out.w + x] = Canvas::pack(((x / 9 + y / 7) & 1) ? rgb(84, 104, 70) : rgb(78, 98, 66));
+    for (int t = 0; t < 2; t++) {
+        int y0 = M + t * (T * S + GAP4);
+        for (int i = 0; i < N; i++) {
+            int kind = i / 3, frame = i % 3;
+            Canvas tile(T, T), tur(T, T);
+            artRelicUnitBody(tile, kind, team[t], frame);
+            if (artRelicUnitTurret(tur, kind, team[t])) for (int y = 0; y < T; y++) for (int x = 0; x < T; x++) tile.set(x, y, Canvas::unpack(tur.px[y * T + x]));
+            int x1 = M + i * (T + GAP), x4 = M + w1 + GAP4 + i * (T * S + GAP);
+            for (int y = 0; y < T; y++) for (int x = 0; x < T; x++) out.set(x1 + x, y0 + y, Canvas::unpack(tile.px[y * T + x]));
+            for (int y = 0; y < T * S; y++) for (int x = 0; x < T * S; x++) out.set(x4 + x, y0 + y, Canvas::unpack(tile.px[(y / S) * T + x / S]));
+        }
+    }
+    if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(out.px.data(), out.w, out.h, 32, out.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, path); SDL_FreeSurface(sf); }
+    printf("wrote %s\n", path);
+}
+
 int main(int argc, char** argv) {
     if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
     if (const char* bs = getenv("ONEHOUR_BUNKERSHEET")) { writeBunkerSheet(bs); return 0; }
+    if (const char* rs = getenv("ONEHOUR_RELICUNITS")) { writeRelicSheet(rs); return 0; }   // preview only: no window, no game state
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0; int lateMin = 0;
     for (int i = 1; i < argc; i++) {   // the headless scene tests check one mechanic each in scenes that run for minutes: no riots in them (full matches - the game,

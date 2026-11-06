@@ -12,7 +12,7 @@ namespace {
 
 const Color CV_SIDE = rgb(116, 130, 148), CV_DECK = rgb(206, 214, 220), CV_DARK = rgb(34, 42, 56), CV_CYAN = rgb(110, 232, 255), CV_WHITE = rgb(236, 244, 250);
 const Color CV_MARK = rgb(60, 74, 98);   // Cyber's deck markings: slate on the pale deck, so they read
-const Color CV_ISL = rgb(220, 228, 234), CV_GLASS = rgb(40, 110, 140);
+const Color CV_ISL = rgb(220, 228, 234), CV_GLASS = rgb(30, 52, 70);
 const Color CK_SIDE = rgb(144, 58, 38), CK_DECK = rgb(112, 116, 118), CK_DARK = rgb(38, 40, 36), CK_YEL = rgb(232, 190, 64), CK_ISL = rgb(136, 138, 132), CK_RUST = rgb(170, 84, 48);
 const Color NAV_GREY_CY = rgb(140, 148, 156), NAV_GREY_CK = rgb(116, 122, 126);
 const Color AIR_GREY = rgb(150, 158, 166), AIR_INK = rgb(24, 28, 36), WHITE = rgb(255, 255, 255);
@@ -46,35 +46,55 @@ void nozzle(Art& A, float cx, float cy, float r, Color bell, Color glow) {
     A.glow(cx, cy, r * 2.4f, rgba(glow, 110));
 }
 
-// the half-width of the carrier's flight deck at x (the hull outline is the same shape, 2 px wider): symmetric about y = 64
-float carrierHalfWidth(float x) {
-    if (x <= 8.5f) return 15.5f;
-    if (x <= 97.0f) return 15.5f + (x - 8.5f) * (1.9f / 88.5f);
-    if (x <= 112.0f) return 17.4f + (x - 97.0f) * (-7.0f / 15.0f);
-    return std::max(0.0f, 10.4f - (x - 112.0f) * 1.3f);
-}
+// ---------------------------------------------------------------- shared hull profiles and deck helpers
 
-// a small light: a glow and a bright dot
+// A half-width profile: (x, w) control points along a hull, linear between them, symmetric about y = 64 (the centre line).
+struct Prof { float x, w; };
+float profileAt(const std::vector<Prof>& t, float x) {
+    if (x <= t.front().x) return t.front().w;
+    for (size_t i = 1; i < t.size(); i++) if (x <= t[i].x) {
+        float u = (x - t[i - 1].x) / (t[i].x - t[i - 1].x);
+        return t[i - 1].w + (t[i].w - t[i - 1].w) * u;
+    }
+    return t.back().w;
+}
+// the outline of a shape from its profile: the stern edge at the first point, a point at (bowX, 64), every half-width cut back by `inset`
+std::vector<P> profileOutline(const std::vector<Prof>& t, float bowX, float inset) {
+    std::vector<P> v;
+    for (const Prof& p : t) v.push_back({p.x, 64 - std::max(0.0f, p.w - inset)});
+    v.push_back({bowX - inset, 64});
+    for (size_t i = t.size(); i-- > 0;) v.push_back({t[i].x, 64 + std::max(0.0f, t[i].w - inset)});
+    return v;
+}
+// a lamp: a glow and a bright dot
 void lamp(Art& A, float x, float y, float r, Color c) {
     A.glow(x, y, r * 3.0f, rgba(c, 80));
     A.dot(x, y, r, c);
 }
-
-// dashes along a line, n of them with gaps (deck centre line, landing lanes, hazard edges)
+// dashes along a line, n of them with gaps (centre lines, lane lines, hazard edges)
 void dashes(Art& A, float x0, float y0, float x1, float y1, int n, float w, Color col) {
     for (int i = 0; i < n; i++) {
         float t0 = (i + 0.1f) / n, t1 = (i + 0.62f) / n;
         A.line(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0, x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1, w, col);
     }
 }
-
+// a line along one side of a profile (s = -1 port / north, +1 starboard / south), `off` px in from its edge
+void profileEdge(Art& A, const std::vector<Prof>& t, int s, float off, float w, Color col) {
+    for (size_t i = 1; i < t.size(); i++) A.line(t[i - 1].x, 64 + s * (t[i - 1].w - off), t[i].x, 64 + s * (t[i].w - off), w, col);
+}
+// dashes along one side of a profile, following its bends
+void profileDashes(Art& A, const std::vector<Prof>& t, int s, float off, float w, Color col) {
+    for (size_t i = 1; i < t.size(); i++) {
+        float ax = t[i - 1].x, bx = t[i].x, ay = 64 + s * (t[i - 1].w - off), by = 64 + s * (t[i].w - off);
+        dashes(A, ax, ay, bx, by, std::max(1, (int)(hyp(bx - ax, by - ay) / 3.6f)), w, col);
+    }
+}
 // a gun on a mount seen from above: a dome, a barrel pointing +x and a sensor pip (as art_ship.cpp's ciws)
 void ciws(Art& A, float x, float y, bool cy) {
     A.circle(x, y, 1.6f, cy ? CV_WHITE : CK_RUST, 1.0f, 0.5f);
     A.line(x, y, x + 3.2f, y, 0.9f, rgba(cy ? CV_DARK : CK_DARK, 230));
     A.dot(x, y, 0.45f, cy ? CV_CYAN : CK_YEL);
 }
-
 // a lift (elevator) flush with the deck: a framed well with a dark centre seam
 void elevator(Art& A, float x, float y, float w, float h, Color deck, Color mk) {
     A.rect(x - 0.6f, y - 0.6f, w + 1.2f, h + 1.2f, 0.6f, rgba(mk, 170), 0.8f, 0.2f);
@@ -84,82 +104,130 @@ void elevator(Art& A, float x, float y, float w, float h, Color deck, Color mk) 
 
 // ---------------------------------------------------------------- aircraft carrier
 
+// The carrier's numbers are the sim's (data.h), in world px; the canvas is 1.495 world px per px, centred on (64, 64): canvas = 64 + world / 1.495.
+// The touchdown point (-62.8, -12.0) is canvas (22, 56); the roll-out stop (-20.9, -15.0) is (50, 54); the catapults run from canvas x 101 to 119
+// at y 59.6 and 68.4; the six parking spots are converted in carrierBody. The landing lane's heading is CARRIER_LAND_ANG = -0.071 rad.
+const float LANE_SLOPE = -0.071f;
+float laneY(float x, float off) { return 56.0f + LANE_SLOPE * (x - 22.0f) + off; }   // the lane's centre line, off px to starboard
+// a line across the angled deck, square to the lane, half-length h
+void laneCross(Art& A, float x, float h, float w, Color col) {
+    float c = laneY(x, 0), n = -LANE_SLOPE;
+    A.line(x - n * h, c - h, x + n * h, c + h, w, col);
+}
+
+// the flight deck: a long flat deck, widest amidships, its bow squared off with rounded corners (not a pointed warship bow); the hull's flare
+// shows past the deck edge and round the bow
+const std::vector<Prof> KDECK = { {8.0f, 14.8f}, {30.0f, 15.6f}, {60.0f, 15.8f}, {88.0f, 15.4f}, {104.0f, 14.6f}, {114.0f, 12.6f}, {120.0f, 10.0f}, {123.4f, 6.6f}, {124.8f, 3.6f} };
+const std::vector<Prof> KHULL = { {4.5f, 13.6f}, {14.0f, 16.6f}, {44.0f, 18.2f}, {80.0f, 17.8f}, {100.0f, 16.0f}, {114.0f, 13.4f}, {120.0f, 11.2f}, {124.0f, 8.0f}, {126.0f, 4.2f} };
+
 void carrierBody(Art& A, bool cy) {
-    Color side = cy ? CV_SIDE : CK_SIDE, deck = cy ? CV_DECK : CK_DECK, mk = cy ? CV_MARK : CK_YEL, dk = cy ? CV_DARK : CK_DARK;
-    Color isl = cy ? CV_ISL : CK_ISL;
-    // the hull: a flared bow and a square stern, its sides a band of waterline colour round the flight deck
-    A.poly({ {6, 46}, {98, 44}, {117, 52}, {125.6f, 64}, {117, 76}, {98, 84}, {6, 82} }, side, 1.8f, 0.6f);
-    // the flight deck, with a little bevel on its north-west edges
-    A.poly({ {8.5f, 48.5f}, {97, 46.6f}, {112, 53.6f}, {120, 64}, {112, 74.4f}, {97, 81.4f}, {8.5f, 79.5f} }, deck, 1.6f, 0.45f);
+    const Color deck = cy ? CV_DECK : CK_DECK, mk = cy ? CV_MARK : CK_YEL, dk = cy ? CV_DARK : CK_DARK, isl = cy ? CV_ISL : CK_ISL;
+    const Color topside = cy ? rgb(122, 136, 154) : rgb(92, 96, 98), waterline = cy ? rgb(52, 64, 86) : CK_SIDE;
+    // the hull: a waterline band all round (navy boot-top, rust-red on Clanker) and the topsides above it, both showing past the deck edge
+    A.poly(profileOutline(KHULL, 127.0f, 0), waterline, 1.4f, 0.6f);
+    A.poly(profileOutline(KHULL, 127.0f, 1.0f), topside, 1.2f, 0.6f);
+    // the flight deck, with its bulwark line and the deck-edge line just inside it (Cyber: cyan lights; Clanker: a thin yellow edge line)
+    A.poly(profileOutline(KDECK, 125.2f, 0), deck, 1.6f, 0.45f);
+    profileEdge(A, KDECK, -1, 0.5f, 0.6f, rgba(dk, 150));
+    profileEdge(A, KDECK, 1, 0.5f, 0.6f, rgba(dk, 150));
     if (cy) {
-        // cyan deck lights along both edges, and a cyan seam line
         for (float x = 12; x <= 110; x += 5.0f) {
-            lamp(A, x, 64 - carrierHalfWidth(x) + 1.5f, 0.45f, CV_CYAN);
-            lamp(A, x, 64 + carrierHalfWidth(x) - 1.5f, 0.45f, CV_CYAN);
+            lamp(A, x, 64 - profileAt(KDECK, x) + 1.3f, 0.45f, CV_CYAN);
+            lamp(A, x, 64 + profileAt(KDECK, x) - 1.3f, 0.45f, CV_CYAN);
         }
-        A.line(10, 64, 108, 64, 0.5f, rgba(CV_CYAN, 90));
     } else {
-        // yellow edge hazard dashes and a rust streak down the sides of the hull
-        dashes(A, 10, 50.8f, 96, 47.4f, 16, 0.9f, mk);
-        dashes(A, 10, 77.2f, 96, 80.6f, 16, 0.9f, mk);
-        for (float x = 14; x < 104; x += 11) A.line(x, 46.6f, x + 1.4f, 47.8f, 0.7f, rgba(CK_RUST, 170));   // streaks on the hull band
+        profileEdge(A, KDECK, -1, 1.2f, 0.7f, rgba(mk, 210));
+        profileEdge(A, KDECK, 1, 1.2f, 0.7f, rgba(mk, 210));
     }
-    // angled landing deck to port: its edges are painted lines, its landing lane is dashed and it ends in a line at its forward end
-    Color lane = cy ? CV_MARK : CK_YEL;
-    A.line(14, 52.2f, 58, 49.2f, 0.9f, lane);
-    A.line(14, 60.8f, 58, 57.8f, 0.9f, lane);
-    A.line(58, 49.2f, 58, 57.8f, 0.9f, lane);
-    dashes(A, 18, 56.5f, 54, 53.5f, 7, 0.7f, rgba(lane, 200));
-    // the deck centre line, dashed, from the stern to the bow
-    dashes(A, 14, 64, 110, 64, 22, 0.9f, rgba(lane, 235));
-    // the big hull number "7" on the starboard quarter
-    A.line(36.4f, 67.4f, 42.6f, 67.4f, 1.4f, mk); A.line(42.6f, 67.4f, 38.4f, 76.6f, 1.4f, mk);
-    // catapult tracks at the bow, one each side of the centre line
-    for (float y : { 59.6f, 68.4f }) {
-        A.line(100, y, 119, y, 1.1f, rgba(dk, 255));
-        A.line(100, y - 0.9f, 119, y - 0.9f, 0.45f, rgba(lane, 200));
-        A.box(111.5f, y, 0.7f, 1.4f, 0.2f, shade(dk, 1.6f), 0.5f, 0.3f);
+    dashes(A, 14, 64, 110, 64, 22, 0.9f, rgba(mk, 235));   // the centre line, stern to bow
+    A.line(119.0f, 64, 122.5f, 64, 0.6f, rgba(mk, 150));
+
+    // the angled landing deck to port: its lane runs along the sim's landing line through the touchdown point, with the lane's edges, its
+    // centre dashes, the landing area's box ends, the aiming bars and four arrestor wires square across it
+    const float LH = 5.6f;   // half the lane's width
+    A.poly({ {9, laneY(9, -LH)}, {50, laneY(50, -LH)}, {50, laneY(50, LH)}, {9, laneY(9, LH)} }, shade(deck, cy ? 0.92f : 0.86f), 1.0f, 0.4f);
+    A.line(9, laneY(9, -LH), 50, laneY(50, -LH), 1.0f, mk);
+    A.line(9, laneY(9, LH), 50, laneY(50, LH), 1.0f, mk);
+    dashes(A, 12, laneY(12, 0), 46, laneY(46, 0), 8, 0.7f, rgba(mk, 200));
+    laneCross(A, 16, LH, 0.7f, mk); laneCross(A, 38, LH, 0.7f, mk);
+    laneCross(A, 20.3f, 3.2f, 1.0f, mk); laneCross(A, 23.7f, 3.2f, 1.0f, mk);
+    for (int k = 0; k < 4; k++) {
+        float x = 26.0f + 3.0f * k;
+        laneCross(A, x, 5.0f, 0.5f, rgba(dk, 230));
+        A.dot(x - 0.37f, laneY(x, -5.0f), 0.45f, mk); A.dot(x + 0.37f, laneY(x, 5.0f), 0.45f, mk);
     }
-    // elevators: one on the starboard quarter, one forward on the port side
-    elevator(A, 18.5f, 66.5f, 9, 10.5f, deck, mk);
-    elevator(A, 70, 49.5f, 9, 9, deck, mk);
-    // (the wing is not painted on: the jets on deck are drawn live, where they really are - parked, taxiing, on a catapult - see Game::drawCarrierDeck)
-    // the arresting wires across the landing area, and the parking spots marked out along both deck edges
-    for (int k = 0; k < 4; k++) { float x = 19.0f + k * 3.2f; A.line(x, 52.4f, x - 0.2f, 60.4f, 0.45f, rgba(cy ? CV_DARK : CK_DARK, 210)); A.dot(x, 52.2f, 0.5f, mk); A.dot(x - 0.2f, 60.6f, 0.5f, mk); }
-    for (float x : { 98.8f, 86.1f, 73.4f }) { A.ring(x, 54.0f, 3.2f, 0.35f, rgba(mk, 120), 0.0f, 0); A.ring(x + 1.3f, 74.0f, 3.2f, 0.35f, rgba(mk, 120), 0.0f, 0); }
-    // the landing lens beside the angled deck (port quarter): a box with its row of lights
-    A.rect(34, 45.6f, 3.6f, 1.6f, 0.3f, shade(dk, 1.4f), 0.6f, 0.3f);
-    for (int k = 0; k < 3; k++) A.dot(34.8f + k * 1.0f, 46.4f, 0.35f, k == 1 ? rgb(255, 190, 60) : rgb(90, 230, 120));
-    // the island on the starboard side (y > 64): a stepped superstructure with its bridge forward, glazed, and a mast and radar aft
-    A.shadowRect(50, 70, 18, 9, 2.2f, 2.2f, 1.8f, 170);
-    A.rect(50, 70, 18, 9, 1.6f, isl, 1.8f, 0.55f);
-    A.rect(50, 76.6f, 18, 2.6f, 0.5f, shade(isl, 0.55f), 0.8f, 0.4f);   // the south face of the island
-    A.rect(63.4f, 70.6f, 4.6f, 6.6f, 0.6f, shade(isl, 1.1f), 1.4f, 0.5f);   // the bridge block
-    A.rect(64.2f, 71.4f, 2.8f, 1.5f, 0.3f, cy ? CV_GLASS : rgb(230, 170, 70), 0.8f, 0.3f);
-    A.rect(52, 70.5f, 9.5f, 1.3f, 0.3f, cy ? CV_GLASS : rgb(80, 60, 34), 0.8f, 0.3f);
+    // tyre marks at the touchdown
+    A.line(15, laneY(15, -2.0f), 30, laneY(30, -2.0f), 0.8f, rgba(dk, 70));
+    A.line(15, laneY(15, 2.0f), 30, laneY(30, 2.0f), 0.8f, rgba(dk, 70));
+    // the landing lens at the aft end of the port edge, with its row of lights
+    A.rect(9.6f, 49.3f, 2.8f, 1.4f, 0.3f, shade(dk, 1.4f), 0.6f, 0.3f);
+    for (int k = 0; k < 3; k++) A.dot(10.4f + k * 1.0f, 50.0f, 0.35f, k == 1 ? rgb(255, 190, 60) : rgb(90, 230, 120));
+
+    // the six parking spots (sim CARRIER_PARK, converted): a box lying along each jet's heading; the jets are drawn on top, live
+    static const float PARK[6][3] = { {98.8f, 54.0f, 0.5f}, {86.1f, 54.0f, 0.5f}, {73.4f, 54.2f, 0.5f}, {100.1f, 74.0f, -0.5f}, {87.4f, 74.0f, -0.5f}, {75.4f, 74.4f, -0.5f} };
+    for (const auto& s : PARK) {
+        float ca = std::cos(s[2]), sa = std::sin(s[2]);
+        auto corner = [&](float u, float v) { return P{s[0] + u * ca - v * sa, s[1] + u * sa + v * ca}; };
+        P q[4] = { corner(-4.6f, -2.6f), corner(4.6f, -2.6f), corner(4.6f, 2.6f), corner(-4.6f, 2.6f) };
+        for (int k = 0; k < 4; k++) A.line(q[k].x, q[k].y, q[(k + 1) % 4].x, q[(k + 1) % 4].y, 0.45f, rgba(mk, 120));
+    }
+    // the two bow catapults: a track sunk in the deck with a guide line and a shuttle at the launch end; the blast deflector slots behind them
+    for (float y : {59.6f, 68.4f}) {
+        A.line(101.0f, y, 119.0f, y, 1.1f, rgba(dk, 255));
+        A.line(101.0f, y - 0.9f, 119.0f, y - 0.9f, 0.45f, rgba(mk, 200));
+        A.box(117.6f, y, 1.0f, 1.5f, 0.2f, shade(dk, 1.6f), 0.5f, 0.3f);
+    }
+    A.line(93.6f, 56.0f, 93.6f, 63.4f, 0.8f, rgba(dk, 170));
+    A.line(93.6f, 64.6f, 93.6f, 72.0f, 0.8f, rgba(dk, 170));
+    A.line(99.2f, 56.2f, 102.5f, 59.0f, 0.9f, rgba(dk, 80));   // taxi tracks from the parking to the catapults
+    A.line(100.0f, 71.6f, 103.0f, 68.9f, 0.9f, rgba(dk, 80));
+
+    // deck-edge elevators (aft and amidships on the starboard edge, forward on the port side), and the big hull number on the starboard quarter
+    elevator(A, 12.0f, 69.6f, 7.4f, 8.8f, deck, mk);
+    elevator(A, 29.0f, 71.6f, 7.4f, 7.2f, deck, mk);
+    elevator(A, 58.4f, 48.6f, 7.6f, 6.0f, deck, mk);
+    A.line(22.4f, 65.6f, 27.6f, 65.6f, 1.5f, mk);
+    A.line(27.6f, 65.6f, 24.0f, 74.6f, 1.5f, mk);
+
+    // the island on the starboard side: a stepped superstructure with the flight control and bridge glazed on its forward face, a radar and an
+    // exhaust stack aft
+    A.shadowRect(40.0f, 69.4f, 21.4f, 9.6f, 2.2f, 2.2f, 1.8f, 170);
+    A.rect(40.0f, 69.4f, 21.4f, 9.6f, 1.2f, isl, 1.8f, 0.55f);                                 // the lower island
+    A.rect(41.4f, 77.0f, 14.0f, 1.2f, 0.2f, cy ? CV_GLASS : rgb(60, 48, 30), 0.5f, 0.2f);      // its glazed outboard face
+    A.rect(56.6f, 77.0f, 3.4f, 1.2f, 0.2f, A.team, 0.6f, 0.2f);                               // the team stripe
+    A.rect(45.6f, 70.6f, 10.4f, 6.0f, 0.8f, shade(isl, 1.08f), 1.4f, 0.5f);                    // the second level
+    A.rect(52.6f, 70.9f, 6.6f, 5.4f, 0.6f, shade(isl, 1.16f), 1.4f, 0.5f);                     // the pilot house
+    A.rect(58.2f, 71.4f, 1.1f, 4.6f, 0.2f, cy ? CV_GLASS : rgb(230, 170, 70), 0.6f, 0.2f);     // the flight control windows, facing the deck
+    A.rect(37.4f, 71.6f, 2.8f, 4.8f, 0.5f, shade(isl, 0.78f), 0.8f, 0.4f);                    // the exhaust stack, aft and outboard
+    A.rect(38.4f, 72.4f, 1.2f, 3.2f, 0.2f, rgb(40, 40, 42), 0.4f, 0.1f);
+    A.line(44.6f, 70.8f, 42.4f, 66.4f, 0.35f, rgba(dk, 210));                                // antennas on the island's aft end
+    A.line(54.4f, 70.8f, 55.6f, 66.6f, 0.35f, rgba(dk, 210));
     if (cy) {
-        A.ngon(55.5f, 74.4f, 2.7f, 6, 0, CV_WHITE, 1.0f, 0.5f);      // faceted radar
-        lamp(A, 55.5f, 74.4f, 0.8f, CV_CYAN);
-        A.line(60, 72.6f, 61.6f, 78.0f, 0.5f, rgba(CV_DARK, 150));
+        A.rect(46.0f, 71.2f, 4.8f, 4.2f, 0.3f, CV_WHITE, 1.0f, 0.5f);                         // a flat radar panel with its grid
+        A.line(46.0f, 73.3f, 50.8f, 73.3f, 0.3f, rgba(CV_MARK, 130));
+        A.line(48.4f, 71.2f, 48.4f, 75.4f, 0.3f, rgba(CV_MARK, 130));
+        lamp(A, 49.8f, 70.9f, 0.5f, CV_CYAN);
     } else {
-        A.line(52.5f, 72.6f, 57.5f, 76.4f, 0.7f, CK_DARK); A.line(57.5f, 72.6f, 52.5f, 76.4f, 0.7f, CK_DARK);   // lattice mast
-        A.circle(55, 74.5f, 2.3f, rgb(184, 186, 180), 1.0f, 0.5f);   // radar dish
-        A.dot(55, 74.5f, 0.6f, CK_DARK);
+        A.line(45.4f, 71.6f, 48.6f, 74.8f, 0.6f, CK_DARK); A.line(48.6f, 71.6f, 45.4f, 74.8f, 0.6f, CK_DARK);   // lattice mast
+        A.circle(50.4f, 73.4f, 1.9f, rgb(184, 186, 180), 1.0f, 0.5f);                          // radar dish
+        A.dot(50.4f, 73.4f, 0.6f, CK_DARK);
+        lamp(A, 49.8f, 70.9f, 0.5f, rgb(255, 80, 60));
     }
-    A.rect(51.4f, 77.4f, 4.2f, 1.1f, 0.2f, A.team, 0.6f, 0.2f);   // team stripe on the island face
-    // the team pennant on the stern
+
+    // CIWS domes on the bow corners and missile sponsons on the stern corners, outside the deck edge
+    ciws(A, 117.0f, 51.8f, cy);
+    ciws(A, 117.0f, 76.2f, cy);
+    for (float y : {44.6f, 79.8f}) {
+        A.rect(3.2f, y, 4.8f, 3.6f, 0.5f, shade(topside, 1.25f), 1.0f, 0.5f);
+        for (int k = 0; k < 3; k++) { A.dot(4.4f + 1.5f * k, y + 1.1f, 0.45f, dk); A.dot(4.4f + 1.5f * k, y + 2.5f, 0.45f, dk); }
+    }
+    // the team pennant on the stern, and the bow light
     A.poly({ {7.8f, 61.3f}, {11.4f, 62.6f}, {7.8f, 63.9f} }, A.team, 0.6f, 0, 1);
-    // gun positions: a CIWS on the bow, one on the stern quarter and one on the port quarter
-    ciws(A, 116.0f, 64, cy);
-    ciws(A, 11.6f, 71.5f, cy);
-    ciws(A, 11.6f, 56.5f, cy);
-    // the stern: a deck edge and tail hook
-    A.dot(9.0f, 64, 0.9f, dk);
-    A.line(9.0f, 64, 5.0f, 64, 0.6f, rgba(dk, 200));
-    if (cy) A.grain(6, 44, 120, 84, 0.04f, 151);
-    else {   // weathering: grain over the plating and streaks of rust
-        A.grain(6, 44, 120, 84, 0.12f, 153);
-        for (float x = 24; x < 100; x += 19) A.line(x, 80.6f, x + 1.0f, 81.8f, 0.7f, rgba(CK_RUST, 150));
+    lamp(A, 123.0f, 64, 0.35f, rgb(255, 255, 255));
+    if (cy) A.grain(4, 44, 124, 84, 0.04f, 151);
+    else {   // weathering: grain over the plating and streaks of rust along the waterline
+        A.grain(4, 44, 124, 84, 0.12f, 153);
+        for (float x = 24; x < 100; x += 19) A.line(x, 80.6f, x + 1.0f, 81.8f, 0.7f, rgba(rgb(96, 34, 20), 150));
     }
 }
 
@@ -174,7 +242,6 @@ void tankTop(Art& A, float x, float y, Color col, Color trk) {
     A.circle(x - 0.4f, y, 1.9f, shade(col, 1.14f), 0.8f, 0.5f);
     A.dot(x - 0.9f, y - 0.6f, 0.45f, rgba(WHITE, 130));
 }
-
 // a truck seen from above: a cargo body under a tilt cover with a lighter cab at the front
 void truckTop(Art& A, float x, float y, Color col) {
     A.rect(x - 4.0f, y - 2.1f, 6.6f, 4.2f, 0.6f, shade(col, 0.95f), 0.8f, 0.5f);
@@ -182,7 +249,6 @@ void truckTop(Art& A, float x, float y, Color col) {
     A.rect(x + 2.6f, y - 2.0f, 2.6f, 4.0f, 0.5f, shade(col, 1.15f), 0.7f, 0.5f);   // cab
     A.dot(x + 4.5f, y - 1.2f, 0.4f, rgba(WHITE, 170)); A.dot(x + 4.5f, y + 1.2f, 0.4f, rgba(WHITE, 170));
 }
-
 // a shipping container seen from above, ribbed along its length
 void boxTop(Art& A, float x, float y, Color col) {
     A.shadowRect(x - 4.6f, y - 2.3f, 9.2f, 4.6f, 1.0f, 1.0f, 1.2f, 80);
@@ -190,55 +256,62 @@ void boxTop(Art& A, float x, float y, Color col) {
     for (float xx = x - 3.2f; xx < x + 3.8f; xx += 1.9f) A.line(xx, y - 2.0f, xx, y + 2.0f, 0.4f, rgba(CV_DARK, 80));
 }
 
+// the military Ro-Ro: a flat vehicle deck, a stern ramp lowered past the transom, the accommodation forward with the bridge on its forward end
+const std::vector<Prof> CGO_HULL = { {6.0f, 12.4f}, {30.0f, 13.2f}, {80.0f, 13.2f}, {100.0f, 12.6f}, {112.0f, 10.8f}, {118.0f, 7.8f} };
+const std::vector<Prof> CGO_DECK = { {8.0f, 11.4f}, {30.0f, 11.8f}, {80.0f, 11.8f}, {100.0f, 11.2f}, {110.0f, 9.6f}, {116.0f, 6.8f} };
+
 void cargoBody(Art& A, bool cy) {
-    Color side = cy ? rgb(108, 122, 142) : CK_SIDE, deck = cy ? rgb(184, 194, 204) : rgb(128, 122, 102), dk = cy ? CV_DARK : CK_DARK;
-    Color acc = cy ? rgb(206, 216, 224) : rgb(122, 124, 116), mk = cy ? CV_CYAN : CK_YEL;
-    // the hull: a blunt bow and a square stern, a side band of waterline colour round the deck
-    A.poly({ {6, 50}, {98, 49}, {111, 53}, {121, 64}, {111, 75}, {98, 79}, {6, 78} }, side, 1.8f, 0.6f);
-    A.poly({ {8.5f, 52}, {97, 51}, {108.5f, 55.4f}, {117.6f, 64}, {108.5f, 72.6f}, {97, 77}, {8.5f, 76} }, deck, 1.6f, 0.45f);
+    const Color topside = cy ? rgb(122, 136, 154) : rgb(92, 96, 98), waterline = cy ? rgb(52, 64, 86) : CK_SIDE;
+    const Color deck = cy ? rgb(184, 194, 204) : rgb(128, 122, 102), dk = cy ? CV_DARK : CK_DARK, mk = cy ? CV_CYAN : CK_YEL;
+    const Color acc = cy ? rgb(206, 216, 224) : rgb(122, 124, 116), glass = cy ? CV_GLASS : rgb(230, 170, 70);
+    const Color olive = cy ? rgb(102, 118, 140) : rgb(104, 114, 74), tan = cy ? rgb(146, 158, 176) : rgb(178, 160, 112), cont = cy ? rgb(58, 88, 134) : rgb(150, 92, 52);
+    const Color trk = cy ? rgb(40, 48, 62) : rgb(46, 46, 38);
+    // the hull: a waterline band and the topsides above it, a blunt bow and a square stern; the vehicle deck inset within
+    A.poly(profileOutline(CGO_HULL, 122.0f, 0), waterline, 1.4f, 0.6f);
+    A.poly(profileOutline(CGO_HULL, 122.0f, 1.0f), topside, 1.2f, 0.6f);
+    A.poly(profileOutline(CGO_DECK, 120.0f, 0), deck, 1.6f, 0.45f);
     if (cy) {
-        for (float x = 12; x <= 106; x += 6.0f) { lamp(A, x, 53.2f, 0.4f, CV_CYAN); lamp(A, x, 74.8f, 0.4f, CV_CYAN); }
+        for (float x = 12; x <= 110; x += 6.0f) {
+            lamp(A, x, 64 - profileAt(CGO_DECK, x) + 1.2f, 0.4f, CV_CYAN);
+            lamp(A, x, 64 + profileAt(CGO_DECK, x) - 1.2f, 0.4f, CV_CYAN);
+        }
     } else {
-        dashes(A, 10, 52.4f, 104, 52.4f, 20, 0.8f, mk);
-        dashes(A, 10, 75.6f, 104, 75.6f, 20, 0.8f, mk);
+        profileDashes(A, CGO_DECK, -1, 1.2f, 0.8f, mk);
+        profileDashes(A, CGO_DECK, 1, 1.2f, 0.8f, mk);
     }
-    // the bow ramp: a lighter lowered plate with a hinge seam and chevrons
-    A.poly({ {108, 57.5f}, {116.4f, 60.5f}, {116.4f, 67.5f}, {108, 70.5f} }, shade(deck, 1.12f), 1.0f, 0.5f);
-    A.line(108.2f, 57.6f, 108.2f, 70.4f, 0.8f, rgba(dk, 200));
-    for (float y : { 60.0f, 64.0f, 68.0f }) A.line(110, y, 114.6f, y + 1.0f, 0.4f, rgba(dk, 110));
-    // the vehicle deck: tanks, trucks and containers in three rows, pointing forward
-    Color olive = cy ? rgb(102, 118, 140) : rgb(104, 114, 74), tan = cy ? rgb(146, 158, 176) : rgb(178, 160, 112), cont = cy ? rgb(58, 88, 134) : rgb(150, 92, 52);
-    Color trk = cy ? rgb(40, 48, 62) : rgb(46, 46, 38);
-    tankTop(A, 37, 56.5f, olive, trk); tankTop(A, 49, 56.5f, olive, trk); truckTop(A, 62, 56.5f, tan); tankTop(A, 73, 56.5f, olive, trk); tankTop(A, 85, 56.5f, olive, trk);
-    boxTop(A, 37, 64, cont); boxTop(A, 48, 64, cont); truckTop(A, 62, 64, olive); boxTop(A, 73, 64, shade(cont, 1.2f)); boxTop(A, 84, 64, cont);
-    tankTop(A, 39, 71.5f, tan, trk); truckTop(A, 52, 71.5f, olive); tankTop(A, 64, 71.5f, tan, trk); boxTop(A, 76, 71.5f, cont); tankTop(A, 88, 71.5f, olive, trk);
-    // portal cranes at the forward end of the deck, their booms swung over the lanes
-    for (float y : { 56.0f, 72.0f }) {
-        A.shadowCircle(102, y, 2.4f, 1.0f, 1.2f, 1.2f, 80);
-        A.circle(102, y, 2.4f, shade(dk, 2.4f), 1.0f, 0.5f);
-        A.line(102, y, 94, y + (y < 64 ? 2 : -2), 1.0f, rgba(cy ? CV_WHITE : CK_YEL, 230));
-        A.dot(94, y + (y < 64 ? 2 : -2), 0.8f, rgba(dk, 230));
+    // the stern ramp: the open stern well, and the ramp lowered past the transom with its hinge and grip bars
+    A.rect(6.0f, 58.6f, 3.0f, 11.0f, 0.2f, shade(dk, 1.5f), 0.6f, 0.2f);
+    A.poly({ {6.6f, 58.4f}, {2.0f, 60.4f}, {2.0f, 67.6f}, {6.6f, 69.6f} }, shade(deck, 1.1f), 1.0f, 0.5f);
+    A.line(6.4f, 58.8f, 6.4f, 69.2f, 0.6f, rgba(dk, 200));
+    for (float x : {3.0f, 4.4f, 5.7f}) A.line(x, 60.6f, x, 67.4f, 0.35f, rgba(dk, 120));
+    // the vehicle deck: tanks, trucks and containers in three rows, all pointing forward
+    tankTop(A, 15.6f, 56.2f, olive, trk); tankTop(A, 27.2f, 56.2f, olive, trk); truckTop(A, 38.8f, 56.2f, tan); tankTop(A, 50.4f, 56.2f, tan, trk); tankTop(A, 62.0f, 56.2f, olive, trk); truckTop(A, 73.6f, 56.2f, olive);
+    boxTop(A, 15.6f, 64.0f, cont); boxTop(A, 27.2f, 64.0f, shade(cont, 1.2f)); truckTop(A, 38.8f, 64.0f, olive); boxTop(A, 50.4f, 64.0f, cont); boxTop(A, 62.0f, 64.0f, cont); boxTop(A, 73.6f, 64.0f, shade(cont, 1.2f));
+    tankTop(A, 15.6f, 71.8f, tan, trk); truckTop(A, 27.2f, 71.8f, olive); tankTop(A, 38.8f, 71.8f, olive, trk); boxTop(A, 50.4f, 71.8f, cont); tankTop(A, 62.0f, 71.8f, tan, trk); tankTop(A, 73.6f, 71.8f, olive, trk);
+    // two cranes at the outboard edges of the deck, forward of the vehicles, their booms swung over the lanes
+    for (float y : {55.6f, 72.4f}) {
+        A.shadowCircle(83.0f, y, 2.2f, 1.0f, 1.2f, 1.2f, 80);
+        A.circle(83.0f, y, 2.2f, shade(dk, 2.4f), 1.0f, 0.5f);
+        float tip = y < 64 ? y + 4.0f : y - 4.0f;
+        A.line(83.0f, y, 76.6f, tip, 1.0f, rgba(cy ? CV_WHITE : CK_YEL, 230));
+        A.dot(76.6f, tip, 0.8f, rgba(dk, 230));
     }
-    // accommodation block aft: a flat roof with the bridge at its forward end, glazed on the sea side, and a funnel
-    A.shadowRect(9, 54, 19, 20, 2.0f, 2.0f, 1.8f, 120);
-    A.rect(9, 54, 19, 20, 1.4f, acc, 1.8f, 0.55f);
-    A.rect(9.5f, 72.2f, 18, 1.8f, 0.4f, shade(acc, 0.7f), 0.8f, 0.4f);
-    for (float x = 12; x < 27; x += 3.4f) A.dot(x, 72.6f, 0.5f, cy ? CV_CYAN : rgb(255, 196, 92));   // lit windows along the south face
-    A.rect(22.6f, 57, 5.2f, 14, 0.8f, shade(acc, 1.1f), 1.2f, 0.5f);   // the bridge block, forward on the accommodation
-    A.rect(26.8f, 58.2f, 1.0f, 11.6f, 0.2f, cy ? CV_GLASS : rgb(230, 170, 70), 0.6f, 0.2f);
-    A.line(22.6f, 57.5f, 22.6f, 70.5f, 0.6f, rgba(dk, 110));
-    // the funnel: a round stack with a band and a dark top, with a mast beside it
-    A.circle(15.5f, 64, 3.4f, cy ? rgb(200, 210, 218) : CK_RUST, 1.4f, 0.5f);
-    A.ring(15.5f, 64, 2.6f, 0.6f, cy ? CV_CYAN : CK_DARK, 0.6f, 0.2f);
-    A.circle(15.5f, 64, 1.5f, dk, 0.8f, 0.3f);
-    A.dot(12.4f, 58.8f, 0.7f, rgb(180, 182, 186));
-    // team pennant on the accommodation roof, and a team stripe on the bridge
-    A.rect(11.2f, 56.2f, 3.4f, 1.6f, 0.2f, A.team, 0.6f, 0.2f);
-    A.rect(22.6f, 59.4f, 1.4f, 1.2f, 0.2f, A.team, 0.4f, 0.1f);
-    if (cy) A.grain(6, 48, 120, 80, 0.04f, 161);
+    // the accommodation block forward: the bridge on its forward end, glazed, with lit windows on the south face and the funnel aft
+    A.shadowRect(88.2f, 56.4f, 17.2f, 15.2f, 2.0f, 2.0f, 1.8f, 120);
+    A.rect(88.2f, 56.4f, 17.2f, 15.2f, 1.4f, acc, 1.8f, 0.55f);
+    A.rect(88.2f, 70.6f, 17.2f, 1.0f, 0.2f, shade(acc, 0.7f), 0.6f, 0.3f);
+    for (float x = 90.0f; x < 104.0f; x += 3.4f) A.dot(x, 71.1f, 0.5f, cy ? CV_CYAN : rgb(255, 196, 92));
+    A.rect(100.6f, 57.6f, 5.2f, 12.0f, 1.0f, shade(acc, 1.12f), 1.2f, 0.5f);                  // the bridge
+    A.rect(104.6f, 58.4f, 1.0f, 10.4f, 0.2f, glass, 0.6f, 0.2f);                              // its forward windows
+    A.circle(96.0f, 60.0f, 1.2f, shade(dk, 2.6f), 0.6f, 0.4f);                                // a radar scanner on the roof
+    A.circle(92.4f, 64.0f, 2.6f, cy ? rgb(200, 210, 218) : CK_RUST, 1.2f, 0.5f);              // the funnel
+    A.ring(92.4f, 64.0f, 1.9f, 0.5f, cy ? CV_CYAN : CK_DARK, 0.6f, 0.2f);
+    A.circle(92.4f, 64.0f, 1.2f, dk, 0.8f, 0.3f);
+    A.rect(89.2f, 57.2f, 3.4f, 1.6f, 0.2f, A.team, 0.6f, 0.2f);                               // team pennant on the roof
+    if (cy) A.grain(4, 48, 124, 80, 0.04f, 161);
     else {
-        A.grain(6, 48, 120, 80, 0.12f, 162);
-        for (float x = 30; x < 110; x += 17) A.line(x, 76.4f, x + 1.2f, 77.6f, 0.7f, rgba(CK_RUST, 160));   // streaks on the hull band
+        A.grain(4, 48, 124, 80, 0.12f, 162);
+        for (float x = 30; x < 110; x += 17) A.line(x, 76.4f, x + 1.2f, 77.6f, 0.7f, rgba(rgb(96, 34, 20), 160));   // streaks on the hull band
     }
 }
 

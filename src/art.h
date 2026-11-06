@@ -24,3 +24,12 @@ void artChute(Canvas& c, Color team);
 // Aid Drop: the white relief plane (64x64, faces +x) and the wooden aid crate, closed (falling) or opened (landed).
 void artAidPlane(Canvas& c);
 void artCrate(Canvas& c, bool open);
+// Relic army special units (art_relic.cpp): 64x64, facing +x, centre (32,32), painted and finished (sharpened, outlined) by the function itself.
+// The renderer draws them at UNIT_SCALE * scale. team: the owner's colour (small roundels only).
+// kind 0 Juggernaut: a super-heavy tank on double tracks (frame 0/1/2 = track cycle); its turret is separate.
+// kind 1 Strider: a four-legged artillery walker (frame 0/1/2 = walk cycle, diagonal leg pairs); its back-mounted rocket box is separate.
+// kind 2 Thunderhawk: a heavy attack helicopter; the frame is ignored and the renderer spins the rotor blades over the centre (32,32).
+void artRelicUnitBody(Canvas& c, int kind, Color team, int frame);
+// The rotating part, 64x64 centred (32,32), pointing +x: kind 0 the Juggernaut's turret with twin long cannons; kind 1 the Strider's rocket box
+// (2x4 tubes); kind 2 returns false (no turret).
+bool artRelicUnitTurret(Canvas& c, int kind, Color team);
