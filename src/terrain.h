@@ -5,9 +5,15 @@
 
 // Paints the WORLD_W x WORLD_H ground: noise-shaded grass, dirt, sand and asphalt blended along organic borders, a height field that lights
 // the cliffs and casts soft shadows from rocks and trees, lakes with depth, foam and wet sand, painted roads, individual trees, boulders and clutter.
-void terrainBake(Canvas& world);
-// Box-filtered overview of the baked world for the minimap (size x size).
-void terrainOverview(const Canvas& world, Canvas& out);
+// The world is never held whole: it is painted in bands of TERRAIN_BAND rows, top to bottom, and each finished band (WORLD_W wide, 32-bit
+// Canvas::pack pixels) is handed to 'emit' with its first world row; the band's memory is reused for the next one.
+static const int TERRAIN_BAND = 1024;
+void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit);
+// Box-filtered overview of the baked world (minimap), gathered from the bands as they come out of terrainBake: Begin, Add every band, End.
+struct TerrainOverview { int w = 0, h = 0; std::vector<float> sum; };
+void terrainOverviewBegin(TerrainOverview& o, int w, int h);
+void terrainOverviewAdd(TerrainOverview& o, const Canvas& band, int y0);
+void terrainOverviewEnd(const TerrainOverview& o, Canvas& out);
 // Structures were placed over trees, bushes or small rocks (Map::cleared: tile | kind << 24, kind 1 a footprint tile, 2 quarried rock). Repaints the
 // baked world there: the felled trees and bushes vanish (the ground they stood on comes back with the trees round it redrawn), quarried rock becomes
 // bare earth. 'out' gets the final pixels of the world rectangle (x, y, w, h) to upload; false when nothing visible changed.

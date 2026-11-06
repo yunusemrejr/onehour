@@ -131,7 +131,9 @@ struct Gfx {
     // first), so a low-end machine does not pay for a 400 MB 32-bit copy of the whole world.
     static constexpr int WORLD_CHUNK = 1024;
     static constexpr int WORLD_RESIDENT = 12;   // (a 1080p view spans at most 9 chunks: 12 keep a margin for scrolling, 24 MB of video memory instead of 48)
-    struct WorldChunk { std::vector<u16> px; SDL_Texture* tex = nullptr; int w = 0, h = 0; u32 used = 0; };   // used: the drawWorld call that last drew it
+    // half: a chunk far out on the open sea (nothing but deep water in it, see Gfx::openSeaChunk) keeps its pixels at half resolution (a quarter of
+    // the memory) and is drawn scaled up with linear filtering: the swell and the glitter drawn over it carry the fine detail
+    struct WorldChunk { std::vector<u16> px; SDL_Texture* tex = nullptr; int w = 0, h = 0; u32 used = 0; bool half = false; };   // used: the drawWorld call that last drew it
     std::vector<WorldChunk> worldChunks;
     int worldCols = 0, worldRows = 0, worldResident = 0;
     u32 worldStamp = 0;
@@ -224,6 +226,7 @@ private:
     void bakeTerrain();
     void makeChunkTexture(WorldChunk& ch, u32 stamp);   // gives a chunk its SDL texture, first freeing the least recently drawn one if the cap is reached
     void uploadChunkRect(WorldChunk& ch, int x, int y, int w, int h);   // copies a rectangle of the chunk's RGB565 pixels into its texture (if it has one)
+    bool openSeaChunk(int cx, int cy) const;   // every tile of the chunk and round it lies well out at sea (no shore, decor or anything baked but deep water)
     void buildEffects();
     Sprite makeSprite(Canvas& c, float ox, float oy, bool smooth, SDL_BlendMode mode);
 };

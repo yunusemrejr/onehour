@@ -716,7 +716,73 @@ F3 gradeGround(F3 col, float x, float y, const Noise& nz) {
 static std::vector<u8> g_waterCover; static int g_wcW = 0, g_wcH = 0; static u32 g_wcStamp = 0;
 const std::vector<u8>& terrainWaterCover(int& w, int& h, u32& stamp) { w = g_wcW; h = g_wcH; stamp = g_wcStamp; return g_waterCover; }
 
-void terrainBake(Canvas& world) {
+namespace {
+// The world is painted one band of rows at a time (TERRAIN_BAND tall, a chunk row of the renderer): a 32-bit copy of the whole world was the
+// biggest allocation of the game (420 MB on the 320 map, 600 MB on a bigger one) and lived only for the bake. A band is drawn in world
+// coordinates; every write outside its rows is dropped, exactly as the whole-world canvas dropped writes outside the world, so the bands
+// come out pixel for pixel what the single canvas did.
+struct Band {
+    Canvas* c = nullptr; int oy = 0;
+    void set(int x, int y, Color col) { if (y >= oy && y < oy + c->h) c->set(x, y - oy, col); }
+    u32* at(int x, int y) { return (x >= 0 && x < c->w && y >= oy && y < oy + c->h) ? &c->px[(size_t)(y - oy) * c->w + x] : nullptr; }
+    void fillCircle(float cx, float cy, float r, Color col) {   // (Canvas::fillCircle's own loops, in world rows)
+        for (int j = (int)(cy - r - 1); j <= (int)(cy + r + 1); j++) {
+            if (j < oy || j >= oy + c->h) continue;
+            for (int i = (int)(cx - r - 1); i <= (int)(cx + r + 1); i++) {
+                float dx = i + 0.5f - cx, dy = j + 0.5f - cy;
+                if (dx * dx + dy * dy <= r * r) c->set(i, j - oy, col);
+            }
+        }
+    }
+    void blit(const Canvas& s, int x0, int y0) { blitOver(*c, s, x0, y0 - oy); }
+};
+// The same calls doing nothing: the planning pass runs every routine that draws random numbers through it, so each stream advances exactly
+// as it does while painting and a band can replay any item from the generator state saved for it.
+struct NoBand {
+    void set(int, int, Color) {}
+    void fillCircle(float, float, float, Color) {}
+    void blit(const Canvas&, int, int) {}
+};
+
+// A piece of ground clutter planned once for the whole world and painted by every band it reaches (in the planned order: where two pieces
+// overlap, the later one is on top, as before). kind: what it is; markers (D_ROADC ...) stand for a whole deterministic pass at that point
+// of the order. rs: the generator as it was when the piece started drawing; y0..y1: the world rows it can touch.
+enum DKind : u8 { D_TUFT = 0, D_FLOWER, D_PEBBLE, D_REEDS, D_PAD, D_CRATER, D_BLIT, D_MARKERS, D_ROADC = D_MARKERS, D_ROADE, D_APRONS, D_BRIDGES };
+struct DItem { u8 kind; int a; float x, y, r; Rng rs; int y0, y1; const Canvas* sp; };
+
+template <class B> void drawTuft(B& b, Rng& r, float x, float y) {
+    int blades = r.range(3, 5);
+    bool lightTuft = r.f() < 0.5f;
+    for (int k = 0; k < blades; k++) {
+        float an = -1.5708f + (k - (blades - 1) * 0.5f) * 0.42f + r.f(-0.1f, 0.1f), l = r.f(3, 6);
+        Color c = lightTuft ? rgb(150, 178, 82) : rgb(36, 66, 30); c.a = 120;
+        int steps = (int)l;
+        for (int s = 0; s <= steps; s++) b.set((int)(x + std::cos(an) * s), (int)(y + std::sin(an) * s), c);
+    }
+}
+template <class B> void drawFlowers(B& b, Rng& r, float x, float y, Color c) {
+    for (int k = 0; k < 3; k++) { float fx = x + r.f(-5, 5), fy = y + r.f(-5, 5); b.set((int)fx, (int)fy, c); b.set((int)fx + 1, (int)fy, shade(c, 0.85f)); b.set((int)fx, (int)fy + 1, rgb(60, 90, 40, 140)); }
+}
+template <class B> void drawPebble(B& b, Rng& r, float x, float y, bool sand) {
+    float s = r.f(1.2f, 3.0f); Color c = shade(sand ? rgb(170, 154, 120) : rgb(150, 132, 108), r.f(0.8f, 1.15f));
+    b.fillCircle(x + 1, y + 1, s, rgb(30, 24, 18, 90));
+    b.fillCircle(x, y, s, c);
+    b.fillCircle(x - s * 0.3f, y - s * 0.3f, s * 0.45f, shade(c, 1.3f));
+}
+template <class B> void drawReeds(B& b, Rng& r, int tx, int ty) {
+    for (int k = 0; k < 10; k++) {   // reeds: twice as thick
+        float x = tx * TILE + r.f(2, TILE - 2), y = ty * TILE + r.f(2, TILE - 2);
+        int h = r.range(5, 10);
+        for (int s = 0; s < h; s++) b.set((int)(x + s * 0.12f), (int)(y - s), s > h - 3 ? rgb(120, 78, 40) : rgb(70, 108, 52, 220));
+    }
+}
+}  // namespace
+
+void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
+    // ONEHOUR_BAKETIME=1: where the bake's time goes (milliseconds per phase, summed over the bands)
+    static const bool timing = getenv("ONEHOUR_BAKETIME") != nullptr;
+    double tPh[12] = {}; u64 tMark = SDL_GetPerformanceCounter();
+    auto phase = [&](int i) { if (!timing) return; u64 t = SDL_GetPerformanceCounter(); tPh[i] += (t - tMark) * 1000.0 / SDL_GetPerformanceFrequency(); tMark = t; };
     g_wcW = WORLD_W / 8; g_wcH = WORLD_H / 8; g_waterCover.assign((size_t)g_wcW * g_wcH, 0); g_wcStamp++;
     const int W = WORLD_W, H = WORLD_H;
     const Noise& nz = NZ();
@@ -812,51 +878,6 @@ void terrainBake(Canvas& world) {
         std::sort(trees.begin(), trees.end(), [](const Tree& a, const Tree& b) { return a.y < b.y; });
     }
 
-    // ---- height field (half resolution): rock massifs, lake beds, canopies
-    std::vector<float> hmap((size_t)HW * HH, 0.0f);
-    parallelRows(HH, [&](int y0, int y1) {
-        for (int hy = y0; hy < y1; hy++) for (int hx = 0; hx < HW; hx++) {
-            float x = hx * 2.0f, y = hy * 2.0f, wx, wy; warpAt(x, y, wx, wy);
-            float fx = (x + wx) / CELL - 0.5f, fy = (y + wy) / CELL - 0.5f;
-            int tx = clampi((int)x >> 5, 0, MAP_W - 1), ty = clampi((int)y >> 5, 0, MAP_H - 1);
-            u8 bits = present[(size_t)ty * MAP_W + tx];
-            float h = 0;
-            if (bits & (1 << K_ROCK)) {
-                float mr = samp(mask[K_ROCK], CW, CH, fx, fy);
-                float e = (nz.v(x * 0.06f + 7 * 31.7f, y * 0.06f + 7 * 17.3f) - 0.5f) * 0.28f;   // (a slower wobble: the cliff foot reads as one line, not teeth)
-                float a = sstep(0.38f, 0.74f, mr + e);
-                float ridge = 1.0f - std::abs(2.0f * nz.fbm(x * 0.045f + 11, y * 0.045f + 3) - 1.0f);
-                h += a * (14.0f + 22.0f * ridge * ridge + 4.0f * nz.v(x * 0.05f, y * 0.05f));
-            }
-            if (bits & (1 << K_WATER)) h -= 3.5f * sstep(0.5f, 0.95f, samp(wide, CW, CH, fx, fy));
-            hmap[(size_t)hy * HW + hx] = h;
-        }
-    });
-    for (auto& t : trees) {
-        float hgt = t.kind == T_BUSH ? 7.0f : (t.kind == T_CONIFER ? 24.0f : 20.0f);
-        int hx0 = std::max(0, (int)((t.x - t.r) / 2)), hx1 = std::min(HW - 1, (int)((t.x + t.r) / 2));
-        int hy0 = std::max(0, (int)((t.y - t.r) / 2)), hy1 = std::min(HH - 1, (int)((t.y + t.r) / 2));
-        for (int hy = hy0; hy <= hy1; hy++) for (int hx = hx0; hx <= hx1; hx++) {
-            float d = hyp(hx * 2.0f - t.x, hy * 2.0f - t.y) / t.r;
-            if (d >= 1) continue;
-            float h = hgt * std::sqrt(1 - d * d);
-            float& cell = hmap[(size_t)hy * HW + hx];
-            cell = std::max(cell, h);
-        }
-    }
-    // tiles with any relief (dilated) get the lighting pass; flat meadow skips it
-    std::vector<u8> relief((size_t)MAP_W * MAP_H, 0);
-    {
-        std::vector<u8> raw((size_t)MAP_W * MAP_H, 0);
-        for (int hy = 0; hy < HH; hy++) for (int hx = 0; hx < HW; hx++) if (std::abs(hmap[(size_t)hy * HW + hx]) > 0.05f) raw[(size_t)(hy * 2 / TILE) * MAP_W + hx * 2 / TILE] = 1;
-        for (int ty = 0; ty < MAP_H; ty++) for (int tx = 0; tx < MAP_W; tx++) {
-            u8 v = 0;
-            for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) v |= raw[(size_t)clampi(ty + j, 0, MAP_H - 1) * MAP_W + clampi(tx + i, 0, MAP_W - 1)];
-            relief[(size_t)ty * MAP_W + tx] = v;
-        }
-    }
-    auto hsamp = [&](float hx, float hy) { return samp(hmap, HW, HH, hx, hy); };
-
     // ---- distance from land over the water (tiles, chamfered): the open sea gets darker and cheaper to paint the further out it lies
     std::vector<float> seaD((size_t)MAP_W * MAP_H, 0.0f);
     {
@@ -874,124 +895,24 @@ void terrainBake(Canvas& world) {
         }
     }
 
-    // ---- per-pixel ground
-    parallelRows(H, [&](int y0, int y1) {
-        for (int y = y0; y < y1; y++) for (int x = 0; x < W; x++) {
-            int tx = x >> 5, ty = y >> 5;
-            u8 bits = present[(size_t)ty * MAP_W + tx];
-            float sea = bits == (1 << K_WATER) ? samp(seaD, MAP_W, MAP_H, x / (float)TILE - 0.5f, y / (float)TILE - 0.5f) : 0.0f;
-            if (sea >= SEA_OPEN) {   // open sea: nothing else reaches it, no relief, and the shallows' detail has faded out (see groundColor)
-                if ((x & 7) == 4 && (y & 7) == 4) g_waterCover[(size_t)(y >> 3) * g_wcW + (x >> 3)] = 255;
-                F3 col = mul3(openSeaColor((float)x, (float)y, nz, sea), 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
-                float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
-                auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
-                vr = curve(vr); vg = curve(vg); vb = curve(vb);
-                float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
-                vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
-                float warm = (lum - 0.5f) * 0.045f;
-                world.px[(size_t)y * W + x] = Canvas::pack(Color{ (u8)clampf((vr + warm) * 255.0f, 0, 255), (u8)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (u8)clampf((vb - warm) * 255.0f, 0, 255), 255 });
-                continue;
-            }
-            float wox, woy; warpAt((float)x, (float)y, wox, woy);
-            float fx = (x + wox) / CELL - 0.5f, fy = (y + woy) / CELL - 0.5f;
-            float w[K_N]; float sum = 0, bestV = -1; int best = 0;
-            for (int c = 0; c < K_N; c++) {
-                if (!(bits >> c & 1)) { w[c] = 0; continue; }
-                float m = samp(mask[c], CW, CH, fx, fy);
-                if (m > bestV) { bestV = m; best = c; }
-                float mm = m;
-                // the border's wobble: a mid-scale waver (about 16 px) and a finer one, not the 8 px static that made the edges jagged
-                if (m > 0.02f && m < 0.98f) mm += (c == K_ROAD ? 0.35f : 1.0f) * ((nz.v(x * 0.06f + c * 31.7f, y * 0.06f + c * 17.3f) - 0.5f) * 0.30f + (nz.v(x * 0.21f + c * 7.0f, y * 0.21f + c * 3.0f) - 0.5f) * 0.10f);   // (a road's edge stays nearly straight)
-                float s = std::max(mm, 0.0f); s *= s; s *= s;
-                w[c] = s; sum += s;
-            }
-            if (sum < 1e-6f) { w[best] = 1; sum = 1; }
-            float macro = (bits & ((1 << K_GRASS) | (1 << K_GRASS2))) ? nz.fbm(x * 0.012f, y * 0.012f) : 0.0f;   // (only the meadows read it)
-            float depth = 0;
-            if (w[K_WATER] > 0) depth = sstep(0.5f, 0.95f, samp(wide, CW, CH, fx, fy));
-            F3 col{0, 0, 0};
-            float inv = 1.0f / sum;
-            Base base = baseAt(nz, (float)x, (float)y);   // (shared by every class that blends in here)
-            for (int c = 0; c < K_N; c++) if (w[c] > 0.003f) col = add3(col, mul3(classColor(c, (float)x, (float)y, nz, base, macro, depth, sea), w[c] * inv));
-            float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wSand = w[K_SAND] * inv, wRock = w[K_ROCK] * inv;
-            if ((x & 7) == 4 && (y & 7) == 4) g_waterCover[(size_t)(y >> 3) * g_wcW + (x >> 3)] = (u8)clampf(wWater * 255.0f + 0.5f, 0, 255);
-            // scree aprons: pale rubble shed at the foot of every cliff, strongest where rock coverage is just giving out
-            if (wRock > 0.03f && wRock < 0.5f && wWater < 0.05f) col = lerp3(col, SCREE, (0.5f - wRock) * 0.6f * (0.65f + 0.35f * nz.v(x * 0.4f + 3, y * 0.4f + 8)));
-            // shorelines: foam on the water side, wet dark sand on the land side
-            if (wWater > 0.02f && wWater < 0.98f) {
-                float edge = 1.0f - std::abs(wWater - 0.5f) * 2.0f;
-                if (wWater > 0.4f) {
-                    float foam = edge * edge * (0.45f + 0.55f * nz.v(x * 0.28f + 5, y * 0.28f + 9));
-                    foam *= 0.5f + 0.5f * std::sin(x * 0.17f + y * 0.11f + 6.0f * nz.v(x * 0.02f, y * 0.02f));
-                    col = lerp3(col, f3(226, 238, 236), clampf(foam * 0.8f, 0, 0.7f));
-                } else col = mul3(col, 1.0f - 0.12f * edge);
-            }
-            if (wSand > 0.05f && wWater > 0.0f) {   // wet sand: darker and greyer where the tide-line soaks it
-                float wet = clampf(wWater * 3.0f, 0, 1);
-                col = lerp3(mul3(col, 1.0f - 0.18f * wet), SAND_WET, wet * 0.22f);
-            }
-            // gravel shoulder where a road meets the ground, a darker kerb just inside it
-            if (wRoad > 0.05f && wRoad < 0.95f) {
-                float edge = 1.0f - std::abs(wRoad - 0.5f) * 2.0f;
-                float band = edge * edge * edge;   // a narrow band on the boundary itself
-                if (wRoad < 0.5f) col = lerp3(col, GRAVEL, band * 0.42f * (0.6f + 0.4f * nz.v(x * 0.3f, y * 0.3f)));
-                else col = mul3(col, 1.0f - 0.24f * band);   // the kerb: the road's edge runs darker
-            }
-            // broad light variation
-            col = mul3(col, 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
-            // relief lighting from the height field
-            if (relief[(size_t)ty * MAP_W + tx]) {
-                float hx = x * 0.5f, hy = y * 0.5f;
-                float h0 = hsamp(hx, hy);
-                float gx = (hsamp(hx + 1, hy) - hsamp(hx - 1, hy)) * 0.25f, gy = (hsamp(hx, hy + 1) - hsamp(hx, hy - 1)) * 0.25f;
-                float nl = 1.0f / std::sqrt(gx * gx + gy * gy + 1.0f);
-                float lam = (-gx * nl * -0.50f) + (-gy * nl * -0.60f) + nl * 0.62f;       // light from the NW and above
-                float k = lam / 0.622f;
-                float occ = 0;
-                for (int s = 1; s <= 5; s++) {
-                    float d = s * 7.0f;
-                    float hh = hsamp(hx - 0.62f * d * 0.5f, hy - 0.78f * d * 0.5f);
-                    occ = std::max(occ, clampf((hh - (h0 + d * 0.62f)) / 5.0f, 0, 1));
-                }
-                float rockish = clampf(h0 / 14.0f, 0, 1);
-                k = 1.0f + (k - 1.0f) * 1.6f;   // north-west faces up, south-east faces down: the cliffs read as lit from the NW
-                col = mul3(col, clampf(k, 0.42f, 1.7f) * (1.0f - 0.34f * occ));
-                // moss in the cracks at the foot of cliffs, a pale dry rim on the crests
-                if (w[K_ROCK] > 0.4f * sum) { col = lerp3(col, MOSS, (1.0f - rockish) * 0.3f); col = add3(col, mul3(f3(30, 28, 24), clampf((h0 - 28.0f) / 14.0f, 0, 1))); }
-            }
-            // split-tone grade: a whisper of S-curve, a touch more saturation, warm highlights and cool shadows (one sunlight for the whole map)
-            {
-                float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
-                auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
-                vr = curve(vr); vg = curve(vg); vb = curve(vb);
-                float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
-                vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
-                float warm = (lum - 0.5f) * 0.045f;
-                col = f3((int)clampf((vr + warm) * 255.0f, 0, 255), (int)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (int)clampf((vb - warm) * 255.0f, 0, 255));
-            }
-            Color o{ (u8)clampf(col.r, 0, 255), (u8)clampf(col.g, 0, 255), (u8)clampf(col.b, 0, 255), 255 };
-            world.px[(size_t)y * W + x] = Canvas::pack(o);
-        }
-    });
-
-    // ---- decor: ground clutter first (under the trees)
-    Rng r(4242);
+    phase(0);   // coverage fields, warp, trees, sea distance
+    // ================= the plan: every random pass is run once over the whole world, in the order it is painted, without painting
     auto tileAt = [&](float x, float y) { return g_map.tile(clampi(tileOf(x), 0, MAP_W - 1), clampi(tileOf(y), 0, MAP_H - 1)); };
     auto openGround = [&](float x, float y) { int t = tileAt(x, y); return t == T_GRASS || t == T_GRASS2 || t == T_DIRT || t == T_SAND; };
+    std::vector<DItem> items; items.reserve(1 << 16);
+    auto item = [&](u8 kind, int a, float x, float y, float rr, const Rng& rs, int y0, int y1, const Canvas* sp = nullptr) { items.push_back(DItem{ kind, a, x, y, rr, rs, y0, y1, sp }); };
+    auto marker = [&](u8 kind) { item(kind, 0, 0, 0, 0, Rng(1), 0, H, nullptr); };
+    NoBand nb;
+    static const Color FL[5] = { rgb(246, 244, 230), rgb(244, 214, 70), rgb(208, 168, 228), rgb(240, 150, 170), rgb(150, 190, 246) };
+    Rng r(4242);
     // grass tufts
     for (int i = 0; i < decorCount(88000); i++) {   // grass tufts: twice the old density
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_GRASS && t != T_GRASS2) continue;
         if (nz.v(x * 0.02f + 9, y * 0.02f + 2) < 0.4f) continue;
-        int blades = r.range(3, 5);
-        bool lightTuft = r.f() < 0.5f;
-        for (int b = 0; b < blades; b++) {
-            float an = -1.5708f + (b - (blades - 1) * 0.5f) * 0.42f + r.f(-0.1f, 0.1f), l = r.f(3, 6);
-            Color c = lightTuft ? rgb(150, 178, 82) : rgb(36, 66, 30); c.a = 120;
-            int steps = (int)l;
-            for (int s = 0; s <= steps; s++) world.set((int)(x + std::cos(an) * s), (int)(y + std::sin(an) * s), c);
-        }
+        item(D_TUFT, 0, x, y, 0, r, (int)y - 8, (int)y + 2);
+        drawTuft(nb, r, x, y);
     }
     // wildflowers in drifts
     for (int i = 0; i < decorCount(30000); i++) {   // wildflowers: twice the old density
@@ -1000,93 +921,36 @@ void terrainBake(Canvas& world) {
         if (t != T_GRASS && t != T_GRASS2) continue;
         float drift = nz.v(x * 0.011f + 50, y * 0.011f + 17);
         if (drift < 0.62f) continue;
-        static const Color FL[5] = { rgb(246, 244, 230), rgb(244, 214, 70), rgb(208, 168, 228), rgb(240, 150, 170), rgb(150, 190, 246) };
-        Color c = FL[(int)(drift * 40) % 5];
-        for (int k = 0; k < 3; k++) { float fx = x + r.f(-5, 5), fy = y + r.f(-5, 5); world.set((int)fx, (int)fy, c); world.set((int)fx + 1, (int)fy, shade(c, 0.85f)); world.set((int)fx, (int)fy + 1, rgb(60, 90, 40, 140)); }
+        int fc = (int)(drift * 40) % 5;
+        item(D_FLOWER, fc, x, y, 0, r, (int)y - 7, (int)y + 8);
+        drawFlowers(nb, r, x, y, FL[fc]);
     }
     // pebbles on dirt and sand, shells on the shore
     for (int i = 0; i < decorCount(20000); i++) {   // pebbles: twice the old density
         float x = r.f(4, W - 4.0f), y = r.f(4, H - 4.0f);
         int t = tileAt(x, y);
         if (t != T_DIRT && t != T_SAND) continue;
-        float s = r.f(1.2f, 3.0f); Color c = shade(t == T_SAND ? rgb(170, 154, 120) : rgb(150, 132, 108), r.f(0.8f, 1.15f));
-        world.fillCircle(x + 1, y + 1, s, rgb(30, 24, 18, 90));
-        world.fillCircle(x, y, s, c);
-        world.fillCircle(x - s * 0.3f, y - s * 0.3f, s * 0.45f, shade(c, 1.3f));
+        item(D_PEBBLE, t == T_SAND, x, y, 0, r, (int)y - 6, (int)y + 6);
+        drawPebble(nb, r, x, y, t == T_SAND);
     }
     // reeds along the water's edge
     for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
         if (g_map.tile(tx, ty) != T_SAND) continue;
         bool shore = g_map.tile(tx + 1, ty) == T_WATER || g_map.tile(tx - 1, ty) == T_WATER || g_map.tile(tx, ty + 1) == T_WATER || g_map.tile(tx, ty - 1) == T_WATER;
         if (!shore || seaShore(tx, ty)) continue;   // (reeds grow by fresh water, not on the sea's beaches)
-        for (int k = 0; k < 10; k++) {   // reeds: twice as thick
-            float x = tx * TILE + r.f(2, TILE - 2), y = ty * TILE + r.f(2, TILE - 2);
-            int h = r.range(5, 10);
-            for (int s = 0; s < h; s++) world.set((int)(x + s * 0.12f), (int)(y - s), s > h - 3 ? rgb(120, 78, 40) : rgb(70, 108, 52, 220));
-        }
+        item(D_REEDS, 0, (float)tx, (float)ty, 0, r, ty * TILE - 12, (ty + 1) * TILE + 2);
+        drawReeds(nb, r, tx, ty);
     }
-    // road centre lines: dashes along every segment, only where the tile is still asphalt
-    for (const auto& rs : g_map.roads) {
-        float x0 = rs.x0 * TILE, y0 = rs.y0 * TILE, x1 = rs.x1 * TILE, y1 = rs.y1 * TILE;
-        float len = hyp(x1 - x0, y1 - y0); if (len < 1) continue;
-        float dx = (x1 - x0) / len, dy = (y1 - y0) / len;
-        for (float s = 20; s < len - 20; s += 34) {
-            for (float u = 0; u < 15; u += 0.7f) {
-                float px = x0 + dx * (s + u), py = y0 + dy * (s + u);
-                if (tileAt(px, py) != T_ROAD) continue;
-                // worn paint: a dull cream that greys and breaks up in patches where the traffic has ground it down
-                float wear = nz.v(px * 0.45f + 4, py * 0.45f + 19);
-                if (wear < 0.2f) continue;
-                Color paint = wear > 0.6f ? rgb(206, 194, 150) : rgb(184, 176, 144);
-                for (int wdt = -1; wdt <= 1; wdt++) world.set((int)(px - dy * wdt), (int)(py + dx * wdt), rgba(paint, wdt == 0 ? (wear > 0.55f ? 190 : 150) : 96));
-            }
-        }
-    }
-    // road edge lines: a pale worn line just inside each shoulder (skipped where repair patches and dirt have eaten it)
-    for (const auto& rs : g_map.roads) {
-        float x0 = rs.x0 * TILE, y0 = rs.y0 * TILE, x1 = rs.x1 * TILE, y1 = rs.y1 * TILE;
-        float len = hyp(x1 - x0, y1 - y0); if (len < 1) continue;
-        float dx = (x1 - x0) / len, dy = (y1 - y0) / len, off = rs.halfW * TILE * 0.62f;   // inside the asphalt core: coverage-blended tile borders already read as dirt
-        for (float s = 6; s < len - 6; s += 1.4f) {
-            if (nz.v(s * 0.05f + x0 * 0.01f, y0 * 0.01f) < 0.18f) continue;   // worn away in stretches
-            for (int sd = -1; sd <= 1; sd += 2) {
-                float px = x0 + dx * s - dy * off * sd, py = y0 + dy * s + dx * off * sd;
-                if (tileAt(px, py) != T_ROAD || g_map.bridge[clampi(tileOf(py), 0, MAP_H - 1) * MAP_W + clampi(tileOf(px), 0, MAP_W - 1)]) continue;
-                world.set((int)px, (int)py, rgb(206, 204, 192, 110));
-            }
-        }
-    }
+    marker(D_ROADC);
+    marker(D_ROADE);
     // supply piles stand on a gravel depot pad with churned earth and a ring of tyre tracks
-    for (const auto& sp : g_map.supplies) {
-        float cx = sp.tx * TILE + TILE * 0.5f, cy = sp.ty * TILE + TILE * 0.5f;
-        for (int y = (int)(cy - 26); y < (int)(cy + 26); y++) for (int x = (int)(cx - 26); x < (int)(cx + 26); x++) {
-            if (!inMapPx(x, y)) continue;
-            float e = std::max(std::abs(x - cx), std::abs(y - cy)) / 26.0f;
-            float k = clampf((1.0f - e) * 3.0f, 0, 1) * 0.5f;
-            if (k <= 0) continue;
-            Color o = Canvas::unpack(world.px[(size_t)y * W + x]);
-            Color pad = shade(rgb(150, 142, 124), 0.92f + 0.16f * nz.v(x * 0.5f, y * 0.5f));
-            bool seam = ((x - (int)cx) % 13 == 0) || ((y - (int)cy) % 13 == 0);
-            if (seam) pad = shade(pad, 0.82f);
-            world.px[(size_t)y * W + x] = Canvas::pack(Color{(u8)(o.r + (pad.r - o.r) * k), (u8)(o.g + (pad.g - o.g) * k), (u8)(o.b + (pad.b - o.b) * k), 255});
-        }
-        for (int i = 0; i < 40; i++) { float an = r.f(0, 6.28f), d = r.f(10, 44); world.fillCircle(cx + std::cos(an) * d, cy + std::sin(an) * d * 0.8f, r.f(1.5f, 4), rgb(70, 54, 36, 80)); }
-        for (int k = 0; k < 2; k++) for (float a = 0; a < 6.2f; a += 0.05f) { float rr = 34 + k * 5; world.set((int)(cx + std::cos(a) * rr), (int)(cy + std::sin(a) * rr * 0.8f), rgb(60, 46, 32, 70)); }
+    for (size_t k = 0; k < g_map.supplies.size(); k++) {
+        const auto& sp = g_map.supplies[k];
+        float cy = sp.ty * TILE + TILE * 0.5f;
+        item(D_PAD, (int)k, 0, 0, 0, r, (int)cy - 52, (int)cy + 52);
+        for (int i = 0; i < 40; i++) { r.f(); r.f(); r.f(); }   // (the 40 clods below: a bearing, a distance and a size each)
     }
-    // each base sits on prepared ground: a faint gravel apron under the start position, so a headquarters reads as founded, not parked
-    for (const auto& st : g_map.starts) {
-        float cx = st.tx * TILE + TILE * 0.5f, cy = st.ty * TILE + TILE * 0.5f;
-        const float R = 5.2f * TILE;
-        for (int y = (int)(cy - R); y < (int)(cy + R); y++) for (int x = (int)(cx - R); x < (int)(cx + R); x++) {
-            if (!inMapPx(x, y)) continue;
-            float d = hyp(x - cx, (y - cy) * 1.15f) / R;
-            if (d >= 1) continue;
-            float k = (1 - d) * (1 - d) * 0.30f;
-            Color o = Canvas::unpack(world.px[(size_t)y * W + x]);
-            Color pad = shade(rgb(144, 138, 122), 0.94f + 0.12f * nz.v(x * 0.35f + 4, y * 0.35f));
-            world.px[(size_t)y * W + x] = Canvas::pack(Color{(u8)(o.r + (pad.r - o.r) * k), (u8)(o.g + (pad.g - o.g) * k), (u8)(o.b + (pad.b - o.b) * k), 255});
-        }
-    }
+    marker(D_APRONS);
     // craters from some older war: dark scorched bowls with a pale thrown-up rim, clustered along the old front lines
     {
         Rng cr(5150);
@@ -1101,66 +965,16 @@ void terrainBake(Canvas& world) {
             for (auto& s : g_map.supplies) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < 90) near = true;
             if (near) continue;
             float R = cr.f(13, 30);
-            for (int yy = (int)(y - R - 4); yy < (int)(y + R + 4); yy++) for (int xx = (int)(x - R - 4); xx < (int)(x + R + 4); xx++) {
-                if (!inMapPx(xx, yy)) continue;
-                float d = hyp(xx - x, (yy - y) * 1.2f) / R;
-                if (d > 1.25f) continue;
-                Color o = Canvas::unpack(world.px[(size_t)yy * W + xx]);
-                float nse = 0.85f + 0.3f * nz.v(xx * 0.3f + 9, yy * 0.3f);
-                Color c = o;
-                if (d < 0.72f) { float k = (0.72f - d) * 1.1f; c = shade(mix(o, rgb(38, 30, 24), clampf(k, 0, 0.8f)), nse); }        // scorched bowl
-                else if (d < 1.0f) { float k = (d - 0.72f) * 2.2f; c = shade(mix(o, rgb(168, 148, 118), clampf(k, 0, 0.55f)), nse); } // thrown-up rim
-                else { float k = (1.25f - d) * 0.9f; c = mix(o, rgb(120, 102, 80), clampf(k, 0, 0.3f)); }                              // dust apron
-                if (xx - x + (yy - y) > R * 0.55f && d >= 0.72f && d < 1.0f) c = shade(c, 0.82f);                                        // rim shadow to the south-east
-                world.px[(size_t)yy * W + xx] = Canvas::pack(Color{c.r, c.g, c.b, 255});
-            }
+            item(D_CRATER, 0, x, y, R, cr, (int)(y - R - 4) - 1, (int)(y + R + 4) + 1);
             placedC++;
         }
     }
-
-
-    // ---- bridges: timber decks over the rivers with rails, posts and a shadow on the water below
-    for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
-        if (!g_map.bridge[ty * MAP_W + tx]) continue;
-        int x0 = tx * TILE, y0 = ty * TILE;
-        bool runsEW = g_map.bridge[ty * MAP_W + tx - 1] || g_map.bridge[ty * MAP_W + tx + 1];   // deck direction, for the wheel-worn runner strips
-        for (int y = 0; y < TILE; y++) for (int x = 0; x < TILE; x++) {   // planks
-            float pl = nz.v((x0 + x) * 0.9f, (y0 + y) * 0.1f), g = 0.86f + 0.22f * pl;
-            bool seamH = (y % 8) == 0, seamV = ((x0 + x + (((y0 + y) / 8) & 1) * 12) % 24) == 0;
-            int lane = runsEW ? y : x;
-            bool runner = (lane >= 7 && lane <= 10) || (lane >= 21 && lane <= 24);   // twin dark tracks where wheels and treads polish the timber
-            Color c = shade(rgb(142, 108, 74), g * (seamH || seamV ? 0.6f : 1.0f) * (runner ? 0.78f : 1.0f));
-            world.set(x0 + x, y0 + y, c);
-        }
-    }
-    for (int ty = 1; ty < MAP_H - 1; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
-        if (!g_map.bridge[ty * MAP_W + tx]) continue;
-        int x0 = tx * TILE, y0 = ty * TILE;
-        auto off = [&](int ox, int oy) { return !g_map.bridge[(ty + oy) * MAP_W + tx + ox] && g_map.tile(tx + ox, ty + oy) == T_WATER; };
-        struct Side { int ox, oy; };
-        static const Side SD[4] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
-        for (int sdI = 0; sdI < 4; sdI++) {
-            if (!off(SD[sdI].ox, SD[sdI].oy)) continue;
-            bool horiz = SD[sdI].oy != 0;
-            for (int u = 0; u < TILE; u++) {   // rail: a dark beam with a lit top edge, drop shadow outwards
-                for (int t = 0; t < 4; t++) {
-                    int px = horiz ? x0 + u : x0 + (SD[sdI].ox < 0 ? t : TILE - 1 - t), py = horiz ? y0 + (SD[sdI].oy < 0 ? t : TILE - 1 - t) : y0 + u;
-                    world.set(px, py, t == 0 ? rgb(176, 140, 98) : (t == 3 ? rgb(70, 50, 34) : rgb(104, 76, 52)));
-                }
-                for (int t = 4; t < 9; t++) {
-                    int px = horiz ? x0 + u : x0 + (SD[sdI].ox < 0 ? -(t - 3) : TILE - 1 + (t - 3)), py = horiz ? y0 + (SD[sdI].oy < 0 ? -(t - 3) : TILE - 1 + (t - 3)) : y0 + u;
-                    if (inMapPx(px, py)) { Color p = Canvas::unpack(world.px[(size_t)py * W + px]); world.px[(size_t)py * W + px] = Canvas::pack(shade(p, 1.0f - 0.35f * (1.0f - (t - 4) / 5.0f))); }
-                }
-                if (u % 10 == 4) for (int dt = 0; dt < 5; dt++) for (int dw = 0; dw < 3; dw++) {   // posts
-                    int px = horiz ? x0 + u + dw : x0 + (SD[sdI].ox < 0 ? dt - 1 : TILE - 4 + dt), py = horiz ? y0 + (SD[sdI].oy < 0 ? dt - 1 : TILE - 4 + dt) : y0 + u + dw;
-                    world.set(px, py, dw == 0 ? rgb(170, 134, 94) : rgb(86, 62, 42));
-                }
-            }
-        }
-    }
-    // ---- props
+    marker(D_BRIDGES);
+    // ---- props (their sprites live until the bake is done: the plan points at them)
+    std::vector<Canvas> logs, walls, stones, hulks, pads, pillars, stumps;
+    std::vector<Canvas> hay, fence, wildflowers, mossy, camp, crates, driftwood, boats, signs, cattails, rings, bones, wheat;
+    std::vector<Canvas> boulder;
     {
-        std::vector<Canvas> logs, walls, stones, hulks, pads, pillars, stumps;
         for (int i = 0; i < 5; i++) logs.push_back(makeProp(0, 16.0f + i * 2, 7100u + i));
         for (int i = 0; i < 5; i++) walls.push_back(makeProp(1, 24.0f + i * 2, 7200u + i));
         for (int i = 0; i < 5; i++) stones.push_back(makeProp(2, 18.0f + i * 2, 7300u + i));
@@ -1168,7 +982,7 @@ void terrainBake(Canvas& world) {
         for (int i = 0; i < 6; i++) pads.push_back(makeProp(4, 7.0f + i * 0.8f, 7500u + i));
         for (int i = 0; i < 4; i++) pillars.push_back(makeProp(5, 24.0f + i * 2, 7600u + i));
         for (int i = 0; i < 4; i++) stumps.push_back(makeProp(6, 14.0f + i * 1.5f, 7700u + i));
-        auto put = [&](const Canvas& c, float x, float y) { blitOver(world, c, (int)(x - c.w * 0.5f), (int)(y - c.h * 0.5f)); };
+        auto put = [&](const Canvas& c, float x, float y) { int x0 = (int)(x - c.w * 0.5f), y0 = (int)(y - c.h * 0.5f); item(D_BLIT, x0, x, y, 0, Rng(1), y0, y0 + c.h, &c); };
         auto clearOf = [&](float x, float y, float baseR, float supR) {
             for (auto& s : g_map.starts) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < baseR * TILE) return false;
             for (auto& s : g_map.supplies) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < supR) return false;
@@ -1231,7 +1045,6 @@ void terrainBake(Canvas& world) {
             }
         }
         // ---- more decor: thirteen more kinds, each scattered by density over the ground it belongs on (counts scale with the map's area)
-        std::vector<Canvas> hay, fence, wildflowers, mossy, camp, crates, driftwood, boats, signs, cattails, rings, bones, wheat;
         for (int i = 0; i < 4; i++) hay.push_back(makeProp(7, 11.0f + i * 1.5f, 8100u + i));
         for (int i = 0; i < 4; i++) fence.push_back(makeProp(8, 14.0f + i * 2.0f, 8200u + i));
         for (int i = 0; i < 4; i++) wildflowers.push_back(makeProp(9, 9.0f + i * 1.5f, 8300u + i));
@@ -1295,12 +1108,9 @@ void terrainBake(Canvas& world) {
                 [&](float x, float y) { put(bones[mr.range(0, 2)], x, y); });
         scatter(decorCount(16000), decorCount(30), 110, [&](float x, float y) { return grassAt(x, y) && flat(x, y) && apart(x, y) && nz.v(x * 0.006f + 12, y * 0.006f + 71) > 0.55f; },
                 [&](float x, float y) { put(wheat[mr.range(0, 2)], x, y); });
-    }
 
-    // ---- boulders: scattered where open ground meets rock, plus a few strays
-    {
-        std::vector<Canvas> boulder; float br[6];
-        for (int i = 0; i < 6; i++) { br[i] = 5.0f + i * 1.6f; boulder.push_back(makeBoulder(br[i], 900u + i)); }
+        // ---- boulders: scattered where open ground meets rock, plus a few strays
+        for (int i = 0; i < 6; i++) boulder.push_back(makeBoulder(5.0f + i * 1.6f, 900u + i));
         for (int i = 0; i < decorCount(2300); i++) {
             float x = r.f(8, W - 8.0f), y = r.f(8, H - 8.0f);
             if (!openGround(x, y)) continue;
@@ -1312,33 +1122,374 @@ void terrainBake(Canvas& world) {
             for (auto& s : g_map.starts) if (dist(Vec2(x, y), tileCenter(s.tx, s.ty)) < 9 * TILE) near = true;
             if (near) continue;
             int v = r.range(0, 5);
-            blitOver(world, boulder[v], (int)(x - boulder[v].w * 0.5f), (int)(y - boulder[v].h * 0.5f));
+            const Canvas& bc = boulder[v];
+            int x0 = (int)(x - bc.w * 0.5f), y0 = (int)(y - bc.h * 0.5f);
+            item(D_BLIT, x0, x, y, 0, Rng(1), y0, y0 + bc.h, &bc);
         }
     }
 
-    // ---- trees, back to front (the world without them is kept for local repaints)
-    {
-        Kept& K = kept();
-        if (K.sprites[0].empty()) for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) K.sprites[k].push_back(makeTree(k, spriteBase(k) + v * 0.6f, 5000u + k * 97u + v * 13u));
-        const int PC = Kept::PRE_CHUNK, cols = (W + PC - 1) / PC, rows = (H + PC - 1) / PC, TPC = PC / TILE;
-        K.preCols = cols;
-        K.preTree.assign((size_t)cols * rows, std::vector<u16>());
-        parallelRows(rows, [&](int r0, int r1) {   // (each chunk row is its own vectors: the rows split across the cores)
-            for (int cy = r0; cy < r1; cy++) for (int cx = 0; cx < cols; cx++) {
-                bool land = false;
-                for (int ty = cy * TPC - 1; ty <= (cy + 1) * TPC && !land; ty++) for (int tx = cx * TPC - 1; tx <= (cx + 1) * TPC; tx++)
-                    if (inMap(tx, ty) && g_map.tile(tx, ty) != T_WATER) { land = true; break; }
-                if (!land) continue;
-                std::vector<u16>& c = K.preTree[(size_t)cy * cols + cx];
-                c.assign((size_t)PC * PC, 0);
-                for (int y = 0; y < PC && cy * PC + y < H; y++) for (int x = 0; x < PC && cx * PC + x < W; x++)
-                    c[(size_t)y * PC + x] = to565(Canvas::unpack(world.px[(size_t)(cy * PC + y) * W + cx * PC + x]), cx * PC + x, cy * PC + y);
+    phase(1);   // the plan
+    // ---- what the bake keeps for local repaints: the tree sprites, the tree list, and the ground before the trees (land squares only)
+    Kept& K = kept();
+    if (K.sprites[0].empty()) for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) K.sprites[k].push_back(makeTree(k, spriteBase(k) + v * 0.6f, 5000u + k * 97u + v * 13u));
+    const int PC = Kept::PRE_CHUNK, pcols = (W + PC - 1) / PC, prows = (H + PC - 1) / PC, TPC = PC / TILE;
+    K.preCols = pcols;
+    K.preTree.assign((size_t)pcols * prows, std::vector<u16>());
+    static float maxHalf[T_KINDS] = {};   // the widest sprite of each kind, for a cheap "can this tree reach the band" bound
+    if (maxHalf[0] <= 0) for (int k = 0; k < T_KINDS; k++) for (auto& sp : K.sprites[k]) maxHalf[k] = std::max(maxHalf[k], std::max(sp.w, sp.h) * 0.5f);
+
+    // ================= the bands
+    const int BAND = TERRAIN_BAND;
+    Canvas bandC(W, std::min(BAND, H));
+    std::vector<float> hband;
+    std::vector<u8> reliefB, rawB;
+    for (int oy = 0; oy < H; oy += BAND) {
+        const int bh = std::min(BAND, H - oy);
+        if (bandC.h != bh) bandC = Canvas(W, bh);
+        Band band; band.c = &bandC; band.oy = oy;
+
+        // ---- height field rows of this band (half resolution: rock massifs, lake beds, canopies), with a margin of two tiles above and below
+        // (the soft shadows look up to 27 px north-west, and the relief mask spreads two tiles)
+        const int hb0 = std::max(0, oy / 2 - 32), hb1 = std::min(HH, (oy + bh) / 2 + 32), hbn = hb1 - hb0;
+        hband.assign((size_t)HW * hbn, 0.0f);
+        parallelRows(hbn, [&](int y0, int y1) {
+            for (int hyl = y0; hyl < y1; hyl++) for (int hx = 0; hx < HW; hx++) {
+                const int hy = hb0 + hyl;
+                float x = hx * 2.0f, y = hy * 2.0f, wx, wy; warpAt(x, y, wx, wy);
+                float fx = (x + wx) / CELL - 0.5f, fy = (y + wy) / CELL - 0.5f;
+                int tx = clampi((int)x >> 5, 0, MAP_W - 1), ty = clampi((int)y >> 5, 0, MAP_H - 1);
+                u8 bits = present[(size_t)ty * MAP_W + tx];
+                float h = 0;
+                if (bits & (1 << K_ROCK)) {
+                    float mr = samp(mask[K_ROCK], CW, CH, fx, fy);
+                    float e = (nz.v(x * 0.06f + 7 * 31.7f, y * 0.06f + 7 * 17.3f) - 0.5f) * 0.28f;   // (a slower wobble: the cliff foot reads as one line, not teeth)
+                    float a = sstep(0.38f, 0.74f, mr + e);
+                    float ridge = 1.0f - std::abs(2.0f * nz.fbm(x * 0.045f + 11, y * 0.045f + 3) - 1.0f);
+                    h += a * (14.0f + 22.0f * ridge * ridge + 4.0f * nz.v(x * 0.05f, y * 0.05f));
+                }
+                if (bits & (1 << K_WATER)) h -= 3.5f * sstep(0.5f, 0.95f, samp(wide, CW, CH, fx, fy));
+                hband[(size_t)hyl * HW + hx] = h;
             }
         });
-        K.trees = trees;
-        K.ok = true;
-        for (auto& t : trees) drawTree(world, t, 0, 0);
+        for (auto& t : trees) {
+            if ((t.y + t.r) / 2 < hb0 - 1 || (t.y - t.r) / 2 > hb1 + 1) continue;
+            float hgt = t.kind == T_BUSH ? 7.0f : (t.kind == T_CONIFER ? 24.0f : 20.0f);
+            int hx0 = std::max(0, (int)((t.x - t.r) / 2)), hx1 = std::min(HW - 1, (int)((t.x + t.r) / 2));
+            int hy0 = std::max(hb0, std::max(0, (int)((t.y - t.r) / 2))), hy1 = std::min(hb1 - 1, std::min(HH - 1, (int)((t.y + t.r) / 2)));
+            for (int hy = hy0; hy <= hy1; hy++) for (int hx = hx0; hx <= hx1; hx++) {
+                float d = hyp(hx * 2.0f - t.x, hy * 2.0f - t.y) / t.r;
+                if (d >= 1) continue;
+                float h = hgt * std::sqrt(1 - d * d);
+                float& cell = hband[(size_t)(hy - hb0) * HW + hx];
+                cell = std::max(cell, h);
+            }
+        }
+        phase(2);   // height field
+        // tiles with any relief (dilated) get the lighting pass; flat meadow skips it (worked out for this band's tile rows)
+        const int ty0 = oy / TILE, ty1 = std::min(MAP_H, (oy + bh + TILE - 1) / TILE), rt0 = hb0 * 2 / TILE, rt1 = std::min(MAP_H, (hb1 * 2 + TILE - 1) / TILE);
+        rawB.assign((size_t)MAP_W * (rt1 - rt0), 0);
+        for (int hyl = 0; hyl < hbn; hyl++) for (int hx = 0; hx < HW; hx++) if (std::abs(hband[(size_t)hyl * HW + hx]) > 0.05f) rawB[(size_t)((hb0 + hyl) * 2 / TILE - rt0) * MAP_W + hx * 2 / TILE] = 1;
+        reliefB.assign((size_t)MAP_W * (ty1 - ty0), 0);
+        for (int ty = ty0; ty < ty1; ty++) for (int tx = 0; tx < MAP_W; tx++) {
+            u8 v = 0;
+            for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) { int ry = clampi(ty + j, 0, MAP_H - 1); if (ry >= rt0 && ry < rt1) v |= rawB[(size_t)(ry - rt0) * MAP_W + clampi(tx + i, 0, MAP_W - 1)]; }
+            reliefB[(size_t)(ty - ty0) * MAP_W + tx] = v;
+        }
+        auto hsamp = [&](float hx, float hy) { return samp(hband, HW, hbn, hx, hy - hb0); };
+
+        // ---- per-pixel ground
+        parallelRows(bh, [&](int y0, int y1) {
+            for (int yl = y0; yl < y1; yl++) {
+                const int y = oy + yl;
+                u32* row = &bandC.px[(size_t)yl * W];
+                for (int x = 0; x < W; x++) {
+                    int tx = x >> 5, ty = y >> 5;
+                    u8 bits = present[(size_t)ty * MAP_W + tx];
+                    float sea = bits == (1 << K_WATER) ? samp(seaD, MAP_W, MAP_H, x / (float)TILE - 0.5f, y / (float)TILE - 0.5f) : 0.0f;
+                    if (sea >= SEA_OPEN) {   // open sea: nothing else reaches it, no relief, and the shallows' detail has faded out (see groundColor)
+                        if ((x & 7) == 4 && (y & 7) == 4) g_waterCover[(size_t)(y >> 3) * g_wcW + (x >> 3)] = 255;
+                        F3 col = mul3(openSeaColor((float)x, (float)y, nz, sea), 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
+                        float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
+                        auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
+                        vr = curve(vr); vg = curve(vg); vb = curve(vb);
+                        float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+                        vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
+                        float warm = (lum - 0.5f) * 0.045f;
+                        row[x] = Canvas::pack(Color{ (u8)clampf((vr + warm) * 255.0f, 0, 255), (u8)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (u8)clampf((vb - warm) * 255.0f, 0, 255), 255 });
+                        continue;
+                    }
+                    float wox, woy; warpAt((float)x, (float)y, wox, woy);
+                    float fx = (x + wox) / CELL - 0.5f, fy = (y + woy) / CELL - 0.5f;
+                    float w[K_N]; float sum = 0, bestV = -1; int best = 0;
+                    for (int c = 0; c < K_N; c++) {
+                        if (!(bits >> c & 1)) { w[c] = 0; continue; }
+                        float m = samp(mask[c], CW, CH, fx, fy);
+                        if (m > bestV) { bestV = m; best = c; }
+                        float mm = m;
+                        // the border's wobble: a mid-scale waver (about 16 px) and a finer one, not the 8 px static that made the edges jagged
+                        if (m > 0.02f && m < 0.98f) mm += (c == K_ROAD ? 0.35f : 1.0f) * ((nz.v(x * 0.06f + c * 31.7f, y * 0.06f + c * 17.3f) - 0.5f) * 0.30f + (nz.v(x * 0.21f + c * 7.0f, y * 0.21f + c * 3.0f) - 0.5f) * 0.10f);   // (a road's edge stays nearly straight)
+                        float s = std::max(mm, 0.0f); s *= s; s *= s;
+                        w[c] = s; sum += s;
+                    }
+                    if (sum < 1e-6f) { w[best] = 1; sum = 1; }
+                    float macro = (bits & ((1 << K_GRASS) | (1 << K_GRASS2))) ? nz.fbm(x * 0.012f, y * 0.012f) : 0.0f;   // (only the meadows read it)
+                    float depth = 0;
+                    if (w[K_WATER] > 0) depth = sstep(0.5f, 0.95f, samp(wide, CW, CH, fx, fy));
+                    F3 col{0, 0, 0};
+                    float inv = 1.0f / sum;
+                    Base base = baseAt(nz, (float)x, (float)y);   // (shared by every class that blends in here)
+                    for (int c = 0; c < K_N; c++) if (w[c] > 0.003f) col = add3(col, mul3(classColor(c, (float)x, (float)y, nz, base, macro, depth, sea), w[c] * inv));
+                    float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wSand = w[K_SAND] * inv, wRock = w[K_ROCK] * inv;
+                    if ((x & 7) == 4 && (y & 7) == 4) g_waterCover[(size_t)(y >> 3) * g_wcW + (x >> 3)] = (u8)clampf(wWater * 255.0f + 0.5f, 0, 255);
+                    // scree aprons: pale rubble shed at the foot of every cliff, strongest where rock coverage is just giving out
+                    if (wRock > 0.03f && wRock < 0.5f && wWater < 0.05f) col = lerp3(col, SCREE, (0.5f - wRock) * 0.6f * (0.65f + 0.35f * nz.v(x * 0.4f + 3, y * 0.4f + 8)));
+                    // shorelines: foam on the water side, wet dark sand on the land side
+                    if (wWater > 0.02f && wWater < 0.98f) {
+                        float edge = 1.0f - std::abs(wWater - 0.5f) * 2.0f;
+                        if (wWater > 0.4f) {
+                            float foam = edge * edge * (0.45f + 0.55f * nz.v(x * 0.28f + 5, y * 0.28f + 9));
+                            foam *= 0.5f + 0.5f * std::sin(x * 0.17f + y * 0.11f + 6.0f * nz.v(x * 0.02f, y * 0.02f));
+                            col = lerp3(col, f3(226, 238, 236), clampf(foam * 0.8f, 0, 0.7f));
+                        } else col = mul3(col, 1.0f - 0.12f * edge);
+                    }
+                    if (wSand > 0.05f && wWater > 0.0f) {   // wet sand: darker and greyer where the tide-line soaks it
+                        float wet = clampf(wWater * 3.0f, 0, 1);
+                        col = lerp3(mul3(col, 1.0f - 0.18f * wet), SAND_WET, wet * 0.22f);
+                    }
+                    // gravel shoulder where a road meets the ground, a darker kerb just inside it
+                    if (wRoad > 0.05f && wRoad < 0.95f) {
+                        float edge = 1.0f - std::abs(wRoad - 0.5f) * 2.0f;
+                        float band2 = edge * edge * edge;   // a narrow band on the boundary itself
+                        if (wRoad < 0.5f) col = lerp3(col, GRAVEL, band2 * 0.42f * (0.6f + 0.4f * nz.v(x * 0.3f, y * 0.3f)));
+                        else col = mul3(col, 1.0f - 0.24f * band2);   // the kerb: the road's edge runs darker
+                    }
+                    // broad light variation
+                    col = mul3(col, 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
+                    // relief lighting from the height field
+                    if (reliefB[(size_t)(ty - ty0) * MAP_W + tx]) {
+                        float hx = x * 0.5f, hy = y * 0.5f;
+                        float h0 = hsamp(hx, hy);
+                        float gx = (hsamp(hx + 1, hy) - hsamp(hx - 1, hy)) * 0.25f, gy = (hsamp(hx, hy + 1) - hsamp(hx, hy - 1)) * 0.25f;
+                        float nl = 1.0f / std::sqrt(gx * gx + gy * gy + 1.0f);
+                        float lam = (-gx * nl * -0.50f) + (-gy * nl * -0.60f) + nl * 0.62f;       // light from the NW and above
+                        float k = lam / 0.622f;
+                        float occ = 0;
+                        for (int s = 1; s <= 5; s++) {
+                            float d = s * 7.0f;
+                            float hh = hsamp(hx - 0.62f * d * 0.5f, hy - 0.78f * d * 0.5f);
+                            occ = std::max(occ, clampf((hh - (h0 + d * 0.62f)) / 5.0f, 0, 1));
+                        }
+                        float rockish = clampf(h0 / 14.0f, 0, 1);
+                        k = 1.0f + (k - 1.0f) * 1.6f;   // north-west faces up, south-east faces down: the cliffs read as lit from the NW
+                        col = mul3(col, clampf(k, 0.42f, 1.7f) * (1.0f - 0.34f * occ));
+                        // moss in the cracks at the foot of cliffs, a pale dry rim on the crests
+                        if (w[K_ROCK] > 0.4f * sum) { col = lerp3(col, MOSS, (1.0f - rockish) * 0.3f); col = add3(col, mul3(f3(30, 28, 24), clampf((h0 - 28.0f) / 14.0f, 0, 1))); }
+                    }
+                    // split-tone grade: a whisper of S-curve, a touch more saturation, warm highlights and cool shadows (one sunlight for the whole map)
+                    {
+                        float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
+                        auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
+                        vr = curve(vr); vg = curve(vg); vb = curve(vb);
+                        float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+                        vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
+                        float warm = (lum - 0.5f) * 0.045f;
+                        col = f3((int)clampf((vr + warm) * 255.0f, 0, 255), (int)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (int)clampf((vb - warm) * 255.0f, 0, 255));
+                    }
+                    Color o{ (u8)clampf(col.r, 0, 255), (u8)clampf(col.g, 0, 255), (u8)clampf(col.b, 0, 255), 255 };
+                    row[x] = Canvas::pack(o);
+                }
+            }
+        });
+
+        phase(3);   // relief and ground
+        // ---- the planned clutter that reaches this band, in order (and the deterministic passes where they stood)
+        for (const DItem& it : items) {
+            if (it.kind < D_MARKERS && (it.y1 < oy || it.y0 >= oy + bh)) continue;
+            Rng rr = it.rs;
+            switch (it.kind) {
+            case D_TUFT: drawTuft(band, rr, it.x, it.y); break;
+            case D_FLOWER: drawFlowers(band, rr, it.x, it.y, FL[it.a]); break;
+            case D_PEBBLE: drawPebble(band, rr, it.x, it.y, it.a != 0); break;
+            case D_REEDS: drawReeds(band, rr, (int)it.x, (int)it.y); break;
+            case D_BLIT: band.blit(*it.sp, it.a, it.y0); break;
+            case D_PAD: {
+                const auto& sp = g_map.supplies[it.a];
+                float cx = sp.tx * TILE + TILE * 0.5f, cy = sp.ty * TILE + TILE * 0.5f;
+                for (int y = (int)(cy - 26); y < (int)(cy + 26); y++) for (int x = (int)(cx - 26); x < (int)(cx + 26); x++) {
+                    u32* d = band.at(x, y);
+                    if (!inMapPx(x, y) || !d) continue;
+                    float e = std::max(std::abs(x - cx), std::abs(y - cy)) / 26.0f;
+                    float k = clampf((1.0f - e) * 3.0f, 0, 1) * 0.5f;
+                    if (k <= 0) continue;
+                    Color o = Canvas::unpack(*d);
+                    Color pad = shade(rgb(150, 142, 124), 0.92f + 0.16f * nz.v(x * 0.5f, y * 0.5f));
+                    bool seam = ((x - (int)cx) % 13 == 0) || ((y - (int)cy) % 13 == 0);
+                    if (seam) pad = shade(pad, 0.82f);
+                    *d = Canvas::pack(Color{(u8)(o.r + (pad.r - o.r) * k), (u8)(o.g + (pad.g - o.g) * k), (u8)(o.b + (pad.b - o.b) * k), 255});
+                }
+                for (int i = 0; i < 40; i++) { float an = rr.f(0, 6.28f), d = rr.f(10, 44); band.fillCircle(cx + std::cos(an) * d, cy + std::sin(an) * d * 0.8f, rr.f(1.5f, 4), rgb(70, 54, 36, 80)); }
+                for (int k = 0; k < 2; k++) for (float a = 0; a < 6.2f; a += 0.05f) { float rr2 = 34 + k * 5; band.set((int)(cx + std::cos(a) * rr2), (int)(cy + std::sin(a) * rr2 * 0.8f), rgb(60, 46, 32, 70)); }
+                break;
+            }
+            case D_CRATER: {
+                const float x = it.x, y = it.y, R = it.r;
+                for (int yy = (int)(y - R - 4); yy < (int)(y + R + 4); yy++) {
+                    if (yy < oy || yy >= oy + bh) continue;
+                    for (int xx = (int)(x - R - 4); xx < (int)(x + R + 4); xx++) {
+                        if (!inMapPx(xx, yy)) continue;
+                        float d = hyp(xx - x, (yy - y) * 1.2f) / R;
+                        if (d > 1.25f) continue;
+                        u32* px = band.at(xx, yy);
+                        Color o = Canvas::unpack(*px);
+                        float nse = 0.85f + 0.3f * nz.v(xx * 0.3f + 9, yy * 0.3f);
+                        Color c = o;
+                        if (d < 0.72f) { float k = (0.72f - d) * 1.1f; c = shade(mix(o, rgb(38, 30, 24), clampf(k, 0, 0.8f)), nse); }        // scorched bowl
+                        else if (d < 1.0f) { float k = (d - 0.72f) * 2.2f; c = shade(mix(o, rgb(168, 148, 118), clampf(k, 0, 0.55f)), nse); } // thrown-up rim
+                        else { float k = (1.25f - d) * 0.9f; c = mix(o, rgb(120, 102, 80), clampf(k, 0, 0.3f)); }                              // dust apron
+                        if (xx - x + (yy - y) > R * 0.55f && d >= 0.72f && d < 1.0f) c = shade(c, 0.82f);                                        // rim shadow to the south-east
+                        *px = Canvas::pack(Color{c.r, c.g, c.b, 255});
+                    }
+                }
+                break;
+            }
+            case D_ROADC:   // road centre lines: dashes along every segment, only where the tile is still asphalt
+                for (const auto& rs : g_map.roads) {
+                    float x0 = rs.x0 * TILE, y0 = rs.y0 * TILE, x1 = rs.x1 * TILE, y1 = rs.y1 * TILE;
+                    if (std::max(y0, y1) + 4 < oy || std::min(y0, y1) - 4 >= oy + bh) continue;
+                    float len = hyp(x1 - x0, y1 - y0); if (len < 1) continue;
+                    float dx = (x1 - x0) / len, dy = (y1 - y0) / len;
+                    for (float s = 20; s < len - 20; s += 34) {
+                        for (float u = 0; u < 15; u += 0.7f) {
+                            float px = x0 + dx * (s + u), py = y0 + dy * (s + u);
+                            if (py < oy - 4 || py >= oy + bh + 4) continue;
+                            if (tileAt(px, py) != T_ROAD) continue;
+                            // worn paint: a dull cream that greys and breaks up in patches where the traffic has ground it down
+                            float wear = nz.v(px * 0.45f + 4, py * 0.45f + 19);
+                            if (wear < 0.2f) continue;
+                            Color paint = wear > 0.6f ? rgb(206, 194, 150) : rgb(184, 176, 144);
+                            for (int wdt = -1; wdt <= 1; wdt++) band.set((int)(px - dy * wdt), (int)(py + dx * wdt), rgba(paint, wdt == 0 ? (wear > 0.55f ? 190 : 150) : 96));
+                        }
+                    }
+                }
+                break;
+            case D_ROADE:   // road edge lines: a pale worn line just inside each shoulder (skipped where repair patches and dirt have eaten it)
+                for (const auto& rs : g_map.roads) {
+                    float x0 = rs.x0 * TILE, y0 = rs.y0 * TILE, x1 = rs.x1 * TILE, y1 = rs.y1 * TILE;
+                    float off = rs.halfW * TILE * 0.62f;   // inside the asphalt core: coverage-blended tile borders already read as dirt
+                    if (std::max(y0, y1) + off + 4 < oy || std::min(y0, y1) - off - 4 >= oy + bh) continue;
+                    float len = hyp(x1 - x0, y1 - y0); if (len < 1) continue;
+                    float dx = (x1 - x0) / len, dy = (y1 - y0) / len;
+                    for (float s = 6; s < len - 6; s += 1.4f) {
+                        if (nz.v(s * 0.05f + x0 * 0.01f, y0 * 0.01f) < 0.18f) continue;   // worn away in stretches
+                        for (int sd = -1; sd <= 1; sd += 2) {
+                            float px = x0 + dx * s - dy * off * sd, py = y0 + dy * s + dx * off * sd;
+                            if (py < oy - 2 || py >= oy + bh + 2) continue;
+                            if (tileAt(px, py) != T_ROAD || g_map.bridge[clampi(tileOf(py), 0, MAP_H - 1) * MAP_W + clampi(tileOf(px), 0, MAP_W - 1)]) continue;
+                            band.set((int)px, (int)py, rgb(206, 204, 192, 110));
+                        }
+                    }
+                }
+                break;
+            case D_APRONS:   // each base sits on prepared ground: a faint gravel apron under the start position, so a headquarters reads as founded, not parked
+                for (const auto& st : g_map.starts) {
+                    float cx = st.tx * TILE + TILE * 0.5f, cy = st.ty * TILE + TILE * 0.5f;
+                    const float R = 5.2f * TILE;
+                    for (int y = (int)(cy - R); y < (int)(cy + R); y++) {
+                        if (y < oy || y >= oy + bh) continue;
+                        for (int x = (int)(cx - R); x < (int)(cx + R); x++) {
+                            if (!inMapPx(x, y)) continue;
+                            float d = hyp(x - cx, (y - cy) * 1.15f) / R;
+                            if (d >= 1) continue;
+                            float k = (1 - d) * (1 - d) * 0.30f;
+                            u32* px = band.at(x, y);
+                            Color o = Canvas::unpack(*px);
+                            Color pad = shade(rgb(144, 138, 122), 0.94f + 0.12f * nz.v(x * 0.35f + 4, y * 0.35f));
+                            *px = Canvas::pack(Color{(u8)(o.r + (pad.r - o.r) * k), (u8)(o.g + (pad.g - o.g) * k), (u8)(o.b + (pad.b - o.b) * k), 255});
+                        }
+                    }
+                }
+                break;
+            case D_BRIDGES: {   // bridges: timber decks over the rivers with rails, posts and a shadow on the water below
+                const int tA = std::max(1, ty0 - 1), tB = std::min(MAP_H - 1, ty1 + 1);
+                for (int ty = tA; ty < tB; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
+                    if (!g_map.bridge[ty * MAP_W + tx]) continue;
+                    int x0 = tx * TILE, y0 = ty * TILE;
+                    bool runsEW = g_map.bridge[ty * MAP_W + tx - 1] || g_map.bridge[ty * MAP_W + tx + 1];   // deck direction, for the wheel-worn runner strips
+                    for (int y = 0; y < TILE; y++) for (int x = 0; x < TILE; x++) {   // planks
+                        float pl = nz.v((x0 + x) * 0.9f, (y0 + y) * 0.1f), g = 0.86f + 0.22f * pl;
+                        bool seamH = (y % 8) == 0, seamV = ((x0 + x + (((y0 + y) / 8) & 1) * 12) % 24) == 0;
+                        int lane = runsEW ? y : x;
+                        bool runner = (lane >= 7 && lane <= 10) || (lane >= 21 && lane <= 24);   // twin dark tracks where wheels and treads polish the timber
+                        Color c = shade(rgb(142, 108, 74), g * (seamH || seamV ? 0.6f : 1.0f) * (runner ? 0.78f : 1.0f));
+                        band.set(x0 + x, y0 + y, c);
+                    }
+                }
+                for (int ty = tA; ty < tB; ty++) for (int tx = 1; tx < MAP_W - 1; tx++) {
+                    if (!g_map.bridge[ty * MAP_W + tx]) continue;
+                    int x0 = tx * TILE, y0 = ty * TILE;
+                    auto off = [&](int ox, int oy2) { return !g_map.bridge[(ty + oy2) * MAP_W + tx + ox] && g_map.tile(tx + ox, ty + oy2) == T_WATER; };
+                    struct Side { int ox, oy; };
+                    static const Side SD[4] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
+                    for (int sdI = 0; sdI < 4; sdI++) {
+                        if (!off(SD[sdI].ox, SD[sdI].oy)) continue;
+                        bool horiz = SD[sdI].oy != 0;
+                        for (int u = 0; u < TILE; u++) {   // rail: a dark beam with a lit top edge, drop shadow outwards
+                            for (int t = 0; t < 4; t++) {
+                                int px = horiz ? x0 + u : x0 + (SD[sdI].ox < 0 ? t : TILE - 1 - t), py = horiz ? y0 + (SD[sdI].oy < 0 ? t : TILE - 1 - t) : y0 + u;
+                                band.set(px, py, t == 0 ? rgb(176, 140, 98) : (t == 3 ? rgb(70, 50, 34) : rgb(104, 76, 52)));
+                            }
+                            for (int t = 4; t < 9; t++) {
+                                int px = horiz ? x0 + u : x0 + (SD[sdI].ox < 0 ? -(t - 3) : TILE - 1 + (t - 3)), py = horiz ? y0 + (SD[sdI].oy < 0 ? -(t - 3) : TILE - 1 + (t - 3)) : y0 + u;
+                                u32* d = band.at(px, py);
+                                if (inMapPx(px, py) && d) { Color p = Canvas::unpack(*d); *d = Canvas::pack(shade(p, 1.0f - 0.35f * (1.0f - (t - 4) / 5.0f))); }
+                            }
+                            if (u % 10 == 4) for (int dt = 0; dt < 5; dt++) for (int dw = 0; dw < 3; dw++) {   // posts
+                                int px = horiz ? x0 + u + dw : x0 + (SD[sdI].ox < 0 ? dt - 1 : TILE - 4 + dt), py = horiz ? y0 + (SD[sdI].oy < 0 ? dt - 1 : TILE - 4 + dt) : y0 + u + dw;
+                                band.set(px, py, dw == 0 ? rgb(170, 134, 94) : rgb(86, 62, 42));
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            default: break;
+            }
+        }
+
+        phase(4);   // clutter
+        // ---- the ground before the trees, kept (RGB565) for the land squares of this band
+        {
+            const int sr0 = oy / PC, sr1 = std::min(prows, (oy + bh + PC - 1) / PC);
+            parallelRows(sr1 - sr0, [&](int a0, int a1) {
+                for (int cy = sr0 + a0; cy < sr0 + a1; cy++) for (int cx = 0; cx < pcols; cx++) {
+                    bool land = false;
+                    for (int ty = cy * TPC - 1; ty <= (cy + 1) * TPC && !land; ty++) for (int tx = cx * TPC - 1; tx <= (cx + 1) * TPC; tx++)
+                        if (inMap(tx, ty) && g_map.tile(tx, ty) != T_WATER) { land = true; break; }
+                    if (!land) continue;
+                    std::vector<u16>& c = K.preTree[(size_t)cy * pcols + cx];
+                    if (c.empty()) c.assign((size_t)PC * PC, 0);
+                    for (int y = 0; y < PC && cy * PC + y < H; y++) {
+                        const int wy = cy * PC + y;
+                        if (wy < oy || wy >= oy + bh) continue;
+                        for (int x = 0; x < PC && cx * PC + x < W; x++) c[(size_t)y * PC + x] = to565(Canvas::unpack(bandC.px[(size_t)(wy - oy) * W + cx * PC + x]), cx * PC + x, wy);
+                    }
+                }
+            });
+        }
+        phase(5);   // pre-tree copy
+        // ---- trees, back to front
+        for (auto& t : trees) {
+            float m = maxHalf[t.kind] * std::max(1.0f, t.r / spriteBase(t.kind)) + 6.0f;
+            if (t.y + m < oy || t.y - m >= oy + bh) continue;
+            drawTree(bandC, t, 0, oy);
+        }
+        phase(6);   // trees
+        emit(bandC, oy);
+        phase(7);   // the caller's grading
     }
+    K.trees = trees;
+    K.ok = true;
+    if (timing) printf("bake ms: fields %.0f, plan %.0f, height %.0f, ground %.0f, clutter %.0f, pre-tree %.0f, trees %.0f, grade %.0f\n", tPh[0], tPh[1], tPh[2], tPh[3], tPh[4], tPh[5], tPh[6], tPh[7]);
 }
 
 bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, int& rh, std::vector<u32>& out) {
@@ -1409,17 +1560,26 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     return true;
 }
 
-void terrainOverview(const Canvas& world, Canvas& out) {
-    // 3x3 samples inside each output pixel's exact footprint (the old integer factor cropped the east and south edges
-    // once the world stopped being a multiple of the overview size)
-    for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) {
-        float r = 0, g = 0, b = 0;
-        for (int j = 0; j < 3; j++) for (int i = 0; i < 3; i++) {
-            int sx = std::min(world.w - 1, (int)((x + (i + 0.5f) / 3.0f) * world.w / out.w));
-            int sy = std::min(world.h - 1, (int)((y + (j + 0.5f) / 3.0f) * world.h / out.h));
-            Color c = Canvas::unpack(world.px[(size_t)sy * world.w + sx]); r += c.r; g += c.g; b += c.b;
+// The overview is gathered band by band: 3x3 samples inside each output pixel's exact footprint, summed in the same order as a single pass over the
+// whole world would (rows top to bottom), so the bands give exactly the old picture
+void terrainOverviewBegin(TerrainOverview& o, int w, int h) { o.w = w; o.h = h; o.sum.assign((size_t)w * h * 3, 0.0f); }
+void terrainOverviewAdd(TerrainOverview& o, const Canvas& band, int oy) {
+    if (o.w <= 0) return;
+    for (int y = 0; y < o.h; y++) for (int j = 0; j < 3; j++) {
+        int sy = std::min(WORLD_H - 1, (int)((y + (j + 0.5f) / 3.0f) * WORLD_H / o.h));
+        if (sy < oy || sy >= oy + band.h) continue;
+        const u32* row = &band.px[(size_t)(sy - oy) * band.w];
+        float* acc = &o.sum[(size_t)y * o.w * 3];
+        for (int x = 0; x < o.w; x++) for (int i = 0; i < 3; i++) {
+            int sx = std::min(WORLD_W - 1, (int)((x + (i + 0.5f) / 3.0f) * WORLD_W / o.w));
+            Color c = Canvas::unpack(row[sx]); acc[x * 3] += c.r; acc[x * 3 + 1] += c.g; acc[x * 3 + 2] += c.b;
         }
-        out.px[y * out.w + x] = Canvas::pack(Color{(u8)clampf(r / 9.0f, 0, 255), (u8)clampf(g / 9.0f, 0, 255), (u8)clampf(b / 9.0f, 0, 255), 255});
+    }
+}
+void terrainOverviewEnd(const TerrainOverview& o, Canvas& out) {
+    for (int y = 0; y < out.h && y < o.h; y++) for (int x = 0; x < out.w && x < o.w; x++) {
+        const float* a = &o.sum[((size_t)y * o.w + x) * 3];
+        out.px[y * out.w + x] = Canvas::pack(Color{(u8)clampf(a[0] / 9.0f, 0, 255), (u8)clampf(a[1] / 9.0f, 0, 255), (u8)clampf(a[2] / 9.0f, 0, 255), 255});
     }
 }
 
