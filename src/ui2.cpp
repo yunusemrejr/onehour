@@ -45,16 +45,18 @@ void Game::drawShipMounts(const Entity& e, Vec2 p, Color mod, u8 alpha) {
     Gfx& g = g_gfx;
     const Sprite& tur = g.unitTurret[e.type][slotOf(e.owner < 0 ? 0 : e.owner)];
     if (!tur.tex) return;
-    bool cruiser = e.type == U_C_CRUISER || e.type == U_K_CRUISER, patrol = e.type == U_C_PATROL || e.type == U_K_PATROL;
-    ShipMounts m = patrol ? patrolMounts() : shipMounts(cruiser);
-    const float sc = UNIT_SCALE * artScale(e.type);
+    bool cruiser = e.type == U_C_CRUISER || e.type == U_K_CRUISER, patrol = e.type == U_C_PATROL || e.type == U_K_PATROL, battleship = battleshipType(e.type);
+    ShipMounts m = battleship ? battleshipMounts() : (patrol ? patrolMounts() : shipMounts(cruiser));
+    // (a battleship's hull is painted on the 128 px canvas: its mount offsets are in those half-size pixels, and its turret sprite is drawn at half the
+    // hull's pixel scale, a quarter of the 64 px turret's own)
+    const float sc = UNIT_SCALE * artScale(e.type) * (battleship ? 0.5f : 1.0f), turScale = battleship ? 0.25f : 0.82f;
     float ca = std::cos(e.angle), sa = std::sin(e.angle);
     for (int i = 0; i < m.n; i++) {
         float lx = m.x[i] * sc, ly = m.y[i] * sc;
         float rec = 0;
         if (e.ut().weapon >= 0 && !paused) { const Weapon& w = WEAPONS[e.ut().weapon]; float since = w.cooldown - e.cooldown; if (w.cooldown > 0.6f && since >= 0 && since < 0.18f) rec = 1.0f - since / 0.18f; }   // a barrel kicks back after a salvo
         Vec2 q(p.x + lx * ca - ly * sa - std::cos(e.turret) * 3.0f * rec, p.y + lx * sa + ly * ca - std::sin(e.turret) * 3.0f * rec);
-        g.draw(tur, q.x, q.y, e.turret, 0.82f, mod, alpha);
+        g.draw(tur, q.x, q.y, e.turret, turScale, mod, alpha);
     }
 }
 

@@ -14,7 +14,11 @@ enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_ST
        BK_BUNKERRAIN,   // a bunker's Rain Nukes
        BK_TANKDROP,     // a bunker's Tank Drop
        BK_BUNKERALL,    // Upgrade All Bunkers (id 1: cancel what it queued)
-       BK_SHADOWCALL }; // The Chosen calls its Shadow Guard
+       BK_SHADOWCALL,   // The Chosen calls its Shadow Guard
+       BK_RELICNUKE,    // a Hydra Silo the army holds: fire its missile
+       BK_DIVE,         // submarines: dive out of sight (id 1: surface)
+       BK_SUBNUKE,      // submarines: surface (if need be) and launch the nuclear missile
+       BK_RELICPAGE };  // dozers: the relic structures' page of the bar (id 1) and back (id 0)
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -45,6 +49,10 @@ static const char* kindHotkey(int kind, int id) {
     case BK_TANKDROP: return "D";
     case BK_BUNKERALL: return "A";
     case BK_SHADOWCALL: return "C";
+    case BK_RELICNUKE: return "K";
+    case BK_DIVE: return "D";
+    case BK_SUBNUKE: return "K";
+    case BK_RELICPAGE: return "R";
     }
     return nullptr;
 }
@@ -60,6 +68,10 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_SCAN: return f == F_CYBER ? ICO_SCAN_ORBITAL : ICO_SCAN_RECON;
     case BK_DROP: return ICO_PARADROP;
     case BK_SHADOWCALL: return ICO_PARADROP;
+    case BK_RELICNUKE: return ICO_RAINNUKE;
+    case BK_SUBNUKE: return ICO_NUKE;
+    case BK_DIVE: return id == 1 ? ICO_UNLOAD : ICO_DROPOFF;
+    case BK_RELICPAGE: return id == 1 ? ICO_BUNKERALL : ICO_CANCEL;
     case BK_AID: return ICO_AID;
     case BK_AIRSTRIKE: return ICO_AIRSTRIKE;
     case BK_FLEET: return ICO_FLEET;
@@ -162,7 +174,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -363,15 +375,35 @@ int Game::selectionOwner() const { return g_sim.humanPlayer; }
 
 // Ctrl held = "force fire": the click may target your own or an ally's units and structures (and powers/nukes hit friendly ground too).
 static bool forceFireKey() { return (SDL_GetModState() & KMOD_CTRL) != 0 || (g_game.forceLatch && g_game.powerMode); }   // (the F toggle only counts while aiming a strike: a nuke hits everything anyway)
+// nobody's structure that can be destroyed on purpose (never by anyone's own initiative): a canal bridge, an island launcher, a relic structure
+static bool neutralTarget(const Entity& t) { return t.isBuilding() && t.owner < 0 && t.constructed && (Sim::bridgeEnt(t) || Sim::relicEnt(t) || t.bt().role == BR_ISLANDNUKE); }
 
 void Game::issueRightClick(Vec2 w) {
     if (selection.empty()) return;
     Entity* t = pickEntity(w, false);
-    if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t)) && forceFireKey()) {
+    if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t) || neutralTarget(*t)) && forceFireKey()) {
         std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
         for (auto r : selection) if (r != tr) sel.push_back(r);
         if (!sel.empty()) { g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f); }
         return;
+    }
+    if (t && Sim::bridgeEnt(*t) && selectionHasRole(UR_DOZER) && (!t->constructed || t->hp < t->maxHp)) {   // a broken or damaged canal bridge: the dozers raise it (any army's may)
+        std::vector<Ref> dz, rest;
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o) (o->isUnit() && o->ut().role == UR_DOZER ? dz : rest).push_back(r); }
+        g_sim.cmdAssist(dz, g_sim.refOf(*t));
+        if (!rest.empty()) g_sim.cmdMove(rest, t->pos, false);
+        g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+        return;
+    }
+    if (t && Sim::relicEnt(*t) && t->owner < 0 && t->constructed && t->bt().role != BR_STRONGHOLD) {   // a relic structure nobody holds: the soldiers walk in and claim it
+        std::vector<Ref> claim, rest; Ref tr = g_sim.refOf(*t);
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (!o) continue; (g_sim.relicClaimable(*o, *t) || (o->isUnit() && (o->ut().role == UR_SPY || chosenType(o->type))) ? claim : rest).push_back(r); }
+        if (!claim.empty()) {
+            g_sim.cmdCapture(claim, tr);
+            if (!rest.empty()) g_sim.cmdMove(rest, t->pos, false);
+            g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+            return;
+        }
     }
     if (t && t->owner != g_sim.humanPlayer && t->kind != EK_RESOURCE && g_sim.enemies(g_sim.humanPlayer, t->owner)) {
         g_sim.cmdAttack(selection, g_sim.refOf(*t)); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
@@ -417,7 +449,7 @@ void Game::issueRightClick(Vec2 w) {
 // Force Fire button: attack whatever unit or structure is under the click on purpose, your own and your allies' included
 bool Game::issueForceFire(Vec2 w) {
     Entity* t = pickEntity(w, false);
-    if (!t || t->kind == EK_RESOURCE || (t->owner < 0 && !Sim::invulnerable(*t))) return false;   // (nobody's island launcher or Bastion Wall may be fired on: it only burns)
+    if (!t || t->kind == EK_RESOURCE || (t->owner < 0 && !Sim::invulnerable(*t) && !neutralTarget(*t))) return false;   // (nobody's Bastion Wall may be fired on: it only burns; a bridge, a launcher or a relic structure breaks)
     std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
     for (auto r : selection) if (r != tr) sel.push_back(r);
     if (sel.empty()) return false;
@@ -428,7 +460,7 @@ bool Game::issueForceFire(Vec2 w) {
 
 void Game::issueAttackMove(Vec2 w) {
     Entity* t = pickEntity(w, false);
-    if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t)) && forceFireKey()) {
+    if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t) || neutralTarget(*t)) && forceFireKey()) {
         std::vector<Ref> sel; Ref tr = g_sim.refOf(*t);
         for (auto r : selection) if (r != tr) sel.push_back(r);
         g_sim.cmdAttack(sel, tr, !g_sim.enemies(g_sim.humanPlayer, t->owner));
@@ -531,8 +563,13 @@ void Game::buildButtonsRaw() {
         BuildRole role = b->bt().role;
         for (int u = 0; u < U_COUNT; u++) {
             const UnitType& ut = UNITS[u];
-            if (ut.faction != pl.faction || ut.builtBy != role) continue;
+            if ((!ut.relic && ut.faction != pl.faction) || ut.builtBy != role) continue;
             bool ok = g_sim.unitAvailable(g_sim.humanPlayer, u);
+            if (subType(u) && g_sim.subsOf(g_sim.humanPlayer) >= SUB_MAX) {   // (the twenty-submarine cap)
+                snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s  (You have %d submarines, built and queued: the most an army may have)", ut.name, ut.cost, ut.hotkey, ut.desc, SUB_MAX);
+                add(BK_TRAIN, u, false, ut.name, tip);
+                continue;
+            }
             if (ok && chosenType(u) && g_sim.chosenInProduction(g_sim.humanPlayer)) {   // one at a time: it says why it is greyed out
                 snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s  (You already have The Chosen, in the field or in training: only one at a time)", ut.name, ut.cost, ut.hotkey, ut.desc);
                 add(BK_TRAIN, u, false, ut.name, tip);
@@ -596,6 +633,14 @@ void Game::buildButtonsRaw() {
             float dw = g_sim.deepNukeWait(g_sim.humanPlayer);
             snprintf(tip, sizeof tip, "Launch Underground Nuke  [K]  A silver warhead with three times a Nuke Ramp's blast radius (%d tiles), damage and radiation (%d s). Only Anti-Nuke Lasers can shoot it down. One warhead per silo every 5 minutes%s", (int)(NUKE_RADIUS * std::sqrt(UNUKE_SCALE)), (int)(Sim::FALLOUT_LIFE * UNUKE_FALLOUT), pl.lowPower() ? "  (LOW POWER)" : (dw > 0 ? "  (arming)" : ""));
             add(BK_DEEPNUKE, 0, g_sim.deepNukesReady(g_sim.humanPlayer) > 0, "Underground Nuke", tip);
+        }
+        if (role == BR_RELICSILO) {   // a Hydra Silo the army holds: it only launches
+            if (b->owner != g_sim.humanPlayer) return;
+            float hw = g_sim.relicNukeWait(g_sim.humanPlayer);
+            snprintf(tip, sizeof tip, "Launch Hydra  [K]  The old silo's one unique missile: over the target it splits into %d nuclear warheads (%.1f tile blast each, leave radiation), one on the spot and the others in a ring %d tiles round it. Each warhead is a little harder to shoot down than a ramp's. One launch every %d s%s",
+                     RELIC_SILO_WARHEADS, NUKE_RADIUS * std::sqrt(RELIC_SILO_SCALE), (int)RELIC_SILO_SPREAD, (int)RELIC_SILO_COOLDOWN, hw > 0 ? "  (arming)" : "");
+            add(BK_RELICNUKE, 0, g_sim.relicNukesReady(g_sim.humanPlayer) > 0, "Launch Hydra", tip);
+            return;
         }
         if (role == BR_STRONGHOLD) {   // a claimed stronghold is held, not sold: its garrison can be let out
             if (b->owner != g_sim.humanPlayer) return;
@@ -663,22 +708,36 @@ void Game::buildButtonsRaw() {
             }
             return;
         }
-        if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY || role == BR_NAVAL) add(BK_RALLY, 0, true, "Rally", role == BR_NAVAL ? "Set the point ships sail to (right-click the lake while the yard is selected)" : "Set rally point (right-click ground while selected)");
+        if (role == BR_BARRACKS || role == BR_FACTORY || role == BR_AIRFIELD || role == BR_SUPPLY || role == BR_NAVAL || role == BR_RELICFOUNDRY || role == BR_RELICPAD) add(BK_RALLY, 0, true, "Rally", role == BR_NAVAL ? "Set the point ships sail to (right-click the lake while the yard is selected)" : "Set rally point (right-click ground while selected)");
+        if (b->bt().relic) return;   // (a relic structure is held, never sold)
         add(BK_SELL, 0, true, "Sell", "Sell this structure for 50% of its cost");
         return;
     }
     if (selectionHasRole(UR_DOZER)) {
         bool civ = true;   // only civilian dozers in the selection: the town; any other dozer: the base
         for (auto r : selection) { Entity* d = g_sim.get(r); if (d && d->isUnit() && d->ut().role == UR_DOZER && !civicDozerType(d->type)) civ = false; }
+        const bool relicOk = !civ && g_sim.relicBuildable(g_sim.humanPlayer);   // (an army that holds a Relic Command may raise the relic structures)
+        if (relicPage && relicOk) {
+            for (int t = B_R_COMMAND; t <= B_R_SILO; t++) {
+                const BuildType& bt = BUILDS[t];
+                bool ok = g_sim.buildAvailable(g_sim.humanPlayer, t), lim = g_sim.atBuildLimit(g_sim.humanPlayer, t);
+                snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s. A relic structure: far tougher than your own, never sold%s", bt.name, bt.cost, bt.hotkey, bt.desc, ok ? "" : (lim ? "  Limit reached" : ""));
+                add(BK_BUILD, t, ok, bt.name, tip);
+            }
+            add(BK_RELICPAGE, 0, true, "Back", "Back to your army's own structures  [R]");
+            return;
+        }
+        relicPage = false;
         // the Command Core / Post comes last so the other buttons keep their places
         for (int pass = 0; pass < 2; pass++) for (int t = 0; t < B_COUNT; t++) {
             const BuildType& bt = BUILDS[t];
-            if (bt.faction != pl.faction || neutralRole(bt.role) || (bt.role == BR_CIVIC) != civ || (bt.role == BR_HQ) != (pass == 1)) continue;
+            if (bt.relic || bt.faction != pl.faction || neutralRole(bt.role) || (bt.role == BR_CIVIC) != civ || (bt.role == BR_HQ) != (pass == 1)) continue;
             bool ok = g_sim.buildAvailable(g_sim.humanPlayer, t);
             bool lim = g_sim.atBuildLimit(g_sim.humanPlayer, t);
             snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s%s%s", bt.name, bt.cost, bt.hotkey, bt.desc, ok ? "" : (lim ? "  Limit reached" : "  Requires "), ok || lim ? "" : BUILDS[bt.requires_].name);
             add(BK_BUILD, t, ok, bt.name, tip);
         }
+        if (relicOk) add(BK_RELICPAGE, 1, true, "Relic Structures", "Relic Structures  [R]  You hold a Relic Command: your dozers can raise the abandoned army's structures (overgrown, far tougher than your own): its command post, reactor, foundry, airstrip, flak, lancer tower, siege cannon, ramparts and the Hydra Silo");
         return;
     }
     bool combat = false, lifter = false, jeep = false;
@@ -704,6 +763,19 @@ void Game::buildButtonsRaw() {
         else snprintf(tip, sizeof tip, "Call Shadow Guard  [C]  %d stealth soldiers appear round The Chosen right now; each picks carbine, marksman shot, rocket or stinger for its target, and only helicopters and snipers see them (once every %d s)", CHOSEN_SQUAD, (int)CHOSEN_CALL_COOLDOWN);
         add(BK_SHADOWCALL, 0, wait <= 0, "Call Shadow Guard", tip);
         break;
+    }
+    {   // submarines: dive / surface, and the nuclear missile
+        int subs = 0, dived = 0, ready = 0;
+        for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && subType(e->type)) { subs++; if (e->subState == 2 || e->subState == 1) dived++; if (g_sim.time >= e->siloTimer && e->nukeSalvo == 0) ready++; } }
+        if (subs > 0) {
+            bool surface = dived * 2 >= subs;   // (most of them down: the button brings them up)
+            if (surface) add(BK_DIVE, 1, true, "Surface", "Surface  [D]  Bring the submarines up: they can fire torpedoes at ships again, and can be seen (close up) and hurt");
+            else add(BK_DIVE, 0, true, "Dive", "Dive  [D]  Take the submarines down: nothing can find them (no ship, aircraft, scan or other submarine) and nothing can hurt them, for as long as you like. They cannot fire while under");
+            float sw = g_sim.subNukeWait(g_sim.humanPlayer);
+            snprintf(tip, sizeof tip, "Launch Nuke  [K]  The nearest submarine with its missile ready surfaces if it is down (%.0f s), fires a full nuclear warhead (%d tile blast, radiation) anywhere on the map, and must stay up for %d s after: then it can be found and sunk. One missile per submarine every %d s (%d of the selected ready)%s",
+                     SUB_SURFACE_TIME, (int)NUKE_RADIUS, (int)SUB_EXPOSED, (int)SUB_NUKE_COOLDOWN, ready, sw > 0 && ready == 0 ? "  (reloading)" : "");
+            add(BK_SUBNUKE, 0, g_sim.subNukesReady(g_sim.humanPlayer) > 0, "Launch Nuke", tip);
+        }
     }
     if (combat) add(BK_ATTACKMOVE, 0, true, "Attack Move", "Attack-move: engage everything on the way  [A]");
     if (combat) add(BK_FORCE, 0, true, "Force Fire", "Force fire: click any unit or structure, your own or an ally's included, to attack it on purpose (or hold Ctrl and right-click). Allies never shoot back  [F]");
@@ -733,6 +805,20 @@ bool Game::launchNuke(Vec2 at) {
         addMessage("Island nuke launched", rgb(255, 130, 100));
         return true;
     }
+    if (nukeRelic) {
+        Ref from = NOREF;
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o->isBuilding() && o->bt().role == BR_RELICSILO && o->owner == g_sim.humanPlayer && o->constructed && g_sim.time >= o->siloTimer) { from = r; break; } }
+        if (!g_sim.cmdRelicNuke(g_sim.humanPlayer, at, forceFireKey(), from)) return false;
+        addMessage("Hydra launched", rgb(150, 255, 180));
+        return true;
+    }
+    if (nukeSub) {
+        Ref from = NOREF;
+        for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o->isUnit() && subType(o->type) && o->owner == g_sim.humanPlayer && g_sim.time >= o->siloTimer && o->nukeSalvo == 0) { from = r; break; } }
+        if (!g_sim.cmdSubNuke(g_sim.humanPlayer, at, forceFireKey(), from)) return false;
+        addMessage("Submarine missile ordered", rgb(255, 150, 110));
+        return true;
+    }
     if (nukeMini) {
         Ref from = NOREF;
         for (auto r : selection) { Entity* o = g_sim.get(r); if (o && o->isBuilding() && o->bt().role == BR_BUNKER && o->owner == g_sim.humanPlayer && o->constructed && g_sim.time >= o->siloTimer) { from = r; break; } }
@@ -746,7 +832,7 @@ bool Game::launchNuke(Vec2 at) {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF;
 }
 
 void Game::clickButton(const Button& b) {
@@ -776,6 +862,10 @@ void Game::cmdSelection(int kind, int id) {
     case BK_AIRSTRIKE: if (g_sim.strikesReady(g_sim.humanPlayer) > 0) { cancelModes(); strikeMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_FLEET: if (g_sim.fleetsReady(g_sim.humanPlayer) > 0) { cancelModes(); fleetMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_ISLANDNUKE: if (g_sim.islandNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeIsland = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_RELICNUKE: if (g_sim.relicNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeRelic = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_SUBNUKE: if (g_sim.subNukesReady(g_sim.humanPlayer) > 0) { cancelModes(); nukeMode = true; nukeSub = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
+    case BK_DIVE: g_sim.cmdDive(selection, id == 0); g_audio.play(SND_ORDER, Vec2(), true); break;
+    case BK_RELICPAGE: relicPage = id == 1; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_NUKEBOMBER: if (g_sim.bombersReady(g_sim.humanPlayer) > 0) { cancelModes(); bomberMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_AID: if (g_sim.aidsReady(g_sim.humanPlayer) > 0) { cancelModes(); aidMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
@@ -1589,9 +1679,9 @@ void Game::drawSunShadows(float vx0, float vy0, float vx1, float vy1) {
     const Vec2 dir(std::cos(az), std::sin(az));
     const int steps = detail >= 3 ? 2 : 1;   // (each layer is a structure-sized blend: fill rate on a weak GPU)
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isBuilding() || !e.constructed) continue;
+        if (!e.alive || !e.isBuilding() || !e.constructed || Sim::bridgeEnt(e)) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
-        if (!g_sim.shownToHuman(e)) continue;
+        if (!g_sim.shownToHuman(e) || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
         const BuildType& bt = e.bt();
         float h;
         switch (bt.role) {
@@ -1630,6 +1720,14 @@ void Game::drawEntity(Entity& e) {
         float fw = (float)bt.w * TILE, fh = (float)bt.h * TILE;           // footprint
         float fx = p.x - fw * 0.5f, fy = p.y - fh * 0.5f;
         Color tint = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
+        if (bt.role == BR_BRIDGE) {   // a canal bridge: the deck, or the broken span in the water, or the dozers' scaffolding while it is raised again
+            int st = e.constructed ? 0 : (e.progress > 0.01f ? 2 : 1);
+            g.draw(g.bridgeArt[st], p.x, p.y, 0, 1, tint);
+            if (!e.constructed && e.progress > 0.01f) hpBar(g, p.x - 18, p.y - 8, 36, clampf(e.progress, 0, 1));
+            else if (e.constructed && (selected || e.hp < e.maxHp * 0.999f)) hpBar(g, p.x - 18, fy - 6, 36, e.hp / e.maxHp);
+            if (selected) g.box((int)fx, (int)fy, (int)fw, (int)fh, rgb(150, 255, 170, 160));
+            return;
+        }
         if (bt.role == BR_NAVAL) drawDock(e, p);   // the pier reaches into the lake under the structure
         if (bt.role == BR_WAYMAKER) {   // the grinder at work on its patch: it shudders, and a bar fills as the ground is cleared
             float sh = std::sin(wallTime * 60.0f + e.gen) * 0.8f;
@@ -1745,7 +1843,8 @@ void Game::drawEntity(Entity& e) {
                 }
             }
             // rotating heads for defenses
-            if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
+            if (e.type == B_R_FLAK || e.type == B_R_LASER || e.type == B_R_CANNON) g.draw(g.relicHead[e.type == B_R_FLAK ? 0 : (e.type == B_R_LASER ? 1 : 2)], p.x, p.y, e.angle, 1, tint);   // (the relic defences' own heads)
+            else if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
             else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);
             if (g_sim.roofGun(e) >= 0) {   // Defense Guns upgrade: a small laser / machine gun mount on the roof
                 Vec2 gp = p + (g_sim.roofGunPos(e) - e.pos);
@@ -1803,6 +1902,14 @@ void Game::drawEntity(Entity& e) {
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
     if (air || fallK > 0) { Color t = ambientTint(); mod = rgb(mod.r * t.r / 255, mod.g * t.g / 255, mod.b * t.b / 255); }   // (aircraft are drawn after the world's light pass: they take the hour's light themselves)
     const u8 ghost = (u8)((Sim::stealthOf(e) ? 150 : 255) * clampf(e.fade, 0, 1));
+    // a submarine: how far up it is (1 surfaced .. 0 dived); its own side sees a shadow under the water while it is down, the enemy nothing at all
+    const bool isSub = subType(e.type);
+    float subUp = 1.0f;
+    if (isSub) {
+        if (e.subState == 2) subUp = 0;
+        else if (e.subState == 1) subUp = clampf((e.subT - g_sim.time) / SUB_DIVE_TIME, 0, 1);
+        else if (e.subState == 3) subUp = 1.0f - clampf((e.subT - g_sim.time) / SUB_SURFACE_TIME, 0, 1);
+    }
     const bool deckJet = e.type == U_C_CARRIERJET || e.type == U_K_CARRIERJET;
     const float usc = deckJet ? CARRIER_JET_DECK_SCALE + (1.0f - CARRIER_JET_DECK_SCALE) * clampf(alt, 0, 1) : 1.0f;   // a carrier jet on deck is small; it grows as it climbs   // your own stealth units show as ghosts (the enemy sees nothing at all unless a detector is near); a departing Air Strike fighter fades out
     if (air) {
@@ -1811,8 +1918,8 @@ void Game::drawEntity(Entity& e) {
         p.y -= 14 * alt;   // altitude
     } else {
         if (ut.naval) {   // a hull on the water: the wake round it and a soft dark patch under it
-            if (e.fade > 0.35f) drawShipWake(e, p);   // (a Fleet Call ship still in the haze at the border leaves none yet)
-            g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), (u8)(64 * clampf(e.fade, 0, 1)));
+            if (e.fade > 0.35f && subUp > 0.3f) drawShipWake(e, p);   // (a Fleet Call ship still in the haze at the border leaves none yet; a dived submarine none at all)
+            g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), (u8)(64 * clampf(e.fade, 0, 1) * subUp));
         } else if (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) {   // an infiltrator paddling its inflatable raft
             float ca = std::cos(e.angle), sa = std::sin(e.angle);
             if (spd > 5) for (int k = 1; k <= 2; k++) g.drawSized(g.fxs.ring, p.x - ca * 9 * k, p.y - sa * 9 * k, 10.0f + 7 * k, 7.0f + 5 * k, e.angle, rgb(220, 240, 255), (u8)(90 / k));
@@ -1938,7 +2045,21 @@ void Game::drawEntity(Entity& e) {
             }
         }
     }
-    if (air && std::abs(e.roll) > 0.02f) g.drawRolled(*bs, p.x, p.y, drawAng, e.roll, usc, mod, ghost);   // banking into a turn, or a barrel roll
+    if (isSub) {   // the shadow under the water (dived: all there is to see, for its own side) and the hull on top as it comes up
+        const int fi = ut.faction == F_CYBER ? 0 : 1, sl = slotOf(owner);
+        const bool launching = g_sim.time < e.exposedUntil - SUB_EXPOSED + 3.0f;   // the missile hatch stands open for a moment after a launch
+        if (subUp < 1.0f && g.subArt[fi][sl][0].tex) {
+            g.draw(g.subArt[fi][sl][0], p.x, p.y, drawAng, 1, mod, (u8)(ghost * (1.0f - subUp)));
+            if (subUp <= 0 && !paused && frameDt > 0 && moving && fxRng.f() < 6.0f * frameDt) {   // a periscope's feather of wake
+                Vec2 f(std::cos(e.angle), std::sin(e.angle));
+                emitP(e.pos.x + f.x * e.radius() * 0.5f, e.pos.y + f.y * e.radius() * 0.5f, -f.x * 10, -f.y * 10, fxRng.f(0.6f, 1.0f), 2.0f, 6.0f, rgb(220, 236, 244, 110), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.4f, fxRng.f(0, 6), 0.1f);
+            }
+        }
+        if (subUp > 0) g.draw(launching && g.subArt[fi][sl][1].tex ? g.subArt[fi][sl][1] : *bs, p.x, p.y, drawAng, usc, mod, (u8)(ghost * subUp));
+        if (subUp > 0 && subUp < 1 && !paused && frameDt > 0 && fxRng.f() < 30.0f * frameDt)   // the sea foaming over the casing as it dives or breaks the surface
+            emitP(e.pos.x + fxRng.f(-e.radius(), e.radius()), e.pos.y + fxRng.f(-6, 6), fxRng.f(-8, 8), fxRng.f(-8, 8), fxRng.f(0.5f, 0.9f), 3.0f, 8.0f, rgb(236, 244, 250, 160), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.1f);
+    }
+    else if (air && std::abs(e.roll) > 0.02f) g.drawRolled(*bs, p.x, p.y, drawAng, e.roll, usc, mod, ghost);   // banking into a turn, or a barrel roll
     else g.draw(*bs, p.x, p.y, drawAng, usc, mod, ghost);
     if (deckJet && e.deckPhase == 2 && frameDt > 0) {   // on the catapult: steam streams back off the track behind it
         Vec2 f(std::cos(e.angle), std::sin(e.angle));
@@ -2257,6 +2378,17 @@ void Game::renderWorld() {
             g.circle(c.x, c.y, nr, rgb(255, 120, 80, 170), 32);
         }
         g.circle(m.x, m.y, 4, rgb(255, 200, 90), 12);
+    } else if (nukeMode && nukeRelic) {   // a Hydra: the five warheads, one on the spot and four in a ring round it
+        Vec2 m = Vec2(mouseX, mouseY);
+        float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f), nr = NUKE_RADIUS * TILE * std::sqrt(RELIC_SILO_SCALE), sp = RELIC_SILO_SPREAD * TILE;
+        for (int k = 0; k < RELIC_SILO_WARHEADS; k++) {
+            float a = wallTime * 0.4f + 6.2832f * (k - 1) / (RELIC_SILO_WARHEADS - 1);
+            Vec2 c = k == 0 ? m : m + Vec2(std::cos(a), std::sin(a)) * sp;
+            g.discFill(c.x, c.y, nr, Color{ RELIC_GLOW.r, RELIC_GLOW.g, RELIC_GLOW.b, (u8)(26 * pulse) });
+            g.circle(c.x, c.y, nr, RELIC_GLOW, 40);
+        }
+        g.dashedCircle(m.x, m.y, sp, rgb(170, 255, 200), wallTime * 20.0f);
+        g.circle(m.x, m.y, 4, rgb(220, 255, 230), 12);
     } else if (nukeMode) {
         Vec2 m = Vec2(mouseX, mouseY);
         float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f);
@@ -2352,20 +2484,29 @@ void Game::renderWorld() {
     drawDistrictLife();   // the towns' streets: walkers and cars (under the blocks' roofs and shadows)
     rp.mark("ghosts+zones+rings+town");
     // entities: resources, buildings, then ground units sorted by y, projectiles, fx, aircraft
-    std::vector<Entity*> ground, air;
+    std::vector<Entity*> ground, air, ships, bridges;
     float vx0 = cam.x - 96, vy0 = cam.y - 96, vx1 = cam.x + SCREEN_W + 96, vy1 = cam.y + VIEW_H + 96;
     if (!(skipL & 8) && !(skipL & 512)) drawSunShadows(vx0, vy0, vx1, vy1);   // (ONEHOUR_SKIPLAYER 512: no sun shadows)   // cast shadows of the structures, under everything standing on the ground
     g.beginAdd();   // (the lights, flashes and glows of the structures and units: drawn together after them, see Gfx::flushAdd)
     for (auto& e : g_sim.ents) {
         if (!e.alive) continue;
+        if (Sim::bridgeEnt(e)) {   // (a long deck: culled by its footprint, drawn between the ships passing under it and the traffic on it)
+            if ((e.tx + BRIDGE_W) * TILE < vx0 || e.tx * TILE > vx1 || (e.ty + BRIDGE_L) * TILE < vy0 || e.ty * TILE > vy1 || !g_sim.shownToHuman(e)) continue;
+            bridges.push_back(&e); continue;
+        }
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
         if (!g_sim.shownToHuman(e)) continue;   // never seen, or an enemy unit out of sight (remembered ground shows its structures only)
-        if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier / hidden by stealth
+        if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier / hidden by stealth (and a secret island's structure nobody of ours has found)
         if (e.kind == EK_RESOURCE || e.isBuilding()) drawEntity(e);
         else if (e.isAir() || e.fall > 0) air.push_back(&e);
+        else if (e.ut().naval) ships.push_back(&e);
         else ground.push_back(&e);
     }
-    std::sort(ground.begin(), ground.end(), [](Entity* a, Entity* b) { return a->pos.y < b->pos.y; });
+    auto byY = [](Entity* a, Entity* b) { return a->pos.y < b->pos.y; };
+    std::sort(ships.begin(), ships.end(), byY);
+    std::sort(ground.begin(), ground.end(), byY);
+    if (!(skipL & 8)) for (auto* e : ships) drawEntity(*e);
+    for (auto* e : bridges) drawEntity(*e);
     if (!(skipL & 8)) for (auto* e : ground) drawEntity(*e);
     g.flushAdd();
     rp.mark("entities");
@@ -2903,9 +3044,9 @@ void Game::renderHud() {
         } else g.text(tx, b.y + ly, b.label, tc);
         int cost = b.kind == BK_BUILD ? BUILDS[b.id].cost : (b.kind == BK_TRAIN ? UNITS[b.id].cost : -1);
         if (cost >= 0) { snprintf(buf, sizeof buf, "$%d", cost); g.text(tx, b.y + sy, buf, pl.money >= cost ? rgb(240, 220, 130) : rgb(255, 120, 100)); }
-        if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE || b.kind == BK_FLEET || b.kind == BK_NUKEBOMBER || b.kind == BK_ISLANDNUKE) {
+        if (b.kind == BK_POWER || b.kind == BK_SCAN || b.kind == BK_DROP || b.kind == BK_AID || b.kind == BK_AIRSTRIKE || b.kind == BK_FLEET || b.kind == BK_NUKEBOMBER || b.kind == BK_ISLANDNUKE || b.kind == BK_RELICNUKE || b.kind == BK_SUBNUKE) {
             float rem = b.kind == BK_DROP ? g_sim.dropWait(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidWait(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikeWait(g_sim.humanPlayer) : b.kind == BK_FLEET ? g_sim.fleetWait(g_sim.humanPlayer)
-                      : b.kind == BK_NUKEBOMBER ? g_sim.bomberWait(g_sim.humanPlayer) : b.kind == BK_ISLANDNUKE ? g_sim.islandNukeWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
+                      : b.kind == BK_NUKEBOMBER ? g_sim.bomberWait(g_sim.humanPlayer) : b.kind == BK_ISLANDNUKE ? g_sim.islandNukeWait(g_sim.humanPlayer) : b.kind == BK_RELICNUKE ? g_sim.relicNukeWait(g_sim.humanPlayer) : b.kind == BK_SUBNUKE ? g_sim.subNukeWait(g_sim.humanPlayer) : (b.kind == BK_POWER ? pl.powerReady : pl.scanReady) - g_sim.time;
             if (rem > 0) { snprintf(buf, sizeof buf, "%d:%02d", (int)rem / 60, (int)rem % 60); g.text(tx, b.y + sy, buf, hudDim()); }
             else if (b.enabled) {
                 int dn = b.kind == BK_DROP ? g_sim.dropsReady(g_sim.humanPlayer) : b.kind == BK_AID ? g_sim.aidsReady(g_sim.humanPlayer) : b.kind == BK_AIRSTRIKE ? g_sim.strikesReady(g_sim.humanPlayer) : b.kind == BK_FLEET ? g_sim.fleetsReady(g_sim.humanPlayer) : 1;

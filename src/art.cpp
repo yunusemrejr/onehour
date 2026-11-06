@@ -54,6 +54,9 @@ const CkTone CK_TONES[12] = {
 // silently repaint them (the pair rule below happens to land on 23 today, but it is a spacer rule, not a contract).
 // The Anti-Radiation Trucks follow as local 24, pinned for the same reason.
 static int unitLocal(int type) {
+    if (subType(type)) return 35;                                       // nuclear submarines (art_ship.cpp, 128 px canvas)
+    if (battleshipType(type)) return 36;                                // battleships (art_ship.cpp, 128 px canvas)
+    if (relicUnit(type)) return 37 + (type - U_R_JUGGERNAUT);           // the relic war machines (art_relic.cpp): 37 Juggernaut, 38 Strider, 39 Thunderhawk
     if (civicDozerType(type)) return 22;   // the civilian dozers: a dozer hull in civilian livery
     if (type == U_C_HELI) return 14;
     if (type == U_C_SBOMBER || type == U_K_SBOMBER) return 23;
@@ -1180,7 +1183,7 @@ void enhance(Canvas& c, float amount) {
 }  // namespace
 
 // ---------------------------------------------------------------- public entry points
-int artCanvas(int type) { int l = unitLocal(type); return l == 29 || l == 30 ? ART_BIG : ART_SIZE; }
+int artCanvas(int type) { int l = unitLocal(type); return l == 29 || l == 30 || l == 35 || l == 36 ? ART_BIG : ART_SIZE; }
 void artUnitBody(Canvas& c, int type, Color team, int frame) {
     setTone(type);
     Art A(c, team);
@@ -1217,6 +1220,9 @@ void artUnitBody(Canvas& c, int type, Color team, int frame) {
     case 32: artCommandoBody(c, team, cy, frame); break;    // laser commando (art_commando.cpp)
     case 33: artChosenBody(c, team, cy, frame); break;      // The Chosen (art_chosen.cpp)
     case 34: artShadowBody(c, team, cy, frame); break;      // Shadow Guard (art_chosen.cpp)
+    case 35: artSubBody(c, team, cy, 0); break;             // nuclear submarine, surfaced (art_ship.cpp; the dived and launching looks: Gfx::subArt)
+    case 36: artBattleshipBody(c, team, cy); break;         // battleship (art_ship.cpp)
+    case 37: case 38: case 39: artRelicUnitBody(c, local - 37, team, frame); break;   // the relic war machines (art_relic.cpp)
     case 28: artRioterBody(c, team, type == U_FIREBOMBER ? 1 : 0, frame); break;   // civilian rioters (art_riot.cpp)
     case 24:   // Anti-Radiation Truck: a ground vehicle, so it paints its own detail and finishes with the generic layers' enhance/outline
         radTruckBody(A, cy, frame);
@@ -1369,6 +1375,9 @@ bool artUnitTurret(Canvas& c, int type, Color team) {
     switch (local) {
     case 19: case 20: return artShipMount(c, team, cy, local == 20);   // (the warship mounts; the jeeps and fighters have no rotating part)
     case 27: return artPatrolBoatMount(c, team, cy);                  // (the patrol boat's gun and rocket mount)
+    case 36: return artBattleshipMount(c, team, cy);                  // (a battleship's triple turret: drawn at three places, see Game::drawShipMounts)
+    case 37: case 38: return artRelicUnitTurret(c, local - 37, team);   // (the Juggernaut's twin guns, the Strider's rocket box)
+    case 35: case 39: return false;
     case 5:
         if (cy) {   // Photon Tank turret: a low, faceted composite wedge with slab sides, roof hatches and a slim energy gun
             Color comp = mix(CYH, rgb(92, 104, 120), 0.7f), panel = shade(comp, 1.14f);
@@ -1600,5 +1609,10 @@ float artScale(int type) {
     if (local == 31) return 1.16f;   // carrier jets: a little smaller than the plain fighters
     if (local == 32) return 1.12f;   // laser commandos: bulkier than an elite trooper, still infantry-sized
     if (local == 16) return 0.75f;   // spy drones: small and delicate
+    if (local == 35) return 1.7f;    // nuclear submarines: about a destroyer long, slim (128 px canvas)
+    if (local == 36) return 3.0f;    // battleships: about 1.7 destroyers long (128 px canvas)
+    if (local == 37) return 1.22f;   // Relic Juggernaut: a super-heavy's length
+    if (local == 38) return 1.15f;   // Relic Strider: its legs reach wide
+    if (local == 39) return 1.10f;   // Relic Thunderhawk
     return 1.0f;
 }

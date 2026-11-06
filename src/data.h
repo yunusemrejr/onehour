@@ -83,6 +83,9 @@ enum UnitTypeId {
                                     // enemy soldiers, vehicles and ships to its side (never aircraft); calls its Shadow Guard (see CHOSEN_*)
     U_C_SHADOW, U_K_SHADOW,         // Shadow Guard: never built, CHOSEN_SQUAD of them answer a Chosen's call; seen only by helicopters; rifle, marksman shot, rocket or
                                     // anti-air missile, whichever the target needs (see W_SHADOW and Sim::shadowWeapon)
+    U_C_SUB, U_K_SUB,               // nuclear submarines (Naval Yard + tech structure, SUB_MAX per army): dive out of every sight, surface to fire torpedoes or a nuke (SUB_*)
+    U_C_BATTLESHIP, U_K_BATTLESHIP, // battleships (Naval Yard + tech structure): three heavy gun turrets, vertical-launch cruise missiles and a drone swarm (BATTLESHIP_*)
+    U_R_JUGGERNAUT, U_R_STRIDER, U_R_THUNDERHAWK,   // the relic army's war machines: built only at relic factories an army captured or raised (UnitType.relic)
     U_COUNT
 };
 
@@ -97,6 +100,11 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_FWALL,       // Bastion Wall: indestructible wall segment (spies can take it), no guns and no point defence of its own
                  BR_WAYMAKER,    // Waymaker: placed like a structure, it clears the trees and rock under it into open ground and is gone (see WAYMAKER_*)
                  BR_HEALANT,     // Healing Antenna: a cheap, unlimited 1x1 mast that mends everything friendly round it and slowly scrubs radiation (see HEALANT_*)
+                 BR_RELICCOMMAND,// Relic Command: the heart of an abandoned base; whoever holds one may raise relic structures with their dozers (see RELIC_*)
+                 BR_RELICFOUNDRY,// Relic Foundry: builds the relic war machines (Juggernaut, Strider)
+                 BR_RELICPAD,    // Relic Airstrip: a VTOL hangar that builds the Thunderhawk gunship
+                 BR_RELICSILO,   // Relic Hydra Silo: an old missile silo whose warhead splits into several over the target (RELIC_SILO_*)
+                 BR_BRIDGE,      // a bridge over the canal: nobody's, broken by fire and raised again by any dozer (see BRIDGE_*)
                  BR_NONE };      // (no structure builds it: the Hotline Strike fighters)
 
 enum BuildTypeId {
@@ -117,6 +125,9 @@ enum BuildTypeId {
     B_C_FWALL, B_K_FWALL,     // Bastion Walls (see BR_FWALL)
     B_C_WAYMAKER, B_K_WAYMAKER,   // Waymakers (see BR_WAYMAKER)
     B_C_HEALANT, B_K_HEALANT,     // Healing Antennas (see BR_HEALANT)
+    // the abandoned relic bases (map landmarks owned by nobody at the start; BuildType.relic): taken one structure at a time
+    B_R_COMMAND, B_R_REACTOR, B_R_FOUNDRY, B_R_AIRSTRIP, B_R_FLAK, B_R_LASER, B_R_CANNON, B_R_WALL, B_R_SILO, B_R_BUNKER,
+    B_BRIDGE,                     // a canal bridge (see BR_BRIDGE)
     B_COUNT
 };
 
@@ -153,6 +164,7 @@ struct UnitType {
     int drones;         // protector drones it flies with (see Sim::droneCount): they shoot down rockets and shells aimed at it
     int nukeBomb;       // 1 = a nuclear bomber: its single bomb is a compact silver warhead with an Underground Nuke's damage (see W_NUKE_BOMB)
     float sprintSpeed;  // px/s: the top speed while it still carries its payload (0 = no sprint); it drops to 'speed' once the payload is gone
+    int relic;          // 1 = a relic war machine: no army trains it at its own structures, only a relic factory it holds (see BR_RELICFOUNDRY / BR_RELICPAD)
 };
 // gunships and lifters (spy drones hover too, but they are drones): the only things that find The Chosen and its Shadow Guard (ST_CHOSEN)
 inline bool helicopterType(const UnitType& u) { return u.heli && u.role != UR_SCOUT && u.kind == UK_AIR; }
@@ -174,6 +186,9 @@ struct BuildType {
     int requires_;      // BuildTypeId prerequisite or -1
     const char* desc;
     int garrison = 0;   // neutral stronghold: infantry it can shelter (0 for every normal structure)
+    int relic = 0;      // 1 = a structure of the abandoned relic bases: any army may take it (infantry walk into a neutral one, spies take an enemy's), no army
+                        // upgrade applies (it has its own heavy plating, RELIC_ARMOR / RELIC_NUKE), it is never sold, and a dozer may raise new ones only for an army
+                        // that holds a Relic Command
 };
 
 extern const Weapon WEAPONS[];
@@ -235,9 +250,10 @@ static const float STRONGHOLD_ARMOR = 0.62f;  // fraction of conventional damage
 static const float STRONGHOLD_NUKE = 0.58f;   // hard ceiling: one warhead takes at most this share of its max health
 inline bool strongholdRole(BuildRole r) { return r == BR_STRONGHOLD; }
 inline bool wallRole(BuildRole r) { return r == BR_WALL || r == BR_FWALL; }   // 1x1 segments meant to be chained into a line (no gap rules)
-inline bool neutralRole(BuildRole r) { return r == BR_STRONGHOLD || r == BR_ISLANDNUKE; }   // placed by the map generator: never raised by a dozer, never sold
-inline bool invulnerableRole(BuildRole r) { return r == BR_ISLANDNUKE || r == BR_FWALL; }   // nothing damages them: they burn (see Entity.heat) and only a spy takes them
-inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_FWALL || r == BR_WAYMAKER; }   // no Rugged / Hyper / roof-gun upgrades
+inline bool neutralRole(BuildRole r) { return r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_BRIDGE; }   // placed by the map generator: never raised by a dozer, never sold
+inline bool invulnerableRole(BuildRole r) { return r == BR_FWALL; }   // nothing damages them: they burn (see Entity.heat) and only a spy takes them (the island launchers can be destroyed now)
+inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_FWALL || r == BR_WAYMAKER || r == BR_BRIDGE; }   // no Rugged / Hyper / roof-gun upgrades
+inline bool noArmyUpgrades(const BuildType& b) { return civilianRole(b.role) || b.relic; }   // (and the relic structures: their own plating, not the army's)
 // Waymaker: a dozer places it like a structure on trees, rocks or a ridge (never on water, a bridge, a structure or a supply pile) and it clears the
 // whole footprint into open, walkable ground by itself in WAYMAKER_TIME seconds: no dozer has to reach it, so a dozer can cut its own way into
 // rocky ground one Waymaker at a time and lay a road with a chain of them. It is gone once the ground is clear (nothing stays to defend or sell).
@@ -702,6 +718,65 @@ static const float AIR_STALL = 0.36f;
 static const float AIR_TURN_MAX = 2.0f;
 static const float AIR_LOITER_TIME = 60.0f;   // seconds an aircraft circles (or hovers over) a spot it was sent to before it flies home
 static const float AIR_PAD_REPAIR = 0.03f;    // fraction of max health an aircraft parked on its pad gets back per second
+
+// ---- Abandoned relic bases (the map's landmarks of an army long gone: overgrown, still standing). Their structures start owned by nobody and dormant;
+// infantry of any army may walk into a neutral one and claim it (it takes RELIC_CLAIM x a spy's time), spies take one an enemy holds, The Chosen takes
+// any. Each is taken on its own: an army that holds the Command does not hold the base. They are far tougher than the armies' own structures.
+inline bool relicUnit(int t) { return t >= U_R_JUGGERNAUT && t <= U_R_THUNDERHAWK; }
+inline bool relicBuild(int t) { return t >= B_R_COMMAND && t <= B_R_BUNKER; }
+inline bool subType(int t) { return t == U_C_SUB || t == U_K_SUB; }
+inline bool battleshipType(int t) { return t == U_C_BATTLESHIP || t == U_K_BATTLESHIP; }
+static const float RELIC_ARMOR = 0.45f;        // share of conventional damage a relic structure takes
+static const float RELIC_NUKE = 0.30f;         // hard ceiling: one warhead takes at most this share of its max health
+static const float RELIC_CLAIM = 1.6f;         // plain infantry claiming a neutral relic structure take this many times a spy's capture time
+static const int   RELIC_COMMAND_INCOME = 90;  // credits a held Relic Command pays every RELIC_INCOME_INTERVAL ...
+static const float RELIC_INCOME_INTERVAL = 5.0f;
+static const int   RELIC_COMMAND_MAX = 2;      // ... and how many an army may hold or raise
+static const int   RELIC_SILO_MAX = 2;         // Hydra Silos an army may raise (the ones it captured do not count)
+// The Hydra: a relic silo's missile splits over the target into RELIC_SILO_WARHEADS warheads of RELIC_SILO_SCALE each, laid in a ring RELIC_SILO_SPREAD
+// tiles round the aim point and one in the middle. Interceptors see it as one missile until it splits (one roll for the whole of it, at RELIC_SILO_RESIST)
+static const int   RELIC_SILO_WARHEADS = 5;
+static const float RELIC_SILO_SCALE = 0.42f;
+static const float RELIC_SILO_SPREAD = 9.0f;
+static const float RELIC_SILO_RESIST = 0.55f;
+static const float RELIC_SILO_COOLDOWN = 420.0f;
+static const float RELIC_SILO_ARM = 180.0f;    // seconds after a capture (or after it is raised) before it can fire
+static const Color RELIC_GLOW = rgb(120, 255, 170);   // the green-white of a Hydra warhead and its fire
+// Island Nuke Launchers can be destroyed now: very heavy plating and a per-warhead ceiling (a destroyed one is gone for good)
+static const float ISLAND_NUKE_ARMOR = 0.42f;
+static const float ISLAND_NUKE_NUKE = 0.30f;
+// ---- Bridges over the canal: nobody's, they never fall for good. Enough fire breaks the deck (the span drops into the water: whoever stands on it falls in,
+// ground units can no longer cross; ships still pass under), and any army's dozer raises it again in BUILDS[B_BRIDGE].buildTime seconds of work.
+static const int   BRIDGE_W = 3, BRIDGE_L = 12;   // a deck runs north-south: 3 tiles wide, 12 long (10 of water and a tile of each bank)
+static const float BRIDGE_HELP_RANGE = 16.0f;     // tiles: an idle dozer this close to a broken bridge goes and raises it on its own
+// ---- Nuclear submarines (U_C_SUB / U_K_SUB): no army may have more than SUB_MAX. Surfaced, a submarine is a low hull that only something close sees
+// (SUB_SPOT tiles); dived (Entity.submerged), nothing finds it at all - no ship, no aircraft, no other submarine, no scan - and nothing can hurt it, warheads
+// included. It may stay down as long as it likes. To fire its torpedoes or launch its nuclear missile it has to come up first (SUB_SURFACE_TIME), and after
+// a launch it cannot dive again for SUB_EXPOSED seconds: that is when it can be found and sunk. Diving takes SUB_DIVE_TIME (it is visible meanwhile).
+static const int   SUB_MAX = 20;
+static const float SUB_SPOT = 7.0f;            // tiles: how close an enemy unit or structure must be to see a surfaced submarine
+static const float SUB_DIVE_TIME = 2.5f, SUB_SURFACE_TIME = 3.0f;
+static const float SUB_EXPOSED = 22.0f;        // seconds after a launch before it may dive again
+static const float SUB_NUKE_SCALE = 1.0f;      // its missile: a Nuke Ramp's warhead
+static const float SUB_NUKE_COOLDOWN = 360.0f;
+static const float SUB_NUKE_ARM = 120.0f;      // seconds after it is launched from the yard before its missile is ready
+static const float SUB_ARMOR = 0.55f;          // its pressure hull: share of conventional damage it takes when surfaced
+static const float SUB_NUKE_CAP = 0.34f;       // hard ceiling: one warhead takes at most this share of its health
+static const int   W_TORPEDO_C = 68, W_TORPEDO_K = 69;   // the submarines' torpedoes (ships only)
+// ---- Battleships: three main turrets (their gun is the UnitType weapon) and cruise-missile cells (W_VLS, its own reload) for anything on the ground or the sea
+static const int   W_BATTLESHIP_C = 70, W_BATTLESHIP_K = 71, W_VLS = 72;
+static const float VLS_RANGE = 20.0f;          // tiles
+// ---- Drone swarms: every warship flies with a swarm of guard drones of its own (more with the Guard Drones upgrade). Besides shooting down rockets and
+// shells aimed at their ship, each drone stings enemy aircraft and boats that come within SWARM_REACH tiles of it (W_DRONE_ZAP)
+static const int   SWARM_MAX = 12;             // drones a single ship can fly with
+static const float SWARM_REACH = 4.5f;
+static const int   W_DRONE_ZAP = 73;
+// ---- the relic weapons (WEAPONS indices)
+static const int   W_RELIC_FLAK = 61, W_RELIC_LASER = 62, W_RELIC_CANNON = 63, W_RELIC_BUNKER = 64, W_JUGGERNAUT = 65, W_STRIDER = 66, W_THUNDERHAWK = 67;
+// ---- Surrender: a computer army that has nothing left to fight on with - no structure of any kind (relic ones included), no dozer, no submarine, no
+// tank or warship of any weight, and only a handful of light units - lays down its arms after SURRENDER_GRACE seconds of it (a human never surrenders)
+static const float SURRENDER_GRACE = 15.0f;
+static const float SURRENDER_VALUE = 4500.0f;  // what its remaining light units may be worth at most
 
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures
 int firstBuildOf(Faction f);

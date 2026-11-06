@@ -11,7 +11,7 @@ static const float EMP_DURATION = 8.0f;
 void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const int* difficulties, const int* teams, u64 seed) {
     ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fleetArrivals.clear(); fleetMarks.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); strikeWaves.clear(); nukeSeq = 0; anyBunkerLasers = false;   // (strikeWaves: an Air Strike still coming in when a match ended used to fly into the next one)
     districts.clear(); riots.clear(); riotSeq = 0; riotsOn = riotsDefault && !getenv("ONEHOUR_NORIOTS");   // (ONEHOUR_NORIOTS=1: a match without riots)
-    for (int p = 0; p < MAX_PLAYERS; p++) { unrest[p] = 0; control[p] = 1; riotsRaised[p] = 0; lossHeat[p] = 0; basePeak[p] = 0; riotNoteAt[p] = -100; }
+    for (int p = 0; p < MAX_PLAYERS; p++) { unrest[p] = 0; control[p] = 1; riotsRaised[p] = 0; lossHeat[p] = 0; basePeak[p] = 0; riotNoteAt[p] = -100; beatenSince[p] = 0; }
     gridStart.clear(); gridIdx.clear(); gridOwners.clear();
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
@@ -87,8 +87,8 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.tx = tx; e.ty = ty;
     const BuildType& b = BUILDS[type];
     e.pos = buildingCenter(type, tx, ty);
-    float hpMul = (!civilianRole(b.role) && hasUpgrade(owner, UPG_RUGGED) ? RUGGED_HP : 1.0f);
-    if (!civilianRole(b.role) && hasUpgrade(owner, UPG_HYPER)) hpMul *= HYPER_HP;
+    float hpMul = (!noArmyUpgrades(b) && hasUpgrade(owner, UPG_RUGGED) ? RUGGED_HP : 1.0f);
+    if (!noArmyUpgrades(b) && hasUpgrade(owner, UPG_HYPER)) hpMul *= HYPER_HP;
     e.maxHp = b.hp * hpMul;   // (the civilian town gets no plating)
     e.constructed = instant;
     e.progress = instant ? 1.0f : 0.0f;
@@ -100,7 +100,7 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.angle = -1.5708f;
     e.turret2 = 2.4f;   // (the roof gun idles looking out over a corner)
     if ((b.role == BR_WALL || b.role == BR_ANTINUKE) && std::find(pdList.begin(), pdList.end(), i) == pdList.end()) pdList.push_back(i);   // (a link to its neighbours counts at once, before the next grid rebuild)
-    if (b.role == BR_WAYMAKER) return refOf(i);   // a Waymaker is no obstacle: it may stand partly over a structure or water and clears only what is clearable (updateWaymaker)
+    if (b.role == BR_WAYMAKER || b.role == BR_BRIDGE) return refOf(i);   // a Waymaker is no obstacle: it may stand partly over a structure or water and clears only what is clearable (updateWaymaker); a bridge's deck is the road itself
     g_map.clearForStructure(tx, ty, b.w, b.h);   // trees, bushes and small rocks on the footprint are cleared away
     g_map.setStructure(tx, ty, b.w, b.h, true);
     // shove units off the foundation
@@ -134,6 +134,16 @@ void Sim::spawnMapLandmarks() {
         int type = TYPES[clampi(L.kind, 0, 6)];
         Ref r = placeBuilding(type, -1, L.tx, L.ty, true);
         if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; if (BUILDS[type].role == BR_ISLANDNUKE) e->siloTimer = time + ISLAND_NUKE_ARM; }
+    }
+    // the abandoned relic bases: nobody's, dormant, at full strength (a Hydra Silo needs RELIC_SILO_ARM after somebody takes it)
+    for (auto& R : g_map.relics) {
+        Ref r = placeBuilding(R.type, -1, R.tx, R.ty, true);
+        if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; e->secret = R.secret; e->siloTimer = time + RELIC_SILO_ARM; }
+    }
+    // the canal's bridges, standing
+    for (auto& B : g_map.bridgeSpots) {
+        Ref r = placeBuilding(B_BRIDGE, -1, B.tx, B.ty, true);
+        if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; e->angle = 0; }
     }
     spawnDistricts();   // and the towns and cities round the lake
 }
@@ -185,7 +195,7 @@ void Sim::destroy(Entity& e, bool violent) {
     if (violent) finishUnitExperience(e);
     if (violent) deathFx(e);
     if (e.isBuilding()) {
-        if (e.bt().role != BR_WAYMAKER) g_map.setStructure(e.tx, e.ty, e.bt().w, e.bt().h, false);   // (a Waymaker never marked it)
+        if (e.bt().role != BR_WAYMAKER && e.bt().role != BR_BRIDGE) g_map.setStructure(e.tx, e.ty, e.bt().w, e.bt().h, false);   // (a Waymaker and a bridge never marked it)
         if (!e.passengers.empty()) ejectAll(e, violent);   // a bunker that falls drops its garrison onto the ground, exposed
         // refund queued units
         if (e.owner >= 0) for (int t : e.queue) players[e.owner].money += UNITS[t].cost;
@@ -270,7 +280,9 @@ bool Sim::hasRole(int player, BuildRole role) const {
 }
 bool Sim::unitAvailable(int player, int unitType) const {
     const UnitType& t = UNITS[unitType];
+    if (t.relic) return !t.temp && prereqMet(player, t.requires_);   // a relic war machine: any army that holds the relic factory that builds it
     if (t.faction != players[player].faction) return false;
+    if (subType(unitType) && subsOf(player) >= SUB_MAX) return false;   // (no more than SUB_MAX submarines, the ones in the yards' queues included)
     if (t.program && !players[player].advTech) return false;
     if (chosenType(unitType) && time < CHOSEN_OPEN) return false;   // (no Chosen in the opening: see CHOSEN_OPEN)
     return prereqMet(player, t.requires_);
@@ -278,6 +290,7 @@ bool Sim::unitAvailable(int player, int unitType) const {
 bool Sim::buildAvailable(int player, int buildType) const {
     const BuildType& b = BUILDS[buildType];
     if (neutralRole(b.role)) return false;   // map landmarks and island launchers: never raised by a dozer or sold
+    if (b.relic) return relicBuildable(player) && !atBuildLimit(player, buildType);   // a relic structure: any army that holds a Relic Command
     if (b.faction != players[player].faction) return false;
     if (atBuildLimit(player, buildType)) return false;
     return prereqMet(player, b.requires_);
@@ -290,6 +303,8 @@ bool Sim::atBuildLimit(int player, int buildType) const {
     if (atIncomeLimit(player, buildType)) return true;
     BuildRole r = BUILDS[buildType].role;
     if (r == BR_NAVAL) return countRole(player, BR_NAVAL, false) >= 3;
+    if (buildType == B_R_COMMAND) return countBuildings(player, B_R_COMMAND) >= RELIC_COMMAND_MAX;
+    if (buildType == B_R_SILO) return countBuildings(player, B_R_SILO) >= RELIC_SILO_MAX;
     if (r == BR_ANTINUKE) return countRole(player, BR_ANTINUKE, false) >= ANTINUKE_MAX;
     if (r == BR_CIVIC) return countRole(player, BR_CIVIC, false) >= CIVIC_MAX || (civicKind(buildType) == CV_TOWNHALL && countBuildings(player, buildType) >= 1);   // (one Town Hall)
     return r == BR_HQ && countRole(player, BR_HQ, false) >= HQ_MAX;
@@ -518,6 +533,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
     for (auto r : sel) {
         Entity* e = get(r);
         if (!e || e == t || e->carrier.valid() || (e->isUnit() && e->ut().temp)) continue;
+        if (!force && relicClaimable(*e, *t)) { cmdCapture({r}, target); continue; }   // infantry sent at a relic structure nobody holds walk in and claim it
         if (e->isUnit() && e->ut().role == UR_SPY) {   // a spy takes an enemy structure; against anything else it just walks over
             if (t->isBuilding() && (t->constructed || t->district >= 0) && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
@@ -530,6 +546,8 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         // a player may pour fire on an indestructible structure (an enemy Bastion Wall, an island launcher): it only burns, it never breaks. Nothing
         // ever does that on its own initiative, and the computer armies never order it (see canTarget)
         if (invulnerable(*t) && t->constructed && !players[e->owner].isAI && (force || enemies(e->owner, t->owner))) ff = true;
+        // a bridge, an island launcher or a relic structure nobody holds: never anybody's target on its own initiative, but any army may be ordered at it
+        if (t->isBuilding() && t->owner < 0 && t->constructed && (bridgeEnt(*t) || relicEnt(*t) || t->bt().role == BR_ISLANDNUKE)) ff = true;
         if (e->isBuilding()) {   // a turret or battery takes the target the player points at (a friendly one too, with force fire)
             if (!e->constructed || e->bt().weapon < 0) continue;
             e->forceTarget = ff ? target : NOREF;
@@ -728,6 +746,7 @@ bool Sim::cmdTrain(Ref building, int unitType) {
     Entity* b = get(building);
     if (!b || !b->isBuilding() || !b->constructed || b->owner < 0) return false;
     const UnitType& t = UNITS[unitType];
+    if (subType(unitType) && subsOf(b->owner) >= SUB_MAX) { emit(EV_MSG, b->owner, SND_CANT, b->pos, "No more than 20 submarines"); return false; }
     if (t.builtBy != b->bt().role || !unitAvailable(b->owner, unitType)) return false;
     if (b->queue.size() >= 9) return false;
     if (chosenType(unitType) && chosenInProduction(b->owner)) { emit(EV_MSG, b->owner, SND_CANT, b->pos, "There is only ever one Chosen"); return false; }
@@ -754,7 +773,7 @@ void Sim::cmdSetRally(Ref building, Vec2 p) {
 
 void Sim::cmdSell(Ref building) {
     Entity* b = get(building);
-    if (!b || !b->isBuilding() || b->owner < 0 || neutralRole(b->bt().role) || b->district >= 0) return;   // (a captured island launcher, a claimed stronghold or a town is held, not sold)
+    if (!b || !b->isBuilding() || b->owner < 0 || neutralRole(b->bt().role) || b->district >= 0 || b->bt().relic) return;   // (a captured island launcher, a claimed stronghold, a relic structure or a town is held, not sold)
     if (b->bt().role == BR_HQ && countBuildings(b->owner, -1, false) == 1 && countUnits(b->owner) == 0) return;
     float frac = b->constructed ? 0.5f : 0.5f * (0.3f + 0.7f * (1 - b->progress));
     players[b->owner].money += (int)(b->bt().cost * frac);
@@ -1422,7 +1441,13 @@ void Sim::nukeBlast(const Nuke& n) {
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
         Entity* e = get(r); if (!e) continue;
+        if (submerged(*e)) continue;   // (a dived submarine rides it out deep under the surface)
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
+        if (bridgeEnt(*e)) {   // a bridge anywhere in the blast: the span is thrown down
+            float bd = std::max(0.0f, distToEntity(n.pos, *e));
+            if (e->constructed && bd <= R) applyDamage(*e, e->maxHp * 2.5f * (bd < R * 0.6f ? 1.0f : 0.5f), n.owner, NOREF, nullptr, -1.0f, true);
+            continue;
+        }
         if (d > R) continue;
         float f = d < R * 0.35f ? 1.0f : 1.0f - 0.75f * ((d - R * 0.35f) / (R * 0.65f));   // flat lethal core, then a falloff to a quarter at the rim
         // the pieces of a warhead that was shot down do P of what it would have done to the target, and never more than the target had left to lose
@@ -1452,10 +1477,10 @@ void Sim::nukeBlast(const Nuke& n) {
             if (e->isBuilding()) {
                 bool bunkerB = hardened(*e);
                 bool hqB = e->bt().role == BR_HQ;
-                bool hyperB = hasUpgrade(e->owner, UPG_HYPER) && !civilianRole(e->bt().role);
+                bool hyperB = hasUpgrade(e->owner, UPG_HYPER) && !noArmyUpgrades(e->bt());
                 bool protectedB = hqB || hyperB;      // walls are ordinary small structures now: a warhead flattens them like anything else small
                 bool small = e->bt().w * e->bt().h <= NUKE_SMALL_AREA && !bunkerB && !protectedB;
-                bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && !civilianRole(e->bt().role);
+                bool rugged = hasUpgrade(e->owner, UPG_RUGGED) && !noArmyUpgrades(e->bt());
                 bool fortB = e->bt().role == BR_STRONGHOLD;
                 float dmg, cap = -1.0f;
                 // Hyper Protection and the Command keystone put a hard ceiling on one warhead (so neither is erased in a single hit, even by
@@ -1463,6 +1488,8 @@ void Sim::nukeBlast(const Nuke& n) {
                 if (hyperB) cap = e->maxHp * HYPER_NUKE;
                 if (hqB) cap = cap < 0 ? e->maxHp * HQ_NUKE : std::min(cap, e->maxHp * HQ_NUKE);
                 if (fortB) { float fc = e->maxHp * (e->type == B_C_FORTRESS ? FORTRESS_NUKE : STRONGHOLD_NUKE); cap = cap < 0 ? fc : std::min(cap, fc); }
+                if (e->bt().relic) { float rc = e->maxHp * RELIC_NUKE; cap = cap < 0 ? rc : std::min(cap, rc); }              // (the relic bases' old concrete)
+                if (e->bt().role == BR_ISLANDNUKE) { float lc = e->maxHp * ISLAND_NUKE_NUKE; cap = cap < 0 ? lc : std::min(cap, lc); }   // (an island launcher's chamber)
                 if (bunkerB) dmg = e->maxHp * 1.2f * f * D;                                       // wrecks the hatch and hurts the buried body; warheads ignore the floor, so repeated direct hits destroy it
                 else if (protectedB) dmg = e->maxHp * 1.6f * f * D;                              // (capped below; the ceiling is what stops a one-shot erase)
                 else if (rugged) dmg = e->maxHp * RUGGED_NUKE * f * D / RUGGED_ARMOR;               // (after the armour) a bit over half at ground zero: it takes two warheads (one silver one)
@@ -1484,6 +1511,8 @@ void Sim::nukeBlast(const Nuke& n) {
             } else {
                 float dmg = 6000.0f * f * D;
                 if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f);   // a warship is no match for a warhead anywhere in the blast: it goes down
+                if (subType(e->type)) dmg = std::min(dmg, e->maxHp * SUB_NUKE_CAP);   // ... but a submarine's pressure hull takes a third at most (it is very hard to sink)
+                else if (battleshipType(e->type)) dmg = std::min(dmg, e->maxHp * 0.55f);   // ... and a battleship's armoured citadel a little over half
                 if (!e->passengers.empty() && lessen(dmg, *e) >= e->hp) {   // a vehicle the blast destroys takes its crew with it (nobody climbs out of this one)
                     std::vector<Ref> crew = e->passengers;
                     for (Ref pr : crew) if (Entity* pu = get(pr)) { pu->carrier = NOREF; pu->pos = e->pos; destroy(*pu, true); }
@@ -1843,6 +1872,12 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     const bool burnOrder = invulnerable(t) && t.constructed && e.forceTarget.valid() && !players[e.owner].isAI && get(e.forceTarget) == &t;
     if (invulnerable(t) && t.constructed && !burnOrder) return false;
     if (districtRuin(t) && t.progress < DISTRICT_RUIN_SAFE) return false;   // a razed town block is rubble until its people have raised it again a way
+    if (e.isUnit() && subType(e.type) && e.subState != 0) return false;   // a submarine fires only when it is up
+    if (t.isUnit() && submerged(t)) return false;   // (nothing reaches a dived submarine)
+    if (t.isBuilding() && t.owner < 0 && (bridgeEnt(t) || relicEnt(t) || t.bt().role == BR_ISLANDNUKE)) {   // nobody's bridge, launcher or relic structure: only by order
+        int wq = wpn >= 0 ? wpn : e.weapon();
+        return t.constructed && wq >= 0 && WEAPONS[wq].ground && e.forceTarget.valid() && get(e.forceTarget) == &t && visibleTo(t, e.owner);
+    }
     if (t.carrier.valid() || !visibleTo(t, e.owner)) return false;   // aboard a carrier, or stealthy and not found by any detector (snipers, spy drones)
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
@@ -1855,6 +1890,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     int w = wpn >= 0 ? wpn : e.weapon();
     if (w < 0) return false;
     if (w == W_CONVERT) return t.isBuilding() ? (t.constructed && spyMayTake(e.owner, t)) : mayConvert(e, t);   // The Chosen: what it can take or turn
+    if (w == W_TORPEDO_C || w == W_TORPEDO_K) return t.isUnit() && t.ut().naval;   // torpedoes hit ships, nothing else
     const Weapon& wp = WEAPONS[w];
     if (t.isAir()) return wp.air;
     return wp.ground;
@@ -2051,7 +2087,8 @@ bool Sim::tryFire(Entity& e, Entity& tgt) {
 
 void Sim::fireWeapon(Entity& e, Entity& tgt, const Weapon& w, const Vec2* muzzle) {
     Vec2 from = muzzle ? *muzzle : e.pos;
-    if (e.isUnit() && e.ut().kind == UK_VEH) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * (e.radius() * 0.9f);
+    if (muzzle) {}   // (a given muzzle wins: a structure's mount, a battleship's missile cell)
+    else if (e.isUnit() && e.ut().kind == UK_VEH) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * (e.radius() * 0.9f);
     else if (e.isUnit() && e.ut().kind == UK_INF) from = e.pos + Vec2(std::cos(e.turret), std::sin(e.turret)) * 12.0f;   // muzzle of the rifle, not the soldier's chest
     else if (e.isUnit() && e.ut().kind == UK_AIR) from = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 9.0f;
     Ref tref = refOf(tgt);
@@ -2137,6 +2174,8 @@ void Sim::finishUnitExperience(Entity& e) {
 
 void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap, bool nuke) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
+    if (submerged(tgt)) return;   // a dived submarine: nothing reaches it
+    if (bridgeEnt(tgt) && !tgt.constructed) return;   // (a broken bridge is a wreck in the water until a dozer raises it)
     if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
         if (tick % 3 == 0) { fx.push_back({FX_SPARK, tgt.pos, tgt.pos, 0, 0.3f, rgb(255, 236, 190), 5}); fx.push_back({FX_RING, tgt.pos, tgt.pos, 0, 0.25f, rgb(255, 255, 255), 16.0f}); }
         return;
@@ -2151,12 +2190,14 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     }
     if (tgt.isBuilding() && !tgt.constructed) real *= 1.5f;
     const bool hardNuke = nuke && tgt.isBuilding() && tgt.constructed && tgt.bt().role == BR_BUNKER;   // a warhead on a nuclear-hardened bunker: bunkerNuked already worked out what it takes
-    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED) && !civilianRole(tgt.bt().role) && !hardNuke) {   // Rugged: half damage, until so much lands at once that the plating is swamped (the town has none)
+    if (tgt.isBuilding() && hasUpgrade(tgt.owner, UPG_RUGGED) && !noArmyUpgrades(tgt.bt()) && !hardNuke) {   // Rugged: half damage, until so much lands at once that the plating is swamped (the town has none)
         float load = tgt.dmgLoad / tgt.maxHp;
         real *= RUGGED_ARMOR + (1.0f - RUGGED_ARMOR) * clampf((load - RUGGED_SWAMP_LO) / (RUGGED_SWAMP_HI - RUGGED_SWAMP_LO), 0, 1);
     }
     if (tgt.isBuilding()) {   // Hyper Protection / the Command keystone / thick walls shrug off conventional fire (a warhead's blast overwhelms a wall's plating)
-        if (hasUpgrade(tgt.owner, UPG_HYPER) && !civilianRole(tgt.bt().role) && !hardNuke) real *= HYPER_ARMOR;
+        if (hasUpgrade(tgt.owner, UPG_HYPER) && !noArmyUpgrades(tgt.bt()) && !hardNuke) real *= HYPER_ARMOR;
+        if (tgt.bt().relic) real *= RELIC_ARMOR;                     // the relic bases' massive old concrete
+        if (tgt.bt().role == BR_ISLANDNUKE) real *= ISLAND_NUKE_ARMOR;   // an island launcher's armoured chamber
         if (tgt.bt().role == BR_BUNKER && bunkerHas(tgt, BU_SHELL) && !nuke) real *= BUNKER_SHELL_ARMOR;   // its own super-thick shell
         if (tgt.bt().role == BR_HQ) real *= HQ_ARMOR;
         if (tgt.bt().role == BR_WALL && !nuke) real *= WALL_ARMOR;
@@ -2164,6 +2205,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         tgt.dmgLoad += real;
         if (cap > 0) real = std::min(real, cap);   // a warhead's hard ceiling (absolute HP), applied after every multiplier
     }
+    if (tgt.isUnit() && subType(tgt.type) && !nuke) real *= SUB_ARMOR;   // a submarine's pressure hull
     if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner) && !hardNuke) real *= players[attackerOwner].damageMul();
     const Entity* attU = get(attacker);
     if (attU && attU->isUnit() && attU->rank > 0) real *= 1.0f + 0.2f * attU->rank;   // veterans and elites hit harder
@@ -2220,6 +2262,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         }
     }
     if (tgt.district >= 0) districts[tgt.district].lastHit = time;
+    if (tgt.hp <= 0 && bridgeEnt(tgt)) { breakBridge(tgt, attackerOwner); return; }   // a bridge never falls for good: it waits in the water for a dozer
     if (tgt.hp <= 0 && districtBlock(tgt)) {   // a town block is never wiped out: it falls into a ruin its people raise again (a ruin hit again starts over)
         if (tgt.constructed) collapseBlock(tgt, attackerOwner);
         else { tgt.progress = 0; tgt.hp = tgt.maxHp * 0.1f; }
@@ -2240,7 +2283,8 @@ void Sim::splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref att
     float r = std::max(radiusTiles, 0.05f) * TILE;
     std::vector<Entity*> hits;
     forEachNear(at, r, [&](Entity& t) {
-        if (t.kind == EK_RESOURCE || !(enemies(owner, t.owner) || (forced && t.owner >= 0)) || &t == get(attacker)) return;   // (a force-fired blast never hits the gun that fired it)
+        if (t.kind == EK_RESOURCE || &t == get(attacker) || submerged(t)) return;   // (a force-fired blast never hits the gun that fired it)
+        if (!(enemies(owner, t.owner) || (forced && t.owner >= 0) || (bridgeEnt(t) && t.constructed))) return;   // (a bridge is in any blast's way)
         if (t.isAir() && !w.air) return;
         if (!t.isAir() && !w.ground) return;
         if (t.carrier.valid()) return;
@@ -3001,7 +3045,9 @@ void Sim::updateUnit(Entity& e) {
     }
     if (e.cooldown > 0) e.cooldown -= SIM_DT;
     if (ut.temp && e.lifeUntil >= 0 && time >= e.lifeUntil) { destroy(e, false); return; }   // a loan whose time is up is withdrawn wherever it is
+    if (subType(e.type)) updateSub(e);   // (dives and surfacings go on even while the pulse of a nuke has it stunned)
     if (e.disabledUntil > time) return;
+    if (ut.naval && !subType(e.type)) updateWarship(e);   // the battleships' cruise-missile cells, every warship's drone swarm
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
     if (ut.cargoCap > 0 && ut.kind == UK_VEH) updateJeep(e);   // the crew of a jeep mends, climbs out and fires from the seats
 
@@ -3091,7 +3137,7 @@ int Sim::repairCrewCap(const Entity& b) {
 int Sim::repairCrew(const Entity& b, const Entity* except) const {
     int n = 0; Ref br = refOf(b);
     for (auto& u : ents)
-        if (u.alive && &u != except && u.isUnit() && (u.owner == b.owner || b.district >= 0) && u.order == O_BUILD && u.targetEnt == br && u.ut().role == UR_DOZER) n++;   // (any army's dozers may help a town)
+        if (u.alive && &u != except && u.isUnit() && (u.owner == b.owner || b.district >= 0 || bridgeEnt(b)) && u.order == O_BUILD && u.targetEnt == br && u.ut().role == UR_DOZER) n++;   // (any army's dozers may help a town or a bridge)
     return n;
 }
 
@@ -3103,7 +3149,7 @@ Entity* Sim::repairJob(Entity& dz, float maxDist) {
     for (auto& b : ents) {
         if (!b.alive || !b.isBuilding() || !b.constructed || !dozerMayWork(dz, b) || (b.hp >= b.maxHp * 0.995f && b.hatch >= b.hatchMax) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
-        if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE)) continue;   // (a town's blocks only by a dozer that is close by)
+        if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE) || (bridgeEnt(b) && d > BRIDGE_HELP_RANGE * TILE)) continue;   // (a town's blocks and a bridge only by a dozer that is close by)
         float hurt = 1.0f - b.hp / b.maxHp;
         int crew = repairCrew(b, &dz), cap = repairCrewCap(b);
         if (hurt < 0.5f) cap = std::min(cap, 1 + (hurt > 0.25f ? 1 : 0));   // a scratch needs one dozer
@@ -3124,7 +3170,7 @@ Entity* Sim::siteJob(Entity& dz, float maxDist) {
     for (auto& b : ents) {
         if (!b.alive || !b.isBuilding() || b.constructed || !dozerMayWork(dz, b) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
-        if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE)) continue;   // (a town's ruins only by a dozer that is close by)
+        if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE) || (bridgeEnt(b) && d > BRIDGE_HELP_RANGE * TILE)) continue;   // (a town's ruins and a broken bridge only by a dozer that is close by)
         int crew = repairCrew(b, &dz);
         if (crew >= DOZER_SITE_CREW) continue;
         float score = d / TILE + crew * 12.0f - b.progress * 6.0f;   // (a nearly finished one is worth a short detour)
@@ -3595,7 +3641,8 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_CAPTURE: {   // spy: walk up to an enemy structure and take it
         Entity* b = get(e.targetEnt);
-        if (!b || !b->isBuilding() || (!b->constructed && b->district < 0) || !spyMayTake(e.owner, *b) || !visibleTo(*b, e.owner)) {
+        if (!b || !b->isBuilding() || (!b->constructed && b->district < 0) || !spyMayTake(e.owner, *b) || !visibleTo(*b, e.owner)
+            || (ut.role != UR_SPY && !chosenType(e.type) && !relicClaimable(e, *b))) {   // (a soldier claims only a relic structure nobody holds)
             e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; break;
         }
         float d = distToEntity(e.pos, *b);
@@ -3606,7 +3653,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.actionTimer += SIM_DT;
             if (tick % 5 == 0) fx.push_back({FX_SPARK, b->pos + Vec2(rng.f(-b->bt().w * 14.0f, b->bt().w * 14.0f), rng.f(-b->bt().h * 14.0f, b->bt().h * 14.0f)), Vec2(), 0, 0.25f, players[e.owner].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
             if (chosenType(e.type)) { e.cooldown = 0; chosenAct(e, *b); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; break; }   // The Chosen: at once
-            if (e.actionTimer >= captureTime(*b)) { Ref bref = refOf(*b); captureBuilding(*b, e); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; (void)bref; }
+            if (e.actionTimer >= captureTime(*b, e)) { Ref bref = refOf(*b); captureBuilding(*b, e); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; (void)bref; }
         } else {
             e.actionTimer = 0;
             if (e.pathIdx >= e.path.size() || (e.repathTimer <= 0 && dist(e.path.back(), b->pos) > b->radius() + 60)) requestSidePath(e, *b);
@@ -3665,8 +3712,10 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
 
 // ------------------------------------------------------------ buildings
 void Sim::finishBuilding(Entity& b) {
+    if (b.bt().role == BR_BRIDGE) { raiseBridge(b); return; }   // a bridge raised again from the water by a dozer
     b.constructed = true; b.progress = 1; b.hp = std::max(b.hp, b.maxHp);
     if (b.district >= 0) return;   // a town block raised again from its ruins: no fanfare (see updateDistrictBlock)
+    if (b.bt().role == BR_RELICSILO) b.siloTimer = time + RELIC_SILO_ARM;
     if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; b.siloTimer = time + MINI_NUKE_ARM; }
     if (b.bt().role == BR_UNUKE) b.hatchMax = b.hatch = UNUKE_DOOR_HP;
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
@@ -3718,16 +3767,19 @@ void Sim::updateBuilding(Entity& b) {
     if (b.dmgLoad > 0) b.dmgLoad *= 0.975f;   // (a time constant of two seconds)
     if (b.heat > 0) b.heat = std::max(0.0f, b.heat - HEAT_COOL * SIM_DT);   // an indestructible structure's fire dies down
     if (b.bt().role == BR_WAYMAKER) { updateWaymaker(b); return; }
+    if (b.bt().role == BR_BRIDGE) return;   // (a bridge just stands, or lies in the water waiting for a dozer)
     if (b.district >= 0) { updateDistrictBlock(b); return; }   // a block of a town round the lake: it mends and rebuilds itself, the town pays (see updateDistricts)
     if (!b.constructed) return;
-    if (invulnerable(b)) { b.disabledUntil = -1; if (b.bt().role == BR_ISLANDNUKE) updateIslandNuke(b); return; }   // (burning or not, nothing switches it off; no upgrades, no guns)
+    if (b.bt().role == BR_ISLANDNUKE) { updateIslandNuke(b); return; }   // (an island launcher keeps its clock; no upgrades, no guns)
+    if (invulnerable(b)) { b.disabledUntil = -1; return; }   // (a Bastion Wall: burning or not, nothing switches it off; no upgrades, no guns)
     if (b.disabledUntil > time) { if (b.bt().role == BR_BUNKER && b.owner >= 0) bunkerMend(b); return; }   // (knocked offline, a bunker still mends itself)
     if (b.owner < 0) return;   // a neutral map landmark has nobody to pay, repair or command it until it is garrisoned
     const BuildType& bt = b.bt();
-    if (bt.role == BR_STRONGHOLD) { updateStronghold(b); return; }
+    if (bt.role == BR_STRONGHOLD) { updateStronghold(b); if (!bt.relic) return; }   // (a Sentinel Bunker also fires its own guns, below)
     Player& pl = players[b.owner];
+    if (bt.relic) updateRelic(b);
     bool powered = !(pl.lowPower() && bt.power < 0);
-    if (pl.upg[UPG_REPAIR] && b.hp < b.maxHp && !inFallout(b.pos) && bt.role != BR_BUNKER) {   // Self-Repair: full rate once out of combat, a trickle under fire (a bunker mends itself anyway: Repair Crews only speed that up, see bunkerMend)
+    if (pl.upg[UPG_REPAIR] && b.hp < b.maxHp && !inFallout(b.pos) && bt.role != BR_BUNKER && !bt.relic) {   // Self-Repair: full rate once out of combat, a trickle under fire (a bunker mends itself anyway: Repair Crews only speed that up, see bunkerMend)
         float rate = SELF_REPAIR_RATE * (time - b.lastDamaged >= SELF_REPAIR_DELAY ? 1.0f : SELF_REPAIR_HOT);
         b.hp = std::min(b.maxHp, b.hp + b.maxHp * rate * SIM_DT);
         if ((tick + b.gen) % 40 == 0) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-bt.w * 12.0f, bt.w * 12.0f), rng.f(-bt.h * 12.0f, bt.h * 12.0f)), Vec2(), 0, 0.3f, pl.faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
@@ -3789,6 +3841,12 @@ int Sim::stealthOf(const Entity& e) {
 // seen, selected, targeted or shot, and the computer commanders do not know they are there. The owner's team always sees them.
 bool Sim::visibleTo(const Entity& e, int player) const {
     if (player < 0 || player >= numPlayers) return true;
+    if (e.secret && !(e.discovered >> player & 1) && (e.owner < 0 || players[e.owner].team != players[player].team)) return false;   // a secret island's structure nobody of theirs has found
+    if (e.isUnit() && subType(e.type)) {   // a submarine: dived, nothing finds it; up, only something close sees the low hull (or everyone, just after a launch)
+        if (e.owner < 0 || e.owner == player || players[e.owner].team == players[player].team) return true;
+        if (e.subState == 2) return false;
+        return e.detUntil[player] > time;
+    }
     if (!stealthOf(e)) return true;
     if (e.owner < 0 || e.owner == player || players[e.owner].team == players[player].team) return true;
     return e.detUntil[player] > time;
@@ -3807,6 +3865,15 @@ void Sim::updateDetection() {
                 if (q == d.owner || players[q].team == players[d.owner].team) t.detUntil[q] = std::max(t.detUntil[q], time + linger);
         });
     };
+    for (size_t i = 0; i < ents.size(); i++) {   // surfaced submarines: whatever of an enemy's is within SUB_SPOT sees the low hull
+        Entity& sb = ents[i];
+        if (!sb.alive || !sb.isUnit() || !subType(sb.type) || sb.subState == 2 || sb.owner < 0) continue;
+        forEachNearMask(sb.pos, SUB_SPOT * TILE, enemyMask(sb.owner), [&](Entity& w) {
+            if (w.owner < 0 || w.owner >= numPlayers || !enemies(sb.owner, w.owner) || w.carrier.valid() || w.kind == EK_RESOURCE) return;
+            if (w.isUnit() && submerged(w)) return;   // (a dived submarine sees nothing either)
+            for (int q = 0; q < numPlayers; q++) if (players[q].team == players[w.owner].team) sb.detUntil[q] = std::max(sb.detUntil[q], time + 1.5f);
+        });
+    }
     for (size_t i = 0; i < ents.size(); i++) {
         Entity& d = ents[i];
         if (!d.alive || d.owner < 0 || d.disabledUntil > time) continue;
@@ -4459,7 +4526,8 @@ void Sim::cmdCapture(const std::vector<Ref>& sel, Ref building) {
     if (!b || !b->isBuilding() || (!b->constructed && b->district < 0)) return;   // (a town is taken through any block, a ruin too)
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || !e->isUnit() || (e->ut().role != UR_SPY && !chosenType(e->type)) || e->carrier.valid() || !spyMayTake(e->owner, *b) || !visibleTo(*b, e->owner)) continue;
+        bool claim = e && relicClaimable(*e, *b);   // (plain infantry walk into a relic structure nobody holds)
+        if (!e || !e->isUnit() || (e->ut().role != UR_SPY && !chosenType(e->type) && !claim) || e->carrier.valid() || !spyMayTake(e->owner, *b) || !visibleTo(*b, e->owner)) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF;
         e->order = O_CAPTURE; e->postOrder = O_IDLE; e->targetEnt = building; e->engaged = NOREF; e->path.clear(); e->pathIdx = 0; e->repathTimer = 0; e->actionTimer = 0; e->stuckTimer = 0;
     }
@@ -4479,7 +4547,10 @@ void Sim::captureBuilding(Entity& b, Entity& spy) {
     b.takenFrom = from; b.takenByChosen = spy.isUnit() && chosenType(spy.type);
     b.owner = to;
     if (b.bt().role == BR_ISLANDNUKE) { b.siloTimer = std::max(b.siloTimer, time + ISLAND_NUKE_ARM); players[to].launchersTaken++; }   // the new crew needs a while to take over the launch codes
-    b.maxHp = b.bt().hp * (!civilianRole(b.bt().role) && hasUpgrade(to, UPG_RUGGED) ? RUGGED_HP : 1.0f) * (bunkerHas(b, BU_SHELL) ? BUNKER_SHELL_HP : 1.0f);   // (a bunker's own upgrades stay with it)
+    if (b.bt().role == BR_RELICSILO) b.siloTimer = std::max(b.siloTimer, time + RELIC_SILO_ARM);   // (and the Hydra's old launch codes take a while to crack)
+    if (b.secret) for (int q = 0; q < numPlayers; q++) if (players[q].team == players[to].team) b.discovered |= (u8)(1u << q);
+    b.relicPay = time + RELIC_INCOME_INTERVAL;
+    b.maxHp = b.bt().hp * (!noArmyUpgrades(b.bt()) && hasUpgrade(to, UPG_RUGGED) ? RUGGED_HP : 1.0f) * (bunkerHas(b, BU_SHELL) ? BUNKER_SHELL_HP : 1.0f);   // (a bunker's own upgrades stay with it)
     b.hp = std::max(1.0f, b.hp * (b.maxHp / std::max(1.0f, oldMax)));
     b.disabledUntil = std::max(b.disabledUntil, time + 3.0f);
     b.attacker = NOREF; b.lastDamaged = -100;
@@ -4522,7 +4593,7 @@ void Sim::awardKill(Ref killer, const Entity& victim) {
 
 // ------------------------------------------------------------ Defense Guns: every structure's roof laser / machine gun
 int Sim::roofGun(const Entity& b) const {
-    if (!b.isBuilding() || !b.constructed || !hasUpgrade(b.owner, UPG_GUNS) || civilianRole(b.bt().role)) return -1;   // (no roof gun on the town, the map's neutral structures or a Bastion Wall)
+    if (!b.isBuilding() || !b.constructed || !hasUpgrade(b.owner, UPG_GUNS) || noArmyUpgrades(b.bt())) return -1;   // (no roof gun on the town, the map's neutral structures, a relic structure or a Bastion Wall)
     return BUILDS[b.type].faction == F_CYBER ? W_DEFENSE_LASER : W_DEFENSE_MG;
 }
 
@@ -4631,14 +4702,14 @@ void Sim::separateUnits() {
     for (size_t i = 0; i < ents.size(); i++) {
         const Entity& e = ents[i];
         Sep& q = sp[i]; q.f = 0;
-        if (!e.alive || !e.isUnit() || e.fall > 0) continue;
+        if (!e.alive || !e.isUnit() || e.fall > 0 || submerged(e)) continue;   // (a dived submarine passes under every hull)
         const UnitType& ut = e.ut();
         q.x = e.pos.x; q.y = e.pos.y; q.r = ut.radius;
         q.f = (u8)(1 | (ut.kind == UK_AIR ? 2 : 0) | (ut.naval ? 4 : 0) | (ut.heli ? 8 : 0) | (e.squeezeUntil > time ? 16 : 0) | ((e.order == O_IDLE || e.order == O_GUARDAREA) ? 32 : 0));
     }
     for (int i = 0; i < (int)ents.size(); i++) {
         Entity& a = ents[i];
-        if (!a.alive || !a.isUnit() || a.fall > 0 || a.carrier.valid()) continue;
+        if (!a.alive || !a.isUnit() || a.fall > 0 || a.carrier.valid() || !(sp[i].f & 1)) continue;
         const u8 fa = sp[i].f;
         bool air = (fa & 2) != 0;
         float ra = sp[i].r;
@@ -4692,6 +4763,11 @@ void Sim::checkVictory() {
         // an army is out only when nothing of its own still stands: a hidden sniper, spy drone or bunker counts (the enemy has to find it),
         // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too.
         // Civilian dozers do not: they are civilians, they cannot raise a base, and nobody hunts them (the town's structures do count)
+        // a computer army with nothing left that matters lays down its arms (SURRENDER_*): it has to have been so for SURRENDER_GRACE seconds
+        if (pl.isAI && armyBeaten(p)) {
+            if (beatenSince[p] <= 0) beatenSince[p] = time;
+            else if (time - beatenSince[p] >= SURRENDER_GRACE) surrender(p);
+        } else beatenSince[p] = 0;
         bool any = false;
         for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type))) && !invulnerable(e) && e.district < 0) { any = true; break; }   // (a town it holds is not its army either)   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
         if (!any) {
@@ -4754,6 +4830,7 @@ void Sim::step() {
     if (tick % 10 == 0) updatePower();
     if (tick % 5 == 0) updateResearch();
     if (tick % 20 == 0) checkVictory();
+    if (tick % 10 == 5) updateDiscovery();
     if (tick % 10 == 3) updateDistricts();
     if (tick % 20 == 7) updateRiots();
     // low-power notices

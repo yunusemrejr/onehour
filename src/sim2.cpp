@@ -82,18 +82,36 @@ void Sim::updateJeep(Entity& j) {
 }
 
 // ------------------------------------------------------------ protector drones
+// Every warship flies with its own swarm of guard drones, the bigger the hull the more (a submarine has none: it hides instead); the Guard Drones
+// upgrade adds half again (at least one) to every ship's swarm and gives a jeep a second drone
+static int shipSwarm(int type) {
+    if (subType(type)) return 0;
+    if (battleshipType(type)) return 8;
+    if (type == U_C_CARRIER || type == U_K_CARRIER) return 6;
+    if (type == U_C_CRUISER || type == U_K_CRUISER) return 4;
+    if (type == U_C_DESTROYER || type == U_K_DESTROYER) return 3;
+    if (type == U_C_CARGOSHIP || type == U_K_CARGOSHIP) return 2;
+    return 1;   // patrol boats
+}
 int Sim::droneCount(const Entity& e) const {
-    if (!e.alive || !e.isUnit() || e.fall > 0 || e.carrier.valid() || e.disabledUntil > time) return 0;
+    if (!e.alive || !e.isUnit() || e.fall > 0 || e.carrier.valid() || e.disabledUntil > time || submerged(e)) return 0;
     const UnitType& ut = e.ut();
+    if (ut.naval) {
+        int n = shipSwarm(e.type);
+        if (n > 0 && hasUpgrade(e.owner, UPG_DRONES)) n += std::max(1, n / 2);
+        return std::min(n, SWARM_MAX);
+    }
     int n = ut.drones;
-    if (hasUpgrade(e.owner, UPG_DRONES)) n += ut.naval ? SHIP_DRONES : (ut.cargoCap > 0 ? 1 : 0);
+    if (hasUpgrade(e.owner, UPG_DRONES)) n += ut.cargoCap > 0 ? 1 : 0;
     return std::min(n, 3);
 }
 
 Vec2 Sim::dronePosAt(const Entity& e, int i, float t) const {
     int n = std::max(1, droneCount(e));
-    float R = e.radius() + 15.0f;
-    float a = t * 1.7f + 6.2831853f * (float)i / (float)n + (float)(e.gen % 7) * 0.9f;
+    // a big swarm flies in two rings (the outer one the other way round), so the drones of a battleship do not sit on top of each other
+    bool outer = n > 6 && (i & 1);
+    float R = e.radius() + (outer ? 27.0f : 15.0f);
+    float a = (outer ? -t * 1.2f : t * 1.7f) + 6.2831853f * (float)i / (float)n + (float)(e.gen % 7) * 0.9f;
     return e.pos + Vec2(std::cos(a), std::sin(a)) * R;
 }
 

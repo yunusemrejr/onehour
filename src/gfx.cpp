@@ -971,6 +971,12 @@ void Gfx::buildUnits() {
                 if (f == 0) unitBody[t][p] = s; else unitAnim[t][p][f - 1] = s;
             }
             if (u.kind == UK_AIR) { unitAnim[t][p][0] = unitBody[t][p]; unitAnim[t][p][1] = unitBody[t][p]; }
+            if (subType(t)) for (int st = 1; st <= 2; st++) {   // the dived shadow and the open missile hatch
+                Canvas c(ART_BIG, ART_BIG);
+                artSubBody(c, team, u.faction == F_CYBER, st);
+                if (st == 2) gradeArt(c, 977u + (u32)t, 0.10f, 0.07f);
+                subArt[u.faction == F_CYBER ? 0 : 1][p][st - 1] = cropToSprite(*this, c, ART_BIG / 2, ART_BIG / 2, UNIT_SCALE * artScale(t) * ART_SIZE / (float)ART_BIG);
+            }
             Canvas tc(ART_SIZE, ART_SIZE);
             if (artUnitTurret(tc, t, team)) { gradeArt(tc, 1913u + (u32)t, 0.10f, 0.07f); unitTurret[t][p] = cropToSprite(*this, tc, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t)); }
         }
@@ -1020,6 +1026,7 @@ void Gfx::buildBuildings() {
         artSite(s, t);
         site[t] = cropToSprite(*this, s, sz.cx, sz.cy, 1.0f / BART_K);
         if (BUILDS[t].role == BR_NUKE || BUILDS[t].role == BR_UNUKE) { Canvas a(sz.w, sz.h); artArmed(a, t); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
+        if (BUILDS[t].role == BR_RELICSILO) { Canvas a(sz.w, sz.h); artRelicSiloArmed(a, BUILDS[t].w, BUILDS[t].h); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
         if (BUILDS[t].role == BR_BUNKER) for (int u = 0; u < BU_COUNT; u++) {
             Canvas a(sz.w, sz.h);
             artBunkerUpgrade(a, t, u);
@@ -1039,6 +1046,9 @@ void Gfx::buildBuildings() {
     for (int i = 0; i < 4; i++) { Canvas c(64, 64); artProp(c, i); prop[i] = fromCanvasSmooth(c, 32, 32); prop[i].dscale = 0.5f; }
     // rotating heads of the defensive structures
     for (int i = 0; i < 4; i++) { Canvas tc(ART_SIZE, ART_SIZE); artTurretHead(tc, i); turretHead[i] = fromCanvasSmooth(tc, 32, 32); turretHead[i].dscale = 0.5f; }
+    for (int i = 0; i < 3; i++) { Canvas tc(ART_SIZE, ART_SIZE); artRelicTurretHead(tc, i); relicHead[i] = fromCanvasSmooth(tc, 32, 32); relicHead[i].dscale = 0.5f; }
+    // the bridge decks: 3 x 12 tiles with 8 design px round them, at the 2x art scale (centre of the canvas = centre of the footprint)
+    for (int i = 0; i < 3; i++) { Canvas bc((BRIDGE_W * TILE + 16) * 2, (BRIDGE_L * TILE + 16) * 2); artBridge(bc, i); bridgeArt[i] = fromCanvasSmooth(bc, bc.w * 0.5f, bc.h * 0.5f); bridgeArt[i].dscale = 0.5f; }
 }
 
 // ------------------------------------------------------------ misc

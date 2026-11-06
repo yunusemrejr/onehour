@@ -52,6 +52,9 @@ struct Game {
     bool nukeIsland = false;        // ... for an island launcher's small nuke
     bool bomberMode = false;        // picking the spot a Nuclear Bomber flies to
     bool nukeDeep = false;          // ... for an Underground Nuke silo's silver warhead
+    bool nukeRelic = false;         // ... for a Hydra Silo's missile (five warheads)
+    bool nukeSub = false;           // ... for a submarine's missile
+    bool relicPage = false;         // the dozer bar shows the relic structures (an army holding a Relic Command)
     bool launchNuke(Vec2 at);       // fires the missile (a selected ready bunker's, else any ready one); false if none could go
     bool dropMode = false;          // picking a paradrop zone
     bool strikeMode = false;        // picking the spot a Phone Strike package is called in on

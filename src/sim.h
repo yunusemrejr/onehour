@@ -122,8 +122,9 @@ struct Entity {
     float detUntil[MAX_PLAYERS] = {}; // stealthy entity: sim time until which each player can see it (a detector close by keeps it up to date)
     u8 rank = 0;                      // infantry veterancy: 0 recruit, 1 veteran, 2 elite
     u16 kills = 0;
-    float droneAt[3] = {0, 0, 0};     // protector drones (jeeps, ships): sim time each one can fire again (see Sim::droneCount) ...
-    u8 droneLoad[3] = {0, 0, 0};      // ... and the interceptors it has left (0 once the reload has run out means a full magazine)
+    float droneAt[SWARM_MAX] = {};    // protector drones (jeeps, ships): sim time each one can fire again (see Sim::droneCount) ...
+    u8 droneLoad[SWARM_MAX] = {};     // ... and the interceptors it has left (0 once the reload has run out means a full magazine)
+    float swarmCd = 0;                // warship: sim time its swarm can sting aircraft again (W_DRONE_ZAP)
     u8 strikePass = 0;                // Air Strike fighter: 0 on the run-in, 1 breaking away, 2 leaving the map
     u8 salvoLeft = 0;                 // ... rockets still to fire on the run-in
     Vec2 runDir;                      // ... the heading of its wave across the called spot
@@ -177,6 +178,15 @@ struct Entity {
     int riot = -1;                    // a rioter: the id of the crowd it marches with (see Sim::riots)
     int takenFrom = -1;               // a structure an infiltrator or The Chosen took: the army it was taken from (-1: never taken)
     bool takenByChosen = false;       // ... and whether The Chosen took it
+    // ---- relic bases, bridges, submarines and battleships (sim_relic.cpp, sim_navy.cpp)
+    bool secret = false;              // a structure of a secret island: no army sees it until a unit or structure of its own has had it in sight
+    u8 discovered = 0;                // ... the armies that have found it (bit p)
+    float relicPay = 0;               // Relic Command: sim time of its next stipend
+    u8 subState = 0;                  // submarine: 0 surfaced, 1 diving, 2 dived (nothing sees or hurts it), 3 surfacing
+    float subT = 0;                   // ... sim time the dive or the surfacing is complete
+    float exposedUntil = 0;           // ... after a launch it may not dive again before this
+    bool subAutoDive = false;         // ... it came up to launch: it dives again once it may
+    float vlsCd = 0;                  // battleship: sim time its cruise-missile cells are loaded again
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -323,7 +333,7 @@ struct Sim {
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; Ref source; bool super = false; bool swift = false; bool rain = false; };   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; };   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
                                           // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
@@ -333,7 +343,7 @@ struct Sim {
     static constexpr float NUKE_FLIGHT = 7.0f;
     static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : (n.rain ? NUKE_FLIGHT * RAIN_NUKE_FLIGHT : (n.swift ? NUKE_FLIGHT * BUNKER_SWIFT_FLIGHT : NUKE_FLIGHT)); }   // seconds from launch to impact (a Super Nuke is much faster)
     // Share of a defence's usual chance to shoot this warhead down: the silver casing halves it, a Super Nuke's is a tenth, a swift bunker missile's 30%
-    static float nukeResist(const Nuke& n) { return (n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f)) * (n.swift ? BUNKER_SWIFT_RESIST : 1.0f) * (n.rain ? RAIN_NUKE_RESIST : 1.0f); }   // (a rain warhead: RAIN_NUKE_RESIST)
+    static float nukeResist(const Nuke& n) { return (n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f)) * (n.swift ? BUNKER_SWIFT_RESIST : 1.0f) * (n.rain ? RAIN_NUKE_RESIST : 1.0f) * (n.hydra ? RELIC_SILO_RESIST : 1.0f); }   // (a rain warhead: RAIN_NUKE_RESIST)
     int nukeSeq = 0;
     int fxTagSeq = 0;   // handles into Sim::fx (a fallout zone shrinks its own haze as an Anti-Radiation Truck scrubs it)
     // The air position of a warhead t seconds into its flight: a long arc over the ground line from the ramp to the target (the renderer draws the missile here too).
@@ -404,6 +414,31 @@ struct Sim {
     float basePeak[MAX_PLAYERS] = {};         // per army: what its base was worth at its best lately (slowly forgotten)
     float riotNoteAt[MAX_PLAYERS] = {};       // throttle for the riot warnings
     static bool districtBlock(const Entity& e) { return e.isBuilding() && e.district >= 0; }
+    // ---- the canal's bridges and the relic bases (sim_relic.cpp)
+    static bool bridgeEnt(const Entity& e) { return e.isBuilding() && e.bt().role == BR_BRIDGE; }
+    static bool relicEnt(const Entity& e) { return e.isBuilding() && e.bt().relic; }
+    void breakBridge(Entity& b, int by);       // the deck falls into the water: nobody crosses, whoever stood on it is lost (ships still pass under)
+    void raiseBridge(Entity& b);               // a dozer finished raising it again: the deck is open
+    bool relicClaimable(const Entity& u, const Entity& b) const;   // plain infantry walking into a relic structure nobody holds
+    bool relicBuildable(int player) const;     // the army holds a Relic Command: its dozers may raise relic structures
+    bool cmdRelicNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // a Hydra Silo the army holds fires (RELIC_SILO_*)
+    int relicNukesReady(int player) const;
+    float relicNukeWait(int player) const;     // seconds until the soonest Hydra Silo it holds is ready (0 = ready, -1 = it holds none)
+    void updateRelic(Entity& b);               // a relic structure an army holds: the Command's stipend, the silo's clock
+    void updateDiscovery();                    // who has found the secret islands' structures (from their own sight, never a scan)
+    // ---- submarines, battleships, drone swarms (sim_navy.cpp)
+    static bool submerged(const Entity& e) { return e.isUnit() && e.subState == 2 && subType(e.type); }
+    void cmdDive(const std::vector<Ref>& sel, bool dive);   // submarines dive out of sight (or come up again)
+    bool cmdSubNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // a submarine with its missile ready surfaces (if it must) and launches it at pos
+    int subNukesReady(int player) const;
+    float subNukeWait(int player) const;
+    int subsOf(int player, bool queued = true) const;   // the army's submarines (and those in its yards' queues): at most SUB_MAX
+    void updateSub(Entity& e);                 // dives, surfacings, a launch it came up for, the dive after it
+    void updateWarship(Entity& e);             // a battleship's cruise-missile cells, any warship's swarm stinging aircraft
+    // ---- surrender: a computer army with nothing left to fight on with lays down its arms (SURRENDER_*)
+    float beatenSince[MAX_PLAYERS] = {};       // sim time since which the army has had nothing that matters left (0: it has)
+    bool armyBeaten(int p) const;
+    void surrender(int p);
     static bool districtRuin(const Entity& e) { return districtBlock(e) && !e.constructed; }
     void spawnDistricts();                    // the map's towns and cities, neutral at the start
     void updateDistricts();                   // pay, integrity, townsfolk (every half second)
@@ -484,6 +519,7 @@ struct Sim {
     void cmdUnload(Ref carrier, bool atSpot, Vec2 spot);         // let everybody out: here, or after flying to 'spot' (cargo choppers)
     void cmdCapture(const std::vector<Ref>& sel, Ref building);  // spies take an enemy structure
     float captureTime(const Entity& b) const;                    // seconds a spy needs to take structure b
+    float captureTime(const Entity& b, const Entity& by) const;  // ... or this unit (plain infantry claiming a relic structure take longer)
     void cmdCancelTrain(Ref building, int queueIndex);
     void cmdSetRally(Ref building, Vec2 p);
     void cmdSell(Ref building);
@@ -503,7 +539,7 @@ struct Sim {
     static bool invulnerable(const Entity& b) { return b.isBuilding() && invulnerableRole(b.bt().role); }   // island launchers and Bastion Walls: never damaged, they only burn
     static bool swimmer(const Entity& e) { return e.isUnit() && !e.isAir() && e.ut().role == UR_SPY; }   // infiltrators paddle across water they cannot walk round (see SWIM_COST)
     static bool walkable(const Entity& e, int tx, int ty) { return swimmer(e) ? g_map.swimPassable(tx, ty) : g_map.passable(tx, ty); }
-    static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD || b.district >= 0); }   // nobody's: any army's spy may take it (a town: the whole of it)
+    static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD || b.bt().role == BR_ISLANDNUKE || b.bt().relic || b.district >= 0); }   // nobody's: any army's spy may take it (a town: the whole of it; a relic structure: plain infantry too)
     // what an infiltrator of 'player' may capture: an enemy structure, a neutral one (see neutralTakeable), and - for a human player only, never a
     // computer army - an ally's structure (the human takes it over; the ally is not asked)
     bool allyTakeable(int player, const Entity& b) const { return b.isBuilding() && player >= 0 && b.owner >= 0 && b.owner != player && !players[player].isAI && !enemies(player, b.owner); }

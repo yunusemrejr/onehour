@@ -38,3 +38,17 @@ void artBunkerUpgrade(Canvas& c, int type, int upg);
 // to a painted structure canvas before the realism grade. 'overlay' is the lighter variant for a bunker upgrade drawn over the apron (no
 // contact shadow, no weathering: the bunker underneath already has both). Changes colour inside the shape and adds alpha only outside it.
 void finishBuilding(Canvas& c, int type, u32 seed, bool overlay = false);
+
+// Relic (abandoned, overgrown) structures of the third army (artb_relic.cpp). kind: 0 Command (4x4 tiles), 1 Reactor (3x3), 2 Foundry/war
+// factory (5x4), 3 Airstrip: VTOL hangar + round gunship pad (5x4), 4 Flak battery base (2x2), 5 Laser tower base (2x2), 6 Heavy cannon
+// emplacement base (3x3), 7 Wall segment (1x1), 8 Missile silo (3x3), 9 Secret bunker (3x3). w, h: the footprint in tiles, and the canvas is
+// the size artBuildingSize would give for it. Paints the colour into c and the white-on-clear team mask into mask.
+bool artRelicBuilding(Canvas& c, Canvas& mask, int kind, int w, int h);
+// The silo's armed overlay (same canvas as kind 8): armoured doors slid back, the MIRV nose visible in the shaft. Drawn live when ready.
+void artRelicSiloArmed(Canvas& c, int w, int h);
+// Rotating heads drawn live over the 2x2/3x3 relic bases (centred on the footprint centre): 0 flak launcher, 1 laser emitter, 2 heavy cannon.
+// 64x64 canvas centred (32,32), pointing toward +x, like artTurretHead.
+void artRelicTurretHead(Canvas& c, int which);
+// The river bridge: a 3 x 12 tile deck running north-south, canvas 224 x 800 (BART_K = 2, 8 design px of margin). state 0 intact, 1 broken
+// (the middle span blown out), 2 under repair (the gap bridged by scaffolding and temporary girders).
+void artBridge(Canvas& c, int state);

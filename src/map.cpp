@@ -65,15 +65,29 @@ float mainIslandInland(int x, int y) {
     // broad bays and headlands (up to about 11 tiles in or 3 out), smaller coves, and a ragged edge (the bases sit 28 tiles in: always dry)
     float wob = (fbm(x * 0.022f + 300, y * 0.022f + 500, SEED + 401) - 0.5f) * 16.0f + (fbm(x * 0.06f + 40, y * 0.06f + 90, SEED + 403) - 0.5f) * 6.0f
               + (fbm(x * 0.16f, y * 0.16f, SEED + 402) - 0.5f) * 2.5f;
+    // the canal's mouths: a broad headland of firm ground either side of each estuary, so the delta and its banks always stand clear of the beach
+    float mouth = std::max(0.0f, 1.0f - std::fabs(v - W * 0.5f) / 44.0f);
+    if (cu < 44.0f) { float k = mouth * std::max(0.0f, 1.0f - cu / 44.0f); wob = wob * (1.0f - k) + 9.0f * k; }
     return d - 4.0f + wob;
 }
-// The same for the second island: a squarish oval (a superellipse, so the flat top has room to build on) with a gently wandering coast (roughly in tiles)
+// The same for the two jungle islands: squarish ovals (superellipses, so the flat top has room to build on) with a gently wandering coast (roughly
+// in tiles); the nearer island answers
 float seaIslandInland(int x, int y) {
     const u32 SEED = 1979;
-    float dx = std::fabs(x + 0.5f - SEA_ISLE_X) / SEA_ISLE_RX, dy = std::fabs(y + 0.5f - MAP_H * 0.5f) / SEA_ISLE_RY;
+    float cx = (x + 0.5f) > MAP_W * 0.5f ? SEA_ISLE_X : SEA_ISLE_XW;
+    float dx = std::fabs(x + 0.5f - cx) / SEA_ISLE_RX, dy = std::fabs(y + 0.5f - MAP_H * 0.5f) / SEA_ISLE_RY;
     float e = std::cbrt(dx * dx * dx + dy * dy * dy);
-    float wob = (fbm(x * 0.08f + 11, y * 0.08f + 23, SEED + 420) - 0.5f) * 0.16f;
+    float wob = (fbm(x * 0.08f + 11, y * 0.08f + 23, SEED + 420) - 0.5f) * 0.18f + (fbm(x * 0.21f + 5, y * 0.21f + 77, SEED + 421) - 0.5f) * 0.05f;
     return (1.0f + wob - e) * SEA_ISLE_RX;
+}
+// ... and for the two secret islands
+static float secretIslandInland(int x, int y) {
+    const u32 SEED = 1979;
+    float cy = (y + 0.5f) > MAP_H * 0.5f ? MAP_H - SECRET_ISLE_Y : SECRET_ISLE_Y;
+    float dx = std::fabs(x + 0.5f - MAP_W * 0.5f) / SECRET_ISLE_RX, dy = std::fabs(y + 0.5f - cy) / SECRET_ISLE_RY;
+    float e = std::sqrt(dx * dx + dy * dy);
+    float wob = (fbm(x * 0.13f + 51, y * 0.13f + 17, SEED + 430) - 0.5f) * 0.28f;
+    return (1.0f + wob - e) * SECRET_ISLE_RY;
 }
 
 void Map::generate() {
@@ -86,13 +100,13 @@ void Map::generate() {
     const float C = MAP_W * 0.5f;   // map centre = the island's centre, tile units
     const int O = ISLE_X0;          // the island's first tile: layout coordinates of the old map are offset by it
     // The lake country (the lake, its beach and islands, the ring road round it, the shore supply piles, the pools and the old strongholds between
-    // the lake and the ring road's corners) is scaled up by LAKE_K about the centre on top of the map's own scale: the lake has twice the water of
-    // the 146x146 map while the bases, ridges and woods keep their place in the corners.
-    const float LAKE_K = 1.17f, GL = G * LAKE_K;
+    // the lake and the ring road's corners) keeps its size on the bigger island (LAKE_K scales it about the centre on top of the map's own scale):
+    // the room the island gained lies between the bases and the ring road.
+    const float LAKE_K = 1.0f, GL = G * LAKE_K;
     const float ISL = GL / (146.0f / 104.0f);   // island sizes and offsets were laid out for the 146 map's lake
     auto inner = [&](float v104) { return C + (v104 - 52.0f) * GL; };   // a lake-country coordinate of the 104-tile layout, in tiles
     auto sc = [&](int v) { return O + (int)std::lround(v * S); };
-    roads.clear();
+    roads.clear(); relics.clear(); bridgeSpots.clear();
     // Base terrain from noise: grass with dirt patches, sand near center
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         float n = fbm(x * 0.07f, y * 0.07f, SEED);
@@ -105,8 +119,8 @@ void Map::generate() {
         bridge[y * MAP_W + x] = 0;
     }
     // The central lake: a big organic body of water, the arena of the warships. Its shore bulges into bays toward the four corners and pulls back
-    // toward the supply piles on the axes; a sandy beach rings it, two islands and two rocky islets break the open water, and the four
-    // rivers leave it (they are cut off by the bridges of the ring road, so only the lake itself is a sea for ships).
+    // toward the supply piles on the axes; a sandy beach rings it and two islands and some rocky islets break the open water. The canal runs into it
+    // from the west and leaves it to the east: it is one sea with the ocean, and ships sail in under the bridges.
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         float dx = x + 0.5f - C, dy = y + 0.5f - C, d = std::sqrt(dx * dx + dy * dy), th = std::atan2(dy, dx);
         float R = (20.0f + 1.5f * std::cos(4.0f * th + 3.14159f) + 0.6f * std::sin(3.0f * th + 1.1f) + 0.5f * std::sin(8.0f * th + 0.7f) + (fbm(x * 0.21f + 7, y * 0.21f + 3, SEED + 77) - 0.5f) * 2.0f) * GL;
@@ -119,7 +133,7 @@ void Map::generate() {
         paintDisc(*this, px, py, 3.0f, T_SAND); paintDisc(*this, px, py, 1.9f, T_WATER);
     }
 
-    // Rock ridges dividing quadrants, each with a gap (chokepoint)
+    // Rock ridges between the two bases of each half of the island (north and south), each with a gap (chokepoint); the canal divides the halves
     auto ridge = [&](int x0, int x1, int y0, int y1, bool vertical, int gapA, int gapB) {
         for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
             int along = vertical ? y : x;
@@ -134,8 +148,6 @@ void Map::generate() {
     const int tip = (int)(C - 26 * GL);   // ridge ends stop under the ring road (its discs paint over the last tiles), leaving a shore corridor inside the ring with the supply piles in it
     ridge(sc(38), sc(41), O, tip, true, sc(10), sc(14));   // (from the old border: the coast below cuts them off as cliffs over the sea)
     ridge(sc(38), sc(41), MAP_H - 1 - tip, sc(80) - 1, true, sc(65), sc(69));
-    ridge(O, tip, sc(38), sc(41), false, sc(10), sc(14));
-    ridge(MAP_W - 1 - tip, sc(80) - 1, sc(38), sc(41), false, sc(65), sc(69));
     // A Mountain Fortress is set into each ridge, in the long stretch of mountain between the map edge and the pass: the ridge rock is cut back
     // round the fortress so each of the two armies on either side of the ridge has a doorstep onto it, but the fortress itself still closes
     // the ridge (it is no second pass).
@@ -144,20 +156,17 @@ void Map::generate() {
         const int FW = 5, FH = 4;   // BUILDS[B_C_FORTRESS] footprint
         int axis = (sc(38) + sc(41)) / 2, segA = O + 2, segB = sc(10) - 1;   // the ridge stretch between the map edge and the pass
         int along = (segA + segB) / 2;
-        struct F { int x, y; bool vertical; } F4[4] = {
-            { axis - FW / 2, along - FH / 2, true }, { axis - FW / 2, (MAP_H - 1) - along - FH / 2, true },
-            { along - FW / 2, axis - FH / 2, false }, { (MAP_W - 1) - along - FW / 2, axis - FH / 2, false } };
-        for (auto& f : F4) {
+        struct F { int x, y; bool vertical; } F2[2] = { { axis - FW / 2, along - FH / 2, true }, { axis - FW / 2, (MAP_H - 1) - along - FH / 2, true } };
+        for (auto& f : F2) {
             // the footprint and a doorstep two tiles deep on the two open faces become worn ground
-            int x0 = f.x - (f.vertical ? 2 : 0), x1 = f.x + FW - 1 + (f.vertical ? 2 : 0);
-            int y0 = f.y - (f.vertical ? 0 : 2), y1 = f.y + FH - 1 + (f.vertical ? 0 : 2);
+            int x0 = f.x - 2, x1 = f.x + FW - 1 + 2, y0 = f.y, y1 = f.y + FH - 1;
             for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) if (inMap(x, y)) tiles[y * MAP_W + x] = T_DIRT;
             forts.push_back({ f.x, f.y, 5 });
         }
     }
     // Rock outcrops guarding the diagonal approaches to the center
-    {   // (pushed out with the bigger lake: rocky headlands on its shore)
-        const float hx = (25.7f - 40.0f) * S * LAKE_K, hy = (32.3f - 40.0f) * S * LAKE_K, hr = 2.4f * S;
+    {   // (rocky headlands on the lake's shore)
+        const float hx = (25.7f - 40.0f) * S * LAKE_K * (208.0f / ISLE_W) * 1.17f, hy = (32.3f - 40.0f) * S * LAKE_K * (208.0f / ISLE_W) * 1.17f, hr = 2.4f * (208.0f / 80.0f);
         paintDisc(*this, C + hx, C + hy, hr, T_ROCK); paintDisc(*this, C - hx, C + hy, hr, T_ROCK);
         paintDisc(*this, C + hx, C - hy, hr, T_ROCK); paintDisc(*this, C - hx, C - hy, hr, T_ROCK);
     }
@@ -173,79 +182,83 @@ void Map::generate() {
     paintRoad(*this, rx1, rx0, rx1, rx1, 1.4f);
     paintRoad(*this, rx1, rx1, rx0, rx1, 1.4f);
     paintRoad(*this, rx0, rx1, rx0, rx0, 1.4f);
+    const float ln = sc(12), lf = (MAP_W - 1) - sc(12) - 1;
     {
         float dn = sc(13), df = (MAP_W - 1) - dn;   // just outside each Command Core
         paintRoad(*this, dn, dn, rx0, rx0, 1.5f);
         paintRoad(*this, df, dn, rx1, rx0, 1.5f);
         paintRoad(*this, dn, df, rx0, rx1, 1.5f);
         paintRoad(*this, df, df, rx1, rx1, 1.5f);
-        // Lateral roads through the chokepoint gaps
-        float ln = sc(12), lf = (MAP_W - 1) - sc(12) - 1;
+        // Lateral roads: through the ridge passes (north and south), and down each side of the island over the canal's bridges (west and east)
         paintRoad(*this, dn, ln, df, ln, 1.3f);
         paintRoad(*this, dn, lf + 1, df, lf + 1, 1.3f);
         paintRoad(*this, ln, dn, ln, df, 1.3f);
         paintRoad(*this, lf + 1, dn, lf + 1, df, 1.3f);
     }
 
-    // Rivers: four meandering streams leave the lake towards the map edge (one per quadrant, mirrored). Roads that cross them become bridges and
-    // every river has a sandy ford besides, so nothing is cut off, but armies funnel through the crossings.
+    // ---- The canal. Ten tiles of water (CANAL_Y0..CANAL_Y1) run from the lake to the west coast and from the lake to the east coast, so the island is
+    // two halves, joined only by the bridges, and the lake is open to the ocean at both ends. Near each mouth the canal splits round a delta island
+    // (an abandoned relic outpost stands on it and on both banks beside it); seawards of the island it opens into a broad estuary. Bridges: the
+    // ring road's, the lateral road's, and one from each bank onto the delta island - all north-south decks BRIDGE_W x BRIDGE_L.
     {
-        struct Pt { float x, y; };
-        static const Pt NW0[] = { {32.5f, 35.3f}, {26.5f, 36.2f}, {22, 36.8f}, {18.5f, 34.5f}, {16, 31.5f}, {12.5f, 29.6f}, {8, 30.4f}, {4.5f, 32.4f}, {1, 31.5f} };
-        const int N = (int)(sizeof(NW0) / sizeof(NW0[0]));
-        Pt NW[16];
-        for (int i = 0; i < N; i++) NW[i] = Pt{ O + NW0[i].x * S, O + NW0[i].y * S };
-        for (int q = 0; q < 4; q++) {
-            auto tf = [&](Pt p) { return Pt{ (q & 1) ? (MAP_W - 1) - p.x : p.x, (q & 2) ? (MAP_H - 1) - p.y : p.y }; };
-            std::vector<Pt> pts;   // Catmull-Rom through the control points
-            for (int i = 0; i < N - 1; i++) {
-                Pt a = NW[std::max(0, i - 1)], b = NW[i], c = NW[i + 1], d = NW[std::min(N - 1, i + 2)];
-                for (int k = 0; k < 8; k++) {
-                    float t = k / 8.0f, t2 = t * t, t3 = t2 * t;
-                    auto cr = [&](float p0, float p1, float p2, float p3) { return 0.5f * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3); };
-                    pts.push_back(tf(Pt{cr(a.x, b.x, c.x, d.x), cr(a.y, b.y, c.y, d.y)}));
+        const int DI0 = O + 8, DI1 = O + 26;                     // the delta island's west and east columns (on the west side; mirrored for the east)
+        const int NCH0 = (int)C - 17, NCH1 = (int)C - 8;         // the north channel's rows round the island
+        const int SCH0 = (int)C + 7, SCH1 = (int)C + 16;         // the south channel's
+        const int ISL0 = (int)C - 7, ISL1 = (int)C + 6;          // the island's rows
+        const int TAPER = 7;                                     // columns over which the two channels merge again upstream of the island
+        const int bridgeX[4] = { O + 16, O + 16, (int)std::lround(ln) - 1, (int)std::lround(rx0) - 1 };   // west side: delta north, delta south, lateral road, ring road
+        auto nearBridge = [&](int xw) { for (int b = 2; b < 4; b++) if (std::abs(xw - (bridgeX[b] + 1)) <= 4) return true; return std::abs(xw - (bridgeX[0] + 1)) <= 4; };
+        for (int side = 0; side < 2; side++) {
+            auto X = [&](int xw) { return side ? (MAP_W - 1) - xw : xw; };   // a west-side column, on this side
+            for (int xw = 0; xw <= (int)C; xw++) {
+                int x = X(xw);
+                if (xw > DI1 + TAPER && tiles[(int)C * MAP_W + x] == T_WATER) break;   // (the lake: the canal has reached it)
+                int n0, n1, s0, s1;   // water rows: [n0, n1] and [s0, s1] (one span when they meet)
+                if (xw < DI0) { n0 = NCH0 - std::max(0, (DI0 - xw)) / 2; n1 = SCH1 + std::max(0, (DI0 - xw)) / 2; s0 = s1 = -1; }   // the estuary widens seawards
+                else if (xw <= DI1) { n0 = NCH0; n1 = NCH1; s0 = SCH0; s1 = SCH1; }
+                else if (xw <= DI1 + TAPER) {   // the channels close in on the canal's own rows; the island's tip is rounded off
+                    float k = (xw - DI1) / (float)TAPER;
+                    n0 = (int)std::lround(NCH0 + (CANAL_Y0 - NCH0) * k); s1 = (int)std::lround(SCH1 + (CANAL_Y1 - SCH1) * k);
+                    if (xw <= DI1 + 2) { n1 = NCH1 + (xw - DI1); s0 = SCH0 - (xw - DI1); }   // (the tip)
+                    else { n1 = s1; s0 = s1 = -1; }
+                } else { n0 = CANAL_Y0; n1 = CANAL_Y1; s0 = s1 = -1; }
+                // the outer banks wander a little (never at a bridge: its deck spans exactly ten tiles of water)
+                if (!nearBridge(xw) && xw > DI1 + TAPER) {
+                    float wn = fbm(x * 0.11f + 13, 3.0f, SEED + 441), ws = fbm(x * 0.11f + 71, 9.0f, SEED + 442);
+                    n0 -= (int)std::lround((wn - 0.5f) * 3.0f + 0.4f); n1 += (int)std::lround((ws - 0.5f) * 3.0f + 0.4f);
+                }
+                auto water = [&](int a, int b) { for (int y = a; y <= b; y++) if (inMap(x, y)) tiles[y * MAP_W + x] = T_WATER; };
+                auto bank = [&](int y) { if (inMap(x, y)) { u8& t = tiles[y * MAP_W + x]; if (t == T_GRASS || t == T_GRASS2 || t == T_DIRT || t == T_TREE) t = T_SAND; } };
+                bank(n0 - 1); if (hash2(x, n0, SEED + 443) < 0.6f) bank(n0 - 2);
+                bank((s1 >= 0 ? s1 : n1) + 1); if (hash2(x, n1, SEED + 444) < 0.6f) bank((s1 >= 0 ? s1 : n1) + 2);
+                water(n0, n1);
+                if (s0 >= 0) water(s0, s1);
+            }
+            // the delta island itself: grassland with a sandy rim (the outpost's ground is cleared later)
+            for (int y = ISL0; y <= ISL1; y++) for (int xw = DI0; xw <= DI1 + 1; xw++) {
+                int x = X(xw);
+                bool rim = y == ISL0 || y == ISL1 || xw == DI0 || xw == DI1 + 1;
+                tiles[y * MAP_W + x] = rim ? T_SAND : (hash2(x, y, SEED + 445) < 0.55f ? T_GRASS2 : T_DIRT);
+            }
+            // the bridges of this side (decks over the water; their ends rest on a bank tile)
+            const int bys[4] = { NCH0 - 1, SCH0 - 1, CANAL_Y0 - 1, CANAL_Y0 - 1 };
+            for (int b = 0; b < 4; b++) {
+                int bx = side ? MAP_W - bridgeX[b] - BRIDGE_W : bridgeX[b], by = bys[b];
+                bridgeSpots.push_back({ bx, by });
+                for (int j = 0; j < BRIDGE_L; j++) for (int i = 0; i < BRIDGE_W; i++) {
+                    int x = bx + i, y = by + j, k = y * MAP_W + x;
+                    if (!inMap(x, y)) continue;
+                    if (j == 0 || j == BRIDGE_L - 1) { if (tiles[k] == T_WATER || tiles[k] == T_SAND) tiles[k] = T_ROAD; }   // (the abutments: a road tile on each bank)
+                    else tiles[k] = T_WATER;   // (the deck's span: exactly ten tiles of water)
+                    bridge[k] = 1;
                 }
             }
-            pts.push_back(tf(NW[N - 1]));
-            for (size_t i = 0; i < pts.size(); i++) {   // banks first (grass and dirt only), then the water on top
-                float w = (1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q)) * S;
-                paintDisc(*this, pts[i].x, pts[i].y, w + 0.9f * S, T_SAND, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT; });
-            }
-            for (size_t i = 0; i < pts.size(); i++) {
-                float w = (1.35f + 0.55f * (1.0f - i / (float)pts.size()) + 0.35f * std::sin(i * 0.7f + q)) * S;
-                paintDisc(*this, pts[i].x, pts[i].y, w, T_WATER, [](u8 t) { return t != T_ROCK; });
-            }
-            {   // a wider, marshy pool part-way down each river, where the stream slows and spreads
-                Pt mp = pts[pts.size() * 13 / 20];
-                paintDisc(*this, mp.x, mp.y, 3.4f * S, T_SAND, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_DIRT; });
-                paintDisc(*this, mp.x, mp.y, 2.7f * S, T_WATER, [](u8 t) { return t != T_ROCK; });
-            }
-            size_t fi = pts.size() * 9 / 20;   // the ford: a narrow sandy shallows strip laid across the stream
-            Pt f = pts[fi], d{ pts[fi + 2].x - pts[fi - 2].x, pts[fi + 2].y - pts[fi - 2].y };
-            float dl = std::sqrt(d.x * d.x + d.y * d.y); d.x /= dl; d.y /= dl;
-            for (float t = -3.2f * S - 0.8f; t <= 3.2f * S + 0.8f; t += 0.25f) for (float u = -0.9f * S; u <= 0.9f * S; u += 0.3f) {
-                int fx = (int)(f.x - d.y * t + d.x * u), fy = (int)(f.y + d.x * t + d.y * u);
-                if (inMap(fx, fy) && tiles[fy * MAP_W + fx] == T_WATER) tiles[fy * MAP_W + fx] = T_SAND;
-            }
-        }
-        // bridges: every road is laid over the water again
-        for (auto& rs : roads) paintRoad(*this, rs.x0, rs.y0, rs.x1, rs.y1, rs.halfW, true);
-        // square off ragged deck ends: a road tile touching the deck both along and across it joins it
-        for (int pass = 0; pass < 2; pass++) {
-            for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++) {
-                int i = y * MAP_W + x;
-                if (tiles[i] != T_ROAD || bridge[i]) continue;
-                bool h = bridge[i - 1] || bridge[i + 1], v = bridge[i - MAP_W] || bridge[i + MAP_W];
-                if (h && v) bridge[i] = 2;
-            }
-            for (int i = 0; i < MAP_W * MAP_H; i++) if (bridge[i] == 2) bridge[i] = 1;
         }
     }
 
-    // Two islands (painted after the rivers, whose channels start out in the lake). The big one in the middle of the lake: a sandy shore round a grassy top with a stand of trees, an Island Nuke Launcher and an
-    // old watchtower. The small one lies off the east shore (well out in the water, not a wade away) with its own launcher and a few trees.
-    // Nothing drives to either: infantry and dozers are airlifted in, so they are prizes for whoever holds the water and the sky.
-    // (Both grew with the lake: sizes and offsets are the 146 map's times ISL.)
+    // Two islands in the lake (painted after the canal). The big one in the middle: a sandy shore round a grassy top with a stand of trees, two
+    // Island Nuke Launchers and an old watchtower. The small one lies off the east shore (well out in the water, not a wade away) with its own launchers.
+    // Nothing drives to either: infantry and dozers are airlifted or shipped in, so they are prizes for whoever holds the water and the sky.
     const float bigR = 7.0f * std::sqrt(ISL), smallR = 4.4f * std::sqrt(ISL), sx2 = C + 16.5f * ISL, sy2 = C + 2.5f * ISL;
     islands = { { C, C, bigR }, { sx2, sy2, smallR } };
     paintDisc(*this, C, C, bigR, T_SAND); paintDisc(*this, C, C, bigR - 1.1f, T_GRASS);
@@ -258,51 +271,90 @@ void Map::generate() {
         for (auto& t : TREES2) { int i = (int)(sy2 + t[1]) * MAP_W + (int)(sx2 + t[0]); if (tiles[i] == T_GRASS2) tiles[i] = T_TREE; }
     }
     paintDisc(*this, C - 13.0f * ISL, C - 10.0f * ISL, 1.9f, T_ROCK); paintDisc(*this, C - 9.0f * ISL, C + 15.5f * ISL, 1.9f, T_ROCK);   // rocky islets (nothing can be built on them)
-    paintDisc(*this, C + 6.0f * ISL, C - 17.0f * ISL, 1.5f, T_ROCK); paintDisc(*this, C - 19.0f * ISL, C + 4.0f * ISL, 1.4f, T_ROCK);   // and two more out in the wider water
+    paintDisc(*this, C + 6.0f * ISL, C - 17.0f * ISL, 1.5f, T_ROCK);
 
     // ---- the sea. The old map is the main island: its coast wanders a few tiles inside the old border (headlands push out a little), the corners
-    // are rounded off, and a beach or a band of cliffs rings it (where the coast is high, and wherever a ridge runs into the sea). The rivers keep
-    // flowing out through the beach: their mouths open into the ocean.
+    // are rounded off, and a beach or a band of cliffs rings it (where the coast is high, and wherever a ridge runs into the sea). The canal keeps
+    // flowing out through the beach: its mouths open into the ocean.
     auto coastBand = [&](int x, int y, float inland, float beachW, float cliffK) {   // a land tile 'inland' tiles from the water: beach, cliff or as it is
         u8& t = tiles[y * MAP_W + x];
-        if (inland >= beachW || t == T_WATER || t == T_ROAD) return;   // (a river runs on out to its mouth; no road reaches the beach)
+        if (inland >= beachW || t == T_WATER || t == T_ROAD) return;   // (the canal runs on out to its mouth; no road reaches the beach)
         bool cliff = t == T_ROCK || fbm(x * 0.06f + 90, y * 0.06f + 40, SEED + 411) > cliffK;
         t = cliff ? T_ROCK : T_SAND;
     };
+    fresh.assign((size_t)MAP_W * MAP_H, 0);
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         float d = mainIslandInland(x, y);
-        if (d <= 0) { tiles[y * MAP_W + x] = T_WATER; continue; }
-        coastBand(x, y, d, 1.7f + 1.6f * fbm(x * 0.11f + 7, y * 0.11f + 70, SEED + 412), 0.55f);
+        fresh[(size_t)y * MAP_W + x] = d > 0.5f;   // (water inside the coast is the lake's and the canal's: fresh water)
+        if (d <= 0) { if (!bridge[y * MAP_W + x]) tiles[y * MAP_W + x] = T_WATER; continue; }
+        if (bridge[y * MAP_W + x]) continue;
+        bool canalMouth = std::fabs(y + 0.5f - C) < 24.0f && (x < O + 30 || x > MAP_W - O - 30);   // (the estuary banks stay sand, never cliffs: boats land there)
+        coastBand(x, y, d, 1.7f + 1.6f * fbm(x * 0.11f + 7, y * 0.11f + 70, SEED + 412), canalMouth ? 2.0f : 0.55f);
     }
-    // The second island out in the eastern sea, midway between the main island and the map's edge: far smaller than the main island but many times
-    // the lake's islands. A bare plateau of flat sand - no grass, no trees - ringed all round by a rocky edge one or two tiles thick, with three rich
-    // supply piles and three old strongholds on top. Nothing drives there: cargo ships land troops over the rocks, lifters fly them in.
+    // The two jungle islands out in the sea, west and east, midway between the main island and the map's edge: a beach all round (rocky at a few
+    // headlands), thick jungle, and in the middle a clearing where an abandoned relic base stands, overgrown, with a trail to the north and south
+    // beaches where cargo ships can land. Then the two secret islands north and south: a ring of beach and a dome of jungle round a hidden bunker.
     seaIslands.clear();
-    {
-        const float SX = SEA_ISLE_X, SY = C, RX = SEA_ISLE_RX, RY = SEA_ISLE_RY;
+    std::vector<std::pair<int, int>> trailTiles;   // (the islands' trails: no trees grow on them)
+    for (int side = 0; side < 2; side++) {
+        const float SX = side ? SEA_ISLE_XW : SEA_ISLE_X, SY = C, RX = SEA_ISLE_RX, RY = SEA_ISLE_RY;
         seaIslands.push_back({ SX, SY, RX, RY });
         const int x0 = std::max(0, (int)(SX - RX - 4)), x1 = std::min(MAP_W - 1, (int)(SX + RX + 4));
         const int y0 = std::max(0, (int)(SY - RY - 4)), y1 = std::min(MAP_H - 1, (int)(SY + RY + 4));
-        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) if (seaIslandInland(x, y) > 0) tiles[y * MAP_W + x] = T_SAND;
-        // the rocky edge: every tile of the island within 1.5 - 2.4 tiles of the sea (measured to the nearest water tile, so it is as thick at the
-        // narrow ends as on the long sides)
-        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {   // (only water counts, so painting rock as it goes changes nothing)
-            if (tiles[y * MAP_W + x] != T_SAND || seaIslandInland(x, y) <= 0) continue;
-            float w = 1.5f + 0.9f * fbm(x * 0.15f + 5, y * 0.15f + 31, SEED + 414), near = 9.0f;
-            for (int j = -3; j <= 3; j++) for (int i = -3; i <= 3; i++)
-                if (inMap(x + i, y + j) && tiles[(y + j) * MAP_W + x + i] == T_WATER) near = std::min(near, std::sqrt((float)(i * i + j * j)));
-            if (near <= w) tiles[y * MAP_W + x] = T_ROCK;
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
+            float d = seaIslandInland(x, y);
+            if (d <= 0) continue;
+            u8 t;
+            float beachW = 1.4f + 1.4f * fbm(x * 0.17f + 3, y * 0.17f + 9, SEED + 450);
+            if (d < beachW) t = fbm(x * 0.09f + 31, y * 0.09f + 13, SEED + 451) > 0.66f ? T_ROCK : T_SAND;   // beach, and a rocky headland here and there
+            else {
+                float n = fbm(x * 0.09f + 70, y * 0.09f + 40, SEED + 452);
+                t = n > 0.58f ? T_DIRT : (n < 0.42f ? T_GRASS2 : T_GRASS);
+                // jungle: thick everywhere but the clearing round the base, the trail and a few glades
+                float glade = fbm(x * 0.12f + 9, y * 0.12f + 90, SEED + 453);
+                bool clearing = std::fabs(x + 0.5f - SX) < 15.5f && std::fabs(y + 0.5f - SY) < 16.5f;
+                if (!clearing && d > beachW + 1.0f && glade < 0.62f) t = T_TREE;
+                if (clearing && hash2(x, y, SEED + 454) < 0.05f && (std::fabs(x + 0.5f - SX) > 13.0f || std::fabs(y + 0.5f - SY) > 14.0f)) t = T_TREE;   // (the jungle creeps back in at the clearing's edge)
+                // a rocky hill at each end of the island
+                float hill = std::hypot((x + 0.5f - SX) / 5.0f, (std::fabs(y + 0.5f - SY) - RY * 0.62f) / 4.0f);
+                if (hill < 1.0f && fbm(x * 0.3f, y * 0.3f, SEED + 455) > 0.38f) t = T_ROCK;
+            }
+            tiles[y * MAP_W + x] = t;
+        }
+        // the trail: from the clearing north and south to the beaches (worn earth, one tile wide, wandering a little)
+        for (int dir = -1; dir <= 1; dir += 2) for (float s = 15.0f; s < RY + 2.0f; s += 0.5f) {
+            float tx = SX + 2.2f * std::sin(s * 0.21f + side + dir), ty = SY + dir * s;
+            int ix = (int)tx, iy = (int)ty;
+            if (!inMap(ix, iy) || tiles[iy * MAP_W + ix] == T_WATER) break;
+            for (int k = 0; k <= 1; k++) if (inMap(ix + k, iy) && tiles[iy * MAP_W + ix + k] != T_WATER && tiles[iy * MAP_W + ix + k] != T_SAND) { tiles[iy * MAP_W + ix + k] = T_DIRT; trailTiles.push_back({ ix + k, iy }); }
         }
     }
-    // Islets scattered round the sea: sand cays with a few trees, bare rock stacks. Kept well off both islands' coasts and the edge of the map.
+    for (int side = 0; side < 2; side++) {
+        const float SY = side ? MAP_H - SECRET_ISLE_Y : SECRET_ISLE_Y;
+        seaIslands.push_back({ C, SY, SECRET_ISLE_RX, SECRET_ISLE_RY });
+        for (int y = (int)(SY - SECRET_ISLE_RY - 3); y <= (int)(SY + SECRET_ISLE_RY + 3); y++) for (int x = (int)(C - SECRET_ISLE_RX - 3); x <= (int)(C + SECRET_ISLE_RX + 3); x++) {
+            if (!inMap(x, y)) continue;
+            float d = secretIslandInland(x, y);
+            if (d <= 0) continue;
+            u8 t = d < 1.3f + 0.8f * fbm(x * 0.2f, y * 0.2f, SEED + 460) ? T_SAND : T_GRASS2;
+            bool clearing = std::fabs(x + 0.5f - C) < 6.5f && std::fabs(y + 0.5f - SY) < 3.6f;
+            bool trail = std::fabs(x + 0.5f - C) < 1.1f && (side ? y + 0.5f < SY : y + 0.5f > SY);   // (a track from the clearing down to the beach facing the main island)
+            if (t != T_SAND && !clearing && !trail && hash2(x, y, SEED + 461) < 0.82f) t = T_TREE;
+            if (trail && t != T_SAND) t = T_DIRT;
+            tiles[y * MAP_W + x] = t;
+            if (trail) trailTiles.push_back({ x, y });
+        }
+    }
+    // Islets scattered round the sea: sand cays with a few trees, bare rock stacks. Kept well off the islands' coasts and the edge of the map, and few
+    // (the open sea far from any land is baked at half resolution: every islet costs a little memory)
     {
         Rng ir(SEED + 4401);
         std::vector<Island> got;
-        for (int attempt = 0; attempt < 4000 && got.size() < 22; attempt++) {
-            float x = ir.f(9.0f, MAP_W - 9.0f), y = ir.f(9.0f, MAP_H - 9.0f), r = ir.f(1.6f, 4.4f);
-            if (mainIslandInland((int)x, (int)y) > -9.0f || seaIslandInland((int)x, (int)y) > -9.0f) continue;
+        for (int attempt = 0; attempt < 4000 && got.size() < 12; attempt++) {
+            float x = ir.f(14.0f, MAP_W - 14.0f), y = ir.f(14.0f, MAP_H - 14.0f), r = ir.f(1.6f, 3.8f);
+            if (mainIslandInland((int)x, (int)y) > -12.0f || seaIslandInland((int)x, (int)y) > -12.0f || secretIslandInland((int)x, (int)y) > -12.0f) continue;
             bool near = false;
-            for (auto& o2 : got) if (std::hypot(o2.cx - x, o2.cy - y) < 17.0f) near = true;
+            for (auto& o2 : got) if (std::hypot(o2.cx - x, o2.cy - y) < 40.0f) near = true;
             if (near) continue;
             got.push_back({ x, y, r });
             if (r < 2.2f || ir.f() < 0.25f) { paintDisc(*this, x, y, r * 0.8f, T_ROCK); continue; }   // a bare stack
@@ -315,21 +367,53 @@ void Map::generate() {
         }
         for (auto& g2 : got) seaIslands.push_back({ g2.cx, g2.cy, g2.r, g2.r });
     }
-    // Tree clusters from noise, kept off roads, bases, and the shore
+    // ground the jungle has taken back: the jungle islands and the secret islands all over, the relic outposts on the main island (filled in below)
+    overgrown.assign((size_t)MAP_W * MAP_H, 0);
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) if (tiles[y * MAP_W + x] != T_WATER && (seaIslandInland(x, y) > 0 || secretIslandInland(x, y) > 0)) overgrown[(size_t)y * MAP_W + x] = 1;
+    // The relic outposts' ground on the main island: the delta islands are cleared already; the banks beside them get worn clearings the outposts stand in
+    auto relicClearing = [&](int x0, int y0, int x1, int y1) {
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
+            if (!inMap(x, y)) continue;
+            u8& t = tiles[y * MAP_W + x];
+            if (t == T_WATER || t == T_ROAD || bridge[y * MAP_W + x]) continue;
+            if (t == T_TREE || t == T_ROCK || t == T_GRASS) t = hash2(x, y, SEED + 470) < 0.5f ? T_GRASS2 : T_DIRT;
+            overgrown[(size_t)y * MAP_W + x] = 1;
+        }
+    };
+    for (int side = 0; side < 2; side++) for (int y = (int)C - 7; y <= (int)C + 6; y++) for (int xw = O + 8; xw <= O + 27; xw++) { int x = side ? MAP_W - 1 - xw : xw; if (tiles[y * MAP_W + x] != T_WATER) overgrown[(size_t)y * MAP_W + x] = 1; }   // (the delta islands)
+    for (int side = 0; side < 2; side++) for (int bankS = 0; bankS < 2; bankS++) {
+        int xa = O + 5, xb = O + 32, ya = bankS ? (int)C + 18 : (int)C - 36, yb = bankS ? (int)C + 35 : (int)C - 19;
+        if (side) { int t0 = MAP_W - 1 - xb; xb = MAP_W - 1 - xa; xa = t0; }
+        relicClearing(xa, ya, xb, yb);
+    }
+    // Tree clusters from noise, kept off roads, bases, the shore and the relic outposts
+    auto relicGround = [&](int x, int y) {   // inside one of the main island's relic outposts (the deltas and their banks)
+        bool w = x < O + 34, e = x > MAP_W - O - 35;
+        return (w || e) && std::fabs(y + 0.5f - C) < 37.0f && mainIslandInland(x, y) > 0;
+    };
     for (int y = 2; y < MAP_H - 2; y++) for (int x = 2; x < MAP_W - 2; x++) {
         u8& t = tiles[y * MAP_W + x];
         if (!isGrass(t)) continue;
+        if (mainIslandInland(x, y) <= 0) continue;   // (the islands out at sea have their own jungle)
         float n = fbm(x * 0.13f + 40, y * 0.13f + 40, SEED + 31);
         bool nearBase = false;
         for (auto& s : starts) if (std::abs(x - s.tx) < 15 && std::abs(y - s.ty) < 15) nearBase = true;
         float dc = std::sqrt((x - C) * (x - C) + (y - C) * (y - C));
-        if (nearBase || dc < 24 * GL) continue;
+        if (nearBase || dc < 24 * GL || relicGround(x, y)) continue;
         // keep roads' neighbors clear
         bool nearRoad = false;
         for (int dy = -1; dy <= 1 && !nearRoad; dy++) for (int dx = -1; dx <= 1; dx++)
             if (tiles[(y + dy) * MAP_W + x + dx] == T_ROAD) { nearRoad = true; break; }
         if (nearRoad) continue;
         if (n > 0.63f) t = T_TREE;
+    }
+    // ... but the jungle grows right up to the relic outposts' walls: a fringe of trees round each clearing
+    for (int y = 2; y < MAP_H - 2; y++) for (int x = 2; x < MAP_W - 2; x++) {
+        u8& t = tiles[y * MAP_W + x];
+        if (!isGrass(t) && t != T_DIRT) continue;
+        if (!relicGround(x, y)) continue;
+        bool edge = !relicGround(x - 3, y) || !relicGround(x + 3, y) || !relicGround(x, y - 3) || !relicGround(x, y + 3);
+        if (edge && hash2(x, y, SEED + 471) < 0.45f) t = T_TREE;
     }
     // Forest belts: two dense stands in each quadrant between the base and the ring road (cover for infantry, never sealed:
     // the noise gate leaves gaps a column can thread). Placed by rotation so every quadrant gets the same woods.
@@ -349,34 +433,43 @@ void Map::generate() {
                 bool near = false;
                 for (auto& s : starts) if (std::abs(x - s.tx) < 14 && std::abs(y - s.ty) < 14) near = true;
                 for (int j = -1; j <= 1 && !near; j++) for (int i = -1; i <= 1; i++) if (tiles[(y + j) * MAP_W + x + i] == T_ROAD) near = true;
-                if (near) continue;
+                if (near || std::abs(y - (int)C) < 9) continue;   // (and never on the canal's banks)
                 if (fbm(x * 0.35f + 9, y * 0.35f + 4, SEED + 47) > 0.38f + 0.25f * d) t = T_TREE;
             }
         }
     }
-    // Supply piles: two per base, four on the lake shore, four in the lateral gaps, four contested ones in the quadrant woods
+    // Supply piles: two per base, the lake shore's, the lateral gaps', and contested ones in the quadrant woods (the canal's banks have two each
+    // side where the old west and east piles stood)
     supplies = {
         {8, 21, 36000}, {21, 8, 36000},
         {95, 21, 36000}, {82, 8, 36000},
         {8, 82, 36000}, {21, 95, 36000},
         {95, 82, 36000}, {82, 95, 36000},
-        {52, 29, 50000}, {75, 52, 50000}, {52, 75, 50000}, {29, 52, 50000},
-        {46, 8, 36000}, {8, 57, 36000}, {57, 95, 36000}, {95, 46, 36000},
+        {52, 29, 50000}, {52, 75, 50000},
+        {46, 8, 36000}, {57, 95, 36000},
         {18, 33, 30000}, {70, 18, 30000}, {85, 70, 30000}, {33, 85, 30000},
     };
     for (size_t k = 0; k < supplies.size(); k++) {
         auto& supply = supplies[k];
-        bool shore = k >= 8 && k < 12;   // the four on the lake shore move out with the lake country
+        bool shore = k >= 8 && k < 10;   // the two on the lake shore move out with the lake country
         supply.tx = shore ? (int)std::lround(inner(supply.tx + 0.5f) - 0.5f) : O + (int)std::lround((supply.tx + 0.5f) * G - 0.5f);
         supply.ty = shore ? (int)std::lround(inner(supply.ty + 0.5f) - 0.5f) : O + (int)std::lround((supply.ty + 0.5f) * G - 0.5f);
     }
-    // three rich piles on the second island (nobody's: whoever ships a hauler and a Supply Hub over gets them)
-    supplies.push_back({ (int)SEA_ISLE_X - 3, (int)C - 21, 50000 });
-    supplies.push_back({ (int)SEA_ISLE_X + 3, (int)C - 2, 50000 });
-    supplies.push_back({ (int)SEA_ISLE_X - 4, (int)C + 19, 50000 });
+    {   // the lake's west and east mouths: a pile on each bank, between the lateral road's bridge and the ring road's
+        int px = (int)std::lround((ln + rx0) * 0.5f);
+        supplies.push_back({ px, CANAL_Y0 - 8, 34000 }); supplies.push_back({ px, CANAL_Y1 + 8, 34000 });
+        supplies.push_back({ MAP_W - 1 - px, CANAL_Y0 - 8, 34000 }); supplies.push_back({ MAP_W - 1 - px, CANAL_Y1 + 8, 34000 });
+    }
+    // two rich piles on each jungle island, north and south of the relic base (nobody's: whoever ships a hauler and a Supply Hub over gets them)
+    for (int side = 0; side < 2; side++) {
+        int sx = (int)(side ? SEA_ISLE_XW : SEA_ISLE_X);
+        supplies.push_back({ sx - 3, (int)C - 24, 50000 });
+        supplies.push_back({ sx + 2, (int)C + 23, 50000 });
+    }
     // Clear the ground around supply piles and bases so nothing important is walled in
     for (auto& s : supplies) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 3.4f, T_DIRT, [](u8 t) { return t == T_TREE || t == T_ROCK || t == T_WATER; });
     for (auto& s : starts) paintDisc(*this, s.tx + 0.5f, s.ty + 0.5f, 11.5f, T_GRASS, [](u8 t) { return t == T_TREE || t == T_ROCK; });
+    for (auto& t : trailTiles) if (tiles[t.second * MAP_W + t.first] == T_TREE) tiles[t.second * MAP_W + t.first] = T_DIRT;
 
     // Clearings sealed inside a forest (a few tiles of open ground with trees on every side, no road through them) grow over: on the bigger
     // map the noise woods close more of them, and nothing can ever walk in (a structure or a Waymaker still clears its way to the ground)
@@ -406,11 +499,11 @@ void Map::generate() {
         }
     }
     // Pockets of the main island's ground walled in by the coast's cliffs and the sea (a strip of beach under a cliff, a cliff top) are part of the
-    // cliffs: nothing could ever walk in or out. (The lake's islands are cut off by design, and so is everything out at sea.)
+    // cliffs: nothing could ever walk in or out. (The lake's islands are cut off by design, and so is everything out at sea and on the deltas.)
     {
         static int labC[MAP_W * MAP_H];
         memset(labC, 0, sizeof(labC));
-        auto open = [&](int i) { u8 t = tiles[i]; return t != T_WATER && t != T_ROCK && t != T_TREE; };
+        auto open = [&](int i) { u8 t = tiles[i]; return (t != T_WATER || bridge[i]) && t != T_ROCK && t != T_TREE; };
         std::vector<int> sizes(1, 0), stack;
         for (int i = 0; i < MAP_W * MAP_H; i++) {
             if (labC[i] || !open(i)) continue;
@@ -433,17 +526,17 @@ void Map::generate() {
             int id = labC[i];
             if (!id || id == mainId || sizes[id] > 160) continue;
             int x = i % MAP_W, y = i / MAP_W;
-            if (mainIslandInland(x, y) <= 0) continue;   // (out at sea: the second island and the islets)
+            if (mainIslandInland(x, y) <= 0) continue;   // (out at sea: the jungle islands, the secret islands and the islets)
             bool lakeIsle = false;
             for (auto& isl : islands) if ((x - isl.cx) * (x - isl.cx) + (y - isl.cy) * (y - isl.cy) <= (isl.r + 3) * (isl.r + 3)) lakeIsle = true;
-            if (lakeIsle || mainIslandInland(x, y) > 14.0f) continue;   // (only the coast: pockets inland are the forests' business, see above)
+            if (lakeIsle || mainIslandInland(x, y) > 14.0f || relicGround(x, y)) continue;   // (only the coast: pockets inland are the forests' business, see above)
             tiles[i] = T_ROCK;
         }
     }
-    // Blocked flags
+    // Blocked flags (a bridge's deck is water with a road over it: passable while the bridge stands)
     for (int i = 0; i < MAP_W * MAP_H; i++) {
         u8 t = tiles[i];
-        blocked[i] = (t == T_WATER || t == T_ROCK || t == T_TREE) ? 1 : 0;
+        blocked[i] = ((t == T_WATER && !bridge[i]) || t == T_ROCK || t == T_TREE) ? 1 : 0;
     }
     for (auto& s : supplies) setResource(s.tx, s.ty, true);
     // What a structure may be built over: every tree, and rock that belongs to a small outcrop or islet (a 4-connected patch of at most
@@ -473,7 +566,7 @@ void Map::generate() {
             if (!border && (int)comp.size() <= SMALL_ROCK) for (int c : comp) clearable[c] = 2;
         }
     }
-    // bodies of water (4-connected): the lake is the one a Naval Yard may touch
+    // bodies of water (4-connected; a bridge's deck is water too: the canal runs on under it)
     memset(waterComp, 0, sizeof(waterComp));
     waterSize.assign(1, 0);
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
@@ -492,12 +585,14 @@ void Map::generate() {
             }
         }
     }
-    // landmasses (4-connected land, bridges included): the main island, the second island, each islet. Structures and trees do not split them
+    // landmasses (4-connected land, bridge decks included: the two halves of the main island are one landmass while the bridges stand, and stay one
+    // in this map even while they are broken - they are raised again): the main island, each sea island, each islet, the deltas
     landComp.assign((size_t)MAP_W * MAP_H, 0);
     {
+        auto land = [&](int i) { return tiles[i] != T_WATER || bridge[i]; };
         int id = 0;
         for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
-            if (tiles[y * MAP_W + x] == T_WATER || landComp[y * MAP_W + x]) continue;
+            if (!land(y * MAP_W + x) || landComp[y * MAP_W + x]) continue;
             id++;
             std::vector<int> stack{ y * MAP_W + x };
             landComp[y * MAP_W + x] = (u16)id;
@@ -507,13 +602,13 @@ void Map::generate() {
                 static const int DX4[4] = {1, -1, 0, 0}, DY4[4] = {0, 0, 1, -1};
                 for (int k = 0; k < 4; k++) {
                     int nx = ix + DX4[k], ny = iy + DY4[k];
-                    if (!inMap(nx, ny) || tiles[ny * MAP_W + nx] == T_WATER || landComp[ny * MAP_W + nx]) continue;
+                    if (!inMap(nx, ny) || !land(ny * MAP_W + nx) || landComp[ny * MAP_W + nx]) continue;
                     landComp[ny * MAP_W + nx] = (u16)id; stack.push_back(ny * MAP_W + nx);
                 }
             }
         }
     }
-    // the ocean is the biggest body of water; the lake is the body that holds most of the water round the map's centre
+    // the ocean is the biggest body of water; the lake is the water at the map's centre (the canal joins it to the ocean: then they are one sea)
     oceanComp = 0;
     for (int i = 1; i < (int)waterSize.size(); i++) if (waterSize[i] > waterSize[oceanComp]) oceanComp = i;
     {
@@ -522,7 +617,7 @@ void Map::generate() {
         for (int y = (int)(C - LR); y <= (int)(C + LR); y++) for (int x = (int)(C - LR); x <= (int)(C + LR); x++)
             if (inMap(x, y) && (x - C) * (x - C) + (y - C) * (y - C) <= LR * LR) near[waterComp[y * MAP_W + x]]++;
         lakeComp = 0;
-        for (int i = 1; i < (int)near.size(); i++) if (i != oceanComp && near[i] > near[lakeComp]) lakeComp = i;
+        for (int i = 1; i < (int)near.size(); i++) if (near[i] > near[lakeComp]) lakeComp = i;
     }
     // how far every tile lies from land (0 on land), chamfered 2-3 (so 2 = one tile straight, 3 = one diagonal step) then halved
     shoreDist.assign((size_t)MAP_W * MAP_H, 0);
@@ -555,9 +650,9 @@ void Map::generate() {
         waterDist.assign((size_t)MAP_W * MAP_H, 0);
         for (int i = 0; i < MAP_W * MAP_H; i++) waterDist[i] = (u8)std::min(255, d[i] / 2);
     }
-    // Interior water grouped for the overlay passes (see map.h): the whole ocean gets the swell in aligned 8x8 blocks, then 4x4 blocks, then
-    // single tiles (no seam between the coast and the open sea), and its shallows a list of tiles for the fading caustics; the lake and the
-    // rivers get caustics in aligned 4x4 blocks, then whatever interior tiles remain.
+    // Interior water grouped for the overlay passes (see map.h): the ocean gets the swell in aligned 8x8 blocks, then 4x4 blocks, then single tiles
+    // (no seam between the coast and the open sea), and its shallows a list of tiles for the fading caustics; the lake and the canal (the water
+    // inside the main island's coast: fresh water) get caustics in aligned 4x4 blocks, then whatever interior tiles remain.
     waterBlocks.clear(); waterTiles.clear(); seaBlocks.clear(); seaQuads.clear(); seaTiles.clear(); seaShallow.clear();
     {
         auto interior = [&](int x, int y) {
@@ -565,8 +660,9 @@ void Map::generate() {
             return tiles[y * MAP_W + x] == T_WATER && tiles[y * MAP_W + x - 1] == T_WATER && tiles[y * MAP_W + x + 1] == T_WATER
                 && tiles[(y - 1) * MAP_W + x] == T_WATER && tiles[(y + 1) * MAP_W + x] == T_WATER;
         };
-        auto ocean = [&](int x, int y) { return interior(x, y) && waterComp[y * MAP_W + x] == oceanComp; };
-        auto inland = [&](int x, int y) { return interior(x, y) && waterComp[y * MAP_W + x] != oceanComp; };
+        auto fresh = [&](int x, int y) { return freshWater(x, y); };
+        auto ocean = [&](int x, int y) { return interior(x, y) && !fresh(x, y); };
+        auto inland = [&](int x, int y) { return interior(x, y) && fresh(x, y); };
         static u8 covered[MAP_W * MAP_H];
         memset(covered, 0, sizeof(covered));
         // the ocean's swell: the biggest aligned blocks first, then 4x4 blocks, then single tiles
@@ -589,7 +685,7 @@ void Map::generate() {
             if (!covered[y * MAP_W + x]) seaTiles.push_back(y * MAP_W + x);
             if (shoreDist[y * MAP_W + x] <= SEA_CAUSTIC_REACH) seaShallow.push_back(y * MAP_W + x);
         }
-        // the lake and the rivers: caustics everywhere
+        // the lake and the canal: caustics everywhere
         memset(covered, 0, sizeof(covered));
         for (int by = 4; by + 3 < MAP_H - 1; by += 4) for (int bx = 4; bx + 3 < MAP_W - 1; bx += 4) {
             bool full = true;
@@ -605,6 +701,13 @@ void Map::generate() {
     // They are placed on valid open ground away from roads and, before they are reserved, checked not to seal a corridor. Each gets a worn dirt
     // apron (tiles only: no new obstacle) so the landmark reads as part of the landscape rather than a building dropped on the grass.
     landmarks.clear();
+    auto landmarkFits = [&](int x, int y, int w, int h) {
+        for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
+            if (!buildable(i, j) || tile(i, j) == T_ROAD) return false;
+            if ((blocked[j * MAP_W + i] & 2) || (blocked[j * MAP_W + i] & 4)) return false;
+        }
+        return !wouldPlug(x, y, w, h);
+    };
     {
         static const struct { int x, y, w, h, kind; } BASE[5] = {
             { 27, 38, 4, 4, 0 },   // castle
@@ -613,19 +716,12 @@ void Map::generate() {
             { 24, 39, 2, 2, 3 },   // abandoned cottage beside the castle
             { 32, 36, 3, 2, 4 },   // old roadside workshop
         };
-        auto landmarkFits = [&](int x, int y, int w, int h) {
-            for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
-                if (!buildable(i, j) || tile(i, j) == T_ROAD) return false;
-                if ((blocked[j * MAP_W + i] & 2) || (blocked[j * MAP_W + i] & 4)) return false;
-            }
-            return !wouldPlug(x, y, w, h);
-        };
         for (int q = 0; q < 4; q++) for (auto& L : BASE) {
             int tx = (int)std::lround(inner((float)L.x)), ty = (int)std::lround(inner((float)L.y)), w = L.w, h = L.h;
             for (int k = 0; k < q; k++) { int nx = MAP_W - ty - h, ny = tx; tx = nx; ty = ny; }   // rotate the whole set with the quadrant
             auto fits = [&](int x, int y) { return landmarkFits(x, y, w, h); };
             int bx = tx, by = ty;
-            if (!fits(bx, by)) {   // a river, rock or a narrow corridor shifted on this seed: take the nearest legal footprint
+            if (!fits(bx, by)) {   // the canal, rock or a narrow corridor shifted on this seed: take the nearest legal footprint
                 float best = 1e18f; int fx = -1, fy = -1;
                 for (int r = 1; r <= 10; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
                     if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
@@ -658,20 +754,103 @@ void Map::generate() {
             int tx = (int)C - 4, ty = (int)C + 1;
             if (landmarkFits(tx, ty, 2, 2)) { landmarks.push_back({ tx, ty, 2 }); setStructure(tx, ty, 2, 2, true); }
         }
-        // the second island's old strongholds: a castle in the middle, a watchtower at the north end, a civilian bunker in the south
-        static const struct { int dx, dy, w, h, kind; } SEA[3] = { { -5, 5, 4, 4, 0 }, { -1, -29, 2, 2, 2 }, { -2, 27, 3, 3, 1 } };
-        for (auto& L : SEA) {
-            int tx = (int)SEA_ISLE_X + L.dx, ty = (int)C + L.dy, bx = -1, by = -1;
-            for (int r = 0; r <= 6 && bx < 0; r++) for (int dy = -r; dy <= r && bx < 0; dy++) for (int dx = -r; dx <= r; dx++) {
-                if (std::max(std::abs(dx), std::abs(dy)) != r || !landmarkFits(tx + dx, ty + dy, L.w, L.h)) continue;
+    }
+    // ---- The abandoned relic bases. Each layout is given for the west side (the delta and its banks, the jungle island) or the north (the secret
+    // island), in tiles from an anchor, and mirrored for the other; a footprint that does not fit on this map's ground moves to the nearest legal spot
+    // within a few tiles, or is left out (it must never wall off a corridor). Walls (Relic Ramparts) are left out where a tile is taken.
+    {
+        auto relicFits = [&](int x, int y, int w, int h) {
+            for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
+                if (!inMap(i, j) || bridge[j * MAP_W + i] || tile(i, j) == T_WATER || tile(i, j) == T_ROAD) return false;
+                if (blocked[j * MAP_W + i] & 6) return false;
+                if ((tile(i, j) == T_ROCK || tile(i, j) == T_TREE) && !clearable[j * MAP_W + i]) return false;
+            }
+            // a tile of open ground round it (walls excepted) so nothing of the base seals a lane
+            if (w > 1 || h > 1) for (int j = y - 1; j <= y + h; j++) for (int i = x - 1; i <= x + w; i++) {
+                if (!inMap(i, j) || (i >= x && i < x + w && j >= y && j < y + h)) continue;
+                if (blocked[j * MAP_W + i] & 6) return false;
+            }
+            return !wouldPlug(x, y, w, h);
+        };
+        auto put = [&](int type, int tx, int ty, bool secret, int reach) {
+            const BuildType& b = BUILDS[type];
+            int bx = -1, by = -1;
+            for (int r = 0; r <= reach && bx < 0; r++) for (int dy = -r; dy <= r && bx < 0; dy++) for (int dx = -r; dx <= r; dx++) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r || !relicFits(tx + dx, ty + dy, b.w, b.h)) continue;
                 bx = tx + dx; by = ty + dy; break;
             }
-            if (bx < 0) continue;
-            landmarks.push_back({ bx, by, L.kind });
-            setStructure(bx, by, L.w, L.h, true);
-            paintDisc(*this, bx + L.w * 0.5f, by + L.h * 0.5f, std::max(L.w, L.h) * 0.5f + 2.0f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2; });
+            if (bx < 0) return;
+            clearForStructure(bx, by, b.w, b.h);
+            setStructure(bx, by, b.w, b.h, true);
+            relics.push_back({ type, bx, by, secret });
+        };
+        struct L { int type, dx, dy; };
+        // the delta island (anchor: its west column and the map's middle row) and its two banks
+        static const L DELTA[] = {
+            { B_R_COMMAND, 3, -3 }, { B_R_FLAK, 12, -5 }, { B_R_FLAK, 12, 3 }, { B_R_LASER, 15, -1 },
+            // north bank (rows above the north channel)
+            { B_R_FOUNDRY, -1, -28 }, { B_R_REACTOR, 13, -28 }, { B_R_CANNON, 18, -23 }, { B_R_LASER, 0, -22 },
+            // south bank
+            { B_R_AIRSTRIP, -1, 24 }, { B_R_REACTOR, 13, 25 }, { B_R_CANNON, 18, 20 }, { B_R_FLAK, 0, 20 },
+        };
+        const int DI0 = O + 8;
+        for (int side = 0; side < 2; side++) for (const L& l : DELTA) {
+            const BuildType& b = BUILDS[l.type];
+            int tx = DI0 + l.dx, ty = (int)C + l.dy;
+            if (side) tx = MAP_W - tx - b.w;
+            put(l.type, tx, ty, false, 4);
+        }
+        // the delta island's ramparts: a broken line along its seaward tip (one in three fallen)
+        for (int side = 0; side < 2; side++) for (int y = (int)C - 5; y <= (int)C + 4; y++) {
+            if (hash2(y, side, SEED + 480) < 0.34f) continue;
+            int tx = DI0 + 1; if (side) tx = MAP_W - tx - 1;
+            put(B_R_WALL, tx, y, false, 0);
+        }
+        // the jungle islands' bases (anchor: the island's centre tile)
+        static const L ISLE[] = {
+            { B_R_COMMAND, -2, -2 }, { B_R_SILO, -1, 8 }, { B_R_REACTOR, -9, -8 }, { B_R_FOUNDRY, -10, -1 }, { B_R_AIRSTRIP, 4, -8 },
+            { B_R_CANNON, 6, -1 }, { B_R_FLAK, -6, 8 }, { B_R_FLAK, 6, 7 }, { B_R_LASER, -1, -9 }, { B_R_LASER, -1, 13 }, { B_R_REACTOR, 5, 11 },
+        };
+        for (int side = 0; side < 2; side++) {
+            int cx = (int)(side ? SEA_ISLE_XW : SEA_ISLE_X), cy = (int)C;
+            for (const L& l : ISLE) {
+                const BuildType& b = BUILDS[l.type];
+                int tx = cx + l.dx, ty = cy + l.dy;
+                if (side) tx = 2 * cx - tx - b.w;
+                put(l.type, tx, ty, false, 3);
+            }
+            // its ramparts: the old perimeter, a rectangle with gates on the trail and gaps where the wall has fallen
+            for (int k = -12; k <= 12; k++) for (int e = 0; e < 4; e++) {
+                int tx = e < 2 ? cx + k : cx + (e == 2 ? -13 : 13), ty = e < 2 ? cy + (e == 0 ? -15 : 16) : cy + k;
+                if ((e < 2 && std::abs(k) <= 2) || (e >= 2 && std::abs(k) <= 1)) continue;   // the gates
+                if (hash2(tx, ty, SEED + 481) < 0.38f) continue;   // fallen
+                put(B_R_WALL, tx, ty, false, 0);
+            }
+        }
+        // the secret islands: a Sentinel Bunker, a Hydra Silo and a flak battery under the canopy
+        for (int side = 0; side < 2; side++) {
+            int cy = (int)(side ? MAP_H - SECRET_ISLE_Y : SECRET_ISLE_Y), cx = (int)C;
+            static const L SECRET[] = { { B_R_BUNKER, -5, -1 }, { B_R_SILO, 2, -1 }, { B_R_FLAK, -1, 1 } };
+            for (const L& l : SECRET) {
+                const BuildType& b = BUILDS[l.type];
+                int tx = cx + l.dx, ty = cy + l.dy;
+                if (side) ty = 2 * cy - ty - b.h;
+                put(l.type, tx, ty, true, 2);
+            }
         }
     }
+    // The jungle among the ruins: single young trees on the overgrown ground between the relic structures (never touching another tree, a structure or
+    // a pile, so no lane closes; a structure raised there later clears them like any tree)
+    for (int y = 2; y < MAP_H - 2; y++) for (int x = 2; x < MAP_W - 2; x++) {
+        int i = y * MAP_W + x;
+        if (!overgrown[i] || blocked[i] || bridge[i] || (tiles[i] != T_GRASS && tiles[i] != T_GRASS2 && tiles[i] != T_DIRT)) continue;
+        if (hash2(x, y, SEED + 490) > 0.085f) continue;
+        bool crowded = false;
+        for (int j = -1; j <= 1 && !crowded; j++) for (int k = -1; k <= 1; k++) { int n = (y + j) * MAP_W + x + k; if (n != i && (blocked[n] || tiles[n] == T_TREE || tiles[n] == T_ROAD)) { crowded = true; break; } }
+        if (crowded || wouldPlug(x, y, 1, 1)) continue;
+        tiles[i] = T_TREE; blocked[i] = 1; clearable[i] = 1;
+    }
+    regionDirty = true;
     // Short worn access tracks tie the settlement to its road network. Paint only
     // traversable ground along a real path: no new bridge, obstacle or water fill.
     for (const auto& L : landmarks) {

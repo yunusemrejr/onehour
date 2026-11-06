@@ -754,6 +754,8 @@ BArtSize artBuildingSize(int type) {
 
 void artBuilding(Canvas& c, Canvas& mask, int type) {
     const BuildType& bt = BUILDS[type];
+    if (relicBuild(type)) { artRelicBuilding(c, mask, type - B_R_COMMAND, bt.w, bt.h); return; }   // the abandoned bases (artb_relic.cpp)
+    if (bt.role == BR_BRIDGE) return;   // (a bridge is drawn from its own sprites: Gfx::bridgeArt)
     if (artNavalBuilding(c, mask, type)) return;
     if (artSpecialBuilding(c, mask, type)) return;
     if (artBunker(c, mask, type)) return;

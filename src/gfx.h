@@ -105,6 +105,9 @@ struct Gfx {
     Sprite chute[MAX_PLAYERS];                 // parachute canopy by owner colour
     Sprite aidPlane, aidChute, crate, crateOpen;   // Aid Drop: the white relief plane, its sky-blue canopies and the wooden crates
     Sprite turretHead[4];           // laser turret, gun nest, patriot, rocket battery
+    Sprite subArt[2][MAX_PLAYERS][2];   // a submarine's other looks: [0 Cyber / 1 Clanker][owner][0 dived (its own side sees a shadow under the water), 1 launching]
+    Sprite relicHead[3];            // the relic defences' heads: flak launcher, lancer emitter, siege cannon (artRelicTurretHead)
+    Sprite bridgeArt[3];            // a canal bridge: intact, broken, being raised again (artBridge; drawn on the ground layer under everything)
     Sprite building[B_COUNT];       // one colour sprite per structure type, shared by every owner (2x supersampled, shadow baked in)
     Sprite buildingTeam[B_COUNT];   // white-on-clear owner marks, drawn over the structure with the owner's colour modulated in
     Sprite bunkerUpg[F_COUNT][BU_COUNT];   // per-bunker upgrades painted alone, drawn over a bunker that has them (same anchor as its sprite)

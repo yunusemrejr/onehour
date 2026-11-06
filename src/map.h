@@ -11,17 +11,27 @@ struct SupplySpot { int tx, ty; int amount; };
 // 5 Mountain Fortress (set into a ridge), 6 Island Nuke Launcher (one on each lake island) (see Sim::spawnMapLandmarks).
 // They are filled in by generate() in four rotated copies, so every corner of the map gets the same set.
 struct LandmarkSpot { int tx, ty; int kind; };
+// A structure of an abandoned relic base, placed by the generator (BuildTypeId, top-left tile); secret: hidden on a secret island
+struct RelicSpot { int type, tx, ty; bool secret; };
+// A bridge over the canal (top-left tile of its BRIDGE_W x BRIDGE_L deck, which runs north-south)
+struct BridgeSpot { int tx, ty; };
 struct RoadSeg { float x0, y0, x1, y1, halfW; };
 // The towns and cities round the lake (see DISTRICT_* in data.h and Sim::districts): a cluster of civic blocks (CivicKind, top-left tile) with a
 // paved street round every block. 'city' areas use the glass-and-steel (Cyber) civic designs, the others the old brick (Clanker) ones.
 struct DistrictBlock { int kind, tx, ty; };
 struct DistrictSpot { const char* name; bool city; float cx, cy; std::vector<DistrictBlock> blocks; };   // tile units; kept so the baked terrain can paint centre lines
 
-// The second island out in the eastern sea (Map::seaIslands[0]): a squarish oval RX x RY tiles round (SEA_ISLE_X, the map's middle row), set midway
-// between the main island's east coast (its headlands reach about ISLE_X0 + ISLE_W) and the map's edge, so open water lies on both sides of it
-static const float SEA_ISLE_X = (ISLE_X0 + ISLE_W + MAP_W) * 0.5f, SEA_ISLE_RX = 13.0f, SEA_ISLE_RY = 40.0f;
+// The two jungle islands out at sea (Map::seaIslands[0] east, [1] west): squarish ovals RX x RY tiles round (SEA_ISLE_X and its mirror, the map's middle
+// row), set midway between the main island's coast and the map's edge, so open water lies on both sides of them. Each holds an abandoned relic base.
+static const float SEA_ISLE_X = (ISLE_X0 + ISLE_W + MAP_W) * 0.5f, SEA_ISLE_RX = 18.0f, SEA_ISLE_RY = 46.0f;
+static const float SEA_ISLE_XW = MAP_W - SEA_ISLE_X;   // the west island's centre
+// The two secret islands (seaIslands[2] north, [3] south): small jungle islands on the main island's north-south axis, each hiding a Sentinel Bunker and a
+// Hydra Silo under the canopy (secret: nobody sees them until a unit of theirs has come close, see Entity.secret)
+static const float SECRET_ISLE_Y = (ISLE_X0 - 4) * 0.5f + 1.0f, SECRET_ISLE_RX = 9.5f, SECRET_ISLE_RY = 7.5f;
+// The canal: ten tiles of water (rows CANAL_Y0..CANAL_Y1) from each coast to the lake; at each mouth it splits round a delta island
+static const int CANAL_Y0 = MAP_H / 2 - 5, CANAL_Y1 = MAP_H / 2 + 4;
 float mainIslandInland(int x, int y);   // tiles inland from the main island's coast (<= 0: the sea)
-float seaIslandInland(int x, int y);    // ... from the second island's coast
+float seaIslandInland(int x, int y);    // ... from the coast of the nearer of the two jungle islands (east or west)
 
 struct Map {
     u8 tiles[MAP_W * MAP_H];
@@ -37,6 +47,8 @@ struct Map {
     std::vector<SupplySpot> supplies;
     std::vector<LandmarkSpot> landmarks;   // neutral civilian castles / bunkers / watchtowers, 4 rotated copies of each kind, the ridge fortresses and island launchers
     std::vector<DistrictSpot> districts;   // the civilian areas round the lake (four: either side of the north and south shore piles)
+    std::vector<RelicSpot> relics;         // the abandoned relic bases' structures (the two deltas, the two jungle islands, the two secret islands)
+    std::vector<BridgeSpot> bridgeSpots;   // the canal's bridges (the deck tiles are water: Map::bridge marks them, and they are passable while the bridge stands)
     struct Island { float cx, cy, r; };    // the lake's islands (tile units): [0] the big one in the middle, [1] the small one off the east shore
     std::vector<Island> islands;
     struct SeaIsland { float cx, cy, rx, ry; };   // out in the ocean: [0] the second island, then the islets (tile units)
@@ -55,6 +67,10 @@ struct Map {
     static constexpr int SEA_CAUSTIC_REACH = 6;
     std::vector<u8> shoreDist;
     std::vector<u8> waterDist;      // land tiles: tiles to the nearest water of any kind (chamfered, capped at 255; 0 on water)
+    std::vector<u8> fresh;          // per tile: inside the main island's coast (its water is the lake's or the canal's: fresh water, caustics, reeds, lily pads)
+    std::vector<u8> overgrown;      // per tile: ground the jungle has taken back (the relic bases, the jungle islands): a mossy, leaf-strewn floor, thick undergrowth
+    bool overgrownAt(int x, int y) const { return inMap(x, y) && !overgrown.empty() && overgrown[(size_t)y * MAP_W + x]; }
+    bool freshWater(int x, int y) const { return inMap(x, y) && tiles[y * MAP_W + x] == T_WATER && !fresh.empty() && fresh[(size_t)y * MAP_W + x]; }
 
     void generate();
     u8 tile(int x, int y) const { return tiles[y * MAP_W + x]; }

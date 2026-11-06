@@ -32,6 +32,7 @@ void Sim::spawnDistricts() {
 // held by an enemy - its own side's, an ally's, or a neutral one's (raising a town before taking it is a fair bet). Any kind of dozer works on a town.
 bool Sim::dozerMayWork(const Entity& dz, const Entity& b) const {
     if (!b.isBuilding() || !dz.isUnit() || dz.ut().role != UR_DOZER) return false;
+    if (b.bt().role == BR_BRIDGE) return !civicDozerType(dz.type);   // a canal bridge is nobody's: any army's dozer raises it again or patches it up
     if (b.district >= 0) return b.owner < 0 || b.owner == dz.owner || !enemies(dz.owner, b.owner);
     if (b.owner != dz.owner) return false;
     return b.constructed ? canMend(dz, b.type) : canRaise(dz, b.type);

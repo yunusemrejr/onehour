@@ -2853,10 +2853,66 @@ static void writeRelicSheet(const char* path) {
     printf("wrote %s\n", path);
 }
 
+// ONEHOUR_RELICSHEET=<file.bmp>: headless preview of the relic structures (artb_relic.cpp) on grass: every kind at its footprint, the armed
+// silo beside the bare one, the three turret heads drawn over their bases at the base centre, and the three bridge states. Team marks are
+// tinted with Cyber's colour, as the game tints them.
+static void writeRelicBuildSheet(const char* path) {
+    const int FP[10][2] = {{4, 4}, {3, 3}, {5, 4}, {5, 4}, {2, 2}, {2, 2}, {3, 3}, {1, 1}, {3, 3}, {3, 3}};   // footprints in tiles, by relic kind
+    auto canvasFor = [](int w, int h) { return Canvas((w * TILE + BART_PAD_L + BART_PAD_R) * BART_K, (h * TILE + BART_PAD_T + BART_PAD_B) * BART_K); };
+    Canvas out(1440, 1756);
+    for (int y = 0; y < out.h; y++) for (int x = 0; x < out.w; x++) out.px[y * out.w + x] = Canvas::pack(((x / 9 + y / 7) & 1) ? rgb(84, 118, 58) : rgb(78, 112, 54));
+    auto blit = [](Canvas& dst, const Canvas& src, int x0, int y0) { for (int y = 0; y < src.h; y++) for (int x = 0; x < src.w; x++) dst.set(x0 + x, y0 + y, Canvas::unpack(src.px[y * src.w + x])); };
+    auto structure = [&](int kind) {   // the painted structure with its team mask in the owner's colour
+        int w = FP[kind][0], h = FP[kind][1];
+        Canvas base = canvasFor(w, h), mask = canvasFor(w, h);
+        artRelicBuilding(base, mask, kind, w, h);
+        Color t = PLAYER_COLOR[0];
+        for (int i = 0; i < (int)mask.px.size(); i++) {
+            Color m = Canvas::unpack(mask.px[i]);
+            if (!m.a) continue;
+            Color b0 = Canvas::unpack(base.px[i]);
+            float k = m.a / 255.0f;
+            base.px[i] = Canvas::pack(Color{(u8)(b0.r + (t.r * m.r / 255 - b0.r) * k), (u8)(b0.g + (t.g * m.g / 255 - b0.g) * k), (u8)(b0.b + (t.b * m.b / 255 - b0.b) * k), std::max(b0.a, m.a)});
+        }
+        return base;
+    };
+    auto headed = [&](int kind, int which) {   // a turret head over its base, centred on the footprint centre (64x64 at 1x on the 2x base, as the game draws it)
+        Canvas base = structure(kind), hd(64, 64);
+        artRelicTurretHead(hd, which);
+        int cx = (BART_PAD_L + FP[kind][0] * 16) * BART_K, cy = (BART_PAD_T + FP[kind][1] * 16) * BART_K;
+        blit(base, hd, cx - 32, cy - 32);
+        return base;
+    };
+    // row 1: Command, Reactor, Foundry, Airstrip
+    blit(out, structure(0), 8, 8);
+    blit(out, structure(1), 332, 8);
+    blit(out, structure(2), 592, 8);
+    blit(out, structure(3), 980, 8);
+    // row 2: the three heads on their bases, then three wall segments chained as they stand in a line
+    blit(out, headed(4, 0), 8, 364);
+    blit(out, headed(5, 1), 204, 364);
+    blit(out, headed(6, 2), 400, 364);
+    for (int i = 0; i < 3; i++) blit(out, structure(7), 672 + i * 64, 364);
+    // row 3: the bare silo, the silo with its armed overlay, the secret bunker
+    blit(out, structure(8), 8, 656);
+    {
+        Canvas armed = structure(8), arm = canvasFor(3, 3);
+        artRelicSiloArmed(arm, 3, 3);
+        blit(armed, arm, 0, 0);
+        blit(out, armed, 268, 656);
+    }
+    blit(out, structure(9), 528, 656);
+    // row 4: the bridge intact, broken and under repair
+    for (int s = 0; s < 3; s++) { Canvas br(224, 800); artBridge(br, s); blit(out, br, 8 + s * 236, 948); }
+    if (SDL_Surface* sf = SDL_CreateRGBSurfaceWithFormatFrom(out.px.data(), out.w, out.h, 32, out.w * 4, SDL_PIXELFORMAT_ABGR8888)) { SDL_SaveBMP(sf, path); SDL_FreeSurface(sf); }
+    printf("wrote %s\n", path);
+}
+
 int main(int argc, char** argv) {
     if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
     if (const char* bs = getenv("ONEHOUR_BUNKERSHEET")) { writeBunkerSheet(bs); return 0; }
     if (const char* rs = getenv("ONEHOUR_RELICUNITS")) { writeRelicSheet(rs); return 0; }   // preview only: no window, no game state
+    if (const char* rb = getenv("ONEHOUR_RELICSHEET")) { writeRelicBuildSheet(rb); return 0; }   // (the relic structures and the bridge)
     int scale = 0; int reqW = 0, reqH = 0; bool software = false; bool headless = false;
     int selftestSecs = -1; const char* shot = nullptr; const char* sheetPath = nullptr; int ticks = 0; u64 seed = 12345; Faction faction = F_CYBER; int players = 4; int d0 = 3; bool swap = false; int viewPlayer = 0; bool allAi = false; int trainN = 0, evalN = 0, evalAiN = 0, evalDiffN = 0; bool autostart = false; int benchFrames = 0; int lateMin = 0;
     for (int i = 1; i < argc; i++) {   // the headless scene tests check one mechanic each in scenes that run for minutes: no riots in them (full matches - the game,

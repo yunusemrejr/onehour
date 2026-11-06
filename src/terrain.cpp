@@ -229,7 +229,7 @@ inline bool inMapPx(int x, int y) { return x >= 0 && y >= 0 && x < WORLD_W && y 
 inline bool seaShore(int tx, int ty) {
     for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) {
         int x = tx + i, y = ty + j;
-        if (inMap(x, y) && g_map.waterComp[y * MAP_W + x] == g_map.oceanComp && g_map.oceanComp != 0) return true;
+        if (inMap(x, y) && g_map.tiles[y * MAP_W + x] == T_WATER && !g_map.freshWater(x, y)) return true;
     }
     return false;
 }
@@ -802,6 +802,19 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
         for (int cy = y0; cy < y1; cy++) for (int cx = 0; cx < CW; cx++) mask[classOf(cx / 4, cy / 4)][(size_t)cy * CW + cx] = 1.0f;
     });
     std::vector<float> wide = mask[K_WATER];
+    // ground the jungle has taken back (Map::overgrown: the relic bases, the jungle islands), softened like the classes so its edge is a curve
+    std::vector<float> ogF((size_t)CW * CH, 0.0f);
+    std::vector<u8> ogNear((size_t)MAP_W * MAP_H, 0);
+    bool anyOg = false;
+    for (int cy = 0; cy < CH; cy++) for (int cx = 0; cx < CW; cx++) if (g_map.overgrownAt(cx / 4, cy / 4)) { ogF[(size_t)cy * CW + cx] = 1.0f; anyOg = true; }
+    if (anyOg) {
+        blurBox(ogF, CW, CH, 4, 2);
+        for (int ty = 0; ty < MAP_H; ty++) for (int tx = 0; tx < MAP_W; tx++) {
+            bool n = false;
+            for (int j = -2; j <= 2 && !n; j++) for (int i = -2; i <= 2; i++) if (g_map.overgrownAt(tx + i, ty + j)) { n = true; break; }
+            ogNear[(size_t)ty * MAP_W + tx] = n;
+        }
+    }
     // three box passes (about 1.1 tiles of softness): a tile-stepped edge comes out as one smooth curve, not a staircase of tile steps
     // (roads keep a firmer edge, since their kerb is drawn at the boundary; the water keeps its old coverage so the shoreline stays where the water work expects it)
     for (int c = 0; c < K_N; c++) blurBox(mask[c], CW, CH, 4, c == K_ROAD ? 2 : 3);
@@ -867,7 +880,8 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
         for (int ty = 2; ty < MAP_H - 2; ty++) for (int tx = 2; tx < MAP_W - 2; tx++) {
             int tl = g_map.tile(tx, ty);
             if (tl != T_GRASS && tl != T_GRASS2 && tl != T_DIRT) continue;
-            if (nz.fbm(tx * 0.21f + 70, ty * 0.21f + 20) < 0.62f || r.f() > 0.42f) continue;
+            const bool og = g_map.overgrownAt(tx, ty);   // (the jungle's undergrowth is thick)
+            if (nz.fbm(tx * 0.21f + 70, ty * 0.21f + 20) < (og ? 0.40f : 0.62f) || r.f() > (og ? 0.75f : 0.42f)) continue;
             bool near = false;
             for (auto& s : g_map.starts) if (std::abs(tx - s.tx) < 8 && std::abs(ty - s.ty) < 8) near = true;
             for (auto& s : g_map.supplies) if (std::abs(tx - s.tx) < 3 && std::abs(ty - s.ty) < 3) near = true;
@@ -969,7 +983,6 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
             placedC++;
         }
     }
-    marker(D_BRIDGES);
     // ---- props (their sprites live until the bake is done: the plan points at them)
     std::vector<Canvas> logs, walls, stones, hulks, pads, pillars, stumps;
     std::vector<Canvas> hay, fence, wildflowers, mossy, camp, crates, driftwood, boats, signs, cattails, rings, bones, wheat;
@@ -999,8 +1012,8 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
             if (tileAt(x, y) != T_WATER || tileAt(x + 12, y) != T_WATER || tileAt(x - 12, y) != T_WATER || tileAt(x, y + 12) != T_WATER || tileAt(x, y - 12) != T_WATER) continue;
             {   // not out on the open lake: only its shallows next to the shore (rivers and pools anywhere)
                 int ptx = clampi(tileOf(x), 0, MAP_W - 1), pty = clampi(tileOf(y), 0, MAP_H - 1);
-                if (g_map.waterComp[pty * MAP_W + ptx] == g_map.oceanComp) continue;   // (salt water: none on the sea)
-                if (g_map.waterComp[pty * MAP_W + ptx] == g_map.lakeComp) {
+                if (!g_map.freshWater(ptx, pty)) continue;   // (salt water: none on the sea)
+                if (g_map.waterComp[pty * MAP_W + ptx] == g_map.lakeComp) {   // (the lake and the canal: only by their shores)
                     bool shore = false;
                     for (int j = -2; j <= 2 && !shore; j++) for (int i = -2; i <= 2; i++) if (inMap(ptx + i, pty + j) && g_map.tile(ptx + i, pty + j) != T_WATER) { shore = true; break; }
                     if (!shore) continue;
@@ -1080,7 +1093,7 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
             return false;
         };
         auto grassAt = [&](float x, float y) { int t = tileAt(x, y); return t == T_GRASS || t == T_GRASS2; };
-        auto apart = [&](float x, float y) { return clearOf(x, y, 7, 70); };   // clear of the bases and supply piles
+        auto apart = [&](float x, float y) { return clearOf(x, y, 7, 70) && !g_map.overgrownAt(tileOf(x), tileOf(y)); };   // clear of the bases and supply piles (and of the jungle: no hay or fences in it)
         // hay and wheat lie in meadow drifts, flowers in their own drifts, the rest by what they stand on
         scatter(decorCount(9000), decorCount(90), 44, [&](float x, float y) { return grassAt(x, y) && flat(x, y) && apart(x, y) && nz.v(x * 0.008f + 61, y * 0.008f + 44) > 0.5f; },
                 [&](float x, float y) { put(hay[mr.range(0, 3)], x, y); });
@@ -1262,6 +1275,16 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                         float band2 = edge * edge * edge;   // a narrow band on the boundary itself
                         if (wRoad < 0.5f) col = lerp3(col, GRAVEL, band2 * 0.42f * (0.6f + 0.4f * nz.v(x * 0.3f, y * 0.3f)));
                         else col = mul3(col, 1.0f - 0.24f * band2);   // the kerb: the road's edge runs darker
+                    }
+                    // the jungle floor where the jungle has taken the ground back: moss, fallen leaves and deep shade between the roots
+                    if (ogNear[(size_t)ty * MAP_W + tx]) {
+                        float og = samp(ogF, CW, CH, fx, fy) * (1.0f - wWater) * (1.0f - wRoad * 0.6f);
+                        if (og > 0.01f) {
+                            float lv = nz.v(x * 0.09f + 41, y * 0.09f + 7), ms = nz.v(x * 0.035f + 13, y * 0.035f + 88);
+                            F3 floor = lerp3(lerp3(FOREST_A, MOSS, sstep(0.35f, 0.75f, ms)), LEAF_LITTER, sstep(0.55f, 0.85f, lv) * 0.55f);
+                            floor = mul3(floor, 0.82f + 0.3f * nz.v(x * 0.4f + 5, y * 0.4f + 2));
+                            col = lerp3(col, floor, clampf(og * 0.62f, 0, 0.62f));
+                        }
                     }
                     // broad light variation
                     col = mul3(col, 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));

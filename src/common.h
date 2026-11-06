@@ -17,11 +17,12 @@ typedef uint64_t u64;
 
 // World geometry
 static const int TILE = 32;          // pixels per tile
-// The battlefield is an island in the ocean: the 208x208 main island (the old map: four bases round a lake with its own islands) sits in the middle
-// of a 320x320 sea with a second, smaller island off its east coast and islets scattered round it.
-static const int MAP_W = 320;        // tiles
-static const int MAP_H = 320;
-static const int ISLE_W = 208;       // the main island's square (the land the old 208 map covered), centred in the sea
+// The battlefield is an island in the ocean: the 240x240 main island (four bases round a lake, a canal running through the lake from coast to coast
+// with a relic base on a delta at each mouth) sits in the middle of a 384x384 sea, with a jungle island off the west and the east coast and a secret
+// island to the north and the south.
+static const int MAP_W = 384;        // tiles
+static const int MAP_H = 384;
+static const int ISLE_W = 240;       // the main island's square, centred in the sea
 static const int ISLE_X0 = (MAP_W - ISLE_W) / 2;   // its first tile on both axes
 static const int WORLD_W = MAP_W * TILE;
 static const int WORLD_H = MAP_H * TILE;
