@@ -2847,10 +2847,18 @@ void Game::renderHud() {
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);
-                if (int dn = g_sim.droneCount(*e)) {   // protector drones: how many are ready to fire
+                if (subType(e->type) && e->owner == g_sim.humanPlayer) {   // a submarine: under or up, and its missile
+                    const char* ss = e->subState == 2 ? "DIVED: nothing can see or hurt it [D] surface" : e->subState == 1 ? "Diving..." : e->subState == 3 ? "Surfacing..." : "SURFACED: seen and vulnerable [D] dive";
+                    float exposed = e->exposedUntil - g_sim.time, wait = e->siloTimer - g_sim.time;
+                    if (exposed > 0) snprintf(buf, sizeof buf, "%s   exposed after its launch: %d s", ss, (int)std::ceil(exposed));
+                    else if (e->nukeSalvo > 0) snprintf(buf, sizeof buf, "%s   surfacing to launch", ss);
+                    else if (wait > 0) snprintf(buf, sizeof buf, "%s   missile in %d s", ss, (int)std::ceil(wait));
+                    else snprintf(buf, sizeof buf, "%s   missile READY [K]", ss);
+                    g.text(INFO_X + 86, hy + 110, buf, e->subState == 2 ? rgb(150, 220, 255) : rgb(240, 205, 90));
+                } else if (int dn = g_sim.droneCount(*e)) {   // protector drones: how many are ready to fire
                     int rdy = 0; for (int i = 0; i < dn; i++) if (e->droneAt[i] <= g_sim.time) rdy++;
-                    snprintf(buf, sizeof buf, "Guard drones %d / %d ready: they shoot down rockets and shells aimed at it", rdy, dn); g.text(INFO_X + 86, hy + 110, buf, rgb(150, 220, 255));
-                } else if ((ut.naval || ut.cargoCap > 0) && ut.kind == UK_VEH && e->owner == g_sim.humanPlayer && !g_sim.hasUpgrade(g_sim.humanPlayer, UPG_DRONES) && ut.naval) g.text(INFO_X + 86, hy + 110, "No drones yet: the Guard Drones upgrade at the tech structure gives every ship a screen", hudDim());
+                    snprintf(buf, sizeof buf, ut.naval ? "Drone swarm %d / %d ready: they stop rockets and shells and sting aircraft" : "Guard drones %d / %d ready: they shoot down rockets and shells aimed at it", rdy, dn); g.text(INFO_X + 86, hy + 110, buf, rgb(150, 220, 255));
+                }
             } else if (e->district >= 0) {   // a block of a town round the lake: the town as a whole is what matters
                 const District& D = g_sim.districts[e->district];
                 bool ours = D.owner == g_sim.humanPlayer, foe = D.owner >= 0 && g_sim.enemies(g_sim.humanPlayer, D.owner);
