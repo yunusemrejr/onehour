@@ -111,7 +111,7 @@ struct Map {
     mutable std::vector<u16> region;
     mutable bool regionDirty = true;
     mutable u32 cacheGen = 0;           // generation of closestInRegion's memo (0 after a rebuild: it starts afresh)
-    void touch() { regionDirty = true; navGen++; navAllDirty = true; }
+    void touch() { regionDirty = true; navGen++; navAllDirty = true; navStaticGen++; }
     bool sameGround(Vec2 a, Vec2 b) const {   // a ground route can get from a to b (both on free ground of one region)
         if (regionDirty) buildRegions();
         int ia = clampi(tileOf(a.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(a.x), 0, MAP_W - 1), ib = clampi(tileOf(b.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(b.x), 0, MAP_W - 1);
@@ -173,7 +173,8 @@ struct Map {
     mutable bool navAllDirty = true;
     mutable int navBx0 = MAP_W, navBy0 = MAP_H, navBx1 = -1, navBy1 = -1;
     void noteNavChange(int x0, int y0, int x1, int y1) { navGen++; navBx0 = std::min(navBx0, x0); navBy0 = std::min(navBy0, y0); navBx1 = std::max(navBx1, x1); navBy1 = std::max(navBy1, y1); }
-    void buildNavFlags() const;
+    bool buildNavFlags() const;     // (true when a flag changed: the stretches must be labelled again)
+    u32 navStaticGen = 1;           // moves only when open water itself may have changed (a new map): the naval search's landmark distances follow it
     void buildNavLabels() const;
     u8 navFlagAt(int x, int y) const { return inMap(x, y) ? navFlag[y * MAP_W + x] : 0; }
 };

@@ -100,6 +100,7 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     e.angle = -1.5708f;
     e.turret2 = 2.4f;   // (the roof gun idles looking out over a corner)
     if ((b.role == BR_WALL || b.role == BR_ANTINUKE) && std::find(pdList.begin(), pdList.end(), i) == pdList.end()) pdList.push_back(i);   // (a link to its neighbours counts at once, before the next grid rebuild)
+    if (b.role == BR_SUPPLY && std::find(supplyList.begin(), supplyList.end(), i) == supplyList.end()) { supplyList.push_back(i); std::sort(supplyList.begin(), supplyList.end()); }   // (in entity order, as a scan would meet them)
     if (b.role == BR_WAYMAKER || b.role == BR_BRIDGE) return refOf(i);   // a Waymaker is no obstacle: it may stand partly over a structure or water and clears only what is clearable (updateWaymaker); a bridge's deck is the road itself
     g_map.clearForStructure(tx, ty, b.w, b.h);   // trees, bushes and small rocks on the footprint are cleared away
     g_map.setStructure(tx, ty, b.w, b.h, true);
@@ -244,8 +245,8 @@ void Sim::rebuildGrid() {
         gridOwners[c] |= (u8)(1u << clampi(e.owner + 1, 0, 7));
     }
     for (int c = 0; c < GRID_N; c++) gridStart[c + 1] += gridStart[c];
-    pdList.clear();
-    for (int i = 0; i < n; i++) { const Entity& e = ents[i]; if (e.alive && e.isBuilding() && (e.bt().role == BR_WALL || e.bt().role == BR_ANTINUKE)) pdList.push_back(i); }
+    pdList.clear(); supplyList.clear();
+    for (int i = 0; i < n; i++) { const Entity& e = ents[i]; if (e.alive && e.isBuilding() && (e.bt().role == BR_WALL || e.bt().role == BR_ANTINUKE)) pdList.push_back(i); if (e.alive && e.isBuilding() && e.bt().role == BR_SUPPLY) supplyList.push_back(i); }
     gridIdx.resize(gridStart[GRID_N]);
     cursor.assign(gridStart.begin(), gridStart.end() - 1);
     for (int i = 0; i < n; i++) if (cellOf[i] >= 0) gridIdx[cursor[cellOf[i]]++] = i;
@@ -2393,7 +2394,17 @@ static bool predSupply(const Entity& e, void* ctx) { int owner = *(int*)ctx; ret
 static bool predPile(const Entity& e, void* ctx) { return e.kind == EK_RESOURCE && e.amount > 0 && !(ctx && ((const Sim*)ctx)->inFallout(e.pos, TILE * 0.5f)); }   // (haulers do not drive into radiation, nor park where idle units would walk out of it)
 static bool predAirfield(const Entity& e, void* ctx) { int owner = *(int*)ctx; return e.alive && e.isBuilding() && e.owner == owner && e.constructed && e.bt().role == BR_AIRFIELD; }   // (alive: never the ruins of a destroyed pad)
 
-Entity* Sim::findSupplyBuilding(Entity& h) { int o = h.owner; return nearestEntity(h.pos, 1e9f, predSupply, &o); }
+// (the nearest of the supply hubs, from the short list rebuildGrid keeps in entity order: the same answer as a scan of every entity, a fraction of the work)
+Entity* Sim::findSupplyBuilding(Entity& h) {
+    Entity* best = nullptr; float bd = 1e9f; int o = h.owner;
+    for (int i : supplyList) {
+        Entity& e = ents[i];
+        if (!e.alive || !predSupply(e, &o)) continue;
+        float d = distToEntity(h.pos, e);
+        if (d < bd) { bd = d; best = &e; }
+    }
+    return best;
+}
 // The nearest pile a hauler can drive to: one with free ground beside it in the hauler's own region (the second island's piles are only worked by
 // haulers shipped over there), clean ones first; only radioactive ones left is still better than standing idle.
 Entity* Sim::findPile(Entity& h, float maxDist) {

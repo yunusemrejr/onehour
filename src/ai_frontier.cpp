@@ -203,3 +203,134 @@ void AiPlayer::frontier() {
         else S.cmdEnter({S.refOf(*pick)}, lref);
     }
 }
+
+// ------------------------------------------------------------ the relic bases, the canal's bridges and the submarines (F2_RELIC, F2_SUBS)
+//  * a Hydra Silo it holds fires at the best target it knows; relic factories it holds build their war machines while the money is there
+//  * a relic structure nobody holds is a prize: a squad of the home infantry walks over and claims it (the Command first), an infiltrator swims out to one
+//    on an island, and one goes to look at the secret islands once the match has run a while
+//  * a broken bridge near home is raised again by a dozer; once it holds a Relic Command it raises a few relic defences at home
+//  * its submarines stay down, and one surfaces to launch whenever a target is worth a warhead
+void AiPlayer::subOps() {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    const float minutes = S.time / 60.0f;
+    const int subT = pl.faction == F_CYBER ? U_C_SUB : U_K_SUB;
+    std::vector<Entity*> subs;
+    for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && subType(e.type)) subs.push_back(&e);
+    const int cap = pl.difficulty >= 3 ? 5 : (pl.difficulty == 2 ? 3 : (pl.difficulty == 1 ? 1 : 0));
+    if (on2(F2_SUBS) && cap > 0 && minutes > 12.0f && S.subsOf(player) < cap && pl.money > UNITS[subT].cost + 9000 && S.unitAvailable(player, subT)) {
+        for (auto& y : S.ents) if (y.alive && y.isBuilding() && y.owner == player && y.constructed && y.bt().role == BR_NAVAL && y.queue.empty() && g_map.compAt(S.navalExit(y)) == g_map.oceanComp) {
+            if (S.cmdTrain(S.refOf(y), subT)) break;
+        }
+    }
+    // down, out of every sight, unless it is up to launch or must stay up after one
+    for (Entity* s : subs) if (s->subState == 0 && s->nukeSalvo == 0 && !s->subAutoDive && S.time >= s->exposedUntil && S.time - s->lastDamaged > 2.0f) S.cmdDive({S.refOf(*s)}, true);
+    if (S.subNukesReady(player) > 0) {
+        const float nukeBar = pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f);
+        float score; Vec2 at = frontierTarget(player, NUKE_RADIUS * TILE * std::sqrt(SUB_NUKE_SCALE), SUB_NUKE_SCALE, false, score);
+        if (score >= nukeBar && S.cmdSubNuke(player, at)) subLaunches++;
+    }
+}
+
+void AiPlayer::relicOps() {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    if (S.time < nextRelic) return;
+    nextRelic = S.time + 2.0f;
+    const float minutes = S.time / 60.0f;
+    const float nukeBar = pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f);
+    subOps();
+    if (!on2(F2_RELIC)) return;
+    // ---------- a Hydra we hold: five warheads over a wide ring, so the target must be worth it
+    if (S.relicNukesReady(player) > 0) {
+        float R = (RELIC_SILO_SPREAD * 0.7f + NUKE_RADIUS * std::sqrt(RELIC_SILO_SCALE)) * TILE, score;
+        Vec2 at = frontierTarget(player, R, RELIC_SILO_SCALE, false, score);
+        if (score >= nukeBar * 1.2f && S.cmdRelicNuke(player, at)) hydras++;
+    }
+    // ---------- relic factories we hold: their war machines while there is money to spare
+    if (pl.money > 7000) for (auto& b : S.ents) {
+        if (!b.alive || !b.isBuilding() || b.owner != player || !b.constructed || !b.queue.empty() || b.disabledUntil > S.time) continue;
+        if (b.bt().role == BR_RELICFOUNDRY) S.cmdTrain(S.refOf(b), rng.f() < 0.55f ? U_R_JUGGERNAUT : U_R_STRIDER);
+        else if (b.bt().role == BR_RELICPAD) S.cmdTrain(S.refOf(b), U_R_THUNDERHAWK);
+    }
+    // ---------- a broken bridge near home: the nearest free dozer raises it again (unless one of ours is already at it)
+    if (minutes >= 2.0f && !recovering) {
+        for (auto& b : S.ents) {
+            if (!b.alive || !Sim::bridgeEnt(b) || b.constructed || dist(b.pos, pl.basePos) > 95.0f * TILE || S.time - b.lastDamaged < 6.0f) continue;
+            Ref br = S.refOf(b); bool working = false; int dozers = 0;
+            for (auto& u : S.ents) if (u.alive && u.isUnit() && u.owner == player && u.ut().role == UR_DOZER && !civicDozerType(u.type)) { dozers++; if (u.order == O_BUILD && u.targetEnt == br) working = true; }
+            if (working || dozers < 2) break;
+            if (Entity* d = idleDozer()) { S.cmdAssist({S.refOf(*d)}, br); bridgeRepairs++; }
+            break;
+        }
+    }
+    // ---------- relic defences at home once we hold a Relic Command (its flak and lancer towers are far tougher than our own)
+    if (S.relicBuildable(player) && pl.money > 9000 && S.time >= nextRelicBuild && !recovering) {
+        nextRelicBuild = S.time + 45.0f;
+        int have = 0;
+        for (auto& b : S.ents) if (b.alive && b.isBuilding() && b.owner == player && (b.type == B_R_FLAK || b.type == B_R_LASER || b.type == B_R_CANNON) && dist(b.pos, pl.basePos) < 30.0f * TILE) have++;
+        if (have < 2 + pl.difficulty) tryBuild(have % 3 == 2 ? B_R_CANNON : (have % 2 ? B_R_FLAK : B_R_LASER), pl.basePos + enemyDir * (8.0f * TILE), 18);
+    }
+    // ---------- relic structures nobody holds: claim them
+    if (pl.difficulty < 1 || minutes < 3.0f || recovering) return;
+    const Entity* goal = S.get(relicGoal);
+    if (goal && (goal->owner >= 0 || !goal->constructed)) { goal = nullptr; relicGoal = NOREF; }
+    Vec2 home = g_map.nearestFree(pl.basePos + enemyDir * (4.0f * TILE), 8);
+    if (!goal) {
+        float best = -1e30f;
+        for (auto& e : S.ents) {
+            if (!e.alive || !Sim::relicEnt(e) || e.owner >= 0 || !e.constructed || e.bt().role == BR_STRONGHOLD || e.bt().role == BR_WALL) continue;
+            if (!S.visibleTo(e, player) || !S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1))) continue;
+            if (S.time - relicBadAt < 90.0f && S.refOf(e) == relicBad) continue;
+            Vec2 door = g_map.nearestFree(e.pos + Vec2(0, (e.bt().h * 0.5f + 1.0f) * TILE), 4);
+            bool walk = g_map.sameGround(home, door);
+            float v = e.type == B_R_COMMAND ? 10.0f : (e.type == B_R_SILO ? 8.0f : ((e.type == B_R_FOUNDRY || e.type == B_R_AIRSTRIP) ? 6.0f : (e.type == B_R_REACTOR ? 5.0f : 3.5f)));
+            float d = dist(e.pos, pl.basePos) / TILE;
+            if (d > 140.0f) continue;
+            float score = v * 100.0f - d * 3.0f - (walk ? 0.0f : 120.0f) - enemyStrengthNear(e.pos, 10.0f) * 0.05f;
+            if (score > best) { best = score; goal = &e; }
+        }
+        if (goal) relicGoal = S.refOf(*goal);
+    }
+    if (!goal) {   // nothing known to claim: once in a while an infiltrator goes to look at a secret island we have not found yet
+        if (minutes >= 8.0f && S.time >= nextSecretLook && g_map.seaIslands.size() >= 4) {
+            nextSecretLook = S.time + 240.0f;
+            const auto& isl = g_map.seaIslands[2 + (int)(rng.next() % 2)];
+            Vec2 spot(isl.cx * TILE, isl.cy * TILE);
+            int spyT = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY;
+            for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.type == spyT && !e.carrier.valid() && e.order == O_IDLE) { S.cmdMove({S.refOf(e)}, spot, false); break; }
+        }
+        return;
+    }
+    Ref gref = S.refOf(*goal);
+    Vec2 door = g_map.nearestFree(goal->pos + Vec2(0, (goal->bt().h * 0.5f + 1.0f) * TILE), 4);
+    const bool walk = g_map.sameGround(home, door);
+    // the squad: whoever of it is still alive and free, topped up with idle home infantry (never the wave, snipers or infiltrators)
+    relicSquad.erase(std::remove_if(relicSquad.begin(), relicSquad.end(), [&](Ref r) { const Entity* u = S.get(r); return !u || u->carrier.valid(); }), relicSquad.end());
+    if (walk) {
+        if ((int)relicSquad.size() < 4) for (auto& e : S.ents) {
+            if ((int)relicSquad.size() >= 4) break;
+            if (!e.alive || e.owner != player || !e.isUnit() || e.carrier.valid() || e.fall > 0 || !S.relicClaimable(e, *goal)) continue;
+            if (e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) continue;
+            if (std::find(wave.begin(), wave.end(), S.refOf(e)) != wave.end() || std::find(relicSquad.begin(), relicSquad.end(), S.refOf(e)) != relicSquad.end()) continue;
+            if (dist(e.pos, pl.basePos) > 40.0f * TILE) continue;
+            relicSquad.push_back(S.refOf(e));
+        }
+        if (relicSquad.size() < 2) return;   // (not a lone soldier)
+        std::vector<Ref> send;
+        for (Ref r : relicSquad) if (const Entity* u = S.get(r)) if (!(u->order == O_CAPTURE && u->targetEnt == gref)) send.push_back(r);
+        if (!send.empty()) { S.cmdCapture(send, gref); relicClaims++; }
+        // a squad that has been at it for long without getting there gives up on that one for a while
+        if (relicSince <= 0) relicSince = S.time;
+        if (S.time - relicSince > 150.0f) { relicBad = gref; relicBadAt = S.time; relicGoal = NOREF; relicSince = 0; for (Ref r : relicSquad) S.cmdStop({r}); relicSquad.clear(); }
+        return;
+    }
+    relicSince = 0;
+    // out on an island: an infiltrator swims out and takes it
+    int spyT = pl.faction == F_CYBER ? U_C_SPY : U_K_SPY;
+    bool going = false;
+    for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.type == spyT && e.order == O_CAPTURE && e.targetEnt == gref) going = true;
+    if (going) return;
+    for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.type == spyT && !e.carrier.valid() && e.order != O_CAPTURE) { S.cmdCapture({S.refOf(e)}, gref); relicClaims++; return; }
+    if (S.techOnline(player) && pl.money > 2500) for (auto& b : S.ents) if (b.alive && b.isBuilding() && b.owner == player && b.constructed && b.bt().role == BR_BARRACKS && b.queue.empty()) { if (S.cmdTrain(S.refOf(b), spyT)) break; }
+}

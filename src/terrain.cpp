@@ -647,21 +647,33 @@ Canvas makeProp(int kind, float R, u32 seed) {
     return downsample2(big);
 }
 
-struct Tree { float x, y, r; int kind; u32 seed; int tile = -1; };   // tile: the map tile it grows on (a structure built there clears it)
+struct Tree { float x, y, r; int kind; u32 seed; int tile = -1; bool gone = false; };   // tile: the map tile it grows on (a structure built there clears it); gone: felled
 
 // What the bake leaves behind for local repaints (see terrainRepaint): the world as it was before the trees were drawn, every tree and bush,
 // and the tree sprites. A structure placed over trees then only has to recompose a small rectangle.
 struct Kept {
-    // RGB565 (half the memory of the 32-bit world), kept in PRE_CHUNK px squares and only where there is land within a tile of the square: trees,
-    // bushes and quarried rock never stand out at sea, so the ocean's share of the map keeps no copy at all
+    // RGB565 (half the memory of the 32-bit world), kept in PRE_CHUNK px squares, and of each square only the pixels a repaint can ever change: the
+    // ones some tree's or bush's sprite covers, and the feathered ground round small rock that a structure may quarry. Everywhere else the ground
+    // under the trees is the ground as it is, so a repaint leaves those pixels alone (it marks them clear: see terrainRepaint). A bit per pixel says
+    // whether it is kept; the kept pixels lie packed row by row (the open meadows and the sea keep next to nothing).
     static const int PRE_CHUNK = 256;
-    std::vector<std::vector<u16>> preTree;
+    struct Sq { std::vector<u64> bits; std::vector<u32> rowAt; std::vector<u16> px; };   // bits: 4 words a row; rowAt: the index of each row's first kept pixel
+    std::vector<Sq> preTree;
     int preCols = 0;
     u16* pre(int x, int y) {
-        std::vector<u16>& c = preTree[(size_t)(y / PRE_CHUNK) * preCols + x / PRE_CHUNK];
-        return c.empty() ? nullptr : &c[(size_t)(y % PRE_CHUNK) * PRE_CHUNK + x % PRE_CHUNK];
+        if (x < 0 || y < 0 || x >= WORLD_W || y >= WORLD_H) return nullptr;
+        Sq& q = preTree[(size_t)(y / PRE_CHUNK) * preCols + x / PRE_CHUNK];
+        if (q.bits.empty()) return nullptr;
+        const int lx = x % PRE_CHUNK, ly = y % PRE_CHUNK, w = lx >> 6, b = lx & 63;
+        const u64* row = &q.bits[(size_t)ly * 4];
+        if (!(row[w] >> b & 1)) return nullptr;
+        u32 k = q.rowAt[ly];
+        for (int i = 0; i < w; i++) k += (u32)__builtin_popcountll(row[i]);
+        if (b) k += (u32)__builtin_popcountll(row[w] & ((1ull << b) - 1));
+        return &q.px[k];
     }
-    std::vector<Tree> trees;
+    std::vector<Tree> trees;                // sorted by y (back to front)
+    std::vector<int> tileHead, tileNext;    // the trees and bushes growing on each tile: a list per tile through trees
     std::vector<Canvas> sprites[T_KINDS];
     bool ok = false;
 };
@@ -1147,9 +1159,11 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
     if (K.sprites[0].empty()) for (int k = 0; k < T_KINDS; k++) for (int v = 0; v < 5; v++) K.sprites[k].push_back(makeTree(k, spriteBase(k) + v * 0.6f, 5000u + k * 97u + v * 13u));
     const int PC = Kept::PRE_CHUNK, pcols = (W + PC - 1) / PC, prows = (H + PC - 1) / PC, TPC = PC / TILE;
     K.preCols = pcols;
-    K.preTree.assign((size_t)pcols * prows, std::vector<u16>());
+    K.preTree.assign((size_t)pcols * prows, Kept::Sq());
     static float maxHalf[T_KINDS] = {};   // the widest sprite of each kind, for a cheap "can this tree reach the band" bound
     if (maxHalf[0] <= 0) for (int k = 0; k < T_KINDS; k++) for (auto& sp : K.sprites[k]) maxHalf[k] = std::max(maxHalf[k], std::max(sp.w, sp.h) * 0.5f);
+    float maxReach = 0;   // (the farthest any tree's rectangle reaches from its centre)
+    for (int k = 0; k < T_KINDS; k++) maxReach = std::max(maxReach, maxHalf[k] * 1.4f + 8.0f);
 
     // ================= the bands
     const int BAND = TERRAIN_BAND;
@@ -1480,21 +1494,48 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
         }
 
         phase(4);   // clutter
-        // ---- the ground before the trees, kept (RGB565) for the land squares of this band
+        // ---- the ground before the trees, kept (RGB565) for the land squares of this band: only the pixels under a tree's or a bush's sprite and round
+        // the small rock a structure may quarry (see Kept)
         {
             const int sr0 = oy / PC, sr1 = std::min(prows, (oy + bh + PC - 1) / PC);
             parallelRows(sr1 - sr0, [&](int a0, int a1) {
-                for (int cy = sr0 + a0; cy < sr0 + a1; cy++) for (int cx = 0; cx < pcols; cx++) {
-                    bool land = false;
-                    for (int ty = cy * TPC - 1; ty <= (cy + 1) * TPC && !land; ty++) for (int tx = cx * TPC - 1; tx <= (cx + 1) * TPC; tx++)
-                        if (inMap(tx, ty) && g_map.tile(tx, ty) != T_WATER) { land = true; break; }
-                    if (!land) continue;
-                    std::vector<u16>& c = K.preTree[(size_t)cy * pcols + cx];
-                    if (c.empty()) c.assign((size_t)PC * PC, 0);
-                    for (int y = 0; y < PC && cy * PC + y < H; y++) {
-                        const int wy = cy * PC + y;
-                        if (wy < oy || wy >= oy + bh) continue;
-                        for (int x = 0; x < PC && cx * PC + x < W; x++) c[(size_t)y * PC + x] = to565(Canvas::unpack(bandC.px[(size_t)(wy - oy) * W + cx * PC + x]), cx * PC + x, wy);
+                std::vector<u64> bits;
+                for (int cy = sr0 + a0; cy < sr0 + a1; cy++) {
+                    const int py0 = cy * PC, py1 = std::min(H, py0 + PC);
+                    // the trees that can reach this row of squares (the list is sorted by y)
+                    const float reach = maxReach;
+                    auto lo = std::lower_bound(trees.begin(), trees.end(), py0 - reach, [](const Tree& t, float v) { return t.y < v; });
+                    for (int cx = 0; cx < pcols; cx++) {
+                        bool land = false;
+                        for (int ty = cy * TPC - 1; ty <= (cy + 1) * TPC && !land; ty++) for (int tx = cx * TPC - 1; tx <= (cx + 1) * TPC; tx++)
+                            if (inMap(tx, ty) && g_map.tile(tx, ty) != T_WATER) { land = true; break; }
+                        if (!land) continue;
+                        const int px0 = cx * PC, px1 = std::min(W, px0 + PC);
+                        bits.assign((size_t)PC * 4, 0);
+                        auto mark = [&](int x0, int y0, int x1, int y1) {   // (half-open, world px)
+                            x0 = std::max(x0, px0); y0 = std::max(y0, py0); x1 = std::min(x1, px1); y1 = std::min(y1, py1);
+                            for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) bits[(size_t)(y - py0) * 4 + ((x - px0) >> 6)] |= 1ull << ((x - px0) & 63);
+                        };
+                        bool any = false;
+                        for (auto it = lo; it != trees.end() && it->y - reach < py1; ++it) {
+                            int a, b, c, d; treeRect(*it, a, b, c, d);
+                            if (c < px0 || a >= px1 || d < py0 || b >= py1) continue;
+                            mark(a, b, c + 1, d + 1); any = true;
+                        }
+                        for (int ty = cy * TPC - 1; ty <= (cy + 1) * TPC; ty++) for (int tx = cx * TPC - 1; tx <= (cx + 1) * TPC; tx++) {
+                            if (!inMap(tx, ty) || g_map.clearable[ty * MAP_W + tx] != 2) continue;   // small rock: a quarry feathers 14 px round it
+                            mark(tx * TILE - 18, ty * TILE - 18, (tx + 1) * TILE + 18, (ty + 1) * TILE + 18); any = true;
+                        }
+                        if (!any) continue;
+                        Kept::Sq& q = K.preTree[(size_t)cy * pcols + cx];
+                        q.bits = bits; q.rowAt.assign(PC, 0); q.px.clear();
+                        for (int y = 0; y < PC; y++) {
+                            q.rowAt[y] = (u32)q.px.size();
+                            const int wy = py0 + y;
+                            if (wy >= H) continue;
+                            for (int x = 0; x < PC && px0 + x < W; x++) if (bits[(size_t)y * 4 + (x >> 6)] >> (x & 63) & 1) q.px.push_back(to565(Canvas::unpack(bandC.px[(size_t)(wy - oy) * W + px0 + x]), px0 + x, wy));
+                        }
+                        q.px.shrink_to_fit();
                     }
                 }
             });
@@ -1511,6 +1552,8 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
         phase(7);   // the caller's grading
     }
     K.trees = trees;
+    K.tileHead.assign((size_t)MAP_W * MAP_H, -1); K.tileNext.assign(K.trees.size(), -1);
+    for (int i = (int)K.trees.size() - 1; i >= 0; i--) { int t = K.trees[i].tile; if (t >= 0 && t < MAP_W * MAP_H) { K.tileNext[i] = K.tileHead[t]; K.tileHead[t] = i; } }
     K.ok = true;
     if (timing) printf("bake ms: fields %.0f, plan %.0f, height %.0f, ground %.0f, clutter %.0f, pre-tree %.0f, trees %.0f, grade %.0f\n", tPh[0], tPh[1], tPh[2], tPh[3], tPh[4], tPh[5], tPh[6], tPh[7]);
 }
@@ -1519,24 +1562,30 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     Kept& K = kept();
     if (!K.ok || cleared.empty()) return false;
     const Noise& nz = NZ();
-    std::vector<u8> foot((size_t)MAP_W * MAP_H, 0);   // 1 footprint tile, 2 quarried rock
-    for (int c : cleared) { int k = c & 0xFFFFFF, kind = c >> 24; if (k >= 0 && k < MAP_W * MAP_H) foot[k] = (u8)std::max<int>(foot[k], kind == 2 ? 2 : 1); }
+    // everything here is local to the footprint: its tiles, the trees growing on them (each tile's list), the rock quarried, and the trees whose
+    // sprites reach the rectangle (a range of the y-sorted list) - a full-map pass per footprint was most of the first frame of a match
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
     auto grow = [&](int a, int b, int c, int d) { x0 = std::min(x0, a); y0 = std::min(y0, b); x1 = std::max(x1, c); y1 = std::max(y1, d); };
-    // the trees and bushes that grew on the footprint go
-    std::vector<Tree> keep; keep.reserve(K.trees.size());
-    for (auto& t : K.trees) {
-        if (t.tile >= 0 && foot[t.tile]) { int a, b, c, d; treeRect(t, a, b, c, d); grow(a, b, c, d); continue; }
-        keep.push_back(t);
+    bool felled = false;
+    std::vector<int> quarried;
+    for (int c : cleared) {
+        int k = c & 0xFFFFFF, kind = c >> 24;
+        if (k < 0 || k >= MAP_W * MAP_H) continue;
+        if (kind == 2) quarried.push_back(k);
+        for (int ti = K.tileHead.empty() ? -1 : K.tileHead[k]; ti >= 0; ti = K.tileNext[ti]) {   // the trees and bushes that grew on the footprint go
+            Tree& t = K.trees[ti];
+            if (t.gone) continue;
+            t.gone = true; felled = true;
+            int a, b, cc, d; treeRect(t, a, b, cc, d); grow(a, b, cc, d);
+        }
     }
-    bool felled = keep.size() != K.trees.size();
-    K.trees.swap(keep);
+    std::sort(quarried.begin(), quarried.end()); quarried.erase(std::unique(quarried.begin(), quarried.end()), quarried.end());
     // quarried rock becomes bare earth, feathered into what is round it
     const int FEATHER = 14;
-    bool rock = false;
-    int qx0 = 1 << 30, qy0 = 1 << 30, qx1 = -1, qy1 = -1;
-    for (int i = 0; i < MAP_W * MAP_H; i++) if (foot[i] == 2) { rock = true; int tx = i % MAP_W, ty = i / MAP_W; qx0 = std::min(qx0, tx); qy0 = std::min(qy0, ty); qx1 = std::max(qx1, tx); qy1 = std::max(qy1, ty); }
+    bool rock = !quarried.empty();
     if (rock) {
+        int qx0 = 1 << 30, qy0 = 1 << 30, qx1 = -1, qy1 = -1;
+        for (int i : quarried) { int tx = i % MAP_W, ty = i / MAP_W; qx0 = std::min(qx0, tx); qy0 = std::min(qy0, ty); qx1 = std::max(qx1, tx); qy1 = std::max(qy1, ty); }
         int px0 = std::max(0, qx0 * TILE - FEATHER), py0 = std::max(0, qy0 * TILE - FEATHER);
         int px1 = std::min(WORLD_W - 1, (qx1 + 1) * TILE + FEATHER), py1 = std::min(WORLD_H - 1, (qy1 + 1) * TILE + FEATHER);
         grow(px0, py0, px1 + 1, py1 + 1);
@@ -1544,18 +1593,18 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
             float best = 1e9f;   // distance to the nearest quarried tile (px)
             for (int ty = std::max(0, (y - FEATHER) / TILE); ty <= std::min(MAP_H - 1, (y + FEATHER) / TILE); ty++)
                 for (int tx = std::max(0, (x - FEATHER) / TILE); tx <= std::min(MAP_W - 1, (x + FEATHER) / TILE); tx++) {
-                    if (foot[ty * MAP_W + tx] != 2) continue;
+                    if (!std::binary_search(quarried.begin(), quarried.end(), ty * MAP_W + tx)) continue;
                     float dx = std::max(0.0f, std::max(tx * TILE - (float)x, x - (tx + 1.0f) * TILE)), dy = std::max(0.0f, std::max(ty * TILE - (float)y, y - (ty + 1.0f) * TILE));
                     best = std::min(best, std::sqrt(dx * dx + dy * dy));
                 }
             if (best > FEATHER) continue;
+            u16* dp = K.pre(x, y);
+            if (!dp) continue;   // (nothing kept there: no rock to quarry within reach)
             float w = best <= 2.0f ? 1.0f : sstep((float)FEATHER, 2.0f, best);
             float macro = nz.fbm(x * 0.012f, y * 0.012f);
             F3 dirt = groundColor(K_DIRT, (float)x, (float)y, nz, macro, 0);
             dirt = lerp3(dirt, SCREE, 0.25f * nz.v(x * 0.2f + 4, y * 0.2f + 9));   // rubble left by the quarrying
             dirt = gradeGround(dirt, (float)x, (float)y, nz);
-            u16* dp = K.pre(x, y);
-            if (!dp) continue;   // (open sea: nothing is quarried there)
             u16& d = *dp;
             Color o = from565(d);
             d = to565(Color{ (u8)clampf(o.r + (dirt.r - o.r) * w, 0, 255), (u8)clampf(o.g + (dirt.g - o.g) * w, 0, 255), (u8)clampf(o.b + (dirt.b - o.b) * w, 0, 255), 255 }, x, y);
@@ -1565,14 +1614,17 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(WORLD_W, x1); y1 = std::min(WORLD_H, y1);
     if (x1 <= x0 || y1 <= y0) return false;
     rx = x0; ry = y0; rw = x1 - x0; rh = y1 - y0;
-    // recompose: the ground before the trees, then every tree that reaches into the rectangle, back to front
+    // recompose: the ground before the trees where anything was kept (clear elsewhere: those pixels do not change), then every standing tree that
+    // reaches into the rectangle, back to front
     Canvas patch(rw, rh);
     for (int y = 0; y < rh; y++) for (int x = 0; x < rw; x++) { const u16* q = K.pre(rx + x, ry + y); patch.px[(size_t)y * rw + x] = q ? Canvas::pack(from565(*q)) : 0; }
-    if (std::any_of(patch.px.begin(), patch.px.end(), [](u32 v) { return v == 0; })) return false;   // (a patch reaching open sea has nothing kept to repaint from: leave it)
-    // (a cheap bound first: the widest sprite of the tree's kind at its scale; working out every tree's exact rectangle was most of a repaint's cost)
     static float maxHalf[T_KINDS] = {};
     if (maxHalf[0] <= 0) for (int k = 0; k < T_KINDS; k++) for (auto& sp : K.sprites[k]) maxHalf[k] = std::max(maxHalf[k], std::max(sp.w, sp.h) * 0.5f);
-    for (auto& t : K.trees) {
+    float maxAll = 0; for (int k = 0; k < T_KINDS; k++) maxAll = std::max(maxAll, maxHalf[k] * 1.4f + 8.0f);
+    auto lo = std::lower_bound(K.trees.begin(), K.trees.end(), ry - maxAll, [](const Tree& t, float v) { return t.y < v; });
+    for (auto it = lo; it != K.trees.end() && it->y - maxAll < ry + rh; ++it) {
+        const Tree& t = *it;
+        if (t.gone) continue;
         float m = maxHalf[t.kind] * std::max(1.0f, t.r / spriteBase(t.kind)) + 6.0f;
         if (t.x + m < rx || t.x - m > rx + rw || t.y + m < ry || t.y - m > ry + rh) continue;
         int a, b, c, d; treeRect(t, a, b, c, d);

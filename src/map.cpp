@@ -92,7 +92,7 @@ static float secretIslandInland(int x, int y) {
 
 void Map::generate() {
     const u32 SEED = 1979;
-    regionDirty = true; navGen++; navAllDirty = true;
+    regionDirty = true; navGen++; navAllDirty = true; navStaticGen++;
     // The arena's routes scale with the main island (the old map, ISLE_W tiles square, centred in the sea); structures, road widths and unit
     // silhouettes stay at their original readable size. Mirrors and rotations about the map centre are mirrors about the island's centre too.
     const float G = ISLE_W / 104.0f;
@@ -1214,6 +1214,44 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
             return false;
         }
     }
+    // Across the canal: the straight line runs into the water and the search would flood the whole bank looking for the way round. The way round is a
+    // bridge (a delta's two bridges, with the island between them): go to the middle of the best crossing that stands, then on from there - two short
+    // searches that each head straight for their goal.
+    if (!swim && !bridgeSpots.empty()) {
+        auto side = [](int y) { return y < CANAL_Y0 - 1 ? -1 : (y > CANAL_Y1 + 1 ? 1 : 0); };
+        int ss = side(sy), gs = side(gy);
+        if (ss != 0 && gs != 0 && ss != gs && landComp.size() == (size_t)MAP_W * MAP_H && landComp[sy * MAP_W + sx] == landComp[gy * MAP_W + gx]) {
+            auto octile = [](int ax, int ay, int bx, int by) { int dx = std::abs(ax - bx), dy = std::abs(ay - by); return (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy)); };
+            auto standing = [&](const BridgeSpot& b) { int k = (b.ty + BRIDGE_L / 2) * MAP_W + b.tx + 1; return inMap(b.tx + 1, b.ty + BRIDGE_L / 2) && blocked[k] == 0; };
+            int bestX = -1, bestY = -1; float bestD = 1e30f;
+            for (size_t i = 0; i < bridgeSpots.size(); i++) {
+                const BridgeSpot& b = bridgeSpots[i];
+                if (!standing(b)) continue;
+                int mx = b.tx + 1, my = b.ty + BRIDGE_L / 2;
+                // a delta's bridge only leads to the island: the crossing is its pair (the other bridge at the same column), and the island between them
+                bool delta = b.ty + BRIDGE_L - 1 < CANAL_Y0 - 1 || b.ty > CANAL_Y1 + 1;
+                if (delta) {
+                    if (b.ty > CANAL_Y1) continue;   // (taken with its northern partner)
+                    const BridgeSpot* pair = nullptr;
+                    for (const BridgeSpot& o : bridgeSpots) if (o.tx == b.tx && o.ty > CANAL_Y1) pair = &o;
+                    if (!pair || !standing(*pair)) continue;
+                    my = (b.ty + BRIDGE_L + pair->ty) / 2;   // (the island)
+                    if (blocked[my * MAP_W + mx]) { int nx = mx, ny = my; for (int r = 1; r <= 3 && blocked[ny * MAP_W + nx]; r++) { nx = mx + r; if (!blocked[my * MAP_W + nx]) { ny = my; break; } nx = mx - r; if (!blocked[my * MAP_W + nx]) { ny = my; break; } nx = mx; } mx = nx; my = ny; }
+                }
+                float d = octile(sx, sy, mx, my) + octile(mx, my, gx, gy);
+                if (d < bestD) { bestD = d; bestX = mx; bestY = my; }
+            }
+            if (bestX >= 0 && passable(bestX, bestY) && !(bestX == sx && bestY == sy)) {
+                std::vector<Vec2> leg;
+                Vec2 wp = tileCenter(bestX, bestY);
+                if (findPath(from, wp, out, maxNodes, false) && !out.empty() && findPath(wp, to, leg, maxNodes, false)) {
+                    out.insert(out.end(), leg.begin(), leg.end());
+                    return true;
+                }
+                out.clear();   // (no luck that way: the plain search below)
+            }
+        }
+    }
     curGen++;
     if (curGen == 0) { memset(visitGen, 0, sizeof(visitGen)); memset(closedGen, 0, sizeof(closedGen)); curGen = 1; }
     OpenList open;
@@ -1362,16 +1400,20 @@ Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly, int comp) const {
     return p;
 }
 
-void Map::buildNavFlags() const {
-    // only the tiles in the changed box (and their neighbours) need their flags again; the first build covers the whole map
+bool Map::buildNavFlags() const {
+    // only the tiles in the changed box (and their neighbours) need their flags again; the first build covers the whole map. Returns whether any flag
+    // changed (a structure raised or lost on land changes nothing a ship cares about: the stretches of open water stay as they were)
+    const bool all = navAllDirty;
     int x0 = navAllDirty ? 0 : std::max(0, navBx0), y0 = navAllDirty ? 0 : std::max(0, navBy0);
     int x1 = navAllDirty ? MAP_W - 1 : std::min(MAP_W - 1, navBx1), y1 = navAllDirty ? MAP_H - 1 : std::min(MAP_H - 1, navBy1);
-    if (x1 < x0 || y1 < y0) return;
+    if (x1 < x0 || y1 < y0) return false;
+    static std::vector<u8> before; before.clear();
+    int ex0 = std::max(0, x0 - 1), ey0 = std::max(0, y0 - 1), ex1 = std::min(MAP_W - 1, x1 + 1), ey1 = std::min(MAP_H - 1, y1 + 1);
+    if (!all) for (int y = ey0; y <= ey1; y++) for (int x = ex0; x <= ex1; x++) before.push_back(navFlag[y * MAP_W + x]);
     for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
         int i = y * MAP_W + x;
         navFlag[i] = (tiles[i] == T_WATER && (blocked[i] & ~1) == 0) ? NF_WET : 0;
     }
-    int ex0 = std::max(0, x0 - 1), ey0 = std::max(0, y0 - 1), ex1 = std::min(MAP_W - 1, x1 + 1), ey1 = std::min(MAP_H - 1, y1 + 1);
     for (int y = ey0; y <= ey1; y++) for (int x = ex0; x <= ex1; x++) {
         int i = y * MAP_W + x;
         auto wet = [&](int nx, int ny) { return inMap(nx, ny) && (navFlag[ny * MAP_W + nx] & NF_WET); };   // (only the wet bits are read: the flags above them are still being set)
@@ -1381,6 +1423,10 @@ void Map::buildNavFlags() const {
         navFlag[i] = (u8)((navFlag[i] & NF_WET) | (open ? NF_OPEN : 0) | (dry ? NF_SHORE : 0));
     }
     navAllDirty = false; navBx0 = MAP_W; navBy0 = MAP_H; navBx1 = -1; navBy1 = -1;
+    if (all) return true;
+    size_t k = 0; bool changed = false;
+    for (int y = ey0; y <= ey1 && !changed; y++) for (int x = ex0; x <= ex1; x++) if (navFlag[y * MAP_W + x] != before[k++]) { changed = true; break; }
+    return changed;
 }
 
 // The stretches of open water: a flood over open tiles, stepping the way the search steps (no corner cutting), so two tiles share a label exactly
@@ -1452,9 +1498,58 @@ const int NAV_LABEL_CHECK = 4000;   // expansions a search runs before it asks w
 
 // A* over open water. Ships keep off the shore (a tile next to land costs more), cut no corners, and head for the open water nearest to a goal on
 // land (a ship sent to shell a shore target sails to the closest it can get).
+// The naval search's heuristic. Open water hardly ever changes in a match (nothing stands on it), so from each of NAV_LM spots out at sea the
+// distance over open water to every tile is worked out once per map, at the plain step cost (no shore surcharge: the heuristic must not overestimate).
+// Then |d(L, goal) - d(L, n)| is a lower bound of the way from n to the goal for every landmark L - and unlike the straight line it knows that the main
+// island stands in the way: a ship's search round it no longer floods half the sea first (ALT: A*, landmarks and the triangle inequality).
+static const int NAV_LM = 8;
+static std::vector<u16> g_navLM[NAV_LM];   // distance * 16 (0xFFFF: unreachable)
+static u32 g_navLMStamp = 0;
+static void buildNavLandmarks(const Map& m) {
+    static const int LX[NAV_LM] = { 12, MAP_W / 2, MAP_W - 13, 12, MAP_W - 13, 12, MAP_W / 2, MAP_W - 13 };
+    static const int LY[NAV_LM] = { 12, 10, 12, MAP_H / 2, MAP_H / 2, MAP_H - 13, MAP_H - 11, MAP_H - 13 };
+    static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+    static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    std::vector<float> d((size_t)MAP_W * MAP_H);
+    struct Q { float d; int i; bool operator<(const Q& o) const { return d > o.d; } };
+    std::vector<Q> heap; heap.reserve(1 << 16);
+    for (int L = 0; L < NAV_LM; L++) {
+        g_navLM[L].assign((size_t)MAP_W * MAP_H, 0xFFFF);
+        // the landmark: the open water tile nearest its spot
+        int sx = -1, sy = -1;
+        for (int r = 0; r < 40 && sx < 0; r++) for (int dy = -r; dy <= r && sx < 0; dy++) for (int dx = -r; dx <= r; dx++) {
+            if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+            if (m.navFlagAt(LX[L] + dx, LY[L] + dy) & Map::NF_OPEN) { sx = LX[L] + dx; sy = LY[L] + dy; break; }
+        }
+        if (sx < 0) continue;
+        std::fill(d.begin(), d.end(), 1e30f);
+        heap.clear();
+        d[sy * MAP_W + sx] = 0; heap.push_back({0, sy * MAP_W + sx});
+        while (!heap.empty()) {
+            std::pop_heap(heap.begin(), heap.end()); Q q = heap.back(); heap.pop_back();
+            if (q.d > d[q.i]) continue;
+            int x = q.i % MAP_W, y = q.i / MAP_W;
+            for (int k = 0; k < 8; k++) {
+                int nx = x + DX[k], ny = y + DY[k];
+                if (!(m.navFlagAt(nx, ny) & Map::NF_OPEN)) continue;
+                if (k >= 4 && (!(m.navFlagAt(x + DX[k], y) & Map::NF_WET) || !(m.navFlagAt(x, y + DY[k]) & Map::NF_WET))) continue;   // (as the search steps: no corner cutting)
+                float nd = q.d + (k >= 4 ? 1.4142f : 1.0f);
+                int ni = ny * MAP_W + nx;
+                if (nd < d[ni]) { d[ni] = nd; heap.push_back({nd, ni}); std::push_heap(heap.begin(), heap.end()); }
+            }
+        }
+        for (int i = 0; i < MAP_W * MAP_H; i++) if (d[i] < 1e29f) g_navLM[L][i] = (u16)std::min(65534.0f, d[i] * 16.0f);
+    }
+}
+
 bool Map::findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes) const {
     out.clear();
-    if (navFlagGen != navGen) { buildNavFlags(); navFlagGen = navGen; }
+    if (navFlagGen != navGen) {
+        bool changed = buildNavFlags();
+        if (!changed && navLabelGen == navFlagGen) navLabelGen = navGen;   // (nothing a ship cares about changed: the stretches still hold)
+        navFlagGen = navGen;
+    }
+    if (g_navLMStamp != navStaticGen) { buildNavLandmarks(*this); g_navLMStamp = navStaticGen; }
     Vec2 sf = nearestWater(from, 6);
     int comp = compAt(sf);   // (the goal is moved onto the same body of water: the lake and the ocean do not meet)
     Vec2 gt = nearestWater(to, 14, true, comp);
@@ -1473,9 +1568,20 @@ bool Map::findNavalPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes
         nGen++;
         if (nGen == 0) { memset(nNode, 0, sizeof(nNode)); nGen = 1; }
         const int goal = gy * MAP_W + gx;
+        u16 lg[NAV_LM];
+        for (int L = 0; L < NAV_LM; L++) lg[L] = g_navLM[L].empty() ? 0xFFFF : g_navLM[L][goal];
         auto h = [&](int idx) {
             int x = idx % MAP_W, y = idx / MAP_W, dx = std::abs(x - gx), dy = std::abs(y - gy);
-            return 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+            float oct = 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+            int alt = 0;   // the landmarks' bound (see buildNavLandmarks)
+            for (int L = 0; L < NAV_LM; L++) {
+                if (lg[L] == 0xFFFF) continue;
+                u16 a = g_navLM[L][idx];
+                if (a == 0xFFFF) continue;
+                int v = a > lg[L] ? a - lg[L] : lg[L] - a;
+                if (v > alt) alt = v;
+            }
+            return std::max(oct, alt * (1.0f / 16.0f));
         };
         navHeap.clear();
         nNode[start].g = 0; nNode[start].parent = -1; nNode[start].visit = nGen;

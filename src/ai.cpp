@@ -909,6 +909,7 @@ void AiPlayer::think() {
             else if (ut.role == UR_DECON) decon.push_back(S.refOf(e));       // anti-radiation trucks scrub fallout off the base: never part of a wave
             else if (ut.kind == UK_AIR) { if (!ut.temp) aircraft.push_back(S.refOf(e)); }   // (a Hotline Strike fighter is on loan: it flies its own run)
             else if (smart && ut.role == UR_HEALER) medics.push_back(S.refOf(e));   // medics trail the army instead of leading the charge
+            else if (subType(e.type)) {}   // (the submarines keep to themselves: subOps)
             else if (ut.naval) { fleet.push_back(S.refOf(e)); fleetValue += unitValue(e); shipsOrJeeps++; }   // (the fleet is handled apart from the land army)
             else {
                 if (e.carrier.valid() || e.order == O_ENTER) continue;
@@ -918,6 +919,7 @@ void AiPlayer::think() {
             }
         } else {
             if (e.district >= 0) continue;   // a town round the lake it holds is not part of its base (see civilAffairs)
+            if (e.bt().relic && dist(e.pos, pl.basePos) > 45.0f * TILE) continue;   // (a relic outpost it holds far from home: not the base, nobody is sent to mend it)
             if (e.constructed && e.hp < e.maxHp * 0.6f && !(smart && S.inFallout(e.pos))) damaged.push_back(&e);
             switch (e.bt().role) {
             case BR_HQ: hq = &e; break;
@@ -941,6 +943,8 @@ void AiPlayer::think() {
             case BR_FWALL: walls++; break;
             case BR_WAYMAKER: break;   // (gone again in a few seconds)
             case BR_HEALANT: masts++; break;
+            case BR_RELICCOMMAND: case BR_RELICFOUNDRY: case BR_RELICPAD: case BR_RELICSILO: break;   // (the relic structures it holds: relicOps)
+            case BR_BRIDGE: break;
             case BR_NONE: break;
             }
         }
@@ -950,7 +954,7 @@ void AiPlayer::think() {
     Entity* threat = nullptr; float threatDist = 1e18f; int threatCount = 0;
     std::vector<Entity*> enemyUnits;
     std::vector<Entity*> ownBuildings;
-    for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && e.district < 0) ownBuildings.push_back(&e);   // (its towns round the lake are defended apart: civilAffairs)
+    for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && e.district < 0 && !(e.bt().relic && dist(e.pos, pl.basePos) > 45.0f * TILE)) ownBuildings.push_back(&e);   // (its towns round the lake are defended apart: civilAffairs; a relic outpost far from home is not the base)
     // an enemy within 12 tiles of the edge of one of our structures: most enemies stand far outside the box round the base and are passed over at
     // once; the rest stop at the first structure in reach (it was the distance to every structure for every enemy on the map)
     float ox0 = 1e18f, oy0 = 1e18f, ox1 = -1e18f, oy1 = -1e18f;
@@ -1432,6 +1436,12 @@ void AiPlayer::think() {
         // a carrier for a rich Hard or Brutal commander once a few warships escort it: its wing does the rest
         if (pl.difficulty >= 2 && carriers == 0 && destroyers + cruisers >= 2 && pl.money - reserve > UNITS[carrierT].cost + 3000 && S.unitAvailable(player, carrierT))
             for (auto* y : yards) if (y->constructed && y->queue.empty()) { if (S.cmdTrain(S.refOf(*y), carrierT)) { queuedShips++; break; } }
+        // a battleship (or two, Brutal) for a rich commander once destroyers screen it: heavy guns and cruise missiles for the shore
+        int bsT = pl.faction == F_CYBER ? U_C_BATTLESHIP : U_K_BATTLESHIP, battleships = 0;
+        for (auto r : fleet) if (Entity* e = S.get(r)) if (e->type == bsT) battleships++;
+        for (auto* y : yards) for (int q : y->queue) if (q == bsT) battleships++;
+        if (pl.difficulty >= 1 && battleships < (pl.difficulty >= 3 ? 2 : 1) && destroyers >= 2 && pl.money - reserve > UNITS[bsT].cost + 4000 && S.unitAvailable(player, bsT))
+            for (auto* y : yards) if (y->constructed && y->queue.empty()) { if (S.cmdTrain(S.refOf(*y), bsT)) { queuedShips++; break; } }
         int fleetCap = 3 + pl.difficulty + (enemyShips > 0 ? 2 : 0) + (pl.money > 9000 ? 1 : 0) + patrols / 2;   // (patrol boats are small: two take one berth)
         for (auto* y : yards) if (y->constructed && y->queue.empty() && (int)fleet.size() + queuedShips < fleetCap && pl.money - reserve > 800) {
             bool rich = pl.money - reserve > 2600;
@@ -2247,4 +2257,5 @@ void AiPlayer::think() {
     }
     prof.mark("riots");
     if (on(FEAT_FRONTIER)) frontier();
+    relicOps();
 }

@@ -466,6 +466,7 @@ struct Sim {
     std::vector<u8> gridOwners;
     std::vector<int> heliList;   // living helicopters (rebuilt with the grid every tick)
     std::vector<int> pdList;     // every wall and anti-nuke defence (rebuilt with the grid, extended as they are placed): what antiNukeLinked looks through
+    std::vector<int> supplyList; // every Supply Hub (rebuilt with the grid, extended as they are placed, in entity order): what a hauler looks through for one
     u8 enemyMask(int p) const { u8 m = 0; for (int q = 0; q < MAX_PLAYERS; q++) if (enemies(p, q)) m |= (u8)(1u << (q + 1)); return m; }   // gridOwners bits of p's enemies
     std::vector<float> incoming; // per entity index: damage already on its way in projectiles (rebuilt with the grid every tick; sharp fire skips the doomed)
 

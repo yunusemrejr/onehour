@@ -146,6 +146,12 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             int ft = pl.faction == F_CYBER ? U_C_FIGHTER : U_K_FIGHTER, forts = 0, held = 0;
             for (auto& e : g_sim.ents) if (e.alive && e.owner == p && e.isBuilding()) { if (e.type == B_C_FORTRESS) forts++; if (e.bt().role == BR_ISLANDNUKE) held++; }
             printf("  P%d: island launchers taken %d (held now %d), island nukes %d, Nuclear Bombers called %d, fighters bought %d, fortresses held %d\n", p, pl.launchersTaken, held, pl.islandLaunches, pl.bomberCalls, (int)(pl.spentOn[ft] / UNITS[ft].cost), forts);
+            {   // the update's strategic assets: relic structures held, Hydras fired, submarines, battleships and bridges
+                const AiPlayer& ai = g_ai.ais[p];
+                int relicsHeld = 0, subs = 0, bs = 0;
+                for (auto& e : g_sim.ents) if (e.alive && e.owner == p) { if (e.isBuilding() && e.bt().relic) relicsHeld++; if (e.isUnit() && subType(e.type)) subs++; if (e.isUnit() && battleshipType(e.type)) bs++; }
+                printf("  P%d: relic structures held %d (claim orders %d), Hydras %d, submarines %d (launches %d), battleships %d, bridges raised by its dozers %d\n", p, relicsHeld, ai.relicClaims, ai.hydras, subs, ai.subLaunches, bs, ai.bridgeRepairs);
+            }
         }
         {   // the towns round the lake and the riots
             int towns = 0; for (auto& D : g_sim.districts) if (D.owner == p) towns++;

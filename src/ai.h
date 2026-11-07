@@ -57,8 +57,10 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                                   // (a different one each wave, up to 7 tiles' worth), so it hits the hub one time and the airfield the next, never a clearly
                                   // worse target; and the first wave's pace differs a little from match to match (0.92 to 1.08: a +-18% pace lost 41-50)
                F2_CAND = 8,       // (training only, never shipped: plays TUNE_CAND, see readTuneEnv in ai.cpp)
-               F2_ALL = 7 | 16 | 32,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_RELIC = 64,     // the abandoned relic bases (ai_frontier.cpp relicOps): squads claim them, Hydra Silos fire, relic factories build, bridges are raised
+               F2_SUBS = 128,     // nuclear submarines (subOps): a few for a rich commander, kept dived, one surfacing to launch at a target worth a warhead
+               F2_ALL = 7 | 16 | 32 | 64 | 128,
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -214,6 +216,12 @@ struct AiPlayer {
     void garrisonStrongholds();
     void frontier();                    // FEAT_FRONTIER (ai_frontier.cpp): take the island launchers, fire them, call the Nuclear Bomber
     float nextFrontier = 0;
+    void relicOps();                    // F2_RELIC / F2_SUBS (ai_frontier.cpp): the relic bases, the canal's bridges, the submarines
+    void subOps();
+    float nextRelic = 0, nextRelicBuild = 0, nextSecretLook = 0, relicSince = 0, relicBadAt = -1000;
+    Ref relicGoal, relicBad;            // the relic structure the squad is claiming, and one it could not get to
+    std::vector<Ref> relicSquad;
+    int relicClaims = 0, hydras = 0, subLaunches = 0, bridgeRepairs = 0;   // (statistics for the self-play report)
     void think();
     void dodgeNukes();                  // cheap per-tick check: pull units out of the circle of an incoming enemy nuke
     bool findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty);

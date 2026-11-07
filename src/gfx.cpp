@@ -630,29 +630,61 @@ static u32 expand565(u16 p) {
     return Canvas::pack(Color{ (u8)(r << 3 | r >> 2), (u8)(g << 2 | g >> 4), (u8)(b << 3 | b >> 2), 255 });
 }
 
-bool Gfx::openSeaChunk(int cx, int cy) const {
-    const int T = WORLD_CHUNK / TILE;
-    for (int ty = cy * T - 1; ty <= (cy + 1) * T; ty++) for (int tx = cx * T - 1; tx <= (cx + 1) * T; tx++) {
+bool Gfx::openSeaBlock(int px0, int py0, int size) const {
+    for (int ty = py0 / TILE - 1; ty <= (py0 + size) / TILE; ty++) for (int tx = px0 / TILE - 1; tx <= (px0 + size) / TILE; tx++) {
         if (!inMap(tx, ty)) continue;
         if (g_map.tiles[ty * MAP_W + tx] != T_WATER || g_map.shoreDist[(size_t)ty * MAP_W + tx] < 10) return false;
     }
     return true;
 }
 
+// A 2x bilinear step has fixed weights: every output pixel is 9/16 of its own half pixel, 3/16 of each of the two nearest along the rows and the columns,
+// 1/16 of the diagonal one (integer arithmetic: a float version per sample cost a tenth of a second per chunk)
+static void upscale565(const u16* in, int hw, int hh, u16* out) {
+    static thread_local std::vector<u8> rgb; rgb.resize((size_t)hw * hh * 3);
+    for (int i = 0; i < hw * hh; i++) { u16 p = in[i]; int r = p >> 11, g = p >> 5 & 63, b2 = p & 31; rgb[i * 3] = (u8)(r << 3 | r >> 2); rgb[i * 3 + 1] = (u8)(g << 2 | g >> 4); rgb[i * 3 + 2] = (u8)(b2 << 3 | b2 >> 2); }
+    const int W = hw * 2, H = hh * 2;
+    for (int j = 0; j < H; j++) {
+        const int ky = j >> 1, oy = (j & 1) ? std::min(hh - 1, ky + 1) : std::max(0, ky - 1);
+        const u8* A = &rgb[(size_t)ky * hw * 3]; const u8* B = &rgb[(size_t)oy * hw * 3];
+        for (int i = 0; i < W; i++) {
+            const int kx = i >> 1, ox = (i & 1) ? std::min(hw - 1, kx + 1) : std::max(0, kx - 1);
+            int c[3];
+            for (int q = 0; q < 3; q++) c[q] = (9 * A[kx * 3 + q] + 3 * A[ox * 3 + q] + 3 * B[kx * 3 + q] + B[ox * 3 + q] + 8) >> 4;
+            out[(size_t)j * W + i] = (u16)((std::min(31, c[0] >> 3) << 11) | (std::min(63, c[1] >> 2) << 5) | std::min(31, c[2] >> 3));
+        }
+    }
+}
+
+void Gfx::subTexels(const WorldChunk& ch, int k, std::vector<u16>& out) const {
+    const int S = WORLD_SUB;
+    out.resize((size_t)S * S);
+    if (!ch.blkHalf[k]) { std::copy(ch.blk[k].begin(), ch.blk[k].end(), out.begin()); return; }
+    upscale565(ch.blk[k].data(), S / 2, S / 2, out.data());
+}
+
 void Gfx::bakeTerrain() {
     static_assert(TERRAIN_BAND == WORLD_CHUNK, "a baked band is one row of chunks");
+    static_assert(WORLD_SUB * WORLD_SUBS == WORLD_CHUNK, "a chunk is a square of sub-blocks");
     // The bake paints the world one band (a row of chunks) at a time; each band is graded and dithered into the chunks' RGB565 pixels as it comes
     // out, so neither a 32-bit copy of the whole world nor of a whole chunk row outlives its band. No texture is made here: makeChunkTexture
     // gives one to a chunk when drawWorld first shows it.
     worldCols = (WORLD_W + WORLD_CHUNK - 1) / WORLD_CHUNK; worldRows = (WORLD_H + WORLD_CHUNK - 1) / WORLD_CHUNK;
     worldChunks.assign((size_t)worldCols * worldRows, WorldChunk());
     worldResident = 0;
+    const bool fullSea = getenv("ONEHOUR_FULLSEA") != nullptr;
     for (int cy = 0; cy < worldRows; cy++) for (int cx = 0; cx < worldCols; cx++) {
         WorldChunk& ch = worldChunks[(size_t)cy * worldCols + cx];
         int x0 = cx * WORLD_CHUNK, y0 = cy * WORLD_CHUNK;
         ch.w = std::min(WORLD_CHUNK, WORLD_W - x0); ch.h = std::min(WORLD_CHUNK, WORLD_H - y0);
-        ch.half = (ch.w % 2 == 0 && ch.h % 2 == 0) && openSeaChunk(cx, cy) && !getenv("ONEHOUR_FULLSEA");
-        ch.px.assign(ch.half ? (size_t)(ch.w / 2) * (ch.h / 2) : (size_t)ch.w * ch.h, 0);
+        bool all = true;
+        for (int k = 0; k < WORLD_SUBS * WORLD_SUBS; k++) {
+            int bx = x0 + (k % WORLD_SUBS) * WORLD_SUB, by = y0 + (k / WORLD_SUBS) * WORLD_SUB;
+            ch.blkHalf[k] = !fullSea && openSeaBlock(bx, by, WORLD_SUB);
+            all = all && ch.blkHalf[k];
+            ch.blk[k].assign(ch.blkHalf[k] ? (size_t)(WORLD_SUB / 2) * (WORLD_SUB / 2) : (size_t)WORLD_SUB * WORLD_SUB, 0);
+        }
+        ch.half = all;
     }
     groundLight(0, 0);   // (its noise grid made before the threads read it)
     const char* wp = getenv("ONEHOUR_WORLDBMP");   // debugging: dump the baked ground (ONEHOUR_WORLDBMP=file.bmp) - only then is the whole world held at once
@@ -671,20 +703,24 @@ void Gfx::bakeTerrain() {
                 const int wy = oy + yl;
                 for (int cx = 0; cx < worldCols; cx++) {
                     WorldChunk& ch = worldChunks[(size_t)cy * worldCols + cx];
-                    const int x0 = cx * WORLD_CHUNK, y = wy - cy * WORLD_CHUNK;
+                    const int x0 = cx * WORLD_CHUNK, y = wy - cy * WORLD_CHUNK, by = y / WORLD_SUB, ly = y % WORLD_SUB;
                     const u32* src = &band.px[(size_t)yl * band.w + x0];
-                    if (!ch.half) { for (int x = 0; x < ch.w; x++) ch.px[(size_t)y * ch.w + x] = dithered565(gradeGround(src[x], x0 + x, wy), x0 + x, wy); continue; }
-                    if (y & 1) continue;   // a half chunk: each pixel averages the graded 2x2 block it stands for (rows pair up: the band is a whole chunk row)
-                    const u32* src2 = src + band.w;
-                    const int hw = ch.w / 2;
-                    for (int hx = 0; hx < hw; hx++) {
-                        int r = 0, g = 0, b = 0;
-                        for (int k = 0; k < 4; k++) {
-                            int ix = hx * 2 + (k & 1);
-                            Color c = Canvas::unpack(gradeGround((k < 2 ? src : src2)[ix], x0 + ix, wy + (k >> 1)));
-                            r += c.r; g += c.g; b += c.b;
+                    for (int bx = 0; bx < WORLD_SUBS; bx++) {
+                        const int k = by * WORLD_SUBS + bx, sx0 = bx * WORLD_SUB;
+                        std::vector<u16>& blk = ch.blk[k];
+                        if (!ch.blkHalf[k]) { for (int x = 0; x < WORLD_SUB; x++) blk[(size_t)ly * WORLD_SUB + x] = dithered565(gradeGround(src[sx0 + x], x0 + sx0 + x, wy), x0 + sx0 + x, wy); continue; }
+                        if (ly & 1) continue;   // a half sub-block: each pixel averages the graded 2x2 block it stands for (rows pair up: the band is a whole chunk row)
+                        const u32* src2 = src + band.w;
+                        const int hw = WORLD_SUB / 2;
+                        for (int hx = 0; hx < hw; hx++) {
+                            int r = 0, g = 0, b = 0;
+                            for (int q = 0; q < 4; q++) {
+                                int ix = sx0 + hx * 2 + (q & 1);
+                                Color c = Canvas::unpack(gradeGround((q < 2 ? src : src2)[ix], x0 + ix, wy + (q >> 1)));
+                                r += c.r; g += c.g; b += c.b;
+                            }
+                            blk[(size_t)(ly / 2) * hw + hx] = dithered565(Canvas::pack(Color{ (u8)((r + 2) / 4), (u8)((g + 2) / 4), (u8)((b + 2) / 4), 255 }), (x0 + sx0) / 2 + hx, wy / 2);
                         }
-                        ch.px[(size_t)(y / 2) * hw + hx] = dithered565(Canvas::pack(Color{ (u8)((r + 2) / 4), (u8)((g + 2) / 4), (u8)((b + 2) / 4), 255 }), x0 / 2 + hx, wy / 2);
                     }
                 }
             }
@@ -703,9 +739,9 @@ void Gfx::bakeTerrain() {
     terrainOverviewEnd(mini, miniC);
     minimapTerrain = fromCanvasSolo(miniC, 0, 0, true);
     if (getenv("ONEHOUR_BAKESTAT")) {   // how the baked ground is stored (half: open-sea chunks kept at half resolution)
-        size_t bytes = 0; int halves = 0;
-        for (auto& ch : worldChunks) { bytes += ch.px.size() * 2; halves += ch.half; }
-        printf("bake: %d chunks, %d half-resolution open sea, %.1f MB of RGB565\n", (int)worldChunks.size(), halves, bytes / 1048576.0);
+        size_t bytes = 0; int halves = 0, halfBlocks = 0;
+        for (auto& ch : worldChunks) { for (int k = 0; k < WORLD_SUBS * WORLD_SUBS; k++) { bytes += ch.blk[k].size() * 2; halfBlocks += ch.blkHalf[k]; } halves += ch.half; }
+        printf("bake: %d chunks (%d all open sea), %d of %d sub-blocks at half resolution, %.1f MB of RGB565\n", (int)worldChunks.size(), halves, halfBlocks, (int)worldChunks.size() * WORLD_SUBS * WORLD_SUBS, bytes / 1048576.0);
     }
     // fog mask, filtered bilinearly at creation time (hint is read when the texture is created)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
@@ -749,8 +785,13 @@ void Gfx::uploadTerrainPatch(const std::vector<int>& group) {
         int bx = std::min(x + w, (cx + 1) * WORLD_CHUNK), by = std::min(y + h, (cy + 1) * WORLD_CHUNK);
         if (bx <= ax || by <= ay) continue;
         int lx = ax - cx * WORLD_CHUNK, ly = ay - cy * WORLD_CHUNK, rw = bx - ax, rh = by - ay;   // the same part in chunk px
-        for (int j = 0; j < rh; j++) for (int i = 0; i < rw; i++)
-            ch.px[(size_t)(ly + j) * ch.w + lx + i] = dithered565(gradeGround(px[(size_t)(ay - y + j) * w + (ax - x + i)], ax + i, ay + j), ax + i, ay + j);
+        for (int j = 0; j < rh; j++) for (int i = 0; i < rw; i++) {
+            u32 v = px[(size_t)(ay - y + j) * w + (ax - x + i)];
+            if ((v >> 24) == 0) continue;   // (clear: nothing grew or was quarried there, the ground stays as it is)
+            const int cxp = lx + i, cyp = ly + j, k = (cyp / WORLD_SUB) * WORLD_SUBS + cxp / WORLD_SUB;
+            if (ch.blkHalf[k]) continue;   // (open sea: nothing is ever cleared there)
+            ch.blk[k][(size_t)(cyp % WORLD_SUB) * WORLD_SUB + cxp % WORLD_SUB] = dithered565(gradeGround(v, ax + i, ay + j), ax + i, ay + j);
+        }
         uploadChunkRect(ch, lx, ly, rw, rh);
     }
 }
@@ -758,6 +799,9 @@ void Gfx::uploadTerrainPatch(const std::vector<int>& group) {
 // Gives a chunk its texture (RGB565 on a GPU, ABGR8888 on the software renderer) and fills it from the chunk's CPU pixels. When the cap is
 // reached, the least recently drawn texture goes first, but never one this draw still needs (a window spanning more chunks than the cap keeps them all).
 void Gfx::makeChunkTexture(WorldChunk& ch, u32 stamp) {
+    static const bool prof = getenv("ONEHOUR_CHUNKPROF") != nullptr;
+    u64 t0 = prof ? SDL_GetPerformanceCounter() : 0;
+    struct Done { bool on; u64 t0; const WorldChunk& c; ~Done() { if (on) fprintf(stderr, "[chunk] %s %dx%d %.1f ms\n", c.half ? "half" : "full", c.w, c.h, (SDL_GetPerformanceCounter() - t0) * 1000.0 / SDL_GetPerformanceFrequency()); } } done{ prof, t0, ch };
     while (worldResident >= WORLD_RESIDENT) {
         WorldChunk* old = nullptr;
         for (auto& o : worldChunks) if (o.tex && o.used != stamp && (!old || o.used < old->used)) old = &o;
@@ -776,30 +820,31 @@ void Gfx::makeChunkTexture(WorldChunk& ch, u32 stamp) {
 
 void Gfx::uploadChunkRect(WorldChunk& ch, int x, int y, int w, int h) {
     if (!ch.tex) return;
-    if (ch.half) {   // the whole chunk at once (it is never patched): as it is for a GPU, scaled up bilinearly for the software renderer
-        const int hw = ch.w / 2, hh = ch.h / 2;
-        if (!softwareRenderer) { SDL_UpdateTexture(ch.tex, nullptr, ch.px.data(), hw * 2); return; }
-        std::vector<u32> px((size_t)ch.w * ch.h);
-        bakeRows(ch.h, [&](int ya, int yb) {
-            for (int j = ya; j < yb; j++) {
-                float fy = clampf((j + 0.5f) * 0.5f - 0.5f, 0, (float)(hh - 1)); int y0 = (int)fy, y1 = std::min(hh - 1, y0 + 1); float ty = fy - y0;
-                for (int i = 0; i < ch.w; i++) {
-                    float fx = clampf((i + 0.5f) * 0.5f - 0.5f, 0, (float)(hw - 1)); int x0 = (int)fx, x1 = std::min(hw - 1, x0 + 1); float tx = fx - x0;
-                    Color a = Canvas::unpack(expand565(ch.px[(size_t)y0 * hw + x0])), b = Canvas::unpack(expand565(ch.px[(size_t)y0 * hw + x1]));
-                    Color c = Canvas::unpack(expand565(ch.px[(size_t)y1 * hw + x0])), d = Canvas::unpack(expand565(ch.px[(size_t)y1 * hw + x1]));
-                    auto L = [&](u8 p, u8 q, u8 r2, u8 s2) { return (u8)clampf(p + (q - p) * tx + (r2 - p) * ty + (p - q - r2 + s2) * tx * ty + 0.5f, 0, 255); };
-                    px[(size_t)j * ch.w + i] = Canvas::pack(Color{ L(a.r, b.r, c.r, d.r), L(a.g, b.g, c.g, d.g), L(a.b, b.b, c.b, d.b), 255 });
-                }
-            }
-        });
-        SDL_UpdateTexture(ch.tex, nullptr, px.data(), ch.w * 4);
+    const int S = WORLD_SUB, NS = WORLD_SUBS;
+    if (ch.half && !softwareRenderer) {   // all open sea on a GPU: the half-size texture, assembled from the half sub-blocks as they are
+        const int hs = S / 2, hw = ch.w / 2;
+        std::vector<u16> all((size_t)hw * (ch.h / 2));
+        for (int k = 0; k < NS * NS; k++) for (int j = 0; j < hs; j++) std::copy(&ch.blk[k][(size_t)j * hs], &ch.blk[k][(size_t)j * hs] + hs, &all[(size_t)((k / NS) * hs + j) * hw + (k % NS) * hs]);
+        SDL_UpdateTexture(ch.tex, nullptr, all.data(), hw * 2);
         return;
     }
-    SDL_Rect r = { x, y, w, h };
-    if (!softwareRenderer) { SDL_UpdateTexture(ch.tex, &r, &ch.px[(size_t)y * ch.w + x], ch.w * 2); return; }
-    std::vector<u32> px((size_t)w * h);
-    for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) px[(size_t)j * w + i] = expand565(ch.px[(size_t)(y + j) * ch.w + x + i]);
-    SDL_UpdateTexture(ch.tex, &r, px.data(), w * 4);
+    // every sub-block the rectangle touches: its part of the rectangle (a half one scaled up first)
+    std::vector<u16> tex;
+    std::vector<u32> px;
+    for (int by = y / S; by <= (y + h - 1) / S && by < NS; by++) for (int bx = x / S; bx <= (x + w - 1) / S && bx < NS; bx++) {
+        const int k = by * NS + bx;
+        const int ax = std::max(x, bx * S), ay = std::max(y, by * S), ex = std::min(x + w, (bx + 1) * S), ey = std::min(y + h, (by + 1) * S);
+        if (ex <= ax || ey <= ay) continue;
+        const u16* src; int pitch;
+        if (ch.blkHalf[k]) { subTexels(ch, k, tex); src = tex.data(); } else src = ch.blk[k].data();
+        pitch = S;
+        SDL_Rect r = { ax, ay, ex - ax, ey - ay };
+        const u16* first = src + (size_t)(ay - by * S) * pitch + (ax - bx * S);
+        if (!softwareRenderer) { SDL_UpdateTexture(ch.tex, &r, first, pitch * 2); continue; }
+        px.resize((size_t)r.w * r.h);
+        for (int j = 0; j < r.h; j++) for (int i = 0; i < r.w; i++) px[(size_t)j * r.w + i] = expand565(first[(size_t)j * pitch + i]);
+        SDL_UpdateTexture(ch.tex, &r, px.data(), r.w * 4);
+    }
 }
 
 void Gfx::drawWorld(int wx, int wy, int w, int h, int dx, int dy) {

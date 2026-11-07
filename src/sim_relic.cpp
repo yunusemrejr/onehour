@@ -13,7 +13,7 @@ static void deckTiles(const Entity& b, bool open) {
         if (g_map.tiles[k] != T_WATER) continue;   // (the abutments on the banks are ground either way)
         if (open) g_map.blocked[k] &= (u8)~1; else g_map.blocked[k] |= 1;
     }
-    g_map.touch();   // (the ground's regions and the naval flags are worked out again)
+    g_map.regionDirty = true;   // (the ground's regions are worked out again; ships sail under the deck either way: the naval flags stand)
 }
 
 void Sim::breakBridge(Entity& b, int by) {
