@@ -1585,10 +1585,10 @@ void Sim::nukeBlast(const Nuke& n) {
         for (int k = 0; k < 4; k++) emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
         return;
     }
-    const bool sv = n.deep;
+    const bool sv = n.deep, hy = n.hydra;   // (a Hydra's warhead: the relic silos' green-white fire and radiation)
     const float Rv = sv ? std::min(R, NUKE_RADIUS * TILE * 1.7f) : R;
-    fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, sv ? rgb(240, 242, 246) : rgb(255, 240, 200), Rv * 1.3f});
-    fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, sv ? rgb(214, 218, 224) : rgb(255, 210, 140), sv ? R * 1.05f : R * 1.2f});
+    fx.push_back({FX_EXPLODE, n.pos, n.pos, 0, 2.0f, sv ? rgb(240, 242, 246) : hy ? rgb(226, 255, 232) : rgb(255, 240, 200), Rv * 1.3f});
+    fx.push_back({FX_RING, n.pos, n.pos, 0, 1.8f, sv ? rgb(214, 218, 224) : hy ? RELIC_GLOW : rgb(255, 210, 140), sv ? R * 1.05f : R * 1.2f});
     if (!sv) fx.push_back({FX_RING, n.pos, n.pos, -0.5f, 2.4f, rgb(255, 180, 100), R * 1.7f});
     fx.push_back({FX_EMP, n.pos, n.pos, 0, 2.0f, sv ? rgb(220, 224, 232) : rgb(255, 220, 160), Rv * 1.3f});
     fx.push_back({FX_MUSHROOM, n.pos, n.pos, 0, 18.0f, sv ? UNUKE_GLOW : rgb(255, 255, 255), Rv});
@@ -1599,7 +1599,7 @@ void Sim::nukeBlast(const Nuke& n) {
     }
     for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
     const float life = FALLOUT_LIFE * (sv ? UNUKE_FALLOUT : 1.0f);
-    fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, life, sv ? UNUKE_GLOW : rgb(120, 255, 90), R * 0.95f});
+    fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, life, sv ? UNUKE_GLOW : hy ? RELIC_GLOW : rgb(120, 255, 90), R * 0.95f});
     fx.back().tag = ++fxTagSeq;
     fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, sv ? UNUKE_FALLOUT : 1.0f, -1, false, life, fxTagSeq});
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);

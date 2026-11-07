@@ -651,7 +651,7 @@ void Game::buildButtonsRaw() {
         if (role == BR_ISLANDNUKE) {   // a captured island launcher: it only launches (nothing sells, repairs or upgrades it)
             if (b->owner != g_sim.humanPlayer) return;
             float iw = g_sim.islandNukeWait(g_sim.humanPlayer);
-            snprintf(tip, sizeof tip, "Launch Super Nuke  [K]  The biggest warhead there is: twice an Underground Nuke's blast (%.0f tile radius, leaves radiation), anywhere on the map, landing in %.1f s. Bunkers and interceptor missiles cannot touch it and a laser's chance is a fifth of its chance against an Underground Nuke. It hurts your own army too if it is in the circle. One launch per launcher every %d s. Nothing destroys the launcher: only an enemy infiltrator taking it back stops it%s",
+            snprintf(tip, sizeof tip, "Launch Super Nuke  [K]  The biggest warhead there is: twice an Underground Nuke's blast (%.0f tile radius, leaves radiation), anywhere on the map, landing in %.1f s. Bunkers and interceptor missiles cannot touch it and a laser's chance is a fifth of its chance against an Underground Nuke. It hurts your own army too if it is in the circle. One launch per launcher every %d s. The launcher is heavily armoured but can be destroyed (gone for good), and an enemy infiltrator can take it back%s",
                      NUKE_RADIUS * std::sqrt(ISLAND_NUKE_SCALE), ISLAND_NUKE_FLIGHT, (int)ISLAND_NUKE_COOLDOWN, iw > 0 ? "  (reloading)" : "");
             add(BK_ISLANDNUKE, 0, g_sim.islandNukesReady(g_sim.humanPlayer) > 0, "Super Nuke", tip);
             return;
@@ -3248,8 +3248,9 @@ void Game::drawNukes() {
         float nr = Sim::nukeRadius(n);
         const bool sv = n.deep;   // an Underground Nuke: everything about it is silver
         const bool su = n.super;  // an island Super Nuke: magenta-white, and the whole of its huge circle flashes
-        g.discFill(tgt.x, tgt.y, nr, su ? rgb(255, 70, 190, (int)(16 + 26 * pulse)) : sv ? rgb(196, 202, 212, (int)(18 + 22 * pulse)) : rgb(255, 60, 40, (int)(20 + 26 * pulse)));
-        g.dashedCircle(tgt.x, tgt.y, nr, su ? rgb(255, 120, 210) : sv ? rgb(220, 224, 232) : rgb(255, 90, 60), wallTime * 30.0f);
+        const bool hy = n.hydra;  // one of a Hydra's warheads: the relic silos' green-white
+        g.discFill(tgt.x, tgt.y, nr, su ? rgb(255, 70, 190, (int)(16 + 26 * pulse)) : sv ? rgb(196, 202, 212, (int)(18 + 22 * pulse)) : hy ? rgb(90, 255, 150, (int)(18 + 24 * pulse)) : rgb(255, 60, 40, (int)(20 + 26 * pulse)));
+        g.dashedCircle(tgt.x, tgt.y, nr, su ? rgb(255, 120, 210) : sv ? rgb(220, 224, 232) : hy ? RELIC_GLOW : rgb(255, 90, 60), wallTime * 30.0f);
         if (su) g.dashedCircle(tgt.x, tgt.y, nr * 0.35f, rgb(255, 200, 240), -wallTime * 40.0f);   // (its lethal core)
         if (su && !n.broken && dist(Vec2(SCREEN_W * 0.5f, VIEW_H * 0.5f), tgt) < nr) {   // the view is inside the huge circle (its rim is off screen): say so plainly
             Color edge = rgb(255, 70, 190, (int)(70 + 90 * pulse));
@@ -3257,7 +3258,7 @@ void Game::drawNukes() {
             char warn[64]; snprintf(warn, sizeof warn, "INSIDE THE SUPER NUKE'S BLAST  %ds", (int)std::ceil(Sim::flightOf(n) - n.t));
             g.text((int)(SCREEN_W * 0.5f - g.textW(warn, 2) * 0.5f), 34, warn, rgb(255, 214, 240), 2);
         }
-        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (su ? "SUPER NUKE" : sv ? "UNDERGROUND NUKE" : n.rain ? "RAIN NUKE" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE")), (int)std::ceil(Sim::flightOf(n) - n.t));
+        char buf[48]; snprintf(buf, sizeof buf, "%s %ds", n.broken ? "SHOT DOWN: PIECES" : (su ? "SUPER NUKE" : sv ? "UNDERGROUND NUKE" : hy ? "HYDRA" : n.rain ? "RAIN NUKE" : (n.scale < 1.0f ? "MINI NUKE" : "NUKE")), (int)std::ceil(Sim::flightOf(n) - std::max(0.0f, n.t)));
         g.text((int)(tgt.x - g.textW(buf) / 2), (int)(tgt.y - 6), buf, n.broken ? rgb(255, 214, 140) : rgb(255, 230, 200));
         if (n.broken) continue;   // (the missile is gone: its pieces are drawn with the anti-nuke shots)
         // the missile: rises from the ramp on a long arc and falls on the target
@@ -3269,8 +3270,8 @@ void Game::drawNukes() {
         const float S = su ? 2.0f : sv ? 1.7f : 1.3f;
         bool cyberArmy = g_sim.players[n.owner < 0 ? 0 : n.owner].faction == F_CYBER;
         const Sprite& body = cyberArmy ? g.fxs.missile : g.fxs.missileK;
-        const Color hot = su ? rgb(255, 236, 250) : sv ? rgb(236, 240, 248) : rgb(255, 244, 214), warm = su ? rgb(255, 120, 210) : sv ? rgb(196, 204, 218) : rgb(255, 190, 120);
-        const Color glowA = su ? Color{255, 90, 200, 170} : sv ? Color{200, 210, 228, 150} : Color{255, 150, 60, 150};
+        const Color hot = su ? rgb(255, 236, 250) : sv ? rgb(236, 240, 248) : hy ? rgb(226, 255, 236) : rgb(255, 244, 214), warm = su ? rgb(255, 120, 210) : sv ? rgb(196, 204, 218) : hy ? RELIC_GLOW : rgb(255, 190, 120);
+        const Color glowA = su ? Color{255, 90, 200, 170} : sv ? Color{200, 210, 228, 150} : hy ? Color{110, 255, 160, 150} : Color{255, 150, 60, 150};
         // its shadow slides across the ground below it, smaller and fainter the higher it climbs
         { Vec2 gs = worldToScreen(ground(k)); float lift = std::sin(k * 3.14159f); float sz = 34.0f - 12.0f * lift;
           g.drawSized(g.fxs.cloud[0], gs.x + 6, gs.y + 4, sz * 2.2f, sz, ang, rgb(0, 0, 0), (u8)(120 - 60 * lift)); }
