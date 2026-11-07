@@ -807,24 +807,33 @@ void AiPlayer::dodgeNukes() {
     if (!smart || S.nukes.empty()) return;
     Player& pl = S.players[player];
     if ((pl.difficulty < 1 && !on(FEAT_EASYWIT)) || (S.tick & 3) != (u32)(player & 3)) return;
-    float notice = pl.difficulty >= 3 ? 0.3f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 4.5f : 6.5f));   // (an Easy army notices last)   // seconds after the launch before it reacts: slow soldiers on Normal are mostly caught
+    float notice = pl.difficulty >= 3 ? 0.3f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 4.5f : 6.5f));   // (an Easy army notices last)   // seconds after the launch before it reacts
+    // every warhead coming down on us that we can still outrun (a Hydra's five land in a ring: a unit has to leave all of their circles, not run
+    // from one into the next, and be told so once instead of every few ticks)
+    struct Threat { Vec2 at; float safe; };
+    Threat th[64]; int nt = 0;
     for (auto& n : S.nukes) {
         bool hurts = S.nukeHurts(n, player);   // (a human ally's nuke hurts us too: get out of the way, never hit back)
         if (!hurts || n.super || n.t < notice || n.t > Sim::flightOf(n) - 0.5f) continue;   // (nothing outruns a Super Nuke)
-        float safe = Sim::nukeRadius(n) + 2.0f * TILE;
-        for (auto& e : S.ents) {
-            if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || e.carrier.valid()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger); a soldier aboard goes where its carrier goes
-            if (dist(e.pos, n.pos) > safe) continue;
-            if (e.order == O_MOVE && dist(e.target, n.pos) > safe) continue;   // already on its way out
-            Vec2 away = e.pos - n.pos; float l = away.len();
-            if (l < 4) { away = pl.basePos - n.pos; l = away.len(); }
-            away = away * (1.0f / std::max(l, 1.0f));
-            Vec2 dest = n.pos + away * (safe + 3.0f * TILE);
-            dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
-            if (e.order == O_MOVE && dist(e.target, dest) < 3.0f * TILE) continue;   // (already told to go there: its ground or the sea moved the spot a little)
-            S.cmdMove({S.refOf(e)}, dest, false);
-            dodges++;
-        }
+        if (nt < 64) th[nt++] = { n.pos, Sim::nukeRadius(n) + 2.0f * TILE };
+    }
+    if (nt == 0) return;
+    auto inside = [&](Vec2 p) { for (int k = 0; k < nt; k++) if (dist2(p, th[k].at) <= th[k].safe * th[k].safe) return true; return false; };
+    float reach = 0; Vec2 lo(1e30f, 1e30f), hi(-1e30f, -1e30f);
+    for (int k = 0; k < nt; k++) { reach = std::max(reach, th[k].safe); lo = Vec2(std::min(lo.x, th[k].at.x), std::min(lo.y, th[k].at.y)); hi = Vec2(std::max(hi.x, th[k].at.x), std::max(hi.y, th[k].at.y)); }
+    for (auto& e : S.ents) {
+        if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || e.carrier.valid()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger); a soldier aboard goes where its carrier goes
+        if (e.pos.x < lo.x - reach || e.pos.y < lo.y - reach || e.pos.x > hi.x + reach || e.pos.y > hi.y + reach || !inside(e.pos)) continue;
+        if (e.order == O_MOVE && !inside(e.target)) continue;   // already on its way out of every circle
+        Vec2 away;
+        for (int k = 0; k < nt; k++) { Vec2 d = e.pos - th[k].at; float l = d.len(); if (l <= th[k].safe) away += (l > 4 ? d * (1.0f / l) : (pl.basePos - th[k].at).norm()) * (th[k].safe - l + TILE); }
+        Vec2 dir = away.len2() > 1e-6f ? away.norm() : (pl.basePos - e.pos).norm();
+        Vec2 dest = e.pos;
+        for (int stp = 0; stp < 30 && inside(dest); stp++) dest = dest + dir * (2.0f * TILE);
+        dest = dest + dir * (3.0f * TILE);
+        dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
+        S.cmdMove({S.refOf(e)}, dest, false);
+        dodges++;
     }
 }
 

@@ -109,7 +109,11 @@ struct Map {
     // findPath goes straight for the closest point of its own region instead. Rebuilt lazily after the map's own setters change 'blocked';
     // code that writes 'blocked' directly (tests) must call touch().
     mutable std::vector<u16> region;
-    mutable std::vector<int> regionBox;  // per region id: x0, y0, x1, y1 of its tiles (closestInRegion starts at the first ring that can reach it)
+    mutable std::vector<int> regionBox;
+    mutable std::vector<u16> swimRegion;  // the same for an infiltrator, who may also cross open water: 4-connected over swimPassable tiles (0 = neither)
+    mutable bool swimDirty = true;        // (built lazily by buildSwimRegions, after the ground regions)
+    void buildSwimRegions() const;
+    mutable std::vector<u8> moveMask;    // per free tile, bit d: the ground search may step in direction d (Map's DX/DY order; diagonals need both sides open), built with the regions  // per region id: x0, y0, x1, y1 of its tiles (closestInRegion starts at the first ring that can reach it)
     mutable bool regionDirty = true;
     mutable u32 cacheGen = 0;           // generation of closestInRegion's memo (0 after a rebuild: it starts afresh)
     void touch() { regionDirty = true; navGen++; navAllDirty = true; navStaticGen++; }

@@ -1111,17 +1111,21 @@ Vec2 Map::nearestFree(Vec2 p, int maxR) const {
 }
 
 bool Map::lineClear(Vec2 a, Vec2 b, bool swim) const {
-    // Sample along the segment at sub-tile spacing
+    // Sample along the segment at sub-tile spacing, checking a small footprint round each sample so units don't scrape corners. Neighbouring samples
+    // mostly land on the same tiles: a sample whose four corner tiles are the ones just checked is not checked again (the same answer, a third of
+    // the look-ups: this ran over two and a half million times a game, nearly all of it smoothing paths)
+    auto fl = [](float v) { int i = (int)v; return v < (float)i ? i - 1 : i; };   // floor (positions may be just below zero at the map's edge)
     float len = dist(a, b);
     int steps = (int)(len / (TILE * 0.35f)) + 1;
+    int px0 = INT32_MIN, px1 = 0, py0 = 0, py1 = 0;
     for (int i = 0; i <= steps; i++) {
         float t = i / (float)steps;
         float x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
-        // check a small footprint so units don't scrape corners
-        for (int k = 0; k < 4; k++) {
-            float ox = (k & 1) ? 6.0f : -6.0f, oy = (k & 2) ? 6.0f : -6.0f;
-            if (!(swim ? swimPassable(tileOf(x + ox), tileOf(y + oy)) : passable(tileOf(x + ox), tileOf(y + oy)))) return false;
-        }
+        const int x0 = fl((x - 6.0f) * (1.0f / TILE)), x1 = fl((x + 6.0f) * (1.0f / TILE)), y0 = fl((y - 6.0f) * (1.0f / TILE)), y1 = fl((y + 6.0f) * (1.0f / TILE));
+        if (x0 == px0 && x1 == px1 && y0 == py0 && y1 == py1) continue;
+        px0 = x0; px1 = x1; py0 = y0; py1 = y1;
+        if (swim) { if (!swimPassable(x0, y0) || !swimPassable(x1, y0) || !swimPassable(x0, y1) || !swimPassable(x1, y1)) return false; }
+        else if (!passable(x0, y0) || !passable(x1, y0) || !passable(x0, y1) || !passable(x1, y1)) return false;
     }
     return true;
 }
@@ -1148,8 +1152,61 @@ void Map::buildRegions() const {
         }
         regionBox.push_back(bx0); regionBox.push_back(by0); regionBox.push_back(bx1); regionBox.push_back(by1);
     }
+    swimDirty = true;   // (the swimmers' regions are worked out when a swimmer next searches: see buildSwimRegions)
+    {   // the ground search's moves from every free tile (see findPath: no corner cutting)
+        static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+        static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+        moveMask.assign((size_t)MAP_W * MAP_H, 0);
+        auto slow = [&](int x, int y) {   // (the map's edge rows and columns: with the bounds checks)
+            u8 m = 0;
+            for (int d = 0; d < 8; d++) {
+                if (!passable(x + DX[d], y + DY[d])) continue;
+                if (d >= 4 && (!passable(x + DX[d], y) || !passable(x, y + DY[d]))) continue;
+                m |= (u8)(1u << d);
+            }
+            return m;
+        };
+        for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
+            const int i = y * MAP_W + x;
+            if (blocked[i]) continue;
+            if (x == 0 || y == 0 || x == MAP_W - 1 || y == MAP_H - 1) { moveMask[i] = slow(x, y); continue; }
+            const bool e = !blocked[i + 1], w = !blocked[i - 1], s = !blocked[i + MAP_W], n = !blocked[i - MAP_W];
+            // bits: 0 +x, 1 -x, 2 +y, 3 -y, 4 (+1,+1), 5 (+1,-1), 6 (-1,+1), 7 (-1,-1)
+            u8 m = (u8)(e | w << 1 | s << 2 | n << 3);
+            if (e && s && !blocked[i + MAP_W + 1]) m |= 16;
+            if (e && n && !blocked[i - MAP_W + 1]) m |= 32;
+            if (w && s && !blocked[i + MAP_W - 1]) m |= 64;
+            if (w && n && !blocked[i - MAP_W - 1]) m |= 128;
+            moveMask[i] = m;
+        }
+        (void)DX; (void)DY;
+    }
     regionDirty = false;
     cacheGen = 0;   // (closestInRegion's memo is stale now)
+}
+
+void Map::buildSwimRegions() const {
+    // the swimmers' regions: land and open water together (a goal walled in on every side is out of reach for them too); only when a swimmer searches
+    if (regionDirty) buildRegions();
+    static std::vector<int> stack;
+    swimRegion.assign((size_t)MAP_W * MAP_H, 0);
+    u16 sn = 0;
+    auto open = [&](int i) { return blocked[i] == 0 || (tiles[i] == T_WATER && (blocked[i] & ~1) == 0); };   // (swimPassable without the bounds checks)
+    for (int i = 0; i < MAP_W * MAP_H; i++) {
+        if (swimRegion[i] || !open(i)) continue;
+        if (sn == 0xFFFF) break;
+        ++sn;
+        stack.assign(1, i); swimRegion[i] = sn;
+        while (!stack.empty()) {
+            int c = stack.back(); stack.pop_back();
+            int cx = c % MAP_W, cy = c / MAP_W;
+            if (cx > 0 && !swimRegion[c - 1] && open(c - 1)) { swimRegion[c - 1] = sn; stack.push_back(c - 1); }
+            if (cx < MAP_W - 1 && !swimRegion[c + 1] && open(c + 1)) { swimRegion[c + 1] = sn; stack.push_back(c + 1); }
+            if (cy > 0 && !swimRegion[c - MAP_W] && open(c - MAP_W)) { swimRegion[c - MAP_W] = sn; stack.push_back(c - MAP_W); }
+            if (cy < MAP_H - 1 && !swimRegion[c + MAP_W] && open(c + MAP_W)) { swimRegion[c + MAP_W] = sn; stack.push_back(c + MAP_W); }
+        }
+    }
+    swimDirty = false;
 }
 
 bool Map::closestInRegion(u16 rg, int gx, int gy, int& bx, int& by) const {
@@ -1268,6 +1325,11 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
     if (!open_(sx, sy)) { Vec2 nf = nearestFree(from); sx = tileOf(nf.x); sy = tileOf(nf.y); }
     if (!open_(sx, sy)) return false;
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
+    if (swim) {   // an infiltrator's goal it cannot get to even swimming (walled in): no flood of the whole map
+        if (regionDirty || swimDirty) buildSwimRegions();
+        u16 ws = swimRegion[sy * MAP_W + sx];
+        if (ws != 0 && swimRegion[gy * MAP_W + gx] != ws && swimPassable(gx, gy)) return false;
+    }
     if (!swim) {   // a spot in another region of ground: no flood, the closest point of our own region instead (see Map::region)
         if (regionDirty) buildRegions();
         u16 rs = region[sy * MAP_W + sx];
@@ -1367,10 +1429,14 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
         if (hh < bestH) { bestH = hh; best = n.idx; }
         if (++expanded > maxNodes) break;
         int x = n.idx % MAP_W, y = n.idx / MAP_W;
+        const u8 mm = swim ? 0xFF : moveMask[n.idx];   // (a ground search reads its moves from the mask; a swimmer's are worked out)
         for (int d = 0; d < 8; d++) {
+            if (!(mm >> d & 1)) continue;
             int nx = x + DX[d], ny = y + DY[d];
-            if (!open_(nx, ny)) continue;
-            if (d >= 4 && (!open_(x + DX[d], y) || !open_(x, y + DY[d]))) continue; // no corner cutting
+            if (swim) {
+                if (!open_(nx, ny)) continue;
+                if (d >= 4 && (!open_(x + DX[d], y) || !open_(x, y + DY[d]))) continue; // no corner cutting
+            }
             int ni = ny * MAP_W + nx;
             if (closedGen[ni] == curGen) continue;
             float step = (d >= 4 ? 1.4142f : 1.0f) * (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny));
@@ -1419,6 +1485,13 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
     // goal: a free tile in the ring round the footprint (its eight neighbours' band)
     auto isGoal = [&](int x, int y) { return passable(x, y) && x >= rx - 1 && x <= rx + rw && y >= ry - 1 && y <= ry + rh && !(x >= rx && x < rx + rw && y >= ry && y < ry + rh); };
     if (isGoal(sx, sy)) { out.push_back(tileCenter(sx, sy)); return true; }
+    if (swim) {   // an infiltrator: no side of it it can reach even swimming (walled in): no flood
+        if (regionDirty || swimDirty) buildSwimRegions();
+        u16 ws = swimRegion[sy * MAP_W + sx];
+        bool any = false;
+        for (int y = ry - 1; y <= ry + rh && !any; y++) for (int x = rx - 1; x <= rx + rw; x++) if (inMap(x, y) && isGoal(x, y) && swimRegion[y * MAP_W + x] == ws) { any = true; break; }
+        if (ws != 0 && !any) return false;
+    }
     if (!swim) {   // no side of it in our region of ground: the closest point of ours instead of a flood (see Map::region)
         if (regionDirty) buildRegions();
         u16 rs = region[sy * MAP_W + sx];
@@ -1483,10 +1556,15 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
         float hh = hCache[n.idx];
         if (hh < bestH) { bestH = hh; best = n.idx; }
         if (++expanded > maxNodes) break;
+        const u8 mm = (swim || regionDirty) ? 0xFF : moveMask[n.idx];
+        const bool check = swim || regionDirty;
         for (int d = 0; d < 8; d++) {
+            if (!(mm >> d & 1)) continue;
             int nx = x + DX[d], ny = y + DY[d];
-            if (!open_(nx, ny)) continue;
-            if (d >= 4 && (!open_(x + DX[d], y) || !open_(x, y + DY[d]))) continue; // no corner cutting
+            if (check) {
+                if (!open_(nx, ny)) continue;
+                if (d >= 4 && (!open_(x + DX[d], y) || !open_(x, y + DY[d]))) continue; // no corner cutting
+            }
             int ni = ny * MAP_W + nx;
             if (closedGen[ni] == curGen) continue;
             float ng = gScore[n.idx] + (d >= 4 ? 1.4142f : 1.0f) * (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny));

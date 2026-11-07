@@ -3344,7 +3344,7 @@ int main(int argc, char** argv) {
         Vec2 crowdAt;
         if (crowd > 0) {
             for (int t = 0; t < 200; t++) { g_sim.step(); g_sim.events.clear(); }
-            crowdAt = Vec2(WORLD_W * 0.5f, std::round(12.0f * MAP_W / 80.0f) * TILE);   // the open ground north of the lake, between two bases: the middle of the northern pass (22 tiles down on the 146 map) on any map size
+            crowdAt = openGroundNear(Vec2(WORLD_W * 0.5f, (ISLE_X0 + 0.12f * ISLE_W) * TILE), 12);   // (open ground in the north of the main island: the sea map's island starts ISLE_X0 tiles in)   // the open ground north of the lake, between two bases: the middle of the northern pass (22 tiles down on the 146 map) on any map size
             for (int side = 0; side < 2; side++) {
                 int p = side, base = firstUnitOf(g_sim.players[p].faction);
                 std::vector<Ref> army;

@@ -3523,7 +3523,17 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
                 break;
             }
             bool need = e.pathIdx >= e.path.size();
-            if (!need && e.repathTimer <= 0 && dist(e.path.back(), t->pos) > TILE * 1.2f) need = true;
+            if (!need && e.repathTimer <= 0) {
+                // a target that moved: planned again once it is off the route's end by more than a sixth or so of the way still to go (at least 1.2
+                // tiles), so a long chase does not search the map every 0.6 s; in between, the last leg is bent onto it when it can be seen from the
+                // waypoint before
+                const float drift = dist(e.path.back(), t->pos), togo = dist(e.pos, t->pos);
+                if (drift > std::max(TILE * 1.2f, togo * 0.15f)) need = true;
+                else {
+                    if (drift > TILE * 1.2f) { Vec2 prev = e.path.size() >= 2 && e.pathIdx + 1 < e.path.size() ? e.path[e.path.size() - 2] : e.pos; if (g_map.lineClear(prev, t->pos)) e.path.back() = t->pos; }
+                    e.repathTimer = PATH_INTERVAL;
+                }
+            }
             if (need) requestPath(e, t->pos);
             moveAlong(e, ut.speed);
             // guard posts don't chase forever
@@ -4799,8 +4809,12 @@ void Sim::separateUnits() {
     static std::vector<Sep> sp;
     static std::vector<u64> keys, tmp;
     static std::vector<int> cb, ce, used, slotOf;
-    if ((int)cb.size() != GRID_N) { cb.assign(GRID_N, 0); ce.assign(GRID_N, 0); used.clear(); }
-    for (int c : used) cb[c] = ce[c] = 0;
+    // resting units: one whose last push was nothing, in cells where nothing has moved for two ticks, would get nothing again: it is skipped
+    // (a base full of idle soldiers standing apart costs no pair tests); anything moving near it - a mover, a unit pushed - wakes its cells
+    static std::vector<u32> movedAt, seenGen; static std::vector<u8> calm, cellMoved;
+    if ((int)cb.size() != GRID_N) { cb.assign(GRID_N, 0); ce.assign(GRID_N, 0); cellMoved.assign(GRID_N, 0); used.clear(); }
+    for (int c : used) cb[c] = ce[c] = 0, cellMoved[c] = 0;
+    if (movedAt.size() < ents.size()) { movedAt.resize(ents.size(), 0); seenGen.resize(ents.size(), 0xFFFFFFFFu); calm.resize(ents.size(), 0); }
     used.clear(); keys.clear();
     for (int i = 0; i < (int)ents.size(); i++) {
         Entity& e = ents[i];
@@ -4809,6 +4823,8 @@ void Sim::separateUnits() {
         if (submerged(e)) continue;   // (a dived submarine passes under every hull)
         int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1);
         keys.push_back((u64)(cy * GRID_W + cx) << 32 | (u64)(u32)i);
+        if (seenGen[i] != e.gen) { seenGen[i] = e.gen; movedAt[i] = tick; calm[i] = 0; }   // (a new unit in this slot)
+        if (e.pos.x != e.prevPos.x || e.pos.y != e.prevPos.y) movedAt[i] = tick;
     }
     tmp.resize(keys.size());
     for (int pass = 0; pass < 2; pass++) {   // LSD radix on the cell's two bytes (stable: index order within a cell)
@@ -4825,6 +4841,7 @@ void Sim::separateUnits() {
         int c = (int)(keys[k] >> 32), i = (int)(u32)keys[k];
         if (k == 0 || (int)(keys[k - 1] >> 32) != c) { cb[c] = (int)k; used.push_back(c); }
         ce[c] = (int)k + 1;
+        if (movedAt[i] + 2 >= tick) cellMoved[c] = 1;
         const Entity& e = ents[i];
         const UnitType& ut = e.ut();
         Sep& q = sp[k];
@@ -4843,6 +4860,12 @@ void Sim::separateUnits() {
         bool air = (fa & 2) != 0;
         float ra = sp[si].r;
         int cx = clampi((int)(sp[si].x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(sp[si].y / GRID_CELL), 0, GRID_H - 1);
+        if (calm[i]) {   // resting: skipped unless something moved in the cells round it
+            bool stir = false;
+            for (int gy = std::max(0, cy - 1); gy <= std::min(GRID_H - 1, cy + 1) && !stir; gy++)
+                for (int gx = std::max(0, cx - 1); gx <= std::min(GRID_W - 1, cx + 1); gx++) if (cellMoved[gy * GRID_W + gx]) { stir = true; break; }
+            if (!stir) continue;
+        }
         Vec2 push;
         for (int gy = std::max(0, cy - 1); gy <= std::min(GRID_H - 1, cy + 1); gy++)
         for (int gx = std::max(0, cx - 1); gx <= std::min(GRID_W - 1, cx + 1); gx++) {
@@ -4874,7 +4897,9 @@ void Sim::separateUnits() {
             if (ahead < 0) a.airspeed *= std::max(0.94f, 1.0f + ahead * 0.004f);
             push = n * ((push.x * n.x + push.y * n.y) * 0.3f) + f * (std::min(0.0f, ahead) * 0.1f);
         }
+        calm[i] = push.len2() <= 0.01f;
         if (push.len2() > 0.01f) {
+            movedAt[i] = tick;
             Vec2 np = a.pos + push * (SIM_DT * 28.0f);
             if (air || ((fa & 4) ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y)))) a.pos = np;
         }
