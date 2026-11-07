@@ -53,7 +53,8 @@ Vec2 frontierTarget(int player, float R, float scale, bool bomber, float& best) 
         });
         if (score <= best) continue;
         const bool super = !bomber && scale >= ISLAND_NUKE_SCALE;   // (an island launcher's Super Nuke: only lasers try for it, at a fifth of their chance)
-        score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true, scale, super, super);
+        const bool silver = super || (!bomber && scale >= UNUKE_SCALE);   // (an Underground Nuke's or a submarine's silver warhead: only lasers count)
+        score *= 1.0f - 0.8f * S.antiNukeChance(c->pos, player, true, scale, silver, super);
         if (bomber) {   // the bomber flies in from our corner over whatever stands in the way: count the batteries round the target
             int flak = 0;
             for (Vec2 a : flakAt) if (dist2(a, c->pos) < 12.0f * TILE * 12.0f * TILE) flak++;
@@ -217,18 +218,30 @@ void AiPlayer::subOps() {
     const int subT = pl.faction == F_CYBER ? U_C_SUB : U_K_SUB;
     std::vector<Entity*> subs;
     for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && subType(e.type)) subs.push_back(&e);
-    const int cap = pl.difficulty >= 3 ? 5 : (pl.difficulty == 2 ? 3 : (pl.difficulty == 1 ? 1 : 0));
+    const int cap = pl.difficulty >= 3 ? 3 : (pl.difficulty == 2 ? 2 : (pl.difficulty == 1 ? 1 : 0));   // (a submarine costs as much as a small army now)
     if (on2(F2_SUBS) && cap > 0 && minutes > 12.0f && S.subsOf(player) < cap && pl.money > UNITS[subT].cost + 9000 && S.unitAvailable(player, subT)) {
         for (auto& y : S.ents) if (y.alive && y.isBuilding() && y.owner == player && y.constructed && y.bt().role == BR_NAVAL && y.queue.empty() && g_map.compAt(S.navalExit(y)) == g_map.oceanComp) {
             if (S.cmdTrain(S.refOf(y), subT)) break;
         }
     }
-    // down, out of every sight, unless it is up to launch or must stay up after one
-    for (Entity* s : subs) if (s->subState == 0 && s->nukeSalvo == 0 && !s->subAutoDive && S.time >= s->exposedUntil && S.time - s->lastDamaged > 2.0f) S.cmdDive({S.refOf(*s)}, true);
+    // down, out of every sight, unless it is up to launch, must stay up after one, or is up to torpedo a ship
+    for (Entity* s : subs) if (s->subState == 0 && s->nukeSalvo == 0 && !s->subAutoDive && !s->subHunt && S.time >= s->exposedUntil && S.time - s->lastDamaged > 2.0f) S.cmdDive({S.refOf(*s)}, true);
+    // an ambush: a dived boat in good shape with an enemy warship it can see close by closes in under water and surfaces only in torpedo range
+    // (Sim::subAutonomy); it does not go for a battleship's guns, nor while its missile is about to launch
+    if (pl.difficulty >= 1) for (Entity* s : subs) {
+        if (s->subState != 2 || s->order == O_ATTACK || s->nukeSalvo > 0 || s->hp < s->maxHp * 0.75f || s->disabledUntil > S.time) continue;
+        Entity* best = nullptr; float bd = 1e30f;
+        S.forEachNearMask(s->pos, 16.0f * TILE, S.enemyMask(player), [&](Entity& t) {
+            if (!t.isUnit() || !t.ut().naval || subType(t.type) || battleshipType(t.type) || t.owner < 0 || !S.enemies(player, t.owner) || !S.visibleTo(t, player)) return;
+            float d = dist2(s->pos, t.pos);
+            if (d < bd) { bd = d; best = &t; }
+        });
+        if (best) S.cmdAttack({S.refOf(*s)}, S.refOf(*best));
+    }
     if (S.subNukesReady(player) > 0) {
         const float nukeBar = pl.difficulty >= 3 ? 2600.0f : (pl.difficulty == 2 ? 3200.0f : 4000.0f);
         float score; Vec2 at = frontierTarget(player, NUKE_RADIUS * TILE * std::sqrt(SUB_NUKE_SCALE), SUB_NUKE_SCALE, false, score);
-        if (score >= nukeBar && S.cmdSubNuke(player, at)) subLaunches++;
+        if (score >= nukeBar * 2.2f && S.cmdSubNuke(player, at)) subLaunches++;   // (the boat's one missile is a silver warhead wider than a deep silo's: save it for a target worth it)
     }
 }
 

@@ -955,7 +955,7 @@ void Map::generate() {
     }
 }
 
-bool Map::wouldPlug(int tx, int ty, int w, int h) const {
+bool Map::wouldPlug(int tx, int ty, int w, int h, bool strict) const {
     // If the one-tile ring is open, every exit from the removed footprint is
     // still connected around it. This is an exact shortcut, not a relaxed rule.
     bool ringOpen = w > 0 && h > 0;
@@ -1043,7 +1043,7 @@ bool Map::wouldPlug(int tx, int ty, int w, int h) const {
                 }
             }
             for (auto& a2 : assigned) if (a2 == 2) a2 = 1;
-            if (queueG.size() > 6) after++;   // (a nook of six tiles or fewer may be closed off)
+            if (queueG.size() > 6 || strict) after++;   // (a nook of six tiles or fewer may be closed off, unless strict)
         }
     }
     return after > before;

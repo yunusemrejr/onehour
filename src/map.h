@@ -100,7 +100,7 @@ struct Map {
     void clearWayDone() { if (cleared.size() < 200000) cleared.push_back(-1); }
     // Would a w x h structure at (x, y) cut the ground around it in two (a corridor between rock and water, a gap between two other structures)? Counts the
     // 4-connected regions of free ground in the window of a few tiles round the footprint before and after: more of them after means it would plug something.
-    bool wouldPlug(int x, int y, int w, int h) const;
+    bool wouldPlug(int x, int y, int w, int h, bool strict = false) const;   // strict: sealing off even a small nook counts (the commander's walls: a unit may stand in it)
     void setStructure(int x, int y, int w, int h, bool on);
     void setResource(int x, int y, bool on);
     // Connected ground: every passable tile carries the id of the 4-connected region it belongs to (0 = blocked). A* moves diagonally only between two

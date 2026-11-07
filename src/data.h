@@ -469,6 +469,12 @@ static const float AID_RADIUS = 3.0f;         // tiles: the crates come down wit
 // Underground Bunker: a deep, hidden shelter that holds up to 200 infantry and five dozers. The garrison fires from a metal hatch on the surface;
 // the hatch can be blown off (a nuke does it) which silences the bunker, but only infantry and vehicles can ever destroy the bunker itself.
 static const int   BUNKER_INF_CAP = 200, BUNKER_DOZER_CAP = 5;
+// Snipers in a bunker's garrison hold the shaft against an infiltrator: each one adds BUNKER_SNIPER_CAPTURE times the usual capture time (up to
+// BUNKER_SNIPER_CAP of them count), the intruder is heard at the hatch (its owner sees it while it works), and every hit it takes there throws its
+// work back by BUNKER_SNIPER_SETBACK.
+static const float BUNKER_SNIPER_CAPTURE = 3.0f;
+static const int   BUNKER_SNIPER_CAP = 12;
+static const float BUNKER_SNIPER_SETBACK = 0.5f;
 static const float BUNKER_HATCH_HP = 1800.0f;     // the surface opening (reinforced plating)
 static const float BUNKER_PLATING = 0.55f;        // share of the damage that reaches the buried bunker once the hatch is gone
 static const float BUNKER_FLOOR = 0.0f;          // aircraft, structures, shells from the sky and radiation can never take it below this share of its health - nuclear warheads ignore it entirely (a direct hit or a barrage destroys the bunker)
@@ -752,16 +758,23 @@ static const float BRIDGE_HELP_RANGE = 16.0f;     // tiles: an idle dozer this c
 // ---- Nuclear submarines (U_C_SUB / U_K_SUB): no army may have more than SUB_MAX. Surfaced, a submarine is a low hull that only something close sees
 // (SUB_SPOT tiles); dived (Entity.submerged), nothing finds it at all - no ship, no aircraft, no other submarine, no scan - and nothing can hurt it, warheads
 // included. It may stay down as long as it likes. To fire its torpedoes or launch its nuclear missile it has to come up first (SUB_SURFACE_TIME), and after
-// a launch it cannot dive again for SUB_EXPOSED seconds: that is when it can be found and sunk. Diving takes SUB_DIVE_TIME (it is visible meanwhile).
+// a launch it cannot dive again for SUB_EXPOSED seconds unless a warhead is coming down on it. Diving takes SUB_DIVE_TIME (it is visible meanwhile).
+// It looks after itself (Sim::subAutonomy): up with nothing to do, it dives; up and in danger - a warhead whose blast reaches it, fire on its hull, an
+// enemy gun aimed at it - it crash-dives (SUB_CRASH_DIVE) and runs for the stretch of sea furthest from what threatens it. Ordered to torpedo a ship
+// while dived, it closes in under water, surfaces only within range and goes down again once the target is gone.
 static const int   SUB_MAX = 20;
 static const float SUB_SPOT = 7.0f;            // tiles: how close an enemy unit or structure must be to see a surfaced submarine
 static const float SUB_DIVE_TIME = 2.5f, SUB_SURFACE_TIME = 3.0f;
-static const float SUB_EXPOSED = 22.0f;        // seconds after a launch before it may dive again
-static const float SUB_NUKE_SCALE = 1.0f;      // its missile: a Nuke Ramp's warhead
+static const float SUB_CRASH_DIVE = 1.2f;      // seconds: an emergency dive when it is in danger
+static const float SUB_EXPOSED = 10.0f;        // seconds after a launch before it may dive again (a warhead coming down on it overrides this)
+static const float SUB_IDLE_DIVE = 2.0f;       // seconds a surfaced submarine with nothing to do waits before it dives on its own
+static const float SUB_THREAT_R = 22.0f;       // tiles: how far round itself a surfaced submarine looks for what threatens it
+static const float SUB_NUKE_SCALE = 12.0f;     // its missile: share of a Nuke Ramp's blast AREA (radius NUKE_RADIUS * sqrt(12), wider than an Underground Nuke's)
+static const float SUB_NUKE_DAMAGE = 2.7f;     // damage multiplier over a ramp's warhead (an Underground Nuke's is UNUKE_DAMAGE)
 static const float SUB_NUKE_COOLDOWN = 360.0f;
 static const float SUB_NUKE_ARM = 120.0f;      // seconds after it is launched from the yard before its missile is ready
-static const float SUB_ARMOR = 0.55f;          // its pressure hull: share of conventional damage it takes when surfaced
-static const float SUB_NUKE_CAP = 0.34f;       // hard ceiling: one warhead takes at most this share of its health
+static const float SUB_ARMOR = 0.45f;          // its pressure hull: share of conventional damage it takes when surfaced
+static const float SUB_NUKE_CAP = 0.30f;       // hard ceiling: one warhead takes at most this share of its health
 static const int   W_TORPEDO_C = 68, W_TORPEDO_K = 69;   // the submarines' torpedoes (ships only)
 // ---- Battleships: three main turrets (their gun is the UnitType weapon) and cruise-missile cells (W_VLS, its own reload) for anything on the ground or the sea
 static const int   W_BATTLESHIP_C = 70, W_BATTLESHIP_K = 71, W_VLS = 72;

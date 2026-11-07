@@ -424,11 +424,18 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
     float bestScore = 1e18f; int bx = -1, by = -1;
     // (the bunkers and turrets are gathered once: going over every entity for every candidate spot was much of a crowded base's search)
     std::vector<std::pair<Vec2, bool>> bunkersAt; std::vector<Vec2> gunsAt;
+    // the aprons in front of our production structures (two rows under them, a tile wider each side): their units come out there, so nothing is
+    // built on one - a wall or a factory in that gap sealed a War Factory's output in for the rest of a match
+    struct Apron { int x0, y0, x1, y1; };
+    std::vector<Apron> aprons;
+    auto producer = [](BuildRole r) { return r == BR_HQ || r == BR_BARRACKS || r == BR_FACTORY || r == BR_SUPPLY || r == BR_RELICFOUNDRY; };
     for (auto& o : g_sim.ents) {
         if (!o.alive || !o.isBuilding()) continue;
         if (o.bt().role == BR_BUNKER) bunkersAt.push_back({o.pos, o.owner == player});
         else if (o.bt().role == BR_TURRET || o.bt().role == BR_AATURRET) gunsAt.push_back(o.pos);
+        if (o.owner == player && producer(o.bt().role)) aprons.push_back({o.tx - 1, o.ty + o.bt().h, o.tx + o.bt().w, o.ty + o.bt().h + 1});
     }
+    const bool iProduce = producer(b.role);
     for (int ring = 3; ring <= maxRing; ring++) {
         for (int dy = -ring; dy <= ring; dy++) for (int dx = -ring; dx <= ring; dx++) {
             if (std::abs(dx) != ring && std::abs(dy) != ring) continue;
@@ -445,6 +452,14 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
                 if (g_map.blocked[j * MAP_W + i] & 2) { gapOk = false; break; }
             }
             if (!gapOk) continue;
+            bool onApron = false;
+            for (const Apron& a : aprons) if (x <= a.x1 && x + b.w - 1 >= a.x0 && y <= a.y1 && y + b.h - 1 >= a.y0) { onApron = true; break; }
+            if (onApron) continue;
+            if (iProduce) {   // (and a new production structure needs its own apron free)
+                bool clear = true;
+                for (int j = y + b.h; j <= y + b.h + 1 && clear; j++) for (int i = x - 1; i <= x + b.w; i++) if (!g_map.passable(i, j)) { clear = false; break; }
+                if (!clear) continue;
+            }
             // never place bot structures or turrets right next to another player's bunker
             bool nearBunker = false;
             for (auto& o : bunkersAt) if (dist(c, o.first) < (o.second ? 8.0f : 16.0f) * TILE) { nearBunker = true; break; }
@@ -453,7 +468,7 @@ bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, in
             if (!g_sim.canPlace(player, buildType, x, y)) continue;
             // Human wall orders may seal a base by choice. The commander must
             // preserve an exit for its builders, haulers and reinforcement waves.
-            if (b.role == BR_WALL && g_map.wouldPlug(x, y, b.w, b.h)) continue;
+            if (b.role == BR_WALL && g_map.wouldPlug(x, y, b.w, b.h, true)) continue;   // (strict: a wall closing a one-tile gap between two structures sealed a jeep in for good)
             if (b.role == BR_TURRET || b.role == BR_AATURRET) {
                 for (Vec2 g : gunsAt) if (dist(c, g) < 5.5f * TILE) score += 140.0f;
             }
@@ -1104,14 +1119,18 @@ void AiPlayer::think() {
         for (Ref dr : decon) {
             Entity* t = S.get(dr);
             if (!t || t->order != O_IDLE || t->carrier.valid()) continue;
-            const Sim::Fallout* best = nullptr; float bd = 1e18f;
+            const Sim::Fallout* best = nullptr; float bd = 1e18f; Vec2 goal;
             for (auto& f : S.fallouts) {
                 if (f.power <= 0.03f) continue;
                 if (dist(t->pos, f.pos) <= f.r + RADTRUCK_RADIUS * TILE) { best = nullptr; bd = -1.0f; break; }   // already scrubbing this one
                 float d = dist(t->pos, f.pos);
-                if (d < 70.0f * TILE && d < bd) { bd = d; best = &f; }
+                if (d >= 70.0f * TILE || d >= bd) continue;
+                // (the ground of the cloud it can drive to: a cloud over the sea or across a broken bridge sent it to the shore again and again)
+                Vec2 g = g_map.nearestFree(f.pos, std::max(2, (int)(f.r / TILE)));
+                if (dist(g, f.pos) > f.r + RADTRUCK_RADIUS * TILE || !g_map.sameGround(t->pos, g)) continue;
+                bd = d; best = &f; goal = g;
             }
-            if (best) S.cmdMove({dr}, best->pos, false);
+            if (best) S.cmdMove({dr}, goal, false);
         }
     }
 
@@ -1323,7 +1342,7 @@ void AiPlayer::think() {
         }
         // continue unfinished structures whose dozer died
         if (!built) for (auto& e : S.ents)
-            if (e.alive && e.isBuilding() && e.owner == player && !e.constructed && Sim::canRaise(*dz, e.type)) {   // (a civilian site waits for a civilian dozer)
+            if (e.alive && e.isBuilding() && e.owner == player && !e.constructed && Sim::canRaise(*dz, e.type) && S.canReachSite(*dz, e)) {   // (a civilian site waits for a civilian dozer; one across water waits for a dozer on its side)
                 bool someone = false;
                 for (auto& u : S.ents) if (u.alive && u.owner == player && u.isUnit() && u.order == O_BUILD && u.targetEnt == S.refOf(e)) someone = true;
                 if (!someone) { S.cmdAssist({S.refOf(*dz)}, S.refOf(e)); break; }
@@ -2060,6 +2079,7 @@ void AiPlayer::think() {
             });
             Entity* sp = S.get(spies[0]);
             float sc = BUILDS[e.type].cost * w * 0.4f - 900.0f * armed - (sp ? dist(e.pos, sp->pos) / TILE * 12.0f : 0.0f);
+            if (int ns = S.bunkerSnipers(e)) sc -= 1500.0f * ns;   // (a bunker whose snipers hold the shaft takes many times as long, under fire)
             if (sc > bs) { bs = sc; best = &e; }
         }
         if (best && bs > -400.0f) {

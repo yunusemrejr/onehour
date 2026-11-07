@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --relictest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --relictest, --subtest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -57,6 +57,13 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
         if (traceIdx >= 0 && t < traceUntil && t % 30 == 0 && getenv("ONEHOUR_TRACENEAR")) { Entity& e = g_sim.ents[traceIdx]; for (auto& o : g_sim.ents) if (o.alive && &o != &e && o.kind != EK_RESOURCE && g_sim.distToEntity(e.pos, o) < 48) fprintf(stderr, "    near: %s P%d %s order %d pos %.1f,%.1f\n", o.isUnit() ? o.ut().name : o.bt().name, o.owner, o.isUnit() ? "unit" : "bld", (int)o.order, o.pos.x, o.pos.y); int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y); for (int dy = -3; dy <= 4; dy++) { fprintf(stderr, "    "); for (int dx = -4; dx <= 4; dx++) { int x = cx + dx, y = cy + dy; fputc(!inMap(x, y) ? ' ' : (dx == 0 && dy == 0) ? '@' : g_map.passable(x, y) ? '.' : (g_map.blocked[y * MAP_W + x] & 2) ? 'B' : (g_map.blocked[y * MAP_W + x] & 4) ? 'R' : '#', stderr); } fputc('\n', stderr); } }
         if (traceIdx >= 0 && t < traceUntil && t % (getenv("ONEHOUR_TRACEALL") ? 1 : 3) == 0) { Entity& e = g_sim.ents[traceIdx]; Entity* tg = g_sim.get(e.targetEnt); if (e.isUnit() && e.ut().naval) { int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y); fprintf(stderr, "  ship: airspeed %.1f angle %.2f nav (rows y-1..y+1, cols x-1..x+1):", e.airspeed, e.angle); for (int dy = -1; dy <= 1; dy++) { fprintf(stderr, " "); for (int dx = -1; dx <= 1; dx++) fputc(g_map.navTile(cx + dx, cy + dy) ? 'w' : (g_map.tiles[(cy + dy) * MAP_W + cx + dx] == T_WATER ? 'S' : '#'), stderr); } fprintf(stderr, "  wp %.0f,%.0f\n", e.pathIdx < e.path.size() ? e.path[e.pathIdx].x : -1.0f, e.pathIdx < e.path.size() ? e.path[e.pathIdx].y : -1.0f); }
             if (e.isUnit() && e.isAir()) { const Entity* hh = e.home.idx >= 0 && e.home.idx < (int)g_sim.ents.size() ? &g_sim.ents[e.home.idx] : nullptr; fprintf(stderr, "  air: order %d zoneR %.0f loiterUntil %.1f alt %.2f airspeed %.0f ammo %d hp %.0f disabled %.1f home %d (idx %d gen %u/%u alive %d %s dist %.0f) ang %.2f\n", (int)e.order, e.zoneR, e.loiterUntil - g_sim.time, e.alt, e.airspeed, e.ammo, e.hp, e.disabledUntil - g_sim.time, g_sim.get(e.home) ? 1 : 0, e.home.idx, e.home.gen, hh ? hh->gen : 0, hh ? (int)hh->alive : -1, hh && hh->kind == EK_BUILDING ? hh->bt().name : "-", hh ? dist(hh->pos, e.pos) : -1.0f, e.angle); } fprintf(stderr, "  trace t=%d order %d post %d pos %.1f,%.1f path %zu/%zu target %s(%d) cooldown %.2f stuck %.2f cargo %d act %.2f\n", t, (int)e.order, (int)e.postOrder, e.pos.x, e.pos.y, e.pathIdx, e.path.size(), tg ? (tg->isBuilding() ? tg->bt().name : tg->kind == EK_RESOURCE ? "pile" : tg->ut().name) : "-", tg ? tg->amount : 0, e.cooldown, e.stuckTimer, e.cargo, e.actionTimer); }
+        if (const char* da = getenv("ONEHOUR_DUMPAT")) { int dt = 0, dx0 = 0, dy0 = 0, dr = 12; sscanf(da, "%d,%d,%d,%d", &dt, &dx0, &dy0, &dr); if (t == dt * SIM_HZ) {   // ONEHOUR_DUMPAT=sec,tx,ty,r: the structures (W wall, F factory, letters by role) and ground units round a tile at one moment
+            std::vector<char> ch((size_t)MAP_W * MAP_H, 0);
+            for (auto& o : g_sim.ents) if (o.alive && o.isBuilding()) for (int j = o.ty; j < o.ty + o.bt().h; j++) for (int i = o.tx; i < o.tx + o.bt().w; i++) if (inMap(i, j)) ch[j * MAP_W + i] = o.bt().role == BR_WALL ? 'W' : o.bt().role == BR_FACTORY ? 'F' : (char)('a' + o.bt().role % 26);
+            for (auto& o : g_sim.ents) if (o.alive && o.isUnit() && !o.isAir()) { int i = tileOf(o.pos.x), j = tileOf(o.pos.y); if (inMap(i, j)) ch[j * MAP_W + i] = 'u'; }
+            for (int y = dy0 - dr; y <= dy0 + dr; y++) { fprintf(stderr, "%3d ", y); for (int x = dx0 - dr; x <= dx0 + dr; x++) { char c = !inMap(x, y) ? ' ' : ch[y * MAP_W + x] ? ch[y * MAP_W + x] : g_map.passable(x, y) ? '.' : '#'; fputc(c, stderr); } fputc('\n', stderr); }
+            for (auto& o : g_sim.ents) if (o.alive && o.isBuilding() && std::abs(o.tx - dx0) < dr && std::abs(o.ty - dy0) < dr) fprintf(stderr, "  %s P%d at %d,%d %dx%d\n", o.bt().name, o.owner, o.tx, o.ty, o.bt().w, o.bt().h);
+        } }
         if (stuckCheck && t % 40 == 0) {
             if (stuckRecs.size() < g_sim.ents.size()) stuckRecs.resize(g_sim.ents.size());
             for (size_t i = 0; i < g_sim.ents.size(); i++) {
@@ -716,6 +723,7 @@ bool navalTrace(u64 seed);       // tests22.cpp: how ship-like two fleets move i
 Vec2 navalBattleScene(std::vector<Ref> side[2]);
 bool microMatrix(u64 seed);
 bool relicTest(u64 seed);         // tests23.cpp: the canal and its bridges, the relic bases, the Hydra, destructible launchers, submarines, swarms, surrender
+bool subTest(u64 seed);           // tests24.cpp: submarine autonomy (idle dive, crash dive, evasion, hunting), its heavy warhead and price; sniper-held bunkers
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
@@ -3023,6 +3031,7 @@ int main(int argc, char** argv) {
         else if (a == "--navaltrace") { g_map.generate(); return navalTrace(seed) ? 0 : 1; }
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
         else if (a == "--relictest") { g_map.generate(); return relicTest(seed) ? 0 : 1; }
+        else if (a == "--subtest") { g_map.generate(); return subTest(seed) ? 0 : 1; }
         else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
         else if (a == "--chosentest") { g_map.generate(); return chosenTest(seed) ? 0 : 1; }
         else if (a == "--variety") { int n = 20; if (i + 1 < argc && argv[i + 1][0] != '-') n = atoi(argv[++i]); g_map.generate(); return varietyTest(n, seed, d0 >= 0 && d0 <= 3 ? d0 : 2); }

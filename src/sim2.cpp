@@ -215,9 +215,14 @@ void Sim::moveShip(Entity& e, float speed) {
         bool last = e.pathIdx + 1 >= e.path.size();
         float want = std::atan2(d.y, d.x);
         float bite = clampf(0.2f + 0.8f * v / std::max(1.0f, speed), 0.2f, 1.0f);   // rudder authority grows with way on
-        float turn = turnRate * bite * SIM_DT, off = std::abs(angDelta(e.angle, want));
+        float off = std::abs(angDelta(e.angle, want));
+        // the next waypoint close by and well off the bow (behind it, round a pier, out of a yard's slip): stop and come round on the bow thrusters
+        // first. Driving on at steerage way there ran the hull into the shore again and again, and a gunboat could sit at a yard's mouth all match.
+        const bool pivot = off > 1.2f && len < std::max(3.0f * TILE, arc * 2.0f);
+        if (pivot) bite = std::max(bite, 0.55f);
+        float turn = turnRate * bite * SIM_DT;
         e.angle = wrapAng(e.angle + clampf(angDelta(e.angle, want), -turn, turn));
-        float vt = speed * clampf(1.1f - off / 1.6f, 0.3f, 1.0f);   // slows into a hard turn, but keeps steerage way
+        float vt = pivot ? speed * 0.04f : speed * clampf(1.1f - off / 1.6f, 0.3f, 1.0f);   // slows into a hard turn, but keeps steerage way
         float rest = len;   // distance left to the end of the run (the route's remaining legs too)
         for (size_t k = e.pathIdx + 1; k < e.path.size() && rest < 2000.0f; k++) rest += dist(e.path[k - 1], e.path[k]);
         vt = std::min(vt, std::max(speed * (last ? 0.08f : 0.3f), std::sqrt(2.0f * decel * std::max(0.0f, rest - 6.0f))));   // coasts in to stop on the spot
@@ -237,7 +242,9 @@ void Sim::moveShip(Entity& e, float speed) {
             Vec2 ow = g_map.nearestWater(e.pos, 4);   // wedged into a corner: edge out toward the open water beside it
             float od = dist(ow, e.pos);
             if (od > 1.0f) { Vec2 q = e.pos + (ow - e.pos) * (std::min(od, 40.0f * SIM_DT) / od); if (wet(q)) e.pos = q; }
-            if (steering && !e.path.empty()) requestPath(e, e.path.back());
+            // (the waypoint it was making for is tucked against this shore: go on to the next one if open water runs straight to it)
+            if (steering && e.pathIdx + 1 < e.path.size() && g_map.navLineClear(e.pos, e.path[e.pathIdx + 1])) e.pathIdx++;
+            else if (steering && !e.path.empty()) requestPath(e, e.path.back());
         }
     }
 }

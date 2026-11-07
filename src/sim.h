@@ -186,6 +186,11 @@ struct Entity {
     float subT = 0;                   // ... sim time the dive or the surfacing is complete
     float exposedUntil = 0;           // ... after a launch it may not dive again before this
     bool subAutoDive = false;         // ... it came up to launch: it dives again once it may
+    bool subStayUp = false;           // ... its player surfaced it on purpose: it stays up until danger is serious (a warhead, or half its hull gone)
+    bool subHunt = false;             // ... it surfaced on its own to torpedo the ship it was ordered at: down again once that is over
+    float subUpSince = -1;            // ... sim time it last came up with nothing to do (it dives SUB_IDLE_DIVE later)
+    float capHit = -100;              // infiltrator: the last hit it took while breaking into a sniper-held bunker (each one sets its work back)
+    float subEvadeAt = 0;             // ... sim time before which it does not pick another place to run to
     float vlsCd = 0;                  // battleship: sim time its cruise-missile cells are loaded again
 
     bool isUnit() const { return kind == EK_UNIT; }
@@ -333,7 +338,7 @@ struct Sim {
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; };   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; bool sub = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; };   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
                                           // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
@@ -433,7 +438,9 @@ struct Sim {
     int subNukesReady(int player) const;
     float subNukeWait(int player) const;
     int subsOf(int player, bool queued = true) const;   // the army's submarines (and those in its yards' queues): at most SUB_MAX
-    void updateSub(Entity& e);                 // dives, surfacings, a launch it came up for, the dive after it
+    void updateSub(Entity& e);
+    void subAutonomy(Entity& e);   // a submarine on its own: dive when idle or in danger, run for safer sea, close in dived to torpedo
+    bool subSafeSpot(const Entity& e, const std::vector<Vec2>& threats, const Nuke* hot, Vec2& out) const;                 // dives, surfacings, a launch it came up for, the dive after it
     void updateWarship(Entity& e);             // a battleship's cruise-missile cells, any warship's swarm stinging aircraft
     // ---- surrender: a computer army with nothing left to fight on with lays down its arms (SURRENDER_*)
     float beatenSince[MAX_PLAYERS] = {};       // sim time since which the army has had nothing that matters left (0: it has)
@@ -510,10 +517,18 @@ struct Sim {
     static int stealthOf(const Entity& e);                       // StealthClass of an entity (structures are never stealthy)
     bool visibleTo(const Entity& e, int player) const;           // can this player see e? (always, unless e is a stealthy unit and no detector of the player's team is close)
     bool canTarget(const Entity& e, const Entity& t, int wpn = -1) const;   // may e shoot t right now (visible, in the right class, not a bunker it cannot hurt); wpn: a weapon other than the entity's own (a roof gun)
+    // a submarine under water (or on its way up or down): could it hit t once it is up? (a dived boat keeps an attack order and closes in)
+    bool subCouldTarget(const Entity& e, const Entity& t) const {
+        if (!e.isUnit() || !subType(e.type) || e.subState == 0) return false;
+        subAimDown = true; bool ok = canTarget(e, t); subAimDown = false; return ok;
+    }
+    mutable bool subAimDown = false;
     bool canBoard(const Entity& u, const Entity& carrier) const; // may u climb aboard right now (room left, right kind of unit)?
     int cargoUsed(const Entity& carrier) const;                  // transport slots taken
     int garrisonInfantry(const Entity& bunker) const;
     int garrisonDozers(const Entity& bunker) const;
+    int bunkerSnipers(const Entity& b) const;                   // snipers in a bunker's garrison (BUNKER_SNIPER_CAP at most): each makes it far harder for an infiltrator to take
+    bool canReachSite(const Entity& dz, const Entity& b) const;  // a free tile within two of b's footprint lies on dz's ground (no water or broken bridge between)
     int garrisonCap(const Entity& b) const;                     // infantry slots of a bunker / neutral stronghold (0 for anything else)
     static bool stronghold(const Entity& e) { return e.isBuilding() && e.bt().role == BR_STRONGHOLD; }
     void spawnMapLandmarks();                                  // put the map's neutral castles / bunkers / watchtowers on the field

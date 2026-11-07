@@ -556,7 +556,7 @@ void Game::buildButtonsRaw() {
     if (placingType >= 0) { add(BK_CANCEL, 0, true, "Cancel", "Cancel placement (Esc)"); return; }
     if (selection.empty()) return;
     Entity* b = selectedBuilding();
-    char tip[640];
+    char tip[1024];
     if (b) {
         if (b->district >= 0) return;   // a block of a town round the lake: held, never sold, nothing to build there
         if (!b->constructed) { add(BK_SELL, 0, true, "Sell", "Sell this structure for a partial refund"); return; }
@@ -769,11 +769,11 @@ void Game::buildButtonsRaw() {
         for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && subType(e->type)) { subs++; if (e->subState == 2 || e->subState == 1) dived++; if (g_sim.time >= e->siloTimer && e->nukeSalvo == 0) ready++; } }
         if (subs > 0) {
             bool surface = dived * 2 >= subs;   // (most of them down: the button brings them up)
-            if (surface) add(BK_DIVE, 1, true, "Surface", "Surface  [D]  Bring the submarines up: they can fire torpedoes at ships again, and can be seen (close up) and hurt");
+            if (surface) add(BK_DIVE, 1, true, "Surface", "Surface  [D]  Bring the submarines up: they can fire torpedoes at ships again, and can be seen (close up) and hurt. Brought up on purpose they stand and fight, and crash-dive and run only when a warhead comes or half a hull is gone. (Ordered at a ship while dived, a submarine closes in under water and surfaces by itself)");
             else add(BK_DIVE, 0, true, "Dive", "Dive  [D]  Take the submarines down: nothing can find them (no ship, aircraft, scan or other submarine) and nothing can hurt them, for as long as you like. They cannot fire while under");
             float sw = g_sim.subNukeWait(g_sim.humanPlayer);
-            snprintf(tip, sizeof tip, "Launch Nuke  [K]  The nearest submarine with its missile ready surfaces if it is down (%.0f s), fires a full nuclear warhead (%d tile blast, radiation) anywhere on the map, and must stay up for %d s after: then it can be found and sunk. One missile per submarine every %d s (%d of the selected ready)%s",
-                     SUB_SURFACE_TIME, (int)NUKE_RADIUS, (int)SUB_EXPOSED, (int)SUB_NUKE_COOLDOWN, ready, sw > 0 && ready == 0 ? "  (reloading)" : "");
+            snprintf(tip, sizeof tip, "Launch Nuke  [K]  The nearest submarine with its missile ready surfaces if it is down (%.0f s) and fires a silver ballistic warhead anywhere on the map: a %d tile blast hitting %.1f times as hard as a Nuke Ramp's, heavy radiation, and only Anti-Nuke Lasers can stop it. It must stay up for %d s after (a warhead coming for it sends it down at once), and runs for safer sea meanwhile. One missile per submarine every %d s (%d of the selected ready)%s",
+                     SUB_SURFACE_TIME, (int)(NUKE_RADIUS * std::sqrt(SUB_NUKE_SCALE)), SUB_NUKE_DAMAGE, (int)SUB_EXPOSED, (int)SUB_NUKE_COOLDOWN, ready, sw > 0 && ready == 0 ? "  (reloading)" : "");
             add(BK_SUBNUKE, 0, g_sim.subNukesReady(g_sim.humanPlayer) > 0, "Launch Nuke", tip);
         }
     }
@@ -2397,9 +2397,10 @@ void Game::renderWorld() {
     } else if (nukeMode) {
         Vec2 m = Vec2(mouseX, mouseY);
         float pulse = 0.6f + 0.4f * std::sin(wallTime * 8.0f);
-        float nr = NUKE_RADIUS * TILE * (nukeMini ? std::sqrt(MINI_NUKE_SCALE) : (nukeIsland ? std::sqrt(ISLAND_NUKE_SCALE) : (nukeDeep ? std::sqrt(UNUKE_SCALE) : 1.0f)));
-        g.discFill(m.x, m.y, nr, nukeDeep ? rgb(200, 206, 216, (int)(30 * pulse)) : rgb(255, 60, 40, (int)(34 * pulse)));
-        g.circle(m.x, m.y, nr, nukeDeep ? rgb(214, 218, 226) : rgb(255, 90, 60), 64);
+        float nr = NUKE_RADIUS * TILE * (nukeMini ? std::sqrt(MINI_NUKE_SCALE) : (nukeIsland ? std::sqrt(ISLAND_NUKE_SCALE) : (nukeSub ? std::sqrt(SUB_NUKE_SCALE) : (nukeDeep ? std::sqrt(UNUKE_SCALE) : 1.0f))));
+        const bool silverAim = nukeDeep || nukeSub;
+        g.discFill(m.x, m.y, nr, silverAim ? rgb(200, 206, 216, (int)(30 * pulse)) : rgb(255, 60, 40, (int)(34 * pulse)));
+        g.circle(m.x, m.y, nr, silverAim ? rgb(214, 218, 226) : rgb(255, 90, 60), 64);
         g.circle(m.x, m.y, nr * 0.35f, rgb(255, 200, 90), 32);
     }
     if (dropMode) {
@@ -2620,11 +2621,11 @@ void Game::renderWorld() {
         g.text(tx, mouseY - 6, rb2, rgb(255, 214, 140));
     }
     else if (nukeMode) {
-        g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : (nukeIsland ? "ISLAND NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : (nukeDeep ? "UNDERGROUND NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)")), nukeDeep ? rgb(220, 224, 232) : rgb(255, 100, 70));
+        g.text(mouseX + 12, mouseY - 4, nukeMini ? "MINI NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : (nukeIsland ? "ISLAND NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : nukeSub ? "SUBMARINE NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : (nukeDeep ? "UNDERGROUND NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)" : "NUKE (HITS EVERYONE IN THE CIRCLE, YOU TOO)")), (nukeDeep || nukeSub) ? rgb(220, 224, 232) : rgb(255, 100, 70));
         Vec2 wp = screenToWorld(mouseX, mouseY);
-        float sc = nukeMini ? MINI_NUKE_SCALE : (nukeIsland ? ISLAND_NUKE_SCALE : (nukeDeep ? UNUKE_SCALE : 1.0f));
-        int nd = g_sim.antiNukeCovering(wp, g_sim.humanPlayer, true, sc, nukeDeep);   // (only defences you have seen; only lasers count against a silver warhead)
-        if (nd > 0) { char ab[200]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the warhead is shot down (30%% of the damage still falls)", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true, sc, nukeDeep) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
+        float sc = nukeMini ? MINI_NUKE_SCALE : (nukeIsland ? ISLAND_NUKE_SCALE : (nukeSub ? SUB_NUKE_SCALE : (nukeDeep ? UNUKE_SCALE : 1.0f)));
+        int nd = g_sim.antiNukeCovering(wp, g_sim.humanPlayer, true, sc, nukeDeep || nukeSub);   // (only defences you have seen; only lasers count against a silver warhead)
+        if (nd > 0) { char ab[200]; snprintf(ab, sizeof ab, "Anti-nuke cover here: %d defence%s, %d%% the warhead is shot down (30%% of the damage still falls)", nd, nd > 1 ? "s" : "", (int)(100.0f * g_sim.antiNukeChance(wp, g_sim.humanPlayer, true, sc, nukeDeep || nukeSub) + 0.5f)); g.text(mouseX + 12, mouseY + 8, ab, rgb(255, 214, 140)); }
     }
     else if (bomberMode) {
         Vec2 wp = screenToWorld(mouseX, mouseY);
@@ -2853,7 +2854,10 @@ void Game::renderHud() {
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);
                 if (subType(e->type) && e->owner == g_sim.humanPlayer) {   // a submarine: under or up, and its missile
-                    const char* ss = e->subState == 2 ? "DIVED: nothing can see or hurt it [D] surface" : e->subState == 1 ? "Diving..." : e->subState == 3 ? "Surfacing..." : "SURFACED: seen and vulnerable [D] dive";
+                    const bool hunting = e->order == O_ATTACK || e->subHunt, running = e->order == O_MOVE && g_sim.time < e->subEvadeAt;
+                    const char* ss = e->subState == 2 ? (hunting ? "DIVED, closing in: it surfaces in torpedo range" : running ? "DIVED, running for safer sea" : "DIVED: nothing can see or hurt it [D] surface")
+                                   : e->subState == 1 ? (running ? "Crash-diving, running for safer sea..." : "Diving...") : e->subState == 3 ? (hunting ? "Surfacing to attack..." : "Surfacing...")
+                                   : (hunting ? "SURFACED, attacking: seen and vulnerable [D] dive" : "SURFACED: seen and vulnerable [D] dive");
                     float exposed = e->exposedUntil - g_sim.time, wait = e->siloTimer - g_sim.time;
                     if (exposed > 0) snprintf(buf, sizeof buf, "%s   exposed after its launch: %d s", ss, (int)std::ceil(exposed));
                     else if (e->nukeSalvo > 0) snprintf(buf, sizeof buf, "%s   surfacing to launch", ss);

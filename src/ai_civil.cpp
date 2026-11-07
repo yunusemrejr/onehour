@@ -171,6 +171,7 @@ void AiPlayer::civilAffairs(const std::vector<Ref>& army, const std::vector<Ref>
             for (auto& e : S.ents) {   // a civilian dozer first (it has nothing else to do), else a military one that is idle, only if more than one is left at home
                 if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || e.carrier.valid() || e.order != O_IDLE) continue;
                 if (!civicDozerType(e.type) && dozers < 2) continue;
+                if (!S.canReachSite(e, *job)) continue;   // (cut off from the town by water or a broken bridge)
                 float de = dist(e.pos, D.center) * (civicDozerType(e.type) ? 0.5f : 1.0f);
                 if (de < dd) { dd = de; dz = &e; }
             }

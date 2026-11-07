@@ -112,6 +112,37 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
         int ux = tileOf(u.pos.x), uy = tileOf(u.pos.y);
         if (ux >= tx && ux < tx + b.w && uy >= ty && uy < ty + b.h) u.pos = g_map.nearestFree(u.pos, 8);
     });
+    // ... and out of any little pocket the new walls close round them (a unit in a one-tile gap between two structures, sealed in by a wall at
+    // each end, could never move again): a bounded flood from each unit beside the footprint, so this costs a few dozen tile tests at most
+    auto pocket = [](int x, int y, int cap) {   // free tiles reachable from (x, y), counted up to cap
+        int seenX[24], seenY[24], n = 0, head = 0;
+        if (!g_map.passable(x, y)) return cap;   // (on a blocked tile: leave it to the shove above)
+        seenX[n] = x; seenY[n] = y; n++;
+        while (head < n && n < cap) {
+            int cx = seenX[head], cy = seenY[head]; head++;
+            static const int DX[4] = {1, -1, 0, 0}, DY[4] = {0, 0, 1, -1};
+            for (int d = 0; d < 4 && n < cap; d++) {
+                int nx = cx + DX[d], ny = cy + DY[d];
+                if (!g_map.passable(nx, ny)) continue;
+                bool dup = false; for (int k = 0; k < n; k++) if (seenX[k] == nx && seenY[k] == ny) { dup = true; break; }
+                if (!dup) { seenX[n] = nx; seenY[n] = ny; n++; }
+            }
+        }
+        return n;
+    };
+    forEachNear(e.pos, (std::max(b.w, b.h) * 0.5f + 3.0f) * TILE, [&](Entity& u) {
+        if (!u.isUnit() || u.isAir() || u.carrier.valid() || u.ut().naval) return;
+        int ux = tileOf(u.pos.x), uy = tileOf(u.pos.y);
+        if (pocket(ux, uy, 8) >= 8) return;   // (only a tiny pocket: a compound a player walls in on purpose is left alone)
+        for (int r = 1; r <= 6; r++) {   // the nearest free tile with room round it
+            bool done = false;
+            for (int dy = -r; dy <= r && !done; dy++) for (int dx = -r; dx <= r && !done; dx++) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r || pocket(ux + dx, uy + dy, 24) < 24 || !g_map.passable(ux + dx, uy + dy)) continue;
+                u.pos = tileCenter(ux + dx, uy + dy); u.prevPos = u.pos; u.path.clear(); u.pathIdx = 0; u.repathTimer = 0; done = true;
+            }
+            if (done) break;
+        }
+    });
     (void)self;
     return refOf(i);
 }
@@ -374,7 +405,29 @@ bool Sim::canPlace(int player, int buildType, int tx, int ty) const {
 Vec2 Sim::unitExit(const Entity& b) const {
     const BuildType& t = b.bt();
     Vec2 p = b.pos + Vec2(0, t.h * TILE * 0.5f + 18);
-    return g_map.nearestFree(p, 14);
+    Vec2 q = g_map.nearestFree(p, 14);
+    // A pocket walled in by neighbouring structures (a new unit there could never leave): come out on whichever side of the structure opens onto
+    // wide ground instead. Only a small region's bounding box counts as a pocket, so a base on a small island still uses its usual exit.
+    if (g_map.regionDirty) g_map.buildRegions();
+    auto boxArea = [&](int x, int y) -> int {
+        if (!inMap(x, y)) return 0;
+        u16 rg = g_map.region[y * MAP_W + x];
+        if (!rg || (size_t)rg * 4 + 3 >= g_map.regionBox.size()) return 0;
+        return (g_map.regionBox[rg * 4 + 2] - g_map.regionBox[rg * 4] + 1) * (g_map.regionBox[rg * 4 + 3] - g_map.regionBox[rg * 4 + 1] + 1);
+    };
+    const int POCKET = 120;
+    if (boxArea(tileOf(q.x), tileOf(q.y)) >= POCKET) return q;
+    float bd = 1e30f; Vec2 best = q;
+    for (int r = 1; r <= 4; r++) {
+        for (int y = b.ty - r; y <= b.ty + t.h - 1 + r; y++) for (int x = b.tx - r; x <= b.tx + t.w - 1 + r; x++) {
+            if (x > b.tx - r && x < b.tx + t.w - 1 + r && y > b.ty - r && y < b.ty + t.h - 1 + r) continue;   // (the ring only)
+            if (!g_map.passable(x, y) || boxArea(x, y) < POCKET) continue;
+            Vec2 c = tileCenter(x, y); float d = dist2(c, p);
+            if (d < bd) { bd = d; best = c; }
+        }
+        if (bd < 1e29f) break;
+    }
+    return best;
 }
 
 // ------------------------------------------------------------ commands
@@ -582,7 +635,8 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
             if (t->kind == EK_RESOURCE) { cmdHarvest({r}, target); continue; }
             cmdMove({r}, t->pos, false); continue;
         }
-        if (ut.weapon < 0 || !canTarget(*e, *t)) { cmdMove({r}, t->pos, false); continue; }
+        if (ut.weapon < 0 || !(canTarget(*e, *t) || subCouldTarget(*e, *t))) { cmdMove({r}, t->pos, false); continue; }
+        if (subType(e->type)) { e->subHunt = true; e->subUpSince = -1; }   // (a submarine sent at a ship stands and fights until the danger is serious)
         if (e->isAir() && e->ammo <= 0 && ut.ammo > 0) { e->targetEnt = target; e->order = O_REARM; e->leashed = false; continue; }   // (helicopters like the Hornet never run dry: they attack at once)
         e->order = O_ATTACK; e->postOrder = e->zoneR > 0 ? O_GUARDAREA : O_IDLE; e->targetEnt = target; e->engaged = NOREF; e->leashed = false;
         e->repathTimer = 0;
@@ -1451,7 +1505,7 @@ void Sim::updateNukes() {
 void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
     const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
-    const float D = n.super ? ISLAND_NUKE_DAMAGE : (n.deep ? UNUKE_DAMAGE : 1.0f);   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius); a Super Nuke harder still
+    const float D = n.super ? ISLAND_NUKE_DAMAGE : (n.sub ? SUB_NUKE_DAMAGE : (n.deep ? UNUKE_DAMAGE : 1.0f));   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius); a Super Nuke harder still
     const bool heavy = n.deep || n.super;   // (the two big warheads flatten large structures in their inner blast and throw things further)
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
@@ -1541,7 +1595,7 @@ void Sim::nukeBlast(const Nuke& n) {
                 e->disabledUntil = std::max(e->disabledUntil, time + 10.0f * f * P);       // survivors are stunned by the pulse
             }
         }
-        if (e->isUnit()) {   // the shockwave throws everything that survives, friend or foe
+        if (e->isUnit() && e->fall <= 0) {   // the shockwave throws everything that survives, friend or foe (not a load still under its parachute)
             Vec2 np = e->pos + away * (90.0f * f * P * (n.super ? 2.0f : n.deep ? 1.6f : 1.0f));
             if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
@@ -1897,7 +1951,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     const bool burnOrder = invulnerable(t) && t.constructed && e.forceTarget.valid() && !players[e.owner].isAI && get(e.forceTarget) == &t;
     if (invulnerable(t) && t.constructed && !burnOrder) return false;
     if (districtRuin(t) && t.progress < DISTRICT_RUIN_SAFE) return false;   // a razed town block is rubble until its people have raised it again a way
-    if (e.isUnit() && subType(e.type) && e.subState != 0) return false;   // a submarine fires only when it is up
+    if (e.isUnit() && subType(e.type) && e.subState != 0 && !subAimDown) return false;   // a submarine fires only when it is up
     if (t.isUnit() && submerged(t)) return false;   // (nothing reaches a dived submarine)
     if (t.isBuilding() && t.owner < 0 && (bridgeEnt(t) || relicEnt(t) || t.bt().role == BR_ISLANDNUKE)) {   // nobody's bridge, launcher or relic structure: only by order
         int wq = wpn >= 0 ? wpn : e.weapon();
@@ -2079,6 +2133,7 @@ Entity* Sim::acquireZoneTarget(Entity& e) {
 bool Sim::tryFire(Entity& e, Entity& tgt) {
     int w = e.weapon();
     if (w < 0) return false;
+    if (e.isUnit() && subType(e.type) && e.subState != 0) return false;   // (a submarine on its way up, or still under, holds fire: it closes in)
     if (w == W_CONVERT) return chosenAct(e, tgt);   // The Chosen: takes or turns, never shoots
     if (w == W_SHADOW) {   // the Shadow Guard: the weapon the target calls for
         float d0 = distToEntity(e.pos, tgt) / TILE;
@@ -3071,7 +3126,9 @@ void Sim::updateUnit(Entity& e) {
             e.pos = e.dropFrom + (e.dropTo - e.dropFrom) * k;
             return;
         }
-        e.fall = 0; e.pos = e.dropTo; e.guardPos = e.pos; e.path.clear(); e.pathIdx = 0; e.stuckTimer = 0; e.lastPos = e.pos;
+        e.fall = 0; e.pos = e.dropTo;
+        if (!ut.naval && !walkable(e, tileOf(e.pos.x), tileOf(e.pos.y))) e.pos = g_map.nearestFree(e.pos, 8);   // (the spot went while it came down: a bridge fell, a structure went up)
+        e.guardPos = e.pos; e.path.clear(); e.pathIdx = 0; e.stuckTimer = 0; e.lastPos = e.pos;
         float r = std::max(10.0f, e.radius() * 1.6f);
         fx.push_back({FX_RING, e.pos, e.pos, 0, 0.5f, rgb(214, 196, 160), r * 1.6f});
         fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 1.4f, rgb(150, 138, 118), r, Vec2(rng.f(-6, 6), -9)});
@@ -3185,6 +3242,7 @@ Entity* Sim::repairJob(Entity& dz, float maxDist) {
         if (!b.alive || !b.isBuilding() || !b.constructed || !dozerMayWork(dz, b) || (b.hp >= b.maxHp * 0.995f && b.hatch >= b.hatchMax) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
         if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE) || (bridgeEnt(b) && d > BRIDGE_HELP_RANGE * TILE)) continue;   // (a town's blocks and a bridge only by a dozer that is close by)
+        if (!canReachSite(dz, b)) continue;   // (an island launcher out in the lake, a structure across a broken bridge: it could only stand on the shore)
         float hurt = 1.0f - b.hp / b.maxHp;
         int crew = repairCrew(b, &dz), cap = repairCrewCap(b);
         if (hurt < 0.5f) cap = std::min(cap, 1 + (hurt > 0.25f ? 1 : 0));   // a scratch needs one dozer
@@ -3200,12 +3258,33 @@ Entity* Sim::repairJob(Entity& dz, float maxDist) {
 // An unfinished site an idle dozer should help with. Construction always comes before mending: the dozer takes the nearest site of its army that
 // is not under fire and has fewer than DOZER_SITE_CREW builders (one nobody is working on counts as much nearer), so a crew of idle dozers fans out over
 // the open sites instead of all piling onto one.
+// Can a ground unit standing at dz get right up to structure b? (some free tile within two of its footprint is on dz's ground; a site across a
+// broken bridge, or on a delta island whose bridges are down, is not)
+bool Sim::canReachSite(const Entity& dz, const Entity& b) const {
+    if (g_map.regionDirty) g_map.buildRegions();
+    int ux = clampi(tileOf(dz.pos.x), 0, MAP_W - 1), uy = clampi(tileOf(dz.pos.y), 0, MAP_H - 1);
+    u16 rg = g_map.region[uy * MAP_W + ux];
+    if (!rg) {   // (standing on a tile the regions do not cover, e.g. at a footprint's edge: the nearest free tile's)
+        Vec2 f = g_map.nearestFree(dz.pos, 2);
+        rg = g_map.region[clampi(tileOf(f.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(f.x), 0, MAP_W - 1)];
+        if (!rg) return true;   // (unknown: do not give up on it)
+    }
+    const int w = b.isBuilding() ? b.bt().w : 1, h = b.isBuilding() ? b.bt().h : 1;
+    for (int r = 1; r <= 2; r++)
+        for (int y = b.ty - r; y <= b.ty + h - 1 + r; y++) for (int x = b.tx - r; x <= b.tx + w - 1 + r; x++) {
+            if (x > b.tx - r && x < b.tx + w - 1 + r && y > b.ty - r && y < b.ty + h - 1 + r) continue;
+            if (inMap(x, y) && g_map.region[y * MAP_W + x] == rg) return true;
+        }
+    return false;
+}
+
 Entity* Sim::siteJob(Entity& dz, float maxDist) {
     Entity* best = nullptr; float bs = 1e18f;
     for (auto& b : ents) {
         if (!b.alive || !b.isBuilding() || b.constructed || !dozerMayWork(dz, b) || time - b.lastDamaged < 4.0f || inFallout(b.pos)) continue;
         float d = dist(b.pos, dz.pos);
         if (d > maxDist || (b.district >= 0 && d > DISTRICT_HELP_RANGE * TILE) || (bridgeEnt(b) && d > BRIDGE_HELP_RANGE * TILE)) continue;   // (a town's ruins and a broken bridge only by a dozer that is close by)
+        if (!canReachSite(dz, b)) continue;   // (across water from it: it would only stand on the shore)
         int crew = repairCrew(b, &dz);
         if (crew >= DOZER_SITE_CREW) continue;
         float score = d / TILE + crew * 12.0f - b.progress * 6.0f;   // (a nearly finished one is worth a short detour)
@@ -3429,7 +3508,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     }
     case O_ATTACK: {
         Entity* t = get(e.targetEnt);
-        if (!t || !canTarget(e, *t)) {
+        if (!t || !(canTarget(e, *t) || subCouldTarget(e, *t))) {   // (a dived submarine keeps its target: it closes in under water and surfaces in range)
             e.targetEnt = NOREF;
             if (ut.nukeBomb && e.zoneR <= 0 && e.postOrder != O_ATTACKMOVE) { e.order = O_REARM; e.postOrder = O_IDLE; e.autoTask = false; e.leashed = false; break; }   // a nuclear bomber whose target is gone flies straight home, as a bomber does: it does not hang about over the battlefield
             if (e.isAir() && e.zoneR <= 0 && (e.ammo > 0 || ut.ammo <= 0) && e.postOrder != O_ATTACKMOVE) { e.loiter = e.pos; e.loiterUntil = std::max(e.loiterUntil, time + 8.0f); }   // look around for more before heading home
@@ -3652,6 +3731,17 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
                 if (tick % 6 == 0) fx.push_back({FX_SPARK, b->pos + Vec2(rng.f(-bt.w * 14.0f, bt.w * 14.0f), rng.f(-bt.h * 14.0f, bt.h * 14.0f)), Vec2(), 0, 0.2f, rgb(255, 230, 150), 3});
             }
         } else {
+            // cut off from it (a bridge went down, or it stands on a delta island whose bridges are down): raise the nearest broken bridge it can
+            // reach first, if there is one close by, and keep the site for after; otherwise give the job up (it would stand on the shore for good)
+            if ((tick + e.gen) % 30 == 0 && !canReachSite(e, *b)) {
+                Entity* br = nullptr; float bd = 40.0f * TILE;
+                for (auto& o : ents) if (o.alive && bridgeEnt(o) && !o.constructed && &o != b) { float dd = dist(o.pos, e.pos); if (dd < bd && dozerMayWork(e, o) && canReachSite(e, o)) { bd = dd; br = &o; } }
+                if (br) { keepSite(e); e.targetEnt = refOf(*br); e.autoTask = true; e.path.clear(); e.pathIdx = 0; e.repathTimer = 0; e.actionTimer = 0; e.stuckTimer = 0; break; }
+                Ref lost = e.targetEnt;
+                e.siteQueue.erase(std::remove(e.siteQueue.begin(), e.siteQueue.end(), lost), e.siteQueue.end());
+                e.order = O_IDLE; e.targetEnt = NOREF; e.guardPos = e.pos; e.path.clear(); e.actionTimer = 0; e.autoTask = false;
+                break;
+            }
             if (e.pathIdx >= e.path.size()) requestSidePath(e, *b);   // the nearest face it can reach, not a fixed doorstep round the back
             Vec2 before = e.pos;
             moveAlong(e, ut.speed);
@@ -3698,6 +3788,11 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             e.actionTimer += SIM_DT;
             if (tick % 5 == 0) fx.push_back({FX_SPARK, b->pos + Vec2(rng.f(-b->bt().w * 14.0f, b->bt().w * 14.0f), rng.f(-b->bt().h * 14.0f, b->bt().h * 14.0f)), Vec2(), 0, 0.25f, players[e.owner].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
             if (chosenType(e.type)) { e.cooldown = 0; chosenAct(e, *b); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; break; }   // The Chosen: at once
+            if (int ns = bunkerSnipers(*b)) {   // snipers in the bunker hold the shaft: they hear the intruder at the hatch, and every hit sets the work back
+                for (int q = 0; q < numPlayers; q++) if (players[q].team == players[b->owner].team) e.detUntil[q] = std::max(e.detUntil[q], time + 0.6f);
+                if (e.lastDamaged > e.capHit) { e.capHit = e.lastDamaged; e.actionTimer *= BUNKER_SNIPER_SETBACK; }
+                if (e.actionTimer <= SIM_DT * 1.5f) emit(EV_UNDER_ATTACK, b->owner, SND_ATTACKED, b->pos, ns > 1 ? "An infiltrator is breaking into a bunker: its snipers are holding the shaft" : "An infiltrator is breaking into a bunker: its sniper is holding the shaft");
+            }
             if (e.actionTimer >= captureTime(*b, e)) { Ref bref = refOf(*b); captureBuilding(*b, e); e.order = O_IDLE; e.targetEnt = NOREF; e.actionTimer = 0; e.guardPos = e.pos; (void)bref; }
         } else {
             e.actionTimer = 0;

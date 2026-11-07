@@ -73,7 +73,15 @@ bool Sim::relicBuildable(int player) const {
 float Sim::captureTime(const Entity& b, const Entity& by) const {
     float t = captureTime(b);
     if (by.isUnit() && by.ut().role != UR_SPY && !chosenType(by.type)) t *= RELIC_CLAIM;   // (plain infantry claiming a relic structure nobody holds)
+    t *= 1.0f + BUNKER_SNIPER_CAPTURE * (float)bunkerSnipers(b);   // a bunker's snipers hold the shaft against an intruder (each one adds)
     return t;
+}
+
+int Sim::bunkerSnipers(const Entity& b) const {
+    if (!b.isBuilding() || b.bt().role != BR_BUNKER || b.owner < 0 || b.passengers.empty()) return 0;
+    int n = 0;
+    for (Ref r : b.passengers) if (const Entity* u = get(r)) if (u->isUnit() && u->ut().sniper) n++;
+    return std::min(n, BUNKER_SNIPER_CAP);
 }
 
 void Sim::updateRelic(Entity& b) {
