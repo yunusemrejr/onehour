@@ -23,7 +23,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --relictest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -715,6 +715,7 @@ bool assaultMatrix(u64 seed);    // tests22.cpp: a budget of each combat unit ag
 bool navalTrace(u64 seed);       // tests22.cpp: how ship-like two fleets move in a fight
 Vec2 navalBattleScene(std::vector<Ref> side[2]);
 bool microMatrix(u64 seed);
+bool relicTest(u64 seed);         // tests23.cpp: the canal and its bridges, the relic bases, the Hydra, destructible launchers, submarines, swarms, surrender
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
@@ -2675,7 +2676,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 36);
+            int c = rng.range(0, 37);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2730,6 +2731,16 @@ static bool fuzzTest(u64 seed, int seconds) {
                 Entity* ce = g_sim.get(ch); Entity* t = g_sim.get(anyEnt(-2, 3));
                 if (ce && t) { ce->cooldown = 0; if (rng.range(0, 1)) g_sim.chosenAct(*ce, *t); else g_sim.cmdAttack({ch}, g_sim.refOf(*t)); }
                 if (ce && t && t->isUnit() && rng.range(0, 3) == 0) g_sim.convertUnit(*t, rng.range(0, 3), ce);
+                break;
+            }
+            case 37: {   // the relic bases, the canal's bridges and the submarines, for whoever: claims, Hydra launches, bridges down and up, dives, launches
+                int ow = rng.range(-1, 3), k = rng.range(0, 5);
+                if (k == 0) { Ref b2 = anyEnt(-1, 2); Entity* be = g_sim.get(b2); if (be && (Sim::relicEnt(*be) || Sim::bridgeEnt(*be))) { std::vector<Ref> s2 = sel(); g_sim.cmdCapture(s2, b2); g_sim.cmdAssist(s2, b2); g_sim.cmdAttack(s2, b2, rng.range(0, 1) == 0); } }
+                else if (k == 1) { for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.bt().role == BR_RELICSILO && rng.range(0, 3) == 0) { e.owner = rng.range(-1, 3); e.siloTimer = 0; } g_sim.cmdRelicNuke(ow, where(), rng.range(0, 1) == 0, anyEnt(-2, 2)); }
+                else if (k == 2) { for (auto& e : g_sim.ents) if (e.alive && Sim::bridgeEnt(e) && rng.range(0, 5) == 0) { if (e.constructed) g_sim.breakBridge(e, ow); else g_sim.raiseBridge(e); } }
+                else if (k == 3) { Vec2 w3 = g_map.nearestWater(where(), 20, true); if (g_map.navTile(tileOf(w3.x), tileOf(w3.y))) { Ref s3 = g_sim.spawnUnit(rng.range(0, 1) ? U_C_SUB : U_K_SUB, rng.range(0, 3), w3); g_sim.cmdDive({s3}, rng.range(0, 1) == 0); } }
+                else if (k == 4) g_sim.cmdDive(sel(), rng.range(0, 1) == 0);
+                else { for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && subType(e.type) && rng.range(0, 2) == 0) e.siloTimer = 0; g_sim.cmdSubNuke(ow, where(), rng.range(0, 1) == 0, anyEnt(-2, 1)); }
                 break;
             }
             case 34: { int bt = rng.range(0, 1) ? B_C_FWALL : B_K_FWALL; int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 2) == 0 ? rng.range(-1, 1) : 0, tx, ty, rng.range(0, 1) == 0); break; }   // Bastion Walls, any owner
@@ -3002,6 +3013,7 @@ int main(int argc, char** argv) {
         else if (a == "--assaultmatrix") { g_map.generate(); return assaultMatrix(seed) ? 0 : 1; }
         else if (a == "--navaltrace") { g_map.generate(); return navalTrace(seed) ? 0 : 1; }
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
+        else if (a == "--relictest") { g_map.generate(); return relicTest(seed) ? 0 : 1; }
         else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
         else if (a == "--chosentest") { g_map.generate(); return chosenTest(seed) ? 0 : 1; }
         else if (a == "--variety") { int n = 20; if (i + 1 < argc && argv[i + 1][0] != '-') n = atoi(argv[++i]); g_map.generate(); return varietyTest(n, seed, d0 >= 0 && d0 <= 3 ? d0 : 2); }

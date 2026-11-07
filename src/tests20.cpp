@@ -54,9 +54,18 @@ bool learnUpdateTest(u64 seed) {
         VERIFY20(r.prof[2].n == 6 && std::abs(r.prof[2].airPeak - P.airPeak) < 1e-3f && std::abs(r.prof[2].firstHit - P.firstHit) < 0.11f && r.unitSamples[U_C_TANK] == 17 && r.docN[DOC_TURTLE] == 5, "the opponent model did not round-trip");
         FILE* f = fopen(path.c_str(), "r"); VERIFY20(f, "cannot read the brain file");
         std::string text; char buf[512]; while (fgets(buf, sizeof buf, f)) text += buf; fclose(f);
-        VERIFY20(text.compare(0, 16, "onehour-brain 20") == 0, "the file is not v20");
+        VERIFY20(text.compare(0, 16, "onehour-brain 21") == 0, "the file is not v21");
+        {   // a v20 file (69 unit rows: before the submarines, battleships and relic units joined the table) keeps its rows, doctrines and model
+            std::string v20 = "onehour-brain 20" + text.substr(16);
+            size_t r0 = v20.find('\n', v20.find('\n') + 1) + 1, cut20 = r0;
+            for (int k = 0; k < 69; k++) cut20 = v20.find('\n', cut20) + 1;
+            v20 = v20.substr(0, cut20) + v20.substr(v20.find("doctrines"));
+            FILE* f20 = fopen(path.c_str(), "w"); fputs(v20.c_str(), f20); fclose(f20);
+            Brain o20; VERIFY20(o20.load(path.c_str()), "a v20 file (the player's brain before the submarines) did not load");
+            VERIFY20(o20.unitSamples[U_C_TANK] == 17 && o20.docN[DOC_TURTLE] == 5 && o20.prof[2].n == 6 && o20.unitSamples[U_C_SUB] == 0, "a v20 file lost its rows, doctrines or model");
+        }
         {   // a v19 file (65 unit rows: before The Chosen and its Shadow Guard joined the table) keeps its rows, doctrines and model
-            std::string v19 = "onehour-brain 19" + text.substr(16);
+            std::string v19 = "onehour-brain 19" + text.substr(16);   // (the header is the same length in every version)
             size_t r0 = v19.find('\n', v19.find('\n') + 1) + 1, cut19 = r0;
             for (int k = 0; k < 65; k++) cut19 = v19.find('\n', cut19) + 1;
             v19 = v19.substr(0, cut19) + v19.substr(v19.find("doctrines"));
