@@ -448,11 +448,13 @@ void Map::generate() {
         {52, 29, 50000}, {52, 75, 50000},
         {46, 8, 36000}, {57, 95, 36000},
         {18, 33, 30000}, {70, 18, 30000}, {85, 70, 30000}, {33, 85, 30000},
+        {57, 8, 36000}, {46, 95, 36000},   // (the old west and east lateral piles stood where the deltas are now: these, across the north and south
+                                           // ridges from the piles above, give the north-east and south-west bases theirs back)
     };
     for (size_t k = 0; k < supplies.size(); k++) {
         auto& supply = supplies[k];
         bool shore = k >= 8 && k < 10;   // the two on the lake shore move out with the lake country
-        supply.tx = shore ? (int)std::lround(inner(supply.tx + 0.5f) - 0.5f) : O + (int)std::lround((supply.tx + 0.5f) * G - 0.5f);
+        supply.tx = shore ? (MAP_W - 1) / 2 : O + (int)std::lround((supply.tx + 0.5f) * G - 0.5f);   // (the shore ones right on the middle line: as near the western bases as the eastern)
         supply.ty = shore ? (int)std::lround(inner(supply.ty + 0.5f) - 0.5f) : O + (int)std::lround((supply.ty + 0.5f) * G - 0.5f);
     }
     {   // the lake's west and east mouths: a pile on each bank, between the lateral road's bridge and the ring road's

@@ -37,7 +37,7 @@ static Ref spawnAt(int type, int owner, Vec2 near) {
 static bool placementTest() {
     int total = 0, kinds[3] = { 0, 0, 0 }, quad[4] = { 0, 0, 0, 0 };
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isBuilding() || e.bt().role != BR_STRONGHOLD) continue;
+        if (!e.alive || !e.isBuilding() || e.bt().role != BR_STRONGHOLD || e.bt().relic) continue;   // (a relic base's Sentinel Bunker is a stronghold too, but not a civilian one)
         total++;
         int kind = e.type == B_C_CASTLE ? 0 : (e.type == B_C_CIVBUNKER ? 1 : 2);
         kinds[kind]++;

@@ -1454,6 +1454,7 @@ void Sim::nukeBlast(const Nuke& n) {
         // the pieces of a warhead that was shot down do P of what it would have done to the target, and never more than the target had left to lose
         auto lessen = [&](float dmg, const Entity& t) { return P < 1.0f ? P * std::min(dmg, t.hp) : dmg; };
         bool foe = nukeHurts(n, e->owner);   // a human's nuke flattens allies and the human's own army as well
+        if (e->owner < 0 && e->isBuilding() && e->constructed && (relicEnt(*e) || e->bt().role == BR_ISLANDNUKE)) foe = true;   // (nobody's launcher or relic structure: a warhead wears it down too, within its cap)
         if (e->isAir()) {   // nothing flying survives the fireball and the shock front, whoever owns it: torn apart, it falls out of the sky
             if (n.source.valid() && refOf(*e) == n.source) continue;   // ... except the bomber that dropped the compact bomb: it is already pulling out of its own blast
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
@@ -3781,7 +3782,7 @@ void Sim::updateBuilding(Entity& b) {
     if (b.bt().role == BR_BRIDGE) return;   // (a bridge just stands, or lies in the water waiting for a dozer)
     if (b.district >= 0) { updateDistrictBlock(b); return; }   // a block of a town round the lake: it mends and rebuilds itself, the town pays (see updateDistricts)
     if (!b.constructed) return;
-    if (b.bt().role == BR_ISLANDNUKE) { updateIslandNuke(b); return; }   // (an island launcher keeps its clock; no upgrades, no guns)
+    if (b.bt().role == BR_ISLANDNUKE) { b.disabledUntil = -1; updateIslandNuke(b); return; }   // (an island launcher keeps its clock and is never switched off; no upgrades, no guns)
     if (invulnerable(b)) { b.disabledUntil = -1; return; }   // (a Bastion Wall: burning or not, nothing switches it off; no upgrades, no guns)
     if (b.disabledUntil > time) { if (b.bt().role == BR_BUNKER && b.owner >= 0) bunkerMend(b); return; }   // (knocked offline, a bunker still mends itself)
     if (b.owner < 0) return;   // a neutral map landmark has nobody to pay, repair or command it until it is garrisoned

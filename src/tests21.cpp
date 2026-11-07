@@ -103,15 +103,15 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     float ready0 = g_sim.players[0].shadowReady;
     VERIFY21(g_sim.time >= ready0 && g_sim.shadowWait(0) == 0.0f, "the call was not ready for a new Chosen");
     VERIFY21(g_sim.cmdShadowCall(0, ch), "The Chosen could not call its Shadow Guard");
-    int n = 0; float far = 0;
-    for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.type == shadowT(me)) { n++; far = std::max(far, dist(e.pos, g_sim.get(ch)->pos)); }
+    int n = 0; float far = 0;   // (every Shadow Guard scan below is for units: a building of the same type number, e.g. a relic one, is not one)
+    for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.type == shadowT(me)) { n++; far = std::max(far, dist(e.pos, g_sim.get(ch)->pos)); }
     VERIFY21(n == CHOSEN_SQUAD, "a call did not bring 30 Shadow Guard");
     VERIFY21(far < 5.0f * TILE, "the Shadow Guard did not appear round The Chosen");
     VERIFY21(!g_sim.cmdShadowCall(0, ch), "a second call went through at once");
     VERIFY21(std::abs(g_sim.shadowWait(0) - CHOSEN_CALL_COOLDOWN) < 0.2f, "the call did not start a 2 minute wait");
     // ---- four weapons in one: the right one for each target
     {
-        Entity* s = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) { s = &e; break; }
+        Entity* s = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me)) { s = &e; break; }
         VERIFY21(s, "no Shadow Guard");
         Ref a1 = at21(foe == F_CYBER ? U_C_HELI : U_K_AIR, 1, mid + Vec2(0, 30 * TILE)); if (Entity* a = g_sim.get(a1)) a->alt = 1;
         Ref t1 = at21(uf + 5, 1, mid + Vec2(0, 32 * TILE)), i1 = at21(uf + 2, 1, mid + Vec2(2 * TILE, 32 * TILE));
@@ -126,28 +126,28 @@ static bool chosenScene(Faction me, Faction foe, u64 seed) {
     std::vector<Ref> rifles; for (int k = 0; k < 4; k++) rifles.push_back(at21(uf + 2, 1, fight + Vec2(4 * TILE, (k - 1.5f) * TILE)));
     if (Entity* c = g_sim.get(ch)) { c->pos = g_map.nearestFree(fight + Vec2(-9 * TILE, 0), 6); g_sim.cmdStop({ch}); }   // (out of reach: the squad must do it)
     bool seen = false; float squadHp0 = 0;
-    for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) squadHp0 += e.hp;
+    for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me)) squadHp0 += e.hp;
     for (int t = 0; t < 12 * SIM_HZ; t++) {
         g_sim.step(); g_sim.events.clear();
-        for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me) && g_sim.visibleTo(e, 1)) seen = true;
+        for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me) && g_sim.visibleTo(e, 1)) seen = true;
     }
     int foesLeft = (g_sim.get(et) && g_sim.get(et)->owner == 1) ? 1 : 0; for (Ref r : rifles) if (g_sim.get(r) && g_sim.get(r)->owner == 1) foesLeft++;
-    float squadHp1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) squadHp1 += e.hp;
+    float squadHp1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me)) squadHp1 += e.hp;
     VERIFY21(foesLeft == 0, "a Shadow Guard squad did not finish a tank and four soldiers in 12 s");
     VERIFY21(!seen, "the enemy saw a Shadow Guard while it fired (no helicopter near)");
     VERIFY21(squadHp1 >= squadHp0 - 1.0f, "the blind enemy still hurt the Shadow Guard");
     // ---- a sniper finds the Shadow Guard and picks them off (they cannot see it to shoot back)
     {
-        Entity* g0 = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) { g0 = &e; break; }
+        Entity* g0 = nullptr; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me)) { g0 = &e; break; }
         VERIFY21(g0, "no Shadow Guard left for the sniper");
-        int guards0 = 0; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) guards0++;
+        int guards0 = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me)) guards0++;
         Ref sn = at21(foe == F_CYBER ? U_C_SNIPER : U_K_SNIPER, 1, g0->pos + Vec2(0, 6 * TILE));
         bool found = false;
         for (int t = 0; t < 12 * SIM_HZ; t++) {
             g_sim.step(); g_sim.events.clear();
-            for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me) && g_sim.visibleTo(e, 1)) found = true;
+            for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me) && g_sim.visibleTo(e, 1)) found = true;
         }
-        int guards1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.type == shadowT(me)) guards1++;
+        int guards1 = 0; for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.type == shadowT(me)) guards1++;
         if (getenv("ONEHOUR_TESTDBG")) printf("  sniper vs Shadow Guard: %d -> %d, sniper %s\n", guards0, guards1, g_sim.get(sn) ? "alive" : "dead");
         VERIFY21(found, "a sniper did not find the Shadow Guard round it");
         VERIFY21(guards1 <= guards0 - 2, "a sniper did not take down two Shadow Guard in 12 s");

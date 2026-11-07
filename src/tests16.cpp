@@ -1,7 +1,8 @@
 // One Hour - headless tests for the ocean update (--oceantest)
-//  * the map: the old map is now the main island in a sea, with a second island off its east coast and islets round it; the coast is beach and
-//    cliffs, every base and its piles are on dry land and reachable, the second island's piles are not (it takes a ship or a lifter)
-//  * the navy: a Naval Yard goes down on the ocean coast by a base; its ships sail round the island and never cross onto the lake
+//  * the map: the main island (240 tiles) is in a sea, with the canal running through it to the ocean (the lake and the canal are one sea with the ocean),
+//    a jungle island out on each side (the east one with its piles, the west one its mirror) and islets round them; the coast is beach and
+//    cliffs, every base and its piles are on dry land and reachable, the jungle islands' piles are not (it takes a ship or a lifter)
+//  * the navy: a Naval Yard goes down on the ocean coast by a base; its ships sail round the island, and up the canal to the lake when sent there
 //  * the cargo ship: a column boards it from the beach, it sails to the second island and lands them there; if it sinks, everyone aboard is lost
 //  * the aircraft carrier: its jets launch on their own at enemies near it, hit them, come back and land; a lost jet is replaced on deck
 #include "sim.h"
@@ -49,8 +50,11 @@ static bool besideReached16(const std::vector<u8>& seen, int tx, int ty) {
 
 static bool mapTest16() {
     g_map.generate();
-    CHECK16(g_map.oceanComp != 0 && g_map.lakeComp != 0 && g_map.oceanComp != g_map.lakeComp, "the lake and the ocean are not two separate seas");
-    CHECK16(g_map.waterSize[g_map.oceanComp] > 4 * g_map.waterSize[g_map.lakeComp], "the ocean is not much bigger than the lake");
+    // the canal joins the lake to the ocean, so they are one body of water; the fresh water inside the coast is still a small part of the sea
+    CHECK16(g_map.oceanComp != 0 && g_map.lakeComp == g_map.oceanComp, "the canal does not join the lake to the ocean");
+    int fresh = 0, salt = 0;
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) { if (g_map.freshWater(x, y)) fresh++; else if (g_map.openSea(x, y)) salt++; }
+    CHECK16(fresh > 0 && salt > 4 * fresh, "the ocean is not much bigger than the lake");
     // the map's border is all sea
     for (int i = 0; i < MAP_W; i++) {
         CHECK16(g_map.tile(i, 0) == T_WATER && g_map.tile(i, MAP_H - 1) == T_WATER && g_map.tile(0, i) == T_WATER && g_map.tile(MAP_W - 1, i) == T_WATER, "the map's edge is not open sea");
@@ -61,7 +65,7 @@ static bool mapTest16() {
         int k = y * MAP_W + x;
         if (g_map.tiles[k] == T_WATER) continue;
         bool sea = false;
-        for (int j = -1; j <= 1 && !sea; j++) for (int i = -1; i <= 1; i++) if (g_map.waterComp[(y + j) * MAP_W + x + i] == g_map.oceanComp) { sea = true; break; }
+        for (int j = -1; j <= 1 && !sea; j++) for (int i = -1; i <= 1; i++) if (g_map.openSea(x + i, y + j)) { sea = true; break; }
         if (!sea || mainIslandInland(x, y) < 0.0f) continue;
         coast++;
         if (g_map.tiles[k] == T_SAND) beach++; else if (g_map.tiles[k] == T_ROCK) cliff++;
@@ -69,35 +73,38 @@ static bool mapTest16() {
     CHECK16(coast > 400, "the main island has hardly any coast");
     CHECK16(beach + cliff > coast * 8 / 10, "the main island's coast is not beach and cliffs");
     CHECK16(cliff > coast / 12 && beach > coast / 3, "the coast lacks either beaches or cliffs");
-    // the second island: far bigger than the lake's islands, much smaller than the main island, cut off by sea
+    // the second island: a jungle island out at sea (the east one, which the cargo ships land on; its mirror in the west has the same shape), far bigger
+    // than the lake's islands, much smaller than the main island, cut off by sea
     CHECK16(!g_map.seaIslands.empty(), "no second island");
     int isle = 0, main = 0;
     for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) {
         if (g_map.tile(x, y) == T_WATER) continue;
-        if (seaIslandInland(x, y) > 0) isle++;
+        if (seaIslandInland(x, y) > 0 && x > MAP_W / 2) isle++;
         if (mainIslandInland(x, y) > 0) main++;
     }
     const auto& big = g_map.islands[0];
     float lakeIsle = 3.1416f * big.r * big.r;
     CHECK16(isle > lakeIsle * 4.0f, "the second island is not much bigger than the lake's islands");
     CHECK16(isle * 8 < main, "the second island is not much smaller than the main island");
-    // ... a bare sand plateau with a rocky edge all round, out in the middle of the sea between the main island and the map's edge
-    int isleSand = 0, isleGreen = 0, isleEdge = 0, isleEdgeRock = 0, gapWest = 1 << 20, gapEast = 1 << 20;
-    for (int y = 1; y < MAP_H - 1; y++) for (int x = 1; x < MAP_W - 1; x++) {
+    // ... a jungle island: a beach of sand (rock on a few headlands) all round, thick jungle inside it, and open ground in the middle for its relic base
+    int isleSand = 0, isleOpen = 0, isleTree = 0, isleEdge = 0, isleEdgeBeach = 0, gapWest = 1 << 20, gapEast = 1 << 20;
+    for (int y = 1; y < MAP_H - 1; y++) for (int x = MAP_W / 2 + 1; x < MAP_W - 1; x++) {
         u8 t = g_map.tile(x, y);
         if (t == T_WATER || seaIslandInland(x, y) <= 0) continue;
-        if (t == T_SAND) isleSand++; else if (t != T_ROCK) isleGreen++;
-        if (g_map.tile(x + 1, y) == T_WATER || g_map.tile(x - 1, y) == T_WATER || g_map.tile(x, y + 1) == T_WATER || g_map.tile(x, y - 1) == T_WATER) { isleEdge++; if (t == T_ROCK) isleEdgeRock++; }
+        if (t == T_SAND) isleSand++;
+        if (t == T_SAND || t == T_GRASS || t == T_GRASS2 || t == T_DIRT) isleOpen++;
+        if (t == T_TREE) isleTree++;
+        if (g_map.tile(x + 1, y) == T_WATER || g_map.tile(x - 1, y) == T_WATER || g_map.tile(x, y + 1) == T_WATER || g_map.tile(x, y - 1) == T_WATER) { isleEdge++; if (t == T_SAND || t == T_ROCK) isleEdgeBeach++; }
         gapEast = std::min(gapEast, MAP_W - 1 - x);
         for (int x2 = x - 1; x2 >= 0; x2--) if (g_map.tile(x2, y) != T_WATER && mainIslandInland(x2, y) > 0) { gapWest = std::min(gapWest, x - x2 - 1); break; }
     }
-    CHECK16(isleGreen == 0, "the second island is not bare sand and rock (grass, dirt or trees on it)");
-    CHECK16(isleEdge > 100 && isleEdgeRock == isleEdge, "the second island's edge is not rock all round");
-    CHECK16(isleSand > 1000, "the second island has too little open sand to build on");
+    CHECK16(isleTree * 5 > isle, "the second island is not jungle (trees over a fifth of it)");
+    CHECK16(isleEdge > 100 && isleEdgeBeach == isleEdge, "the second island's edge is not beach and rock all round");
+    CHECK16(isleOpen > 1000, "the second island has too little open ground to build on");
     CHECK16(gapWest >= 12, "the second island lies too close to the main island");
     CHECK16(std::abs(gapWest - gapEast) <= 8, "the second island is not out in the middle of the sea");
     int islets = 0;
-    for (size_t k = 1; k < g_map.seaIslands.size(); k++) islets++;
+    for (size_t k = 4; k < g_map.seaIslands.size(); k++) islets++;   // (after the two jungle islands and the two secret islands)
     CHECK16(islets >= 12, "too few islets in the sea");
     // the bases and their piles stand on dry land; the main island's piles are all reachable from a base, the second island's from none
     std::vector<u8> reach = floodFrom16(tileCenter(g_map.starts[0].tx, g_map.starts[0].ty + 6));
@@ -111,12 +118,12 @@ static bool mapTest16() {
         if (island) { onIsle++; CHECK16(!besideReached16(reach, sp.tx, sp.ty), "a supply pile on the second island can be driven to"); }
         else CHECK16(besideReached16(reach, sp.tx, sp.ty), "a main island supply pile cannot be reached");
     }
-    CHECK16(onIsle == 3, "the second island does not hold its three supply piles");
-    int seaForts = 0;
-    for (auto& L : g_map.landmarks) if (seaIslandInland(L.tx, L.ty) > 0) seaForts++;
-    CHECK16(seaForts >= 2, "the second island has no old strongholds");
-    printf("oceantest map: ok (%d ocean / %d lake water tiles, coast %d tiles (%d beach, %d cliff), second island %d tiles (main %d; %d sand, %d-tile rock edge, %d tiles of sea to the main island / %d to the edge), %d islets, %d piles out there)\n",
-           g_map.waterSize[g_map.oceanComp], g_map.waterSize[g_map.lakeComp], coast, beach, cliff, isle, main, isleSand, isleEdge, gapWest, gapEast, islets, onIsle);
+    CHECK16(onIsle == 4, "the jungle islands do not hold their four supply piles (two each)");
+    int relicBases = 0;   // the abandoned relic base on each jungle island: its Relic Command
+    for (auto& r : g_map.relics) if (r.type == B_R_COMMAND && seaIslandInland(r.tx, r.ty) > 0) relicBases++;
+    CHECK16(relicBases == 2, "the jungle islands do not each hold an abandoned relic base");
+    printf("oceantest map: ok (%d salt sea / %d fresh lake and canal water tiles, coast %d tiles (%d beach, %d cliff), second island %d tiles (main %d; %d sand, %d open ground, %d trees, %d-tile beach edge, %d tiles of sea to the main island / %d to the edge), %d islets, %d piles out there)\n",
+           salt, fresh, coast, beach, cliff, isle, main, isleSand, isleOpen, isleTree, isleEdge, gapWest, gapEast, islets, onIsle);
     return true;
 }
 
@@ -134,8 +141,8 @@ static bool navyTest16(u64 seed) {
         Ref yard = g_sim.placeBuilding(yardT, 0, tx, ty, true);
         CHECK16(g_sim.get(yard), "could not place the Naval Yard");
         Vec2 exitW = g_sim.navalExit(*g_sim.get(yard));
-        CHECK16(g_map.compAt(exitW) == g_map.oceanComp, "the coastal yard launches its ships onto the lake");
-        // a destroyer sails right round the island to the far side, and refuses to sail onto the lake
+        CHECK16(g_map.openSeaAt(exitW), "the coastal yard launches its ships onto the lake, not onto the open sea");
+        // a destroyer sails right round the island to the far side, and sails on up the canal to the lake when it is sent there (the same sea now)
         int destT = me == F_CYBER ? U_C_DESTROYER : U_K_DESTROYER;
         Ref d = g_sim.spawnUnit(destT, 0, exitW);
         Vec2 far = g_map.nearestWater(g_sim.players[1].basePos, 60, true, g_map.oceanComp);
@@ -144,7 +151,7 @@ static bool navyTest16(u64 seed) {
         CHECK16(g_map.findNavalPath(g_sim.get(d)->pos, far, path), "no sea route round the island");
         g_sim.cmdMove({d}, Vec2(WORLD_W * 0.5f + 6 * TILE, WORLD_H * 0.5f), false);   // the middle of the lake
         Entity* de = g_sim.get(d);
-        CHECK16(g_map.compAt(de->target) == g_map.oceanComp, "a ship on the ocean was sent onto the lake");
+        CHECK16(g_map.navTile(tileOf(de->target.x), tileOf(de->target.y)) && g_map.compAt(de->target) == g_map.oceanComp, "a ship was sent to a spot it cannot sail to");
         // the cargo ship: a column of tanks, a dozer and infantry boards it on the beach and it lands them on the second island
         int cargoT = me == F_CYBER ? U_C_CARGOSHIP : U_K_CARGOSHIP;
         CHECK16(UNITS[cargoT].cargoCap >= 100 && UNITS[cargoT].naval && UNITS[cargoT].builtBy == BR_NAVAL, "the cargo ship is not a big naval transport");

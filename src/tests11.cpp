@@ -116,11 +116,22 @@ static void scene11(u64 seed, bool commander = true) {
 
 bool frontierMapTest(u64 seed) {
     scene11(seed,false);
-    VERIFY11(ISLE_W==208 && MAP_W==320 && MAP_H==320,"unexpected map scale");
-    VERIFY11(g_map.supplies.size()==23,"supply count changed");
-    VERIFY11(g_map.landmarks.size()==32,"a quadrant lost a settlement building");   // (29 on the main island, three on the second island)
+    VERIFY11(ISLE_W==240 && MAP_W==384 && MAP_H==384,"unexpected map scale");
+    VERIFY11(g_map.supplies.size()==26,"supply count changed");   // (22 on the main island, two on each jungle island)
+    {   // every base has the same number of piles nearest to it (a pile half-way between two counts for both)
+        float share[4]={};
+        for (auto& sp:g_map.supplies) {
+            if (mainIslandInland(sp.tx,sp.ty)<=0) continue;
+            float d[4];for (int k=0;k<4;k++) d[k]=std::hypot((float)(sp.tx-g_map.starts[k].tx),(float)(sp.ty-g_map.starts[k].ty));
+            float best=*std::min_element(d,d+4);int n=0;for (int k=0;k<4;k++) if (d[k]<best+2.5f) n++;
+            for (int k=0;k<4;k++) if (d[k]<best+2.5f) share[k]+=1.0f/n;
+        }
+        if (getenv("ONEHOUR_DEBUG")) fprintf(stderr,"pile shares %.1f %.1f %.1f %.1f\n",share[0],share[1],share[2],share[3]);
+        for (int k=1;k<4;k++) VERIFY11(std::abs(share[k]-share[0])<0.01f,"the bases do not have the same number of supply piles nearest to them");
+    }
+    VERIFY11(g_map.landmarks.size()==27,"a quadrant lost a settlement building");   // (five settlements per quadrant, a watchtower on the lake island, two ridge fortresses (north and south), four launchers)
     int kinds[7]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<7,"invalid landmark kind");kinds[l.kind]++; }
-    VERIFY11(kinds[0]==5 && kinds[1]==5 && kinds[2]==6 && kinds[3]==4 && kinds[4]==4 && kinds[5]==4 && kinds[6]==4,"settlements are not distributed fairly");
+    VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4 && kinds[5]==2 && kinds[6]==4,"settlements are not distributed fairly");
     // Flood-fill real occupancy after HQs, resources and all landmarks are present.
     Vec2 start=g_map.nearestFree(g_sim.players[0].basePos+Vec2(0,6*TILE),10);
     std::vector<u8> seen(MAP_W*MAP_H);std::vector<int> q;
@@ -183,7 +194,7 @@ bool frontierMapTest(u64 seed) {
     Map m;memset(m.blocked,1,sizeof m.blocked);memset(m.tiles,T_ROCK,sizeof m.tiles);
     VERIFY11(!m.findPath(Vec2(-999,-999),Vec2(WORLD_W+999,WORLD_H+999),path) && path.empty(),"blocked out-of-world path was accepted");
     VERIFY11(!m.findPath(Vec2(std::numeric_limits<float>::quiet_NaN(),0),c,path),"NaN path input was accepted");
-    printf("frontiermaptest: 208-tile island in a 320x320 sea, 23 supplies, 32 landmarks (4 ridge fortresses, 4 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
+    printf("frontiermaptest: 240-tile island in a 384x384 sea, 26 supplies, 27 landmarks (2 ridge fortresses, 4 island launchers); starts, supplies and mainland entries connected; escape/path edge cases passed\n");
     return true;
 }
 

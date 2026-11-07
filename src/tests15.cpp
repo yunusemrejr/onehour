@@ -122,7 +122,7 @@ static bool townTest15() {
     float tDozer = -1, tAlone = -1, t0 = g_sim.time;
     for (int t = 0; t < (int)((DISTRICT_REBUILD + DISTRICT_REBUILD_DELAY + 20) * SIM_HZ); t++) {
         g_sim.step(); g_sim.events.clear();
-        if (tDozer < 0 && g_sim.get(D.blocks[0])->constructed) tDozer = g_sim.time - t0;
+        if (tDozer < 0 && g_sim.get(D.blocks[0])->constructed) { tDozer = g_sim.time - t0; if (Entity* z = g_sim.get(dz)) g_sim.destroy(*z, false); }   // (the dozer leaves once its block is up: a nearer block is no longer raised by it)
         if (tAlone < 0 && g_sim.get(D.blocks[1])->constructed) tAlone = g_sim.time - t0;
         if (tDozer >= 0 && tAlone >= 0) break;
     }

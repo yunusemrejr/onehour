@@ -1,5 +1,5 @@
 // One Hour - headless tests for the super update (--superupdatetest)
-//  * the map: 208x208 (40% more ground than 176x176), two Island Nuke Launchers on each island, every footprint on dry land
+//  * the map: 240x240 (86% more ground than 176x176), two Island Nuke Launchers on each island, every footprint on dry land
 //  * the Super Nuke an island launcher fires: twice an Underground Nuke's blast radius, much faster, a 75 s reload; bunkers and interceptor
 //    missiles never touch it, and a laser's chance is a fifth of its chance against an Underground Nuke
 //  * a human's infiltrator takes over an ally's structure; a computer army's infiltrator never does
@@ -56,7 +56,7 @@ static Ref placeNear14(int player, int type, Vec2 at) {
 
 // ---- the map and its launchers
 static bool mapTest14() {
-    CHECK14(ISLE_W == 208 && MAP_W == 320 && MAP_H == 320, "the main island is not 208 tiles in a 320x320 sea");
+    CHECK14(ISLE_W == 240 && MAP_W == 384 && MAP_H == 384, "the main island is not 240 tiles in a 384x384 sea");
     CHECK14(g_map.islands.size() == 2, "the lake does not have two islands");
     auto launchers = ofRole14(BR_ISLANDNUKE);
     CHECK14(launchers.size() == 4, "there are not four Island Nuke Launchers");
@@ -272,6 +272,6 @@ bool superUpdateTest(u64 seed) {
     if (!interceptTest()) return false;
     if (!allyCaptureTest(seed)) return false;
     if (!antennaTest(seed)) return false;
-    printf("superupdatetest seed %llu: ok (208 map, four launchers, Super Nukes, ally takeovers by the human only, Healing Antennas)\n", (unsigned long long)seed);
+    printf("superupdatetest seed %llu: ok (240 map, four launchers, Super Nukes, ally takeovers by the human only, Healing Antennas)\n", (unsigned long long)seed);
     return g_ok14;
 }

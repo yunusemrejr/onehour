@@ -1167,7 +1167,7 @@ static bool allyTest(u64 seed) {
         for (int k = 0; k < 12; k++) column.push_back(g_sim.spawnUnit(firstUnitOf(F_CYBER) + 5, 0, g_map.nearestFree(fb + toMe * (20 * TILE) + Vec2((k % 4) * 30.0f, (k / 4) * 30.0f), 6)));
         for (int k = 0; k < 12; k++) g_sim.spawnUnit(firstUnitOf(F_CLANKER) + 5, 1, g_map.nearestFree(g_sim.players[1].basePos + (fb - g_sim.players[1].basePos).norm() * (6 * TILE) + Vec2((k % 4) * 30.0f, (k / 4) * 30.0f), 6));
         g_sim.cmdMove(column, fb, true);
-        for (int t = 0; t < 100 * SIM_HZ && !g_sim.gameOver; t++) {
+        for (int t = 0; t < 140 * SIM_HZ && !g_sim.gameOver; t++) {   // (the trip is longer on the 384 map: 237 tiles to the front, about 115 s on the way; the switched-off ally sets out on its own at about 180 s)
             g_sim.step(); g_ai.update();
             for (auto& ev : g_sim.events) if (ev.type == EV_MSG && ev.player == 0 && ev.msg.find("Ally") == 0) msg[mode] = true;
             g_sim.events.clear();
@@ -1415,7 +1415,7 @@ static bool dropTest(u64 seed) {
         if (std::abs(g_sim.dropWait(0) - 120.0f) > 0.5f) return fail("cooldown is not two minutes");
         if (g_sim.airlifts.size() != 1) return fail("no cargo plane");
         bool sawFall = false; int maxFalling = 0;
-        for (int t = 0; t < 20 * 45 && !g_sim.airlifts.empty(); t++) {
+        for (int t = 0; t < 20 * 50 && !g_sim.airlifts.empty(); t++) {   // (a plane flies its track edge to edge: about 45 s from a diagonal base on the 384 map, 40 s on the old 320 one)
             g_sim.step(); g_sim.events.clear();
             int falling = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.fall > 0) falling++;
             if (falling) sawFall = true;

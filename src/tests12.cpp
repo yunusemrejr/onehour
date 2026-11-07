@@ -1,7 +1,8 @@
 // One Hour - headless tests for the October update (--updatetest)
 //  * the bigger map: a bigger lake, two islands (one in the middle, one off the east shore) with trees and an Island Nuke Launcher each, and a
 //    Mountain Fortress set into every ridge that both neighbouring armies can walk up to
-//  * the launchers and Bastion Walls are indestructible: hits, even warheads, only make them burn; only an infiltrator takes them
+//  * Bastion Walls are indestructible: hits, even warheads, only make them burn; the launchers are heavily armoured (since the Relic update they can
+//    be destroyed); only an infiltrator takes either
 //  * the fortress holds 100 infantry, needs several warheads, and snipers in it find infiltrators
 //  * infiltrators are stealthy: only snipers, drones, aircraft (not heavy bombers), jeeps, infiltrators and light turrets see them
 //  * trees and small rocks never block a site: they are cleared under it; the ridges still do
@@ -41,9 +42,11 @@ static std::vector<Entity*> ofRole(BuildRole r) {
 
 // ---- the map
 static bool mapTest() {
-    CHECK12(ISLE_W == 208 && MAP_W == 320 && MAP_H == 320, "the main island is not 208 tiles in a 320x320 sea (the map changed again: see --oceantest)");
+    CHECK12(ISLE_W == 240 && MAP_W == 384 && MAP_H == 384, "the main island is not 240 tiles in a 384x384 sea");
     CHECK12(g_map.islands.size() == 2, "the lake does not have two islands");
-    int lake = g_map.waterSize[g_map.lakeComp];
+    // the lake: the fresh water inside the main island's coast (the canal joins it to the ocean, so the lake's body of water is the whole sea)
+    int lake = 0;
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) if (g_map.freshWater(x, y)) lake++;
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "lake: %d water tiles\n", lake);
     CHECK12(lake > 2000, "the central lake did not grow (the 128x128 map had 1561 tiles of it)");
     const auto& big = g_map.islands[0];
@@ -84,7 +87,7 @@ static bool mapTest() {
         for (auto& p : probes) if (g_map.passable(tileOf(p.x), tileOf(p.y))) sides++;
         CHECK12(sides >= 2, "a Mountain Fortress cannot be walked up to from both sides of its ridge");
     }
-    CHECK12(forts == 4, "there are not four Mountain Fortresses");
+    CHECK12(forts == 2, "there are not two Mountain Fortresses (one in each north and south ridge: the east and west ridges went with the canal)");
     CHECK12(!g_sim.buildAvailable(0, B_C_ISLANDNUKE) && !g_sim.buildAvailable(0, B_C_FORTRESS), "a map structure is offered in the build menu");
     CHECK12(g_sim.buildAvailable(0, B_C_FWALL) && g_sim.buildAvailable(1, B_K_FWALL), "the Bastion Wall is not in the build menu");
     CHECK12(BUILDS[B_C_FWALL].cost == BUILDS[B_C_WALL].cost, "the Bastion Wall does not cost what a wall costs");
@@ -97,17 +100,18 @@ static bool launcherTest() {
     Ref L = g_sim.refOf(*launchers[0]);
     Entity* l = g_sim.get(L);
     float hp0 = l->hp;
-    g_sim.applyDamagePublic(*l, 50000, 1, NOREF);
+    g_sim.applyDamagePublic(*l, 1000, 1, NOREF);
     l = g_sim.get(L);
-    CHECK12(l && l->hp == hp0, "an island launcher lost health");
-    CHECK12(l->heat > 0, "an island launcher hit hard does not burn");
+    CHECK12(l && l->hp < hp0 && hp0 - l->hp <= 1000 * ISLAND_NUKE_ARMOR + 1.0f, "an island launcher is not heavily armoured (or cannot be hurt at all)");
+    l->hp = hp0;
     Sim::Nuke n; n.from = l->pos; n.pos = l->pos; n.owner = 1; n.scale = UNUKE_SCALE; n.deep = true;
     g_sim.nukeBlastPublic(n);
     l = g_sim.get(L);
-    CHECK12(l && l->hp == hp0 && l->heat >= 1.0f, "a warhead on an island launcher did more than set it ablaze");
+    CHECK12(l && l->hp < hp0 && l->hp >= hp0 * (1.0f - ISLAND_NUKE_NUKE) - 1.0f, "a warhead on an island launcher took nothing, or more than ISLAND_NUKE_NUKE of it");
+    l->hp = hp0;
     g_sim.fallouts.clear(); g_sim.nukes.clear();   // (the scene's warhead left radiation: the spies below would flee it)
     Ref tank = g_sim.spawnUnit(U_K_TANK, 1, g_map.nearestFree(l->pos + Vec2(0, 140), 12));
-    CHECK12(!g_sim.canTarget(*g_sim.get(tank), *l), "a tank may shoot at an indestructible launcher");
+    CHECK12(!g_sim.canTarget(*g_sim.get(tank), *l), "a tank shoots at a neutral launcher without being ordered to");
     // an infiltrator on the island takes it
     Vec2 shore = g_map.nearestFree(l->pos + Vec2(0, (l->bt().h * 0.5f + 1.0f) * TILE), 4);
     Ref spy = g_sim.spawnUnit(U_C_SPY, 0, shore);
@@ -322,7 +326,7 @@ static bool airTest12() {
     for (Ref r : light) if (Entity* e = g_sim.get(r)) g_sim.destroy(*e, false);
     clearUnits12(); g_sim.fallouts.clear(); g_sim.nukes.clear();
     for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0 && e.bt().role == BR_TECH) e.bomberTimer = 0;
-    for (int k = 0; k < 9; k++) {
+    for (int k = 0; k < 12; k++) {   // (nine of them left it with about 5% of its health, or took it down by as little, depending on how their volleys fell: twelve make a wall)
         Vec2 at = from + dir * (900.0f + k * 70.0f) + Vec2(-dir.y, dir.x) * ((k % 3 - 1) * 70.0f);
         g_sim.placeBuilding(B_K_ROCKET, 1, tileOf(at.x), tileOf(at.y), true);
     }

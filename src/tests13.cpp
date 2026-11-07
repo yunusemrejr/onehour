@@ -98,8 +98,10 @@ static bool swimCaptureTest() {
 
 // ---- the lake grew: about twice the 146 map's 2,419 water tiles
 static bool lakeTest() {
-    CHECK13(ISLE_W == 208 && MAP_W == 320 && MAP_H == 320, "the main island is not 208 tiles in a 320x320 sea (see --oceantest)");
-    int lake = g_map.waterSize[g_map.lakeComp];
+    CHECK13(ISLE_W == 240 && MAP_W == 384 && MAP_H == 384, "the main island is not 240 tiles in a 384x384 sea");
+    // the lake: the fresh water inside the main island's coast (the canal joins it to the ocean, so the lake's body of water is the whole sea)
+    int lake = 0;
+    for (int y = 0; y < MAP_H; y++) for (int x = 0; x < MAP_W; x++) if (g_map.freshWater(x, y)) lake++;
     if (getenv("ONEHOUR_DEBUG")) fprintf(stderr, "lake: %d water tiles\n", lake);
     CHECK13(lake >= 2 * 2419 - 300, "the central lake is not about twice the 146 map's");
     CHECK13(g_map.islands.size() == 2, "the lake lost its islands");
