@@ -143,7 +143,11 @@ struct Map {
     bool seaComp(int c) const { return c != 0 && (c == lakeComp || c == oceanComp) && waterSize[c] >= NAVAL_WATER_MIN; }
     bool bigWater(int x, int y) const { return inMap(x, y) && seaComp(waterComp[y * MAP_W + x]); }
     // centre of the nearest open water tile (p itself when it already is one); bigOnly: on the lake or the ocean, not in a pond or a cut-off river;
-    // comp: only in that body of water (a ship on the ocean cannot be sent onto the lake)
+    // comp: only in that body of water; OPEN_SEA: the salt sea only, not the lake or the canal inside the main island's coast (the canal makes them
+    // one body of water, but a fleet called in from the horizon stays out on the sea)
+    static const int OPEN_SEA = -1;
+    bool openSea(int x, int y) const { return inMap(x, y) && waterComp[y * MAP_W + x] == oceanComp && !(!fresh.empty() && fresh[(size_t)y * MAP_W + x]); }
+    bool openSeaAt(Vec2 p) const { return openSea(tileOf(p.x), tileOf(p.y)); }
     Vec2 nearestWater(Vec2 p, int maxR = 12, bool bigOnly = false, int comp = 0) const;
     std::vector<u16> landComp;      // per tile: the landmass it belongs to (0 = water); built with the map
     // the landmass at p, or the one within 'r' tiles of it (a structure on the shore, a ship lying off it); 0 if there is none

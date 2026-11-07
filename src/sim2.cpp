@@ -1024,8 +1024,8 @@ bool Sim::fleetEntry(Vec2 pos, Vec2& goal, Vec2& entry, Vec2& inward) const {
     const int ocean = g_map.oceanComp;
     if (ocean == 0) return false;
     pos = Vec2(clampf(pos.x, TILE, WORLD_W - TILE), clampf(pos.y, TILE, WORLD_H - TILE));
-    goal = g_map.nearestWater(pos, (int)FLEET_REACH, true, ocean);
-    if (!g_map.navTile(tileOf(goal.x), tileOf(goal.y)) || g_map.compAt(goal) != ocean) return false;
+    goal = g_map.nearestWater(pos, (int)FLEET_REACH, true, Map::OPEN_SEA);   // (out on the sea: never up the canal or onto the lake)
+    if (!g_map.navTile(tileOf(goal.x), tileOf(goal.y)) || !g_map.openSeaAt(goal)) return false;
     // the four borders, nearest first; on each, slide from the point level with the spot until the whole column of lanes (and a couple of ship
     // lengths in from the border) is open ocean
     const float depth = 1.6f * TILE;
@@ -1042,7 +1042,7 @@ bool Sim::fleetEntry(Vec2 pos, Vec2& goal, Vec2& entry, Vec2& inward) const {
             for (int l = -half; l <= half && ok; l++) for (int dd = 0; dd <= 3 && ok; dd++) {
                 Vec2 q = c + along * (l * FLEET_LANE * TILE) + n * (dd * 2.0f * TILE);
                 int x = tileOf(q.x), y = tileOf(q.y);
-                if (!inMap(x, y) || !g_map.navOpen(x, y) || g_map.waterComp[y * MAP_W + x] != ocean) ok = false;
+                if (!inMap(x, y) || !g_map.navOpen(x, y) || !g_map.openSea(x, y)) ok = false;
             }
             if (ok) { entry = c; inward = n; return true; }
         }
@@ -1061,12 +1061,11 @@ bool Sim::cmdFleetCall(int player, Vec2 pos) {
     if (!fleetEntry(pos, goal, entry, n)) return false;
     tech->fleetTimer = time + std::max(FLEET_COOLDOWN, DROP_TIERS[dropTier(player)].cooldown);   // a fleet is a big thing: far rarer than a paradrop
     const Vec2 along(-n.y, n.x);
-    const int ocean = g_map.oceanComp;
     auto slot = [&](float fwd, float side) {   // a place in the formation round the goal (tiles ahead along the way in, tiles to the side)
         Vec2 q = goal + n * (fwd * TILE) + along * (side * TILE);
         q = Vec2(clampf(q.x, 2.0f * TILE, WORLD_W - 2.0f * TILE), clampf(q.y, 2.0f * TILE, WORLD_H - 2.0f * TILE));
-        Vec2 w = g_map.nearestWater(q, 9, true, ocean);
-        return g_map.compAt(w) == ocean && g_map.navTile(tileOf(w.x), tileOf(w.y)) ? w : goal;
+        Vec2 w = g_map.nearestWater(q, 9, true, Map::OPEN_SEA);
+        return g_map.openSeaAt(w) && g_map.navTile(tileOf(w.x), tileOf(w.y)) ? w : goal;
     };
     int pi = 0, di = 0, ci = 0, total = 0;
     for (int t : fleetManifest(player)) {

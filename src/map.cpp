@@ -1383,7 +1383,8 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
 // ---- the lake
 Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly, int comp) const {
     int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
-    if (navOpen(tx, ty) && (!bigOnly || bigWater(tx, ty)) && (comp == 0 || waterComp[ty * MAP_W + tx] == comp)) return p;
+    auto inComp = [&](int x, int y) { return comp == 0 || (comp == OPEN_SEA ? openSea(x, y) : waterComp[y * MAP_W + x] == comp); };
+    if (navOpen(tx, ty) && (!bigOnly || bigWater(tx, ty)) && inComp(tx, ty)) return p;
     for (int pass = 0; pass < 2; pass++)   // open water first; a tile with only a narrow channel is the fallback
         for (int r = 1; r <= maxR; r++) {
             float best = 1e18f; int bx = -1, by = -1;
@@ -1391,7 +1392,7 @@ Vec2 Map::nearestWater(Vec2 p, int maxR, bool bigOnly, int comp) const {
                 int x = tx + dx, y = ty + dy;
                 if (pass == 0 ? !navOpen(x, y) : !navTile(x, y)) continue;
                 if (bigOnly && !bigWater(x, y)) continue;
-                if (comp != 0 && waterComp[y * MAP_W + x] != comp) continue;
+                if (!inComp(x, y)) continue;
                 float d = dist2(tileCenter(x, y), p);
                 if (d < best) { best = d; bx = x; by = y; }
             }

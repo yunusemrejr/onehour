@@ -1673,16 +1673,15 @@ void AiPlayer::think() {
     // our own coast as a guard. From then on the fleet is part of the commander's navy (see the fleet orders below); an Easy commander waits longer
     if (on(FEAT_FLEETCALL) && techs > 0 && S.time >= nextFleetCall && S.fleetsReady(player) > 0) {
         nextFleetCall = S.time + (pl.difficulty == 0 ? 90.0f : (pl.difficulty == 1 ? 25.0f : 8.0f));
-        const int ocean = g_map.oceanComp;
         Vec2 at; bool go = false;
         Entity* foeShip = nullptr; float fd = 40.0f * TILE;
-        for (auto* e : enemyUnits) if (e->ut().naval && g_map.compAt(e->pos) == ocean && S.visibleTo(*e, player)) { float d = dist(e->pos, pl.basePos); if (d < fd) { fd = d; foeShip = e; } }
+        for (auto* e : enemyUnits) if (e->ut().naval && g_map.openSeaAt(e->pos) && S.visibleTo(*e, player)) { float d = dist(e->pos, pl.basePos); if (d < fd) { fd = d; foeShip = e; } }
         if (foeShip) { at = foeShip->pos; go = true; }
         else if (mainEnemy >= 0) {
-            Vec2 eb = S.players[mainEnemy].basePos, w = g_map.nearestWater(eb, 40, true, ocean);
-            if (g_map.compAt(w) == ocean && dist(w, eb) < 34.0f * TILE) { at = w + (w - eb).norm() * (4.0f * TILE); go = true; }   // a little off the enemy's shore
+            Vec2 eb = S.players[mainEnemy].basePos, w = g_map.nearestWater(eb, 40, true, Map::OPEN_SEA);
+            if (g_map.openSeaAt(w) && dist(w, eb) < 34.0f * TILE) { at = w + (w - eb).norm() * (4.0f * TILE); go = true; }   // a little off the enemy's shore
         }
-        if (!go) { Vec2 w = g_map.nearestWater(pl.basePos, 40, true, ocean); if (g_map.compAt(w) == ocean) { at = w + (w - pl.basePos).norm() * (5.0f * TILE); go = true; } }
+        if (!go) { Vec2 w = g_map.nearestWater(pl.basePos, 40, true, Map::OPEN_SEA); if (g_map.openSeaAt(w)) { at = w + (w - pl.basePos).norm() * (5.0f * TILE); go = true; } }
         if (go && S.cmdFleetCall(player, at) && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] FLEET CALL to %d,%d\n", player, S.time, tileOf(at.x), tileOf(at.y));
     }
 

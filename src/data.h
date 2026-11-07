@@ -272,9 +272,9 @@ static const float HEALANT_SCRUB_MAX = 0.12f;  // ... and by all the antennas on
 static const float FORTRESS_ARMOR = 0.30f;    // fraction of conventional damage it takes
 static const float FORTRESS_NUKE = 0.24f;     // hard ceiling per warhead (five direct hits from full health)
 static const float FORTRESS_REACH = 1.5f;     // tiles of extra reach its garrison gets from the high firing galleries
-// Island Nuke Launchers: two on each lake island, neutral at the start. Indestructible (fire and fallout only make them burn), taken only by an
-// infiltrator, and the only way to silence one is to take it back. Each launch is a Super Nuke (see ISLAND_NUKE_SCALE and the rest below the
-// Underground Nuke). Its laser chamber flares when something hits it.
+// Island Nuke Launchers: two on each lake island, neutral at the start, taken only by an infiltrator. Heavily armoured but destructible (see
+// ISLAND_NUKE_ARMOR / ISLAND_NUKE_NUKE): a launcher that is destroyed is gone for good. Each launch is a Super Nuke (see ISLAND_NUKE_SCALE and the
+// rest below the Underground Nuke). Its laser chamber flares when something hits it.
 static const float ISLAND_NUKE_ARM = 240.0f;          // seconds after the match starts (or after a capture) before it can fire
 // Indestructible structures catch fire instead of losing health: heat rises with every hit (a warhead sets it ablaze at once) and bleeds away.
 static const float HEAT_PER_DAMAGE = 1.0f / 700.0f;  // heat added per point of weapon damage that hits it (two tanks firing set a segment ablaze within seconds;
@@ -774,8 +774,9 @@ static const int   W_DRONE_ZAP = 73;
 // ---- the relic weapons (WEAPONS indices)
 static const int   W_RELIC_FLAK = 61, W_RELIC_LASER = 62, W_RELIC_CANNON = 63, W_RELIC_BUNKER = 64, W_JUGGERNAUT = 65, W_STRIDER = 66, W_THUNDERHAWK = 67;
 // ---- Surrender: a computer army that has nothing left to fight on with - no structure of any kind (relic ones included), no dozer, no submarine, no
-// tank or warship of any weight, and only a handful of light units - lays down its arms after SURRENDER_GRACE seconds of it (a human never surrenders)
-static const float SURRENDER_GRACE = 15.0f;
+// tank or warship of any weight, and only a handful of light units - lays down its arms after SURRENDER_GRACE seconds of it (a human never surrenders;
+// the wait leaves time for an Aid Drop, which brings a dozer and money, and no army surrenders while a relief flight is in the air)
+static const float SURRENDER_GRACE = 45.0f;
 static const float SURRENDER_VALUE = 4500.0f;  // what its remaining light units may be worth at most
 
 int firstUnitOf(Faction f);   // range helpers for iterating faction units/structures

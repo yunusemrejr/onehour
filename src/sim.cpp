@@ -4775,7 +4775,9 @@ void Sim::checkVictory() {
         // and so does what sits inside a bunker or a transport. A bunker that falls turns its garrison out onto the ground, where it counts too.
         // Civilian dozers do not: they are civilians, they cannot raise a base, and nobody hunts them (the town's structures do count)
         // a computer army with nothing left that matters lays down its arms (SURRENDER_*): it has to have been so for SURRENDER_GRACE seconds
-        if (pl.isAI && armyBeaten(p)) {
+        bool aidInbound = false;   // (a relief flight in the air may be bringing it a dozer: nobody gives up while one is on its way)
+        for (auto& a : aidDrops) if (!a.delivered && !a.downed) { aidInbound = true; break; }
+        if (pl.isAI && !aidInbound && armyBeaten(p)) {
             if (beatenSince[p] <= 0) beatenSince[p] = time;
             else if (time - beatenSince[p] >= SURRENDER_GRACE) surrender(p);
         } else beatenSince[p] = 0;
