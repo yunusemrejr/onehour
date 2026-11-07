@@ -153,7 +153,10 @@ struct Gfx {
     static constexpr int SHROUD_BLK = 8;   // tiles per side of a shroud block
     std::vector<u8> shroudClear;           // per block: 1 = every texel of it is clear (all in sight), so drawShroud leaves it out
     void rebakeTerrain();           // a new match on a map whose baked ground was edited by the last one: bake it afresh
-    void refreshTerrain();          // structures cleared trees / rocks (Map::cleared): repaint and re-upload just that part of the baked world
+    // structures cleared trees / rocks (Map::cleared): repaint and re-upload just that part of the baked world. The footprints inside the view (tiles
+    // vx0..vx1, vy0..vy1) are done at once; the others while the frame has budgetMs left, the rest on the next frames (a burst of structures - a
+    // base raised between two frames, or a match fast-forwarded - is spread out instead of stalling one frame)
+    void refreshTerrain(int vx0 = 0, int vy0 = 0, int vx1 = MAP_W, int vy1 = MAP_H, double budgetMs = 1e9);
     bool terrainEdited = false;
     void uploadTerrainPatch(const std::vector<int>& footprint);
     bool softwareRenderer = false;  // no GPU: skip purely atmospheric full-screen blends (cloud shadows)

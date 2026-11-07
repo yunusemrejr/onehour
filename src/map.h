@@ -109,6 +109,7 @@ struct Map {
     // findPath goes straight for the closest point of its own region instead. Rebuilt lazily after the map's own setters change 'blocked';
     // code that writes 'blocked' directly (tests) must call touch().
     mutable std::vector<u16> region;
+    mutable std::vector<int> regionBox;  // per region id: x0, y0, x1, y1 of its tiles (closestInRegion starts at the first ring that can reach it)
     mutable bool regionDirty = true;
     mutable u32 cacheGen = 0;           // generation of closestInRegion's memo (0 after a rebuild: it starts afresh)
     void touch() { regionDirty = true; navGen++; navAllDirty = true; navStaticGen++; }

@@ -12,7 +12,8 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
     ents.clear(); freeList.clear(); projs.clear(); fx.clear(); events.clear(); storms.clear(); nukes.clear(); airlifts.clear(); aidDrops.clear(); fleetArrivals.clear(); fleetMarks.clear(); fallouts.clear(); interceptors.clear(); strikeMarks.clear(); strikeWaves.clear(); nukeSeq = 0; anyBunkerLasers = false;   // (strikeWaves: an Air Strike still coming in when a match ended used to fly into the next one)
     districts.clear(); riots.clear(); riotSeq = 0; riotsOn = riotsDefault && !getenv("ONEHOUR_NORIOTS");   // (ONEHOUR_NORIOTS=1: a match without riots)
     for (int p = 0; p < MAX_PLAYERS; p++) { unrest[p] = 0; control[p] = 1; riotsRaised[p] = 0; lossHeat[p] = 0; basePeak[p] = 0; riotNoteAt[p] = -100; beatenSince[p] = 0; }
-    gridStart.clear(); gridIdx.clear(); gridOwners.clear();
+    cellBeg.clear(); cellEnd.clear(); gridIdx.clear(); gridOwners.clear(); gridUsed.clear();
+    for (int p = 0; p < MAX_PLAYERS; p++) { exFull[p].clear(); exChecked[p].clear(); }   // (the explored map starts over: so do its full blocks)
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
@@ -228,28 +229,42 @@ void Sim::emit(EventType t, int player, Sound s, Vec2 pos, const char* msg) {
 }
 
 void Sim::rebuildGrid() {
-    // a counting sort into cells: count, offsets, place (in index order, as the old per-cell vectors were filled)
-    static std::vector<int> cellOf, cursor;
+    // a radix sort of the living entities by cell (two stable 8-bit passes: index order within a cell, as before), then each used cell gets its
+    // range; only the cells used last tick are reset (the grid has 36864 cells on the 384 map: sweeping them all every tick was a real cost)
+    static std::vector<u64> keys, tmp;
     const int n = (int)ents.size();
-    cellOf.assign(n, -1);
-    gridStart.assign(GRID_N + 1, 0);
-    gridOwners.assign(GRID_N, 0);
-    heliList.clear();
+    if ((int)cellBeg.size() != GRID_N) { cellBeg.assign(GRID_N, 0); cellEnd.assign(GRID_N, 0); gridOwners.assign(GRID_N, 0); gridUsed.clear(); }
+    for (int c : gridUsed) { cellBeg[c] = cellEnd[c] = 0; gridOwners[c] = 0; }
+    gridUsed.clear();
+    heliList.clear(); pdList.clear(); supplyList.clear();
+    keys.clear();
     for (int i = 0; i < n; i++) {
         const Entity& e = ents[i];
         if (!e.alive) continue;
-        if (e.isUnit() && e.ut().heli) heliList.push_back(i);
+        if (e.isUnit()) { if (e.ut().heli) heliList.push_back(i); }
+        else if (e.isBuilding()) { BuildRole r = e.bt().role; if (r == BR_WALL || r == BR_ANTINUKE) pdList.push_back(i); else if (r == BR_SUPPLY) supplyList.push_back(i); }   // (in index order, as before)
         if (e.carrier.valid()) continue;   // (soldiers aboard a transport or in a bunker are not on the map)
         int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1), c = cy * GRID_W + cx;
-        cellOf[i] = c; gridStart[c + 1]++;
+        keys.push_back((u64)c << 32 | (u64)(u32)i);   // (the cell in the high half, the index in the low one)
         gridOwners[c] |= (u8)(1u << clampi(e.owner + 1, 0, 7));
     }
-    for (int c = 0; c < GRID_N; c++) gridStart[c + 1] += gridStart[c];
-    pdList.clear(); supplyList.clear();
-    for (int i = 0; i < n; i++) { const Entity& e = ents[i]; if (e.alive && e.isBuilding() && (e.bt().role == BR_WALL || e.bt().role == BR_ANTINUKE)) pdList.push_back(i); if (e.alive && e.isBuilding() && e.bt().role == BR_SUPPLY) supplyList.push_back(i); }
-    gridIdx.resize(gridStart[GRID_N]);
-    cursor.assign(gridStart.begin(), gridStart.end() - 1);
-    for (int i = 0; i < n; i++) if (cellOf[i] >= 0) gridIdx[cursor[cellOf[i]]++] = i;
+    static_assert(GRID_N <= 65536, "the grid cell index must fit 16 bits");
+    tmp.resize(keys.size());
+    for (int pass = 0; pass < 2; pass++) {   // LSD radix on the cell's two bytes
+        const int sh = 32 + pass * 8;
+        int cnt[257] = {};
+        for (u64 k : keys) cnt[((k >> sh) & 255) + 1]++;
+        for (int b = 0; b < 256; b++) cnt[b + 1] += cnt[b];
+        for (u64 k : keys) tmp[cnt[(k >> sh) & 255]++] = k;
+        keys.swap(tmp);
+    }
+    gridIdx.resize(keys.size());
+    for (size_t k = 0; k < keys.size(); k++) {
+        int c = (int)(keys[k] >> 32);
+        gridIdx[k] = (int)(u32)keys[k];
+        if (k == 0 || (int)(keys[k - 1] >> 32) != c) { cellBeg[c] = (int)k; gridUsed.push_back(c); }
+        cellEnd[c] = (int)k + 1;
+    }
     incoming.assign(ents.size(), 0.0f);
     for (auto& p : projs) if (p.alive && p.target.idx >= 0 && p.target.idx < (int)ents.size() && ents[p.target.idx].gen == p.target.gen && p.weapon >= 0) {
         const Entity& t = ents[p.target.idx];
@@ -1808,6 +1823,14 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
         return ok;
     }
     bool ok = g_map.findPath(e.pos, dest, e.path, MAP_W * MAP_H, swimmer(e));   // (an infiltrator may cross water: see SWIM_COST)
+    if (!ok && !swimmer(e)) {   // nowhere it can walk to from here (boxed in, or the goal is across water): no point asking again every PATH_INTERVAL
+        Vec2 at = e.path.empty() ? e.pos : e.path.back();
+        if (!g_map.sameGround(at, dest)) {
+            e.repathTimer = PATH_INTERVAL * 4.0f;
+            // a unit sent to board, garrison or take something it cannot reach goes as near as it can and waits there instead of retrying for ever
+            if (e.order == O_ENTER || e.order == O_CAPTURE) { e.order = O_MOVE; e.target = at; e.targetEnt = NOREF; e.postOrder = O_IDLE; }
+        }
+    }
     if (e.path.empty()) {   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
         Vec2 fb = g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4);
         if (!g_map.passable(tileOf(fb.x), tileOf(fb.y))) { fb = g_map.nearestFree(dest, 18); ok = g_map.findPath(e.pos, fb, e.path); }   // (a spot out in the lake: walk to the shore)
@@ -4643,6 +4666,8 @@ void Sim::updatePower() {
 }
 
 void Sim::updateVision() {
+    static_assert(MAP_W % 8 == 0 && MAP_H % 8 == 0, "explored blocks are 8x8 tiles");
+    visRound++;
     for (auto& e : ents) {
         if (!e.alive || e.owner < 0 || e.carrier.valid()) continue;
         int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y);
@@ -4650,11 +4675,30 @@ void Sim::updateVision() {
         if (key == e.visKey) continue;   // nothing new in sight since it last looked (explored ground stays explored)
         e.visKey = key;
         // allies share what they see: the sight of every unit and structure is written into the map of each member of its team
-        Player* seers[MAX_PLAYERS]; int ns = 0;
-        for (int p = 0; p < numPlayers; p++) if (p == e.owner || players[p].team == players[e.owner].team) seers[ns++] = &players[p];
+        Player* seers[MAX_PLAYERS]; int ns = 0, seerId[MAX_PLAYERS];
+        for (int p = 0; p < numPlayers; p++) if (p == e.owner || players[p].team == players[e.owner].team) { seerId[ns] = p; seers[ns++] = &players[p]; }
         float s = e.sight();
         int r = (int)std::ceil(s);
         float s2 = s * s;
+        {   // nothing new to chart when every 8x8 block the sight touches is already wholly explored for every seer
+            const int bx0 = std::max(0, cx - r) >> 3, bx1 = std::min(MAP_W - 1, cx + r) >> 3, by0 = std::max(0, cy - r) >> 3, by1 = std::min(MAP_H - 1, cy + r) >> 3;
+            bool all = bx0 <= bx1 && by0 <= by1;
+            for (int k = 0; k < ns && all; k++) {
+                const int p = seerId[k];
+                if (exFull[p].size() != (size_t)EXB_N) { exFull[p].assign(EXB_N, 0); exChecked[p].assign(EXB_N, 0); }
+                for (int by = by0; by <= by1 && all; by++) for (int bx = bx0; bx <= bx1 && all; bx++) {
+                    const int b = by * EXB_W + bx;
+                    if (exFull[p][b]) continue;
+                    if (exChecked[p][b] == visRound) { all = false; break; }   // (counted this round already: not full)
+                    exChecked[p][b] = visRound;
+                    const u8* ex = &players[p].explored[(size_t)(by * 8) * MAP_W + bx * 8];
+                    bool full = true;
+                    for (int yy = 0; yy < 8 && full; yy++) for (int xx = 0; xx < 8; xx++) if (!ex[yy * MAP_W + xx]) { full = false; break; }
+                    if (full) exFull[p][b] = 1; else all = false;
+                }
+            }
+            if (all) continue;
+        }
         for (int dy = -r; dy <= r; dy++) {
             int y = cy + dy; if (y < 0 || y >= MAP_H) continue;
             for (int dx = -r; dx <= r; dx++) {
@@ -4666,24 +4710,67 @@ void Sim::updateVision() {
 }
 
 void Sim::updateSight() {
+    // What the human's team sees right now. Structures hardly ever change: their sight is stamped into a layer kept until one is placed, finished,
+    // lost or changes hands (the list of them is compared with the last one), and each tick starts from a copy of it; units standing on a tile that a sight as wide
+    // already covered from the same spot (a crowd at a rally point) are not stamped again.
     if (humanPlayer < 0 || humanPlayer >= numPlayers) return;
-    inSight.assign((size_t)MAP_W * MAP_H, 0);
     const int team = players[humanPlayer].team;
-    for (auto& e : ents) {
-        if (!e.alive || e.owner < 0 || e.owner >= numPlayers || e.carrier.valid() || players[e.owner].team != team) continue;
-        if (e.isBuilding() && !e.constructed && e.progress <= 0) continue;
-        int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y);
-        float sgt = e.sight();
+    static std::vector<u8> structLayer;
+    static u64 structSig = 0;
+    static std::vector<u8> stampR;   // per tile: the widest sight stamped from it this round (+1), 0 none
+    static std::vector<int> stamped;
+    auto stamp = [&](std::vector<u8>& layer, int cx, int cy, float sgt) {
         int r = (int)std::ceil(sgt);
         float s2 = sgt * sgt;
         for (int dy = -r; dy <= r; dy++) {
             int y = cy + dy; if (y < 0 || y >= MAP_H) continue;
-            u8* row = &inSight[(size_t)y * MAP_W];
-            for (int dx = -r; dx <= r; dx++) {
-                int x = cx + dx; if (x < 0 || x >= MAP_W) continue;
-                if (dx * dx + dy * dy <= s2) row[x] = 1;
-            }
+            u8* row = &layer[(size_t)y * MAP_W];
+            int w = (int)std::sqrt(std::max(0.0f, s2 - (float)(dy * dy)));   // the disc's half-width on this row (dx * dx + dy * dy <= s2)
+            while ((w + 1) * (w + 1) + dy * dy <= s2) w++;
+            while (w > 0 && w * w + dy * dy > s2) w--;
+            if (w * w + dy * dy > s2) continue;
+            int x0 = std::max(0, cx - w), x1 = std::min(MAP_W - 1, cx + w);
+            if (x0 <= x1) memset(row + x0, 1, (size_t)(x1 - x0 + 1));
         }
+    };
+    // the team's structures as they stand (index, generation, footprint, whether it shows yet, sight): the layer is kept while this list is unchanged
+    struct SB { int i; u32 gen; int tx, ty; bool shows; float sight; bool operator!=(const SB& o) const { return i != o.i || gen != o.gen || tx != o.tx || ty != o.ty || shows != o.shows || sight != o.sight; } };
+    static std::vector<SB> prevSB, curSB;
+    curSB.clear();
+    for (size_t i = 0; i < ents.size(); i++) {
+        const Entity& e = ents[i];
+        if (!e.alive || !e.isBuilding() || e.owner < 0 || e.owner >= numPlayers || players[e.owner].team != team) continue;
+        curSB.push_back({ (int)i, e.gen, e.tx, e.ty, e.constructed || e.progress > 0, e.sight() });
+    }
+    bool same = curSB.size() == prevSB.size();
+    for (size_t k = 0; same && k < curSB.size(); k++) if (curSB[k] != prevSB[k]) same = false;
+    const u64 sig = same ? structSig : structSig + 1;
+    prevSB.swap(curSB);
+    if (sig != structSig || structLayer.size() != (size_t)MAP_W * MAP_H) {
+        structSig = sig;
+        structLayer.assign((size_t)MAP_W * MAP_H, 0);
+        for (auto& e : ents) {
+            if (!e.alive || !e.isBuilding() || e.owner < 0 || e.owner >= numPlayers || players[e.owner].team != team) continue;
+            if (!e.constructed && e.progress <= 0) continue;
+            stamp(structLayer, tileOf(e.pos.x), tileOf(e.pos.y), e.sight());
+        }
+    }
+    inSight = structLayer;
+    if (stampR.size() != (size_t)MAP_W * MAP_H) stampR.assign((size_t)MAP_W * MAP_H, 0);
+    for (int k : stamped) stampR[k] = 0;
+    stamped.clear();
+    for (auto& e : ents) {
+        if (!e.alive || !e.isUnit() || e.owner < 0 || e.owner >= numPlayers || e.carrier.valid() || players[e.owner].team != team) continue;
+        int cx = tileOf(e.pos.x), cy = tileOf(e.pos.y);
+        float sgt = e.sight();
+        u8 code = (u8)std::min(255.0f, sgt * 8.0f + 1.0f);
+        if (cx >= 0 && cy >= 0 && cx < MAP_W && cy < MAP_H) {
+            u8& sr = stampR[cy * MAP_W + cx];
+            if (sr >= code) continue;   // (the same disc or a wider one was stamped from this tile already)
+            if (sr == 0) stamped.push_back(cy * MAP_W + cx);
+            sr = code;
+        }
+        stamp(inSight, cx, cy, sgt);
     }
     sightGen++;
 }
@@ -4706,35 +4793,64 @@ bool Sim::shownToHuman(const Entity& e) const {
 }
 
 void Sim::separateUnits() {
-    // what the pair test needs, packed per entity once a tick (walking the full Entity and its type table for every neighbour pair was a tenth
-    // of a crowded tick); positions are kept current as units are pushed
-    struct Sep { float x, y, r; u8 f; };   // f: 1 a unit taking part, 2 airborne, 4 a ship, 8 a helicopter, 16 squeezing, 32 idle or guarding
+    // what the pair test needs, packed per unit once a tick into a compact array sorted by grid cell (walking the full Entity, and every structure
+    // and supply pile in a cell, for every neighbour pair was the biggest part of a crowded tick); positions are kept current as units are pushed
+    struct Sep { float x, y, r; u8 f; int ent; };   // f: 1 a unit taking part, 2 airborne, 4 a ship, 8 a helicopter, 16 squeezing, 32 idle or guarding
     static std::vector<Sep> sp;
-    sp.resize(ents.size());
-    for (size_t i = 0; i < ents.size(); i++) {
-        const Entity& e = ents[i];
-        Sep& q = sp[i]; q.f = 0;
-        if (!e.alive || !e.isUnit() || e.fall > 0 || submerged(e)) continue;   // (a dived submarine passes under every hull)
-        const UnitType& ut = e.ut();
-        q.x = e.pos.x; q.y = e.pos.y; q.r = ut.radius;
-        q.f = (u8)(1 | (ut.kind == UK_AIR ? 2 : 0) | (ut.naval ? 4 : 0) | (ut.heli ? 8 : 0) | (e.squeezeUntil > time ? 16 : 0) | ((e.order == O_IDLE || e.order == O_GUARDAREA) ? 32 : 0));
-    }
+    static std::vector<u64> keys, tmp;
+    static std::vector<int> cb, ce, used, slotOf;
+    if ((int)cb.size() != GRID_N) { cb.assign(GRID_N, 0); ce.assign(GRID_N, 0); used.clear(); }
+    for (int c : used) cb[c] = ce[c] = 0;
+    used.clear(); keys.clear();
     for (int i = 0; i < (int)ents.size(); i++) {
+        Entity& e = ents[i];
+        if (!e.alive || !e.isUnit() || e.fall > 0 || e.carrier.valid()) continue;
+        e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);   // (every unit stays inside the world every tick, whichever half is pushed)
+        if (submerged(e)) continue;   // (a dived submarine passes under every hull)
+        int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1);
+        keys.push_back((u64)(cy * GRID_W + cx) << 32 | (u64)(u32)i);
+    }
+    tmp.resize(keys.size());
+    for (int pass = 0; pass < 2; pass++) {   // LSD radix on the cell's two bytes (stable: index order within a cell)
+        const int sh = 32 + pass * 8;
+        int cnt[257] = {};
+        for (u64 k : keys) cnt[((k >> sh) & 255) + 1]++;
+        for (int b = 0; b < 256; b++) cnt[b + 1] += cnt[b];
+        for (u64 k : keys) tmp[cnt[(k >> sh) & 255]++] = k;
+        keys.swap(tmp);
+    }
+    sp.resize(keys.size());
+    slotOf.resize(ents.size());
+    for (size_t k = 0; k < keys.size(); k++) {
+        int c = (int)(keys[k] >> 32), i = (int)(u32)keys[k];
+        if (k == 0 || (int)(keys[k - 1] >> 32) != c) { cb[c] = (int)k; used.push_back(c); }
+        ce[c] = (int)k + 1;
+        const Entity& e = ents[i];
+        const UnitType& ut = e.ut();
+        Sep& q = sp[k];
+        q.x = e.pos.x; q.y = e.pos.y; q.r = ut.radius; q.ent = i;
+        q.f = (u8)(1 | (ut.kind == UK_AIR ? 2 : 0) | (ut.naval ? 4 : 0) | (ut.heli ? 8 : 0) | (e.squeezeUntil > time ? 16 : 0) | ((e.order == O_IDLE || e.order == O_GUARDAREA) ? 32 : 0));
+        slotOf[i] = (int)k;
+    }
+    // each unit is pushed apart on every other tick (even and odd indices take turns) with twice the step: the same spreading per second for half
+    // the pair tests (with 40% more units on the 384 map this was the biggest single cost of a tick)
+    const int parity = (int)(tick & 1);
+    for (int i = parity; i < (int)ents.size(); i += 2) {
         Entity& a = ents[i];
-        if (!a.alive || !a.isUnit() || a.fall > 0 || a.carrier.valid() || !(sp[i].f & 1)) continue;
-        const u8 fa = sp[i].f;
+        if (!a.alive || !a.isUnit() || a.fall > 0 || a.carrier.valid() || submerged(a)) continue;
+        const int si = slotOf[i];
+        const u8 fa = sp[si].f;
         bool air = (fa & 2) != 0;
-        float ra = sp[i].r;
-        int cx = clampi((int)(a.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(a.pos.y / GRID_CELL), 0, GRID_H - 1);
+        float ra = sp[si].r;
+        int cx = clampi((int)(sp[si].x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(sp[si].y / GRID_CELL), 0, GRID_H - 1);
         Vec2 push;
         for (int gy = std::max(0, cy - 1); gy <= std::min(GRID_H - 1, cy + 1); gy++)
         for (int gx = std::max(0, cx - 1); gx <= std::min(GRID_W - 1, cx + 1); gx++) {
             const int gc = gy * GRID_W + gx;
-            for (int k = gridStart[gc], kn = gridStart[gc + 1]; k < kn; k++) {
-                const int j = gridIdx[k];
-                if (j == i) continue;
-                const Sep& b = sp[j];
-                if (!(b.f & 1) || ((b.f & 2) != 0) != air) continue;
+            for (int k = cb[gc], kn = ce[gc]; k < kn; k++) {
+                if (k == si) continue;
+                const Sep& b = sp[k];
+                if (((b.f & 2) != 0) != air) continue;
                 if (!air && ((b.f ^ fa) & 4)) continue;   // a ship and a land unit never share ground (a shore unit is not pushed by a hull)
                 if (!air && ((fa | b.f) & 16)) continue;  // a jammed unit slips past
                 float rr = ra + b.r;
@@ -4759,11 +4875,11 @@ void Sim::separateUnits() {
             push = n * ((push.x * n.x + push.y * n.y) * 0.3f) + f * (std::min(0.0f, ahead) * 0.1f);
         }
         if (push.len2() > 0.01f) {
-            Vec2 np = a.pos + push * SIM_DT * 14.0f;
+            Vec2 np = a.pos + push * (SIM_DT * 28.0f);
             if (air || ((fa & 4) ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y)))) a.pos = np;
         }
         a.pos.x = clampf(a.pos.x, 8, WORLD_W - 8); a.pos.y = clampf(a.pos.y, 8, WORLD_H - 8);
-        sp[i].x = a.pos.x; sp[i].y = a.pos.y;
+        sp[si].x = a.pos.x; sp[si].y = a.pos.y;
     }
 }
 

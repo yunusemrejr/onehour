@@ -813,7 +813,7 @@ void AiPlayer::dodgeNukes() {
         if (!hurts || n.super || n.t < notice || n.t > Sim::flightOf(n) - 0.5f) continue;   // (nothing outruns a Super Nuke)
         float safe = Sim::nukeRadius(n) + 2.0f * TILE;
         for (auto& e : S.ents) {
-            if (!e.alive || e.owner != player || !e.isUnit() || e.isAir()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger)
+            if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || e.carrier.valid()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger); a soldier aboard goes where its carrier goes
             if (dist(e.pos, n.pos) > safe) continue;
             if (e.order == O_MOVE && dist(e.target, n.pos) > safe) continue;   // already on its way out
             Vec2 away = e.pos - n.pos; float l = away.len();
@@ -821,6 +821,7 @@ void AiPlayer::dodgeNukes() {
             away = away * (1.0f / std::max(l, 1.0f));
             Vec2 dest = n.pos + away * (safe + 3.0f * TILE);
             dest = Vec2(clampf(dest.x, TILE, WORLD_W - TILE), clampf(dest.y, TILE, WORLD_H - TILE));
+            if (e.order == O_MOVE && dist(e.target, dest) < 3.0f * TILE) continue;   // (already told to go there: its ground or the sea moved the spot a little)
             S.cmdMove({S.refOf(e)}, dest, false);
             dodges++;
         }
@@ -1464,7 +1465,7 @@ void AiPlayer::think() {
             std::vector<std::pair<float, Ref>> cand;
             for (auto ir : idleArmy) {
                 Entity* u = S.get(ir);
-                if (!u || u->ut().kind != UK_INF || u->carrier.valid() || !S.canBoard(*u, *j) || dist(u->pos, j->pos) > 14.0f * TILE) continue;
+                if (!u || u->ut().kind != UK_INF || u->carrier.valid() || !S.canBoard(*u, *j) || dist(u->pos, j->pos) > 14.0f * TILE || !g_map.sameGround(u->pos, j->pos)) continue;
                 bool rocket = u->weapon() >= 0 && (WEAPONS[u->weapon()].proj == PJ_ROCKET || (WEAPONS[u->weapon()].mult[AR_HEAVY] >= 1.0f && WEAPONS[u->weapon()].range > 5.5f));
                 cand.push_back({dist(u->pos, j->pos) - (rocket ? 3.0f * TILE : 0.0f), ir});
             }

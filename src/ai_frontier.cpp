@@ -313,7 +313,7 @@ void AiPlayer::relicOps() {
             if (!e.alive || e.owner != player || !e.isUnit() || e.carrier.valid() || e.fall > 0 || !S.relicClaimable(e, *goal)) continue;
             if (e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) continue;
             if (std::find(wave.begin(), wave.end(), S.refOf(e)) != wave.end() || std::find(relicSquad.begin(), relicSquad.end(), S.refOf(e)) != relicSquad.end()) continue;
-            if (dist(e.pos, pl.basePos) > 40.0f * TILE) continue;
+            if (dist(e.pos, pl.basePos) > 40.0f * TILE || !g_map.sameGround(e.pos, door)) continue;   // (not one boxed in somewhere it cannot walk out of)
             relicSquad.push_back(S.refOf(e));
         }
         if (relicSquad.size() < 2) return;   // (not a lone soldier)

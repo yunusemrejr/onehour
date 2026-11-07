@@ -458,11 +458,13 @@ struct Sim {
     static constexpr int GRID_CELL = 64;
     static constexpr int GRID_W = WORLD_W / GRID_CELL, GRID_H = WORLD_H / GRID_CELL;
     static constexpr int GRID_N = GRID_W * GRID_H;
-    // The grid is packed: the entity indices of every cell lie together in gridIdx (cell c from gridStart[c] to gridStart[c + 1], in index order),
+    // The grid is packed: the entity indices of every cell lie together in gridIdx (cell c from cellBeg[c] to cellEnd[c], in index order; both 0 for
+    // an empty cell, and only the cells used last tick are cleared again, so a tick never sweeps the whole grid),
     // and gridOwners[c] has bit (owner + 1) set for every owner with something in the cell (bit 0: nobody's). A search for enemies skips the cells
     // that hold only friends without touching their entities (see forEachNearMask): a vector per cell, cleared and refilled each tick, and every
     // idle unit in a base looking through its own neighbours for a target, were the biggest part of a crowded tick.
-    std::vector<int> gridStart, gridIdx;
+    std::vector<int> cellBeg, cellEnd, gridIdx;
+    std::vector<int> gridUsed;   // the cells that hold something this tick
     std::vector<u8> gridOwners;
     std::vector<int> heliList;   // living helicopters (rebuilt with the grid every tick)
     std::vector<int> pdList;     // every wall and anti-nuke defence (rebuilt with the grid, extended as they are placed): what antiNukeLinked looks through
@@ -679,7 +681,7 @@ struct Sim {
     template <class F> void forEachNear(Vec2 p, float r, F&& fn) { forEachNearMask(p, r, 0xFF, fn); }
     // the same, visiting only cells that hold something of an owner in 'mask' (gridOwners bits): exact for a search that rejects every other owner
     template <class F> void forEachNearMask(Vec2 p, float r, u8 mask, F&& fn) {
-        if (gridStart.empty() || !mask) return;
+        if (cellBeg.empty() || !mask) return;
         float rr = r + 96;  // buildings are inserted at their center; widen the cell search
         int x0 = clampi((int)((p.x - rr) / GRID_CELL), 0, GRID_W - 1), x1 = clampi((int)((p.x + rr) / GRID_CELL), 0, GRID_W - 1);
         int y0 = clampi((int)((p.y - rr) / GRID_CELL), 0, GRID_H - 1), y1 = clampi((int)((p.y + rr) / GRID_CELL), 0, GRID_H - 1);
@@ -687,7 +689,7 @@ struct Sim {
         for (int cy = y0; cy <= y1; cy++) for (int cx = x0; cx <= x1; cx++) {
             const int c = cy * GRID_W + cx;
             if (!(gridOwners[c] & mask)) continue;
-            for (int k = gridStart[c], kn = gridStart[c + 1]; k < kn; k++) {
+            for (int k = cellBeg[c], kn = cellEnd[c]; k < kn; k++) {
                 Entity& e = ents[gridIdx[k]];
                 if (!e.alive) continue;
                 if (e.kind == EK_BUILDING) {
@@ -714,6 +716,12 @@ struct Sim {
     // ground in sight of a unit or structure of the human's team, refreshed with the vision. Explored ground out of sight is remembered terrain and
     // structures, but enemy units are only shown in sight (or during a scan). sightGen counts the refreshes, so the view knows when to redraw its fog.
     std::vector<u8> inSight;
+    // explored ground in 8x8 blocks, per player: a block once wholly explored stays so (only a new match clears 'explored'), and a unit whose sight
+    // lies wholly in such blocks has nothing new to chart (see updateVision). exChecked: the vision round a block was last counted in
+    std::vector<u8> exFull[MAX_PLAYERS];
+    std::vector<u32> exChecked[MAX_PLAYERS];
+    u32 visRound = 0;
+    static constexpr int EXB_W = MAP_W / 8, EXB_N = (MAP_W / 8) * (MAP_H / 8);
     u32 sightGen = 0;
     bool seenNow(int tx, int ty) const { return revealed(humanPlayer) || (!inSight.empty() && inSight[ty * MAP_W + tx] != 0); }
     bool shownToHuman(const Entity& e) const;   // whether the human's view may show e now (own and allied always; see inSight)

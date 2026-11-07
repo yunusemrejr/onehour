@@ -485,7 +485,7 @@ void Game::drawGroundFx() {
 void Game::drawFx() {
     Gfx& g = g_gfx;
     // this frame's white cores and first-light stars, capped: a nuclear exchange has ninety blasts in view, each would add its own big additive draw
-    int cores = 0, flashes = 0;
+    int cores = 0, flashes = 0, mushrooms = 0;   // (mushrooms: the clouds drawn this frame; past two, the rest draw every second or third billow)
     const int coreMax = detail >= 3 ? 8 : (detail == 2 ? 4 : 0), flashMax = detail >= 3 ? 10 : (detail == 2 ? 5 : 2);
     static const bool fillDbg = getenv("ONEHOUR_FILLDBG") != nullptr;
     static double byType[64]; int lastType = -1; double mark = g.fillPx;
@@ -614,6 +614,8 @@ void Game::drawFx() {
         }
         case FX_MUSHROOM: {   // a rolling toroidal cap on a turbulent stem, a condensation collar, a base surge and a fire-lit underside
             float R = f.size * 0.52f, t = f.t;
+            if (a.x + 3.0f * R < 0 || a.x - 3.0f * R > SCREEN_W || a.y - 3.4f * R > VIEW_H || a.y + 1.8f * R < 0) break;   // (wholly off screen: the stem, the cap and the skirt)
+            const int mi = mushrooms++;
             float g1 = clampf(t / 9.0f, 0, 1), grow = 1 - (1 - g1) * (1 - g1) * (1 - g1);
             float fade = clampf((1 - k) * 3.5f, 0, 1);
             float heat = clampf(1 - t / 7.5f, 0, 1);   // (the glows fade with this)
@@ -631,7 +633,7 @@ void Game::drawFx() {
             // base surge: a low skirt of dust billows rolling outward along the ground, with a dust ring racing out ahead of them
             float sg = clampf(t / 10.0f, 0, 1); sg = 1 - (1 - sg) * (1 - sg);
             if (detail >= 1) { const float Rs = R * (0.3f + 1.05f * sg); g.drawSized(g.fxs.skirt[0], a.x, a.y + 3, Rs * 2.1f, Rs * 1.05f, 0, sv ? rgb(196, 202, 212) : rgb(190, 168, 140), (u8)(190 * fade * (1.0f - 0.5f * sg))); }
-            const int st = detail >= 3 ? 1 : (detail == 2 ? 2 : 3);   // (lower detail: every second or third billow, each a little bigger)
+            const int st = std::max(detail >= 3 ? 1 : (detail == 2 ? 2 : 3), mi >= 4 ? 3 : (mi >= 2 ? 2 : 1));   // (lower detail, or a third cloud in view at once - a Hydra's five: every second or third billow, each a little bigger)
             const float sb = 1.0f + 0.22f * (st - 1);
             for (int i = 0; i < 16; i += st) {
                 float an = i * 0.3927f + std::sin(i * 2.3f) * 0.12f, rr = R * (0.28f + 1.05f * sg) * (0.86f + 0.14f * std::sin(i * 3.1f + t * 0.4f));

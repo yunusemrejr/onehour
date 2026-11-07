@@ -87,7 +87,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             if (!e.alive) continue;
             alive++;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "NaN position at tick %d\n", t); return false; }
-            if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "entity out of world at tick %d\n", t); return false; }
+            if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "entity out of world at tick %d (%s %s owner %d at %.0f,%.0f order %d)\n", t, e.isUnit() ? "unit" : "other", e.isUnit() ? e.ut().name : (e.isBuilding() ? e.bt().name : "resource"), e.owner, e.pos.x, e.pos.y, (int)e.order); return false; }
             // (an infiltrator may be out on the water: it swims)
             if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y)))))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "hp above max at tick %d\n", t); return false; }

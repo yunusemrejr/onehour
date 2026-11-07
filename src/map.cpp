@@ -1128,6 +1128,7 @@ bool Map::lineClear(Vec2 a, Vec2 b, bool swim) const {
 
 void Map::buildRegions() const {
     region.assign((size_t)MAP_W * MAP_H, 0);
+    regionBox.assign(4, 0);
     static std::vector<int> stack;
     u16 next = 0;
     for (int i = 0; i < MAP_W * MAP_H; i++) {
@@ -1135,14 +1136,17 @@ void Map::buildRegions() const {
         if (next == 0xFFFF) break;   // (cannot happen on a real map: far fewer regions than that)
         ++next;
         stack.assign(1, i); region[i] = next;
+        int bx0 = MAP_W, by0 = MAP_H, bx1 = -1, by1 = -1;
         while (!stack.empty()) {
             int c = stack.back(); stack.pop_back();
             int cx = c % MAP_W, cy = c / MAP_W;
+            bx0 = std::min(bx0, cx); bx1 = std::max(bx1, cx); by0 = std::min(by0, cy); by1 = std::max(by1, cy);
             if (cx > 0 && !blocked[c - 1] && !region[c - 1]) { region[c - 1] = next; stack.push_back(c - 1); }
             if (cx < MAP_W - 1 && !blocked[c + 1] && !region[c + 1]) { region[c + 1] = next; stack.push_back(c + 1); }
             if (cy > 0 && !blocked[c - MAP_W] && !region[c - MAP_W]) { region[c - MAP_W] = next; stack.push_back(c - MAP_W); }
             if (cy < MAP_H - 1 && !blocked[c + MAP_W] && !region[c + MAP_W]) { region[c + MAP_W] = next; stack.push_back(c + MAP_W); }
         }
+        regionBox.push_back(bx0); regionBox.push_back(by0); regionBox.push_back(bx1); regionBox.push_back(by1);
     }
     regionDirty = false;
     cacheGen = 0;   // (closestInRegion's memo is stale now)
@@ -1160,15 +1164,22 @@ bool Map::closestInRegion(u16 rg, int gx, int gy, int& bx, int& by) const {
     Slot& sl = cache[h & 8191];
     if (sl.gen == gen && sl.key == key) { if (sl.at < 0) return false; bx = sl.at % MAP_W; by = sl.at / MAP_W; return true; }
     float best = 1e30f; int found = -1;
-    for (int r = 0; r <= MAP_W + MAP_H && found < 0; r++) {   // the first ring with any tile of the region: its nearest tile (close enough to the exact nearest)
-        for (int dy = -r; dy <= r; dy++) {
-            int step = (dy == -r || dy == r) ? 1 : 2 * r;   // whole top and bottom rows, only the two ends of the rows between
-            for (int dx = -r; dx <= r; dx += std::max(1, step)) {
-                int x = gx + dx, y = gy + dy;
-                if (!inMap(x, y) || region[y * MAP_W + x] != rg) continue;
+    if ((size_t)rg * 4 + 3 >= regionBox.size()) { sl.key = key; sl.gen = gen; sl.at = -1; return false; }
+    // only the part of each ring inside the region's box is looked at, and the rings that cannot reach the box at all are skipped (the same tiles in
+    // the same order as a full ring search: the same answer, without sweeping the open map round a small pocket)
+    const int X0 = regionBox[rg * 4] - gx, Y0 = regionBox[rg * 4 + 1] - gy, X1 = regionBox[rg * 4 + 2] - gx, Y1 = regionBox[rg * 4 + 3] - gy;
+    const int rMin = std::max(std::max(X0, -X1), std::max(Y0, -Y1)), rMax = std::max(std::max(-X0, X1), std::max(-Y0, Y1));
+    for (int r = std::max(0, rMin); r <= rMax && found < 0; r++) {   // the first ring with any tile of the region: its nearest tile (close enough to the exact nearest)
+        for (int dy = std::max(-r, Y0); dy <= std::min(r, Y1); dy++) {
+            const int y = gy + dy;
+            auto look = [&](int dx) {
+                int x = gx + dx;
+                if (!inMap(x, y) || region[y * MAP_W + x] != rg) return;
                 float d = (float)(std::max(std::abs(dx), std::abs(dy)) + 0.4142f * std::min(std::abs(dx), std::abs(dy)));
                 if (d < best) { best = d; found = y * MAP_W + x; }
-            }
+            };
+            if (dy == -r || dy == r) { for (int dx = std::max(-r, X0); dx <= std::min(r, X1); dx++) look(dx); }   // whole top and bottom rows
+            else { if (-r >= X0 && -r <= X1) look(-r); if (r != -r && r >= X0 && r <= X1) look(r); }                 // only the two ends of the rows between
         }
     }
     sl.key = key; sl.gen = gen; sl.at = found;
@@ -1194,7 +1205,57 @@ static float gScore[MAP_W * MAP_H];
 static i32 parentIdx[MAP_W * MAP_H];
 static u32 visitGen[MAP_W * MAP_H];
 static u32 closedGen[MAP_W * MAP_H];
+static float hCache[MAP_W * MAP_H];   // a search's heuristic for each tile it has reached (valid while visitGen is this search's): worked out once a tile
 static u32 curGen = 1;
+}
+
+// The ground search's landmark heuristic (ALT), like the naval one: from each of GROUND_LM spots on the main island, the distance to every tile over
+// the ground as it could ever be walked - every land tile, and the bridge decks, open (structures, trees, rock and the ridges can all go: a Waymaker
+// clears them; a broken bridge only makes a way longer). The real way can only be as long or longer, so |d(L, n) - d(L, goal)| never overshoots
+// by more than the straight-line octile estimate already may, and a search across the canal or round the lake heads for the bridge instead of
+// flooding the bank. Integer steps (10 straight, 14 diagonal) in a bucket queue: the eight floods take a few milliseconds.
+static const int GROUND_LM = 8;
+static std::vector<u16> g_gLM;   // per tile, the GROUND_LM distances side by side (one cache line per look-up), in tenths of a tile (0xFFFF: unreachable)
+static u32 g_gLMStamp = 0;
+static void buildGroundLandmarks(const Map& m) {
+    const int A = ISLE_X0 + 10, B = ISLE_X0 + ISLE_W - 11, C = MAP_W / 2;
+    const int LX[GROUND_LM] = { A, C, B, A, B, A, C, B };
+    const int LY[GROUND_LM] = { A, A, A, CANAL_Y0 - 14, CANAL_Y1 + 14, B, B, B };
+    auto open = [&](int x, int y) { if (!inMap(x, y)) return false; int i = y * MAP_W + x; return m.tiles[i] != T_WATER || m.bridge[i] != 0; };
+    static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+    static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    static std::vector<int> bucket[15];
+    g_gLM.assign((size_t)MAP_W * MAP_H * GROUND_LM, 0xFFFF);
+    std::vector<u16> d;
+    for (int L = 0; L < GROUND_LM; L++) {
+        d.assign((size_t)MAP_W * MAP_H, 0xFFFF);
+        int sx = -1, sy = -1;
+        for (int r = 0; r < 30 && sx < 0; r++) for (int dy = -r; dy <= r && sx < 0; dy++) for (int dx = -r; dx <= r; dx++) {
+            if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+            if (open(LX[L] + dx, LY[L] + dy)) { sx = LX[L] + dx; sy = LY[L] + dy; break; }
+        }
+        if (sx < 0) continue;
+        for (auto& b : bucket) b.clear();
+        d[sy * MAP_W + sx] = 0; bucket[0].push_back(sy * MAP_W + sx);
+        int cur = 0, pending = 1;
+        for (int dist = 0; pending > 0; dist++) {
+            std::vector<int>& bk = bucket[dist % 15];
+            for (size_t q = 0; q < bk.size(); q++) {
+                int i = bk[q]; pending--;
+                if (d[i] != dist) continue;   // (a stale entry: reached cheaper since)
+                int x = i % MAP_W, y = i / MAP_W;
+                for (int k = 0; k < 8; k++) {
+                    int nx = x + DX[k], ny = y + DY[k];
+                    if (!open(nx, ny)) continue;
+                    int nd = dist + (k >= 4 ? 14 : 10), ni = ny * MAP_W + nx;
+                    if (nd < d[ni] && nd < 0xFFFF) { d[ni] = (u16)nd; bucket[nd % 15].push_back(ni); pending++; }
+                }
+            }
+            bk.clear();
+            (void)cur;
+        }
+        for (int i = 0; i < MAP_W * MAP_H; i++) g_gLM[(size_t)i * GROUND_LM + L] = d[i];
+    }
 }
 
 bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, bool swim) const {
@@ -1258,16 +1319,41 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
     if (curGen == 0) { memset(visitGen, 0, sizeof(visitGen)); memset(closedGen, 0, sizeof(closedGen)); curGen = 1; }
     OpenList open;
     int start = sy * MAP_W + sx, goal = gy * MAP_W + gx;
+    if (!swim && g_gLMStamp != navStaticGen) { buildGroundLandmarks(*this); g_gLMStamp = navStaticGen; }
+    // the four landmarks that bound the start best do the work (the others would mostly repeat them)
+    int useL[4] = { -1, -1, -1, -1 }; u16 lg[4] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
+    if (!swim && !g_gLM.empty()) {
+        int bound[GROUND_LM];
+        for (int L = 0; L < GROUND_LM; L++) {
+            u16 a = g_gLM[(size_t)start * GROUND_LM + L], b = g_gLM[(size_t)goal * GROUND_LM + L];
+            bound[L] = (a == 0xFFFF || b == 0xFFFF) ? -1 : std::abs((int)a - (int)b);
+        }
+        for (int k = 0; k < 4; k++) {
+            int bi = -1; for (int L = 0; L < GROUND_LM; L++) if (bound[L] >= 0 && (bi < 0 || bound[L] > bound[bi])) bi = L;
+            if (bi < 0) break;
+            useL[k] = bi; lg[k] = g_gLM[(size_t)goal * GROUND_LM + bi]; bound[bi] = -1;
+        }
+    }
     auto h = [&](int idx) {
         int x = idx % MAP_W, y = idx / MAP_W;
         int dx = std::abs(x - gx), dy = std::abs(y - gy);
         // octile distance at the off-road step cost: it can only overestimate where the way runs along a road (a step there costs 0.8), so the
-        // search goes straight for the goal instead of flooding the map, and still takes a road it meets on the way
-        return 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+        // search goes straight for the goal instead of flooding the map, and still takes a road it meets on the way; the landmarks' bound
+        // (buildGroundLandmarks) sees the canal and the lake in the way
+        float oct = 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+        int alt = 0;
+        const u16* row = useL[0] >= 0 ? &g_gLM[(size_t)idx * GROUND_LM] : nullptr;
+        if (row) for (int k = 0; k < 4 && useL[k] >= 0; k++) {
+            u16 a = row[useL[k]];
+            if (a == 0xFFFF) continue;
+            int v = a > lg[k] ? a - lg[k] : lg[k] - a;
+            if (v > alt) alt = v;
+        }
+        return std::max(oct, alt * 0.1f);
     };
-    gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen;
-    open.push({h(start), start});
-    int best = start; float bestH = h(start);
+    gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen; hCache[start] = h(start);
+    open.push({hCache[start], start});
+    int best = start; float bestH = hCache[start];
     int expanded = 0;
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
     static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
@@ -1277,7 +1363,7 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
         if (closedGen[n.idx] == curGen) continue;
         closedGen[n.idx] = curGen;
         if (n.idx == goal) { best = goal; found = true; break; }
-        float hh = h(n.idx);
+        float hh = hCache[n.idx];
         if (hh < bestH) { bestH = hh; best = n.idx; }
         if (++expanded > maxNodes) break;
         int x = n.idx % MAP_W, y = n.idx / MAP_W;
@@ -1289,9 +1375,12 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
             if (closedGen[ni] == curGen) continue;
             float step = (d >= 4 ? 1.4142f : 1.0f) * (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny));
             float ng = gScore[n.idx] + step;
-            if (visitGen[ni] != curGen || ng < gScore[ni]) {
-                visitGen[ni] = curGen; gScore[ni] = ng; parentIdx[ni] = n.idx;
-                open.push({ng + h(ni), ni});
+            if (visitGen[ni] != curGen) {
+                visitGen[ni] = curGen; hCache[ni] = h(ni); gScore[ni] = ng; parentIdx[ni] = n.idx;
+                open.push({ng + hCache[ni], ni});
+            } else if (ng < gScore[ni]) {
+                gScore[ni] = ng; parentIdx[ni] = n.idx;
+                open.push({ng + hCache[ni], ni});
             }
         }
     }
@@ -1345,14 +1434,44 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
     if (curGen == 0) { memset(visitGen, 0, sizeof(visitGen)); memset(closedGen, 0, sizeof(closedGen)); curGen = 1; }
     OpenList open;
     int start = sy * MAP_W + sx;
-    auto h = [&](int idx) {   // octile distance to the ring (as findPath: at the off-road step cost)
+    // the landmarks' bound to a set of goals (the ring's free tiles): for each landmark the nearest and farthest of them; four landmarks, picked
+    // by how well they bound the start (see buildGroundLandmarks)
+    if (!swim && g_gLMStamp != navStaticGen) { buildGroundLandmarks(*this); g_gLMStamp = navStaticGen; }
+    int useL[4] = { -1, -1, -1, -1 }, lo[4] = {}, hi[4] = {};
+    if (!swim && !g_gLM.empty()) {
+        int mn[GROUND_LM], mx[GROUND_LM], bound[GROUND_LM];
+        for (int L = 0; L < GROUND_LM; L++) { mn[L] = 0xFFFF; mx[L] = -1; }
+        for (int y = ry - 1; y <= ry + rh; y++) for (int x = rx - 1; x <= rx + rw; x++) {
+            if (!inMap(x, y) || !isGoal(x, y)) continue;
+            const u16* row = &g_gLM[((size_t)y * MAP_W + x) * GROUND_LM];
+            for (int L = 0; L < GROUND_LM; L++) if (row[L] != 0xFFFF) { mn[L] = std::min(mn[L], (int)row[L]); mx[L] = std::max(mx[L], (int)row[L]); }
+        }
+        const u16* srow = &g_gLM[(size_t)start * GROUND_LM];
+        for (int L = 0; L < GROUND_LM; L++) bound[L] = (mx[L] < 0 || srow[L] == 0xFFFF) ? -1 : std::max(0, std::max((int)srow[L] - mx[L], mn[L] - (int)srow[L]));
+        for (int k = 0; k < 4; k++) {
+            int bi = -1; for (int L = 0; L < GROUND_LM; L++) if (bound[L] >= 0 && (bi < 0 || bound[L] > bound[bi])) bi = L;
+            if (bi < 0) break;
+            useL[k] = bi; lo[k] = mn[bi]; hi[k] = mx[bi]; bound[bi] = -1;
+        }
+    }
+    auto h = [&](int idx) {   // octile distance to the ring (as findPath: at the off-road step cost), or the landmarks' bound when that is more
         int x = idx % MAP_W, y = idx / MAP_W;
         int dx = std::max(0, std::max(rx - 1 - x, x - (rx + rw))), dy = std::max(0, std::max(ry - 1 - y, y - (ry + rh)));
-        return 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+        float oct = 1.0005f * (float)(std::max(dx, dy) + 0.4142f * std::min(dx, dy));
+        if (useL[0] < 0) return oct;
+        const u16* row = &g_gLM[(size_t)idx * GROUND_LM];
+        int alt = 0;
+        for (int k = 0; k < 4 && useL[k] >= 0; k++) {
+            int a = row[useL[k]];
+            if (a == 0xFFFF) continue;
+            int v = std::max(a - hi[k], lo[k] - a);
+            if (v > alt) alt = v;
+        }
+        return std::max(oct, alt * 0.1f);
     };
-    gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen;
-    open.push({h(start), start});
-    int best = start; float bestH = h(start); int expanded = 0; bool found = false;
+    gScore[start] = 0; parentIdx[start] = -1; visitGen[start] = curGen; hCache[start] = h(start);
+    open.push({hCache[start], start});
+    int best = start; float bestH = hCache[start]; int expanded = 0; bool found = false;
     static const int DX[8] = {1, -1, 0, 0, 1, 1, -1, -1};
     static const int DY[8] = {0, 0, 1, -1, 1, -1, 1, -1};
     while (!open.empty()) {
@@ -1361,7 +1480,7 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
         closedGen[n.idx] = curGen;
         int x = n.idx % MAP_W, y = n.idx / MAP_W;
         if (isGoal(x, y)) { best = n.idx; found = true; break; }
-        float hh = h(n.idx);
+        float hh = hCache[n.idx];
         if (hh < bestH) { bestH = hh; best = n.idx; }
         if (++expanded > maxNodes) break;
         for (int d = 0; d < 8; d++) {
@@ -1371,7 +1490,8 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
             int ni = ny * MAP_W + nx;
             if (closedGen[ni] == curGen) continue;
             float ng = gScore[n.idx] + (d >= 4 ? 1.4142f : 1.0f) * (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny));
-            if (visitGen[ni] != curGen || ng < gScore[ni]) { visitGen[ni] = curGen; gScore[ni] = ng; parentIdx[ni] = n.idx; open.push({ng + h(ni), ni}); }
+            if (visitGen[ni] != curGen) { visitGen[ni] = curGen; hCache[ni] = h(ni); gScore[ni] = ng; parentIdx[ni] = n.idx; open.push({ng + hCache[ni], ni}); }
+            else if (ng < gScore[ni]) { gScore[ni] = ng; parentIdx[ni] = n.idx; open.push({ng + hCache[ni], ni}); }
         }
     }
     std::vector<Vec2> rev;

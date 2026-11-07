@@ -40,29 +40,38 @@ void buildField(const std::vector<u8>& cover, int cw, int ch) {
     F.w = cw; F.h = ch;
     // chamfer distances (texels) on both sides of the painted shoreline: out over the water to the nearest dry texel, and in over the land to the
     // nearest wet one, so the field is a signed distance whose zero runs between texels exactly where the paint changes
+    // in bytes, fifths of a texel (5 straight, 7 diagonal: 1.4 for 1.414): the field saturates 27 texels out over the water and 5 in over the land,
+    // so nothing past 51 texels matters, and four byte passes cost a fraction of the float ones (and a quarter of their memory)
     auto chamfer = [&](bool water) {
-        std::vector<float> dist((size_t)F.w * F.h);
-        for (size_t i = 0; i < dist.size(); i++) dist[i] = ((cover[i] >= 128) == water) ? 1e6f : 0.0f;
-        const float D1 = 1.0f, D2 = 1.4142f;
-        for (int y = 0; y < F.h; y++) for (int x = 0; x < F.w; x++) {
-            float& v = dist[(size_t)y * F.w + x];
-            if (v == 0) continue;
-            if (x > 0) v = std::min(v, dist[(size_t)y * F.w + x - 1] + D1);
-            if (y > 0) { v = std::min(v, dist[(size_t)(y - 1) * F.w + x] + D1); if (x > 0) v = std::min(v, dist[(size_t)(y - 1) * F.w + x - 1] + D2); if (x < F.w - 1) v = std::min(v, dist[(size_t)(y - 1) * F.w + x + 1] + D2); }
+        std::vector<u8> dist((size_t)F.w * F.h);
+        for (size_t i = 0; i < dist.size(); i++) dist[i] = ((cover[i] >= 128) == water) ? 255 : 0;
+        auto relax = [](u8& v, u8 n, int w) { int c = n + w; if (c < v) v = (u8)c; };
+        for (int y = 0; y < F.h; y++) {
+            u8* row = &dist[(size_t)y * F.w]; const u8* up = y > 0 ? row - F.w : nullptr;
+            for (int x = 0; x < F.w; x++) {
+                u8& v = row[x];
+                if (v == 0) continue;
+                if (x > 0) relax(v, row[x - 1], 5);
+                if (up) { relax(v, up[x], 5); if (x > 0) relax(v, up[x - 1], 7); if (x < F.w - 1) relax(v, up[x + 1], 7); }
+            }
         }
-        for (int y = F.h - 1; y >= 0; y--) for (int x = F.w - 1; x >= 0; x--) {
-            float& v = dist[(size_t)y * F.w + x];
-            if (v == 0) continue;
-            if (x < F.w - 1) v = std::min(v, dist[(size_t)y * F.w + x + 1] + D1);
-            if (y < F.h - 1) { v = std::min(v, dist[(size_t)(y + 1) * F.w + x] + D1); if (x < F.w - 1) v = std::min(v, dist[(size_t)(y + 1) * F.w + x + 1] + D2); if (x > 0) v = std::min(v, dist[(size_t)(y + 1) * F.w + x - 1] + D2); }
+        for (int y = F.h - 1; y >= 0; y--) {
+            u8* row = &dist[(size_t)y * F.w]; const u8* dn = y < F.h - 1 ? row + F.w : nullptr;
+            for (int x = F.w - 1; x >= 0; x--) {
+                u8& v = row[x];
+                if (v == 0) continue;
+                if (x < F.w - 1) relax(v, row[x + 1], 5);
+                if (dn) { relax(v, dn[x], 5); if (x < F.w - 1) relax(v, dn[x + 1], 7); if (x > 0) relax(v, dn[x - 1], 7); }
+            }
         }
         return dist;
     };
-    std::vector<float> dw = chamfer(true), dl = chamfer(false);
+    std::vector<u8> dwb = chamfer(true), dlb = chamfer(false);
     F.d.assign((size_t)F.w * F.h, 0);
     for (size_t i = 0; i < F.d.size(); i++) {
-        float px = dw[i] > 0 ? (dw[i] - 0.5f) * FQ : -(dl[i] - 0.5f) * FQ;
-        if ((dw[i] > 0 && dw[i] < 1.5f) || (dl[i] > 0 && dl[i] < 1.5f)) px = (cover[i] - 127.5f) / 127.5f * FQ * 0.75f;   // right at the shore: from the coverage itself
+        const float dw_i = dwb[i] * 0.2f, dl_i = dlb[i] * 0.2f;
+        float px = dw_i > 0 ? (dw_i - 0.5f) * FQ : -(dl_i - 0.5f) * FQ;
+        if ((dw_i > 0 && dw_i < 1.5f) || (dl_i > 0 && dl_i < 1.5f)) px = (cover[i] - 127.5f) / 127.5f * FQ * 0.75f;   // right at the shore: from the coverage itself
         F.d[i] = (u8)clampf(px + FIELD_OFF + 0.5f, 0, 255);
     }
 }

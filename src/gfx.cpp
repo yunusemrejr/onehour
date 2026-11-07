@@ -641,17 +641,24 @@ bool Gfx::openSeaBlock(int px0, int py0, int size) const {
 // A 2x bilinear step has fixed weights: every output pixel is 9/16 of its own half pixel, 3/16 of each of the two nearest along the rows and the columns,
 // 1/16 of the diagonal one (integer arithmetic: a float version per sample cost a tenth of a second per chunk)
 static void upscale565(const u16* in, int hw, int hh, u16* out) {
+    // 2x bilinear (weights 9:3:3:1, the source pixel nearest first): 9A + 3A' + 3B + B' = 3V(x) + V(x'), with V = 3A + B worked out once per
+    // source pixel for each output row, so each output pixel is two adds and a shift per channel (the same numbers, a third of the time)
     static thread_local std::vector<u8> rgb; rgb.resize((size_t)hw * hh * 3);
+    static thread_local std::vector<int> V; V.resize((size_t)hw * 3);
     for (int i = 0; i < hw * hh; i++) { u16 p = in[i]; int r = p >> 11, g = p >> 5 & 63, b2 = p & 31; rgb[i * 3] = (u8)(r << 3 | r >> 2); rgb[i * 3 + 1] = (u8)(g << 2 | g >> 4); rgb[i * 3 + 2] = (u8)(b2 << 3 | b2 >> 2); }
     const int W = hw * 2, H = hh * 2;
+    auto pack = [](int r, int g, int b) { return (u16)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)); };   // (each channel is at most 255 after >> 4)
     for (int j = 0; j < H; j++) {
         const int ky = j >> 1, oy = (j & 1) ? std::min(hh - 1, ky + 1) : std::max(0, ky - 1);
         const u8* A = &rgb[(size_t)ky * hw * 3]; const u8* B = &rgb[(size_t)oy * hw * 3];
-        for (int i = 0; i < W; i++) {
-            const int kx = i >> 1, ox = (i & 1) ? std::min(hw - 1, kx + 1) : std::max(0, kx - 1);
-            int c[3];
-            for (int q = 0; q < 3; q++) c[q] = (9 * A[kx * 3 + q] + 3 * A[ox * 3 + q] + 3 * B[kx * 3 + q] + B[ox * 3 + q] + 8) >> 4;
-            out[(size_t)j * W + i] = (u16)((std::min(31, c[0] >> 3) << 11) | (std::min(63, c[1] >> 2) << 5) | std::min(31, c[2] >> 3));
+        for (int x = 0; x < hw * 3; x++) V[x] = 3 * A[x] + B[x];
+        u16* o = &out[(size_t)j * W];
+        for (int kx = 0; kx < hw; kx++) {
+            const int* c = &V[kx * 3];
+            const int* l = &V[std::max(0, kx - 1) * 3];
+            const int* r = &V[std::min(hw - 1, kx + 1) * 3];
+            o[2 * kx] = pack((3 * c[0] + l[0] + 8) >> 4, (3 * c[1] + l[1] + 8) >> 4, (3 * c[2] + l[2] + 8) >> 4);
+            o[2 * kx + 1] = pack((3 * c[0] + r[0] + 8) >> 4, (3 * c[1] + r[1] + 8) >> 4, (3 * c[2] + r[2] + 8) >> 4);
         }
     }
 }
@@ -760,16 +767,21 @@ void Gfx::rebakeTerrain() {
     terrainEdited = false;
 }
 
-void Gfx::refreshTerrain() {
+void Gfx::refreshTerrain(int vx0, int vy0, int vx1, int vy1, double budgetMs) {
     if (g_map.cleared.empty()) return;
     // one structure's footprint at a time (Map::clearForStructure ends each with -1): structures placed far apart must not merge into one huge rectangle
-    std::vector<int> group;
+    const u64 t0 = SDL_GetPerformanceCounter(), freq = SDL_GetPerformanceFrequency();
+    std::vector<int> group, left;
     for (size_t i = 0; i <= g_map.cleared.size(); i++) {
         if (i < g_map.cleared.size() && g_map.cleared[i] >= 0) { group.push_back(g_map.cleared[i]); continue; }
-        if (!group.empty()) uploadTerrainPatch(group);
+        if (group.empty()) continue;
+        bool inView = false;
+        for (int t : group) { int tile = t & 0xFFFFFF, x = tile % MAP_W, y = tile / MAP_W; if (x >= vx0 - 2 && x <= vx1 + 2 && y >= vy0 - 2 && y <= vy1 + 2) { inView = true; break; } }
+        if (inView || (SDL_GetPerformanceCounter() - t0) * 1000.0 / freq < budgetMs) uploadTerrainPatch(group);
+        else { left.insert(left.end(), group.begin(), group.end()); left.push_back(-1); }   // (next frame)
         group.clear();
     }
-    g_map.cleared.clear();
+    g_map.cleared.swap(left);
 }
 
 void Gfx::uploadTerrainPatch(const std::vector<int>& group) {
@@ -877,20 +889,24 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
     // bilinear weights and the boundaries pushed around by value noise, so they are ragged, cloudy fringes instead of a staircase of tiles.
     const int SS = SHROUD_SS, W2 = MAP_W * SS, H2 = MAP_H * SS;
     static std::vector<u32> buf; static std::vector<float> noise;
-    static std::vector<u8> mottle; static std::vector<float> edgeN;   // the mottling and the fringe displacement are fixed per pixel: baked once, looked up per refresh
+    static std::vector<u8> mottle, edgeN, bakedT;   // the mottling and the fringe displacement (edgeN / 255) are fixed per pixel: baked per tile the first
+                                                    // time a tile needs them (bakedT bit 0: mottle, bit 1: fringe), looked up after that
     if (noise.empty()) { Rng r(99); noise.resize(64 * 64); for (auto& v : noise) v = r.f(); }
     auto vn = [&](float x, float y) {
         int ix = (int)std::floor(x), iy = (int)std::floor(y); float fx = x - ix, fy = y - iy; fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
         auto at = [&](int a, int b) { return noise[(b & 63) * 64 + (a & 63)]; };
         return lerpf(lerpf(at(ix, iy), at(ix + 1, iy), fx), lerpf(at(ix, iy + 1), at(ix + 1, iy + 1), fx), fy);
     };
-    if ((int)mottle.size() != W2 * H2) {
-        mottle.assign((size_t)W2 * H2, 0); edgeN.assign((size_t)W2 * H2, 0);
-        for (int y = 0; y < H2; y++) for (int x = 0; x < W2; x++) {
-            mottle[(size_t)y * W2 + x] = (u8)(vn(x * 0.35f, y * 0.35f) * 10);
-            edgeN[(size_t)y * W2 + x] = vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f;
-        }
-    }
+    if ((int)mottle.size() != W2 * H2) { mottle.assign((size_t)W2 * H2, 0); edgeN.assign((size_t)W2 * H2, 0); bakedT.assign((size_t)MAP_W * MAP_H, 0); }
+    auto needMottle = [&](int tx, int ty) {
+        u8& b = bakedT[(size_t)ty * MAP_W + tx]; if (b & 1) return; b |= 1;
+        for (int y = ty * SS; y < ty * SS + SS; y++) for (int x = tx * SS; x < tx * SS + SS; x++) mottle[(size_t)y * W2 + x] = (u8)(vn(x * 0.35f, y * 0.35f) * 10);
+    };
+    auto needEdge = [&](int tx, int ty) {
+        u8& b = bakedT[(size_t)ty * MAP_W + tx]; if (b & 2) return; b |= 2;
+        for (int y = ty * SS; y < ty * SS + SS; y++) for (int x = tx * SS; x < tx * SS + SS; x++)
+            edgeN[(size_t)y * W2 + x] = (u8)clampi((int)std::lround((vn(x * 0.55f + 11, y * 0.55f + 5) * 0.65f + vn(x * 1.4f, y * 1.4f) * 0.35f) * 255.0f), 0, 255);
+    };
     // Only the tiles whose fog changed, and the ring of tiles round them (the bilinear fringe of a tile reaches one tile into its neighbours), are
     // rebuilt, and the texture is updated band by band (BLK tile rows at a time, the span of what changed in it). The old scheme rebuilt whole
     // 8 x 8-tile blocks and all eight neighbours of each for every tile that changed: in a late battle that was most of the frame's CPU time.
@@ -930,6 +946,7 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
             bool flat = true;
             for (int j = -1; j <= 1 && flat; j++) for (int k = -1; k <= 1; k++) if (F(tx + k, ty + j) != l0) { flat = false; break; }
             if (flat) {
+                if (l0 == 0) needMottle(tx, ty);
                 for (int y = py0; y < py0 + SS; y++) for (int x = px0; x < px0 + SS; x++) {
                     u32& o = buf[(size_t)y * W2 + x];
                     if (l0 == 2) o = 0;
@@ -938,6 +955,7 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
                 }
                 continue;
             }
+            needMottle(tx, ty); needEdge(tx, ty);
             for (int y = py0; y < py0 + SS; y++) for (int x = px0; x < px0 + SS; x++) {
                 float fx = (x + 0.5f) / SS - 0.5f, fy = (y + 0.5f) / SS - 0.5f;
                 int x0 = (int)std::floor(fx), y0 = (int)std::floor(fy); float tx2 = fx - x0, ty2 = fy - y0;
@@ -946,7 +964,7 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
                 u32& o = buf[(size_t)y * W2 + x];
                 int m = mottle[(size_t)y * W2 + x];
                 bool pflat = a00 == a10 && a00 == a01 && a00 == a11;   // inside one level: no fringe to displace
-                if (!pflat) v = clampf(v + (edgeN[(size_t)y * W2 + x] - 0.5f) * 0.34f, 0.0f, 1.0f);
+                if (!pflat) v = clampf(v + (edgeN[(size_t)y * W2 + x] * (1.0f / 255.0f) - 0.5f) * 0.34f, 0.0f, 1.0f);
                 if (v <= 0.0f) { o = pack(255, 5 + m / 3, 8 + m / 3, 12 + m / 2); continue; }   // never seen: opaque, faintly mottled
                 if (v >= 1.0f) { o = 0; continue; }                                               // in sight: clear
                 if (v < 0.5f) {   // the edge of the unknown: from opaque to the veil

@@ -2192,8 +2192,10 @@ void Game::renderWorld() {
     RenderProf rp;
     static const int skipL = getenv("ONEHOUR_SKIPLAYER") ? atoi(getenv("ONEHOUR_SKIPLAYER")) : 0;   // (profiling: leave layers out to see what they cost)
     Gfx& g = g_gfx;
-    g.refreshTerrain();   // trees and rocks cleared for new structures since the last frame
+    g.refreshTerrain(tileOf(cam.x), tileOf(cam.y), tileOf(cam.x + SCREEN_W), tileOf(cam.y + VIEW_H), 4.0);   // trees and rocks cleared for new structures since the last frame (off-screen ones within 4 ms a frame)
+    rp.mark("refresh");
     updateWeather();
+    rp.mark("weather");
     g.beginFrame(rgb(6, 8, 12));
     SDL_Rect clip = { 0, 0, SCREEN_W, VIEW_H };
     SDL_RenderSetClipRect(g.ren, &clip);
@@ -2280,8 +2282,11 @@ void Game::renderWorld() {
             SDL_RenderCopy(g.ren, w.tex, &src, &dst);
         }
     }
+    rp.mark("water");
     if (!(skipL & 2) && !(skipL & 1024)) drawWaterOverlay();   // the surf, the wash at the waterline and the storm sea (ONEHOUR_SKIPLAYER 1024: none)
+    rp.mark("overlay");
     drawSeaLife();
+    rp.mark("sealife");
     if (!(skipL & 2)) { drawWhitecaps(); drawWaterGlitter(); }
     rp.mark("water+sealife");
     if (!(skipL & 4)) { g.beginAdd(); drawGroundFx(); g.flushAdd(); }   // (the embers in the ruins and the fires on wrecks: one additive batch)
