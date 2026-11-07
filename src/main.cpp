@@ -1692,7 +1692,16 @@ static bool bombTest(u64 seed) {
         for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
         int b1 = firstBuildOf(fac[1]), u0 = firstUnitOf(fac[0]), u1 = firstUnitOf(fac[1]);
         Vec2 gz = g_sim.players[0].basePos + (g_sim.players[1].basePos - g_sim.players[0].basePos) * 0.5f;
-        gz = g_map.nearestFree(gz, 40);
+        // ground zero on open land with room for the ring: the canal and its bridge decks cross the middle of the map now
+        {
+            int gx = tileOf(gz.x), gy = tileOf(gz.y); bool found = false;
+            for (int r = 0; r < 60 && !found; r++) for (int dy = -r; dy <= r && !found; dy++) for (int dx = -r; dx <= r && !found; dx++) {
+                if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                bool ok = true;
+                for (int ey = -9; ey <= 9 && ok; ey++) for (int ex = -9; ex <= 9 && ok; ex++) ok = g_map.buildable(gx + dx + ex, gy + dy + ey);
+                if (ok) { gz = tileCenter(gx + dx, gy + dy); found = true; }
+            }
+        }
         // enemy structures in a ring around ground zero: place each at the first buildable tile beyond the wanted distance
         auto put = [&](int type, float distTiles, float ang) {
             for (float extra = 0; extra < 6; extra += 0.5f) for (float da = 0; da < 1.2f; da += 0.1f) {

@@ -2857,7 +2857,7 @@ void Game::renderHud() {
                     g.text(INFO_X + 86, hy + 110, buf, e->subState == 2 ? rgb(150, 220, 255) : rgb(240, 205, 90));
                 } else if (int dn = g_sim.droneCount(*e)) {   // protector drones: how many are ready to fire
                     int rdy = 0; for (int i = 0; i < dn; i++) if (e->droneAt[i] <= g_sim.time) rdy++;
-                    snprintf(buf, sizeof buf, ut.naval ? "Drone swarm %d / %d ready: they stop rockets and shells and sting aircraft" : "Guard drones %d / %d ready: they shoot down rockets and shells aimed at it", rdy, dn); g.text(INFO_X + 86, hy + 110, buf, rgb(150, 220, 255));
+                    snprintf(buf, sizeof buf, ut.naval ? (g_sim.hasUpgrade(e->owner, UPG_DRONES) ? "Drone swarm %d / %d ready: they stop rockets and shells and sting aircraft" : "Drone swarm %d / %d: they sting aircraft (Guard Drones: they stop shells too)") : "Guard drones %d / %d ready: they shoot down rockets and shells aimed at it", rdy, dn); g.text(INFO_X + 86, hy + 110, buf, rgb(150, 220, 255));
                 }
             } else if (e->district >= 0) {   // a block of a town round the lake: the town as a whole is what matters
                 const District& D = g_sim.districts[e->district];

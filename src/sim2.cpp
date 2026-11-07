@@ -169,6 +169,7 @@ bool Sim::interceptProjectile(Projectile& p) {
         }
     }
     if (!h || !h->isUnit()) return false;
+    if (h->ut().naval && !hasUpgrade(h->owner, UPG_DRONES)) return false;   // (a warship's own swarm only stings aircraft: stopping shells and rockets takes the Guard Drones upgrade)
     int n = droneCount(*h);
     if (n <= 0 || dist(p.pos, h->pos) > DRONE_RANGE + h->radius()) return false;
     for (int i = 0; i < n; i++) {

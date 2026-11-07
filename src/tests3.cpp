@@ -402,9 +402,9 @@ bool droneTest(u64 seed) {
     // count, EMP
     lakeScene(F_CYBER, F_CLANKER, seed + 9);
     Ref sh = ship3(U_C_DESTROYER, 0, lakePoint(0, 0));
-    CHECK3(g_sim.droneCount(*g_sim.get(sh)) == 0, "a ship has drones without the upgrade");
+    CHECK3(g_sim.droneCount(*g_sim.get(sh)) == SHIP_DRONES, "a destroyer does not fly its own swarm of three (it only stings aircraft without the upgrade)");
     g_sim.players[0].upg[UPG_DRONES] = true;
-    CHECK3(g_sim.droneCount(*g_sim.get(sh)) == SHIP_DRONES, "the upgrade did not give a ship three drones");
+    CHECK3(g_sim.droneCount(*g_sim.get(sh)) > SHIP_DRONES, "the upgrade did not grow a ship's swarm");
     g_sim.get(sh)->disabledUntil = g_sim.time + 5;
     CHECK3(g_sim.droneCount(*g_sim.get(sh)) == 0, "a switched-off ship still has its drones");
     printf("dronetest: ok\n");

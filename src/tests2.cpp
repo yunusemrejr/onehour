@@ -261,6 +261,7 @@ static bool bunkerTest(Faction me, Faction foe, u64 seed) {
     std::vector<Ref> tanks;
     for (int i = 0; i < 14; i++) tanks.push_back(spawnAt(tankFoe, 1, bp + Vec2(-22 * TILE + ((i % 7) - 3) * 30.0f, 4 * TILE + (i / 7) * 30.0f)));
     for (Ref t : tanks) if (alive(t)) { g_sim.get(t)->maxHp *= 10; g_sim.get(t)->hp = g_sim.get(t)->maxHp; }   // (the hatch gunfire would kill them: this test is about damage to the bunker)
+    for (auto& ez : g_sim.ents) if (ez.alive && ez.isUnit() && ez.owner == 0 && ez.ut().role == UR_DOZER) ez.autoHoldUntil = 1e9f;   // (the dozers the fallen first bunker let out would otherwise go and mend this one)
     run(2);
     g_sim.cmdAttack(tanks, bk2);
     CHECK(g_sim.get(tanks[0])->order == O_ATTACK, "enemy tanks could not be ordered to attack a bunker a spy drone had revealed");
@@ -439,7 +440,7 @@ bool uiNewTest(Faction me, Faction foe, u64 seed) {
     CHECK(g_sim.get(spy)->order == O_CAPTURE, "a right-click on an enemy structure did not send the spy to capture it");
     // ---- a cargo lifter: soldiers board by right-click, the buttons unload and drop off
     int cargo = me == F_CYBER ? U_C_CARGO : U_K_CARGO;
-    Ref ch = spawnAt(cargo, 0, mid + Vec2(-10 * TILE, 0)); g_sim.get(ch)->alt = 1;
+    Ref ch = spawnAt(cargo, 0, mid + Vec2(-5 * TILE, 0)); g_sim.get(ch)->alt = 1;   // (inside the clear square openField found: rock lies just west of it, and the crew would be squeezed onto the lifter)
     std::vector<Ref> crew;
     for (int i = 0; i < 4; i++) crew.push_back(spawnAt(firstUnitOf(me) + 2, 0, g_sim.get(ch)->pos + Vec2((i - 2) * 20.0f, 2 * TILE)));
     g_game.selection = crew;
