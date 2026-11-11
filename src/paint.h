@@ -163,10 +163,14 @@ struct Art {
     }
     // soft drop shadow of a rectangle (design pixels), offset toward the south-east (light from the north-west)
     void shadowRect(float x, float y, float w, float h, float dx, float dy, float feather, int alpha = 90) {
+        if (w >= 20 && h >= 20) { dx *= 1.35f; dy *= 1.35f; feather *= 1.2f; }   // a structure's own shadow on the ground: longer, for a lower sun
+        alpha = std::min(215, alpha * 3 / 2);
         float cx = X(x + w * 0.5f + dx), cy = Y(y + h * 0.5f + dy), hw = w * 0.5f * k, hh = h * 0.5f * k, f = feather * k;
         soft((int)(cx - hw - f), (int)(cy - hh - f), (int)(cx + hw + f), (int)(cy + hh + f), [=](float px, float py) { return sdBox(px, py, cx, cy, hw, hh, std::min(hw, hh) * 0.2f); }, Color{0, 0, 0, (u8)alpha}, f);
     }
     void shadowCircle(float cx, float cy, float r, float dx, float dy, float feather, int alpha = 90) {
+        if (r >= 10) { dx *= 1.35f; dy *= 1.35f; feather *= 1.2f; }
+        alpha = std::min(215, alpha * 3 / 2);
         float X0 = X(cx + dx), Y0 = Y(cy + dy), rr = r * k, f = feather * k;
         soft((int)(X0 - rr - f), (int)(Y0 - rr - f), (int)(X0 + rr + f), (int)(Y0 + rr + f), [=](float px, float py) { return hyp(px - X0, py - Y0) - rr; }, Color{0, 0, 0, (u8)alpha}, f);
     }

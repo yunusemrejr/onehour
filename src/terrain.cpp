@@ -88,17 +88,35 @@ inline float samp(const std::vector<float>& m, int w, int h, float fx, float fy)
 // ---------------------------------------------------------------- ground colours
 // Warm, sunlit grading: deeper greens against warm earth, pale sand, teal shallows over a navy lake bed. A split-tone
 // grade at the end of the ground pass warms the highlights and cools the shadows, so the whole map reads as one light.
-const F3 GRASS_A = f3(66, 106, 42), GRASS_B = f3(98, 136, 54), GRASS2_A = f3(52, 92, 38), GRASS2_B = f3(82, 118, 48), DRY = f3(150, 142, 70);
-const F3 GRASS_LUSH = f3(118, 160, 64), GRASS_DEEP = f3(42, 80, 42);      // knots of longer grass: sunned, and shaded
-const F3 DIRT_A = f3(140, 108, 70), DIRT_B = f3(112, 84, 54), DIRT_DARK = f3(86, 62, 42), DIRT_PALE = f3(168, 140, 100);
-const F3 SAND_A = f3(216, 198, 146), SAND_B = f3(192, 172, 122), SAND_WET = f3(150, 134, 100);
-const F3 ASPHALT = f3(66, 67, 72), GRAVEL = f3(138, 130, 112);
-const F3 FOREST_A = f3(44, 70, 34), FOREST_B = f3(84, 68, 40), LEAF_LITTER = f3(128, 88, 42);
-const F3 ROCK_A = f3(124, 116, 102), ROCK_B = f3(90, 84, 76), ROCK_OCHRE = f3(150, 118, 80), LICHEN = f3(132, 136, 102);
-const F3 MOSS = f3(78, 102, 52), SCREE = f3(158, 148, 128);
-const F3 WATER_SHALLOW = f3(56, 160, 170), WATER_MID = f3(27, 102, 150), WATER_DEEP = f3(13, 52, 102), WEED = f3(40, 104, 80);
-const F3 OCEAN_ABYSS = f3(8, 34, 76);   // the open sea far from any shore
+const F3 GRASS_A = f3(54, 108, 46), GRASS_B = f3(84, 134, 58), GRASS2_A = f3(42, 92, 46), GRASS2_B = f3(74, 124, 56), DRY = f3(150, 146, 78);
+const F3 GRASS_LUSH = f3(104, 152, 66), GRASS_DEEP = f3(30, 76, 50);      // knots of longer grass: sunned, and shaded
+const F3 DIRT_A = f3(142, 104, 70), DIRT_B = f3(114, 82, 54), DIRT_DARK = f3(82, 54, 38), DIRT_PALE = f3(190, 150, 100);
+const F3 SAND_A = f3(236, 214, 156), SAND_B = f3(208, 182, 126), SAND_WET = f3(158, 142, 106);
+const F3 ASPHALT = f3(56, 60, 72), GRAVEL = f3(144, 134, 116);
+const F3 FOREST_A = f3(34, 66, 38), FOREST_B = f3(80, 64, 40), LEAF_LITTER = f3(134, 88, 40);
+const F3 ROCK_A = f3(126, 124, 120), ROCK_B = f3(84, 86, 92), ROCK_OCHRE = f3(160, 122, 82), LICHEN = f3(136, 142, 104);
+const F3 MOSS = f3(72, 106, 54), SCREE = f3(164, 152, 132);
+const F3 WATER_SHALLOW = f3(56, 172, 176), WATER_MID = f3(22, 122, 170), WATER_DEEP = f3(10, 60, 120), WEED = f3(34, 112, 86);
+const F3 OCEAN_ABYSS = f3(6, 36, 86);   // the open sea far from any shore
 const float SEA_OPEN = 7.5f;            // tiles from land beyond which water is open sea: no sand bars, weed or caustics, only waves and depth
+
+// The grade every baked pixel goes through: an S-curve (deep, clean shadows; highlights that roll off), fuller colour, and a split tone that
+// leans the shadows to teal and the highlights to gold, so the whole map sits in one late-afternoon light.
+inline void gradeRGB(float& vr, float& vg, float& vb) {
+    auto curve = [](float v) { return v * 0.68f + v * v * (3.0f - 2.0f * v) * 0.32f; };
+    vr = curve(vr); vg = curve(vg); vb = curve(vb);
+    float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+    vr = lum + (vr - lum) * 1.06f; vg = lum + (vg - lum) * 1.06f; vb = lum + (vb - lum) * 1.06f;
+    float t = lum - 0.45f;
+    vr += t * 0.070f; vg += t * 0.012f; vb -= t * 0.090f;
+}
+// Rolling ground: the land is not a table. A slow height wave is lit from the north-west, so meadows swell and dip (a pure function of the
+// pixel, shared by the bake and by repainted ground).
+inline float rollShade(float x, float y, const Noise& nz) {
+    float a = nz.v(x * 0.0125f + 91, y * 0.0125f + 37), b = nz.v((x + 5.0f) * 0.0125f + 91, (y + 6.0f) * 0.0125f + 37);
+    float c = nz.v(x * 0.041f + 13, y * 0.041f + 77), d = nz.v((x + 3.0f) * 0.041f + 13, (y + 3.5f) * 0.041f + 77);
+    return 1.0f + clampf((a - b) * 3.4f + (c - d) * 2.2f, -0.15f, 0.10f);
+}
 
 // Open sea, far from land: what K_WATER below works out to there (depth 1: the bars, weed and caustics are gone), done with a third of the work
 F3 openSeaColor(float x, float y, const Noise& nz, float sea) {
@@ -712,14 +730,10 @@ void treeRect(const Tree& t, int& x0, int& y0, int& x1, int& y1) {
 }
 // The final colour grade of the bake (broad light variation and the split-tone curve), for repainted ground
 F3 gradeGround(F3 col, float x, float y, const Noise& nz) {
-    col = mul3(col, 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
+    col = mul3(col, (0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4)) * rollShade(x, y, nz));
     float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
-    auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
-    vr = curve(vr); vg = curve(vg); vb = curve(vb);
-    float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
-    vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
-    float warm = (lum - 0.5f) * 0.045f;
-    return f3((int)clampf((vr + warm) * 255.0f, 0, 255), (int)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (int)clampf((vb - warm) * 255.0f, 0, 255));
+    gradeRGB(vr, vg, vb);
+    return f3((int)clampf(vr * 255.0f, 0, 255), (int)clampf(vg * 255.0f, 0, 255), (int)clampf(vb * 255.0f, 0, 255));
 }
 
 }  // namespace
@@ -1237,12 +1251,8 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                         if ((x & 7) == 4 && (y & 7) == 4) g_waterCover[(size_t)(y >> 3) * g_wcW + (x >> 3)] = 255;
                         F3 col = mul3(openSeaColor((float)x, (float)y, nz, sea), 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
                         float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
-                        auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
-                        vr = curve(vr); vg = curve(vg); vb = curve(vb);
-                        float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
-                        vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
-                        float warm = (lum - 0.5f) * 0.045f;
-                        row[x] = Canvas::pack(Color{ (u8)clampf((vr + warm) * 255.0f, 0, 255), (u8)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (u8)clampf((vb - warm) * 255.0f, 0, 255), 255 });
+                        gradeRGB(vr, vg, vb);
+                        row[x] = Canvas::pack(Color{ (u8)clampf(vr * 255.0f, 0, 255), (u8)clampf(vg * 255.0f, 0, 255), (u8)clampf(vb * 255.0f, 0, 255), 255 });
                         continue;
                     }
                     float wox, woy; warpAt((float)x, (float)y, wox, woy);
@@ -1300,8 +1310,8 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                             col = lerp3(col, floor, clampf(og * 0.62f, 0, 0.62f));
                         }
                     }
-                    // broad light variation
-                    col = mul3(col, 0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4));
+                    // broad light variation, and the roll of the land (it fades out over water)
+                    col = mul3(col, (0.95f + 0.10f * nz.v(x * 0.006f + 3, y * 0.006f + 4)) * (1.0f + (rollShade((float)x, (float)y, nz) - 1.0f) * (1.0f - clampf(w[K_WATER] / std::max(sum, 1e-4f), 0, 1))));
                     // relief lighting from the height field
                     if (reliefB[(size_t)(ty - ty0) * MAP_W + tx]) {
                         float hx = x * 0.5f, hy = y * 0.5f;
@@ -1325,12 +1335,8 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                     // split-tone grade: a whisper of S-curve, a touch more saturation, warm highlights and cool shadows (one sunlight for the whole map)
                     {
                         float vr = col.r / 255.0f, vg = col.g / 255.0f, vb = col.b / 255.0f;
-                        auto curve = [](float v) { return v * 0.88f + v * v * (3.0f - 2.0f * v) * 0.12f; };
-                        vr = curve(vr); vg = curve(vg); vb = curve(vb);
-                        float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
-                        vr = lum + (vr - lum) * 1.09f; vg = lum + (vg - lum) * 1.09f; vb = lum + (vb - lum) * 1.09f;
-                        float warm = (lum - 0.5f) * 0.045f;
-                        col = f3((int)clampf((vr + warm) * 255.0f, 0, 255), (int)clampf((vg + warm * 0.35f) * 255.0f, 0, 255), (int)clampf((vb - warm) * 255.0f, 0, 255));
+                        gradeRGB(vr, vg, vb);
+                        col = f3((int)clampf(vr * 255.0f, 0, 255), (int)clampf(vg * 255.0f, 0, 255), (int)clampf(vb * 255.0f, 0, 255));
                     }
                     Color o{ (u8)clampf(col.r, 0, 255), (u8)clampf(col.g, 0, 255), (u8)clampf(col.b, 0, 255), 255 };
                     row[x] = Canvas::pack(o);

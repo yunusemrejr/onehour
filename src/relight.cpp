@@ -12,8 +12,8 @@
 
 using paint::Relief;
 
-LightRig rigUnit() { LightRig L; L.lx = -0.30f; L.ly = -0.40f; L.lz = 0.87f; L.reach = 10; L.shadow = 0.62f; return L; }
-LightRig rigBuilding() { LightRig L; L.lx = -0.52f; L.ly = -0.58f; L.lz = 0.63f; L.reach = 22; L.shadow = 0.70f; L.amb = 0.42f; L.key = 0.58f; return L; }
+LightRig rigUnit() { LightRig L; L.lx = -0.34f; L.ly = -0.44f; L.lz = 0.83f; L.reach = 11; L.shadow = 0.74f; L.amb = 0.36f; L.key = 0.64f; L.spec = 0.50f; L.ao = 1.25f; return L; }
+LightRig rigBuilding() { LightRig L; L.lx = -0.54f; L.ly = -0.60f; L.lz = 0.59f; L.reach = 26; L.shadow = 0.80f; L.amb = 0.37f; L.key = 0.63f; L.spec = 0.48f; L.ao = 1.3f; return L; }
 
 namespace {
 
@@ -65,8 +65,8 @@ void relight(Canvas& c, const Relief& r, const LightRig& L0, Canvas* mask) {
     const float dx = hl > 1e-4f ? L.lx / hl : 0, dy = hl > 1e-4f ? L.ly / hl : 0, slope = hl > 1e-4f ? L.lz / hl : 1e6f;
     float hx = L.lx, hy = L.ly, hz = L.lz + 1.0f;   // the half vector toward a viewer straight above
     { float n = std::sqrt(hx * hx + hy * hy + hz * hz); hx /= n; hy /= n; hz /= n; }
-    const float AR = 0.90f, AG = 0.95f, AB = 1.07f;   // sky fill: cool
-    const float KR = 1.06f, KG = 1.02f, KB = 0.93f;   // key: warm sunlight
+    const float AR = 0.74f, AG = 0.90f, AB = 1.20f;   // sky fill: the blue of open sky, so every shaded face turns to cool steel
+    const float KR = 1.15f, KG = 1.05f, KB = 0.84f;   // key: a low golden sun
     std::vector<u32> out = c.px;
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
         const size_t i = (size_t)y * W + x;
@@ -95,6 +95,15 @@ void relight(Canvas& c, const Relief& r, const LightRig& L0, Canvas* mask) {
         float emit = r.emit[i] / 255.0f;
         if (lum > 205 && sat > 0.42f) emit = std::max(emit, 0.8f);   // lit glass, lamps, emitter strips painted as plain bright colour
         float metal = clampf((0.24f - sat) / 0.14f, 0, 1) * clampf((lum - 45) / 70.0f, 0, 1);
+        {   // bare greys become materials: gunmetal in the darks, blue naval steel through the mids, and no slab left paper-white
+            float neutral = clampf((0.20f - sat) / 0.14f, 0, 1) * (1.0f - emit);
+            float l = lum / 255.0f;
+            float dim = 1.0f - 0.30f * clampf((l - 0.42f) / 0.4f, 0, 1);          // the palest panels come down a fifth: lamps and markings stand out
+            float cool = 1.0f - 0.5f * clampf((l - 0.55f) / 0.4f, 0, 1);          // (the darks take the most blue)
+            R += (R * dim * (1.0f - 0.13f * cool) - R) * neutral;
+            G += (G * dim * (1.0f - 0.03f * cool) - G) * neutral;
+            B += (B * dim * (1.0f + 0.12f * cool) - B) * neutral;
+        }
         float ndl = std::max(0.0f, nx * L.lx + ny * L.ly + nz * L.lz);
         float lit = 1.0f - sh * L.shadow;
         float key = L.key * ndl / L.lz * lit;   // (a flat face: L.key)
@@ -108,6 +117,13 @@ void relight(Canvas& c, const Relief& r, const LightRig& L0, Canvas* mask) {
         float fr = R * (AR * sky + KR * key) * wear + sp * 255 * KR * 0.95f;
         float fg = G * (AG * sky + KG * key) * wear + sp * 255 * KG * 0.95f;
         float fb = B * (AB * sky + KB * key) * wear + sp * 255 * KB * 0.95f;
+        {   // the finishing grade: a contrast curve and fuller colour, so paint reads as paint and steel as steel (pale washed-out greys are gone)
+            auto fin = [](float v) { v = clampf(v / 255.0f, 0.0f, 1.0f); return (v * 0.56f + v * v * (3.0f - 2.0f * v) * 0.44f) * 255.0f; };
+            fr = fin(fr * 0.96f); fg = fin(fg * 0.96f); fb = fin(fb * 0.96f);
+            float l2 = 0.299f * fr + 0.587f * fg + 0.114f * fb;
+            const float S = 1.22f;
+            fr = l2 + (fr - l2) * S; fg = l2 + (fg - l2) * S; fb = l2 + (fb - l2) * S;
+        }
         fr += (R - fr) * emit; fg += (G - fg) * emit; fb += (B - fb) * emit;
         out[i] = Canvas::pack(Color{ (u8)clampf(fr, 0, 255), (u8)clampf(fg, 0, 255), (u8)clampf(fb, 0, 255), p.a });
         if (mask) {

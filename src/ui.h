@@ -24,7 +24,8 @@ struct Message { std::string text; float time; Color color; };
 
 // Cosmetic, render-side effects: they never touch the simulation, pause with the game and are capped, so they stay cheap.
 enum PKind : u8 { PK_SMOKE = 0, PK_DUST, PK_DEBRIS, PK_CONTRAIL, PK_SPARK, PK_FLAME, PK_RING, PK_GLOW };
-struct Particle { float x, y, vx, vy, ay, drag, age, life, s0, s1, rot, vrot; Color col; u8 kind, var; };
+struct Particle { float x, y, vx, vy, ay, drag, age, life, s0, s1, rot, vrot; Color col; u8 kind, var;
+                  float z = 0, vz = 0; };   // height above the ground and its speed (px, px/s): a chunk or a hot spark flies, bounces and rests (see fx.cpp)
 struct Decal { float x, y, r, rot, age, life; u8 kind; };       // ground scorch marks
 struct Tread { float x, y, rot, age, life; u8 kind; };          // a short dark track-pressed dash left by a vehicle on soft ground
 

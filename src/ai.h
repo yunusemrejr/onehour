@@ -64,7 +64,9 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_GAMBIT = 512,   // an emphasis for the first 12 minutes (Normal and up): with a 3-in-10 chance the commander leans on air, armour or (where a shore
                                   // site for a naval yard exists) navy, and weights that class up by 40% in its production (chooseUnit; fleet size for the navy)
                F2_SOFTSPOT = 1024,// the soft spot (pickAttackTarget): an objective far from where the enemy's army was last seen (within 90 seconds) scores better
-               F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024,
+               F2_REGROUP = 2048, // no trickling: reinforcements for a wave under way gather at the home rally and set off together (five at the least), never
+                                  // one by one as they leave the factory (the value gate alone let a lone tank walk into the enemy's guns every 30 seconds)
+               F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048,
                F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))

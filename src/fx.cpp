@@ -307,6 +307,19 @@ void Game::updateParticles(float dt) {
     const float dq = (detail + 1) * 0.25f;   // share of the cosmetic emissions at this detail level (all of them at the top)
     for (auto& p : parts) {
         p.age += dt;
+        if (p.kind == PK_DEBRIS) {   // a chunk has height: it flies in an arc, lands, bounces with some of its fall, and slides to rest
+            if (p.ay < 0) { p.vz = -p.ay; p.ay = 0; }
+            p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vrot * dt;
+            if (p.z > 0 || p.vz != 0) {
+                p.vz -= 420.0f * dt; p.z += p.vz * dt;
+                if (p.z <= 0) {
+                    p.z = 0; p.vx *= 0.55f; p.vy *= 0.55f; p.vrot *= 0.5f;
+                    if (p.vz < -90.0f) p.var |= 4;                      // (a hard landing kicks up dust: see below)
+                    p.vz = p.vz < -40.0f ? -p.vz * 0.38f : 0.0f;
+                }
+            } else { const float k = std::exp(-7.0f * dt); p.vx *= k; p.vy *= k; p.vrot *= k; }
+            continue;
+        }
         if (p.kind == PK_SMOKE) p.vx += (WIND_X - p.vx) * std::min(1.0f, 0.9f * dt);
         p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.ay * dt; p.rot += p.vrot * dt;
         if (p.drag > 0) { float k = std::exp(-p.drag * dt); p.vx *= k; p.vy *= k; }
@@ -314,9 +327,15 @@ void Game::updateParticles(float dt) {
     // a chunk of flying debris trails a little smoke for its first moments (the new puffs are appended, so only the old ones are looked at)
     const size_t n0 = parts.size();
     for (size_t i = 0; i < n0; i++) {
-        if (parts[i].kind != PK_DEBRIS || parts[i].age > 0.3f || fxRng.f() >= 2.5f * dq * dt) continue;
+        if (parts[i].kind != PK_DEBRIS) continue;
+        if (parts[i].var & 4) {
+            parts[i].var &= 3;
+            const Particle d = parts[i];
+            if (detail > 0) emitP(d.x, d.y, fxRng.f(-8, 8), fxRng.f(-9, -3), fxRng.f(0.5f, 0.9f), 2.2f, 6.5f, rgb(150, 132, 104, 130), PK_DUST, (u8)fxRng.range(0, 3), 0, 1.2f, fxRng.f(0, 6), 0);
+        }
+        if (parts[i].age > 0.3f || fxRng.f() >= 2.5f * dq * dt) continue;
         const Particle d = parts[i];
-        emitP(d.x, d.y, fxRng.f(-6, 6), fxRng.f(-10, -2), fxRng.f(0.9f, 1.4f), 2.6f, 6.0f, rgb(94, 90, 86, 150), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), fxRng.f(-0.2f, 0.2f));
+        emitP(d.x, d.y - d.z, fxRng.f(-6, 6), fxRng.f(-10, -2), fxRng.f(0.9f, 1.4f), 2.6f, 6.0f, rgb(94, 90, 86, 150), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), fxRng.f(-0.2f, 0.2f));
     }
     for (size_t i = 0; i < parts.size();) { if (parts[i].age >= parts[i].life) { parts[i] = parts.back(); parts.pop_back(); } else i++; }
     // the smoke columns of big blasts: puffs off the spot for a few seconds, thinning out at the end
@@ -349,8 +368,18 @@ void Game::spawnFromFx() {
             const float sc = f.size;
             const bool light = f.vel.y < -0.5f;   // one bomb of an Air Strike's carpet: a fraction of the smoke and scorch (a hundred of them land on one spot)
             float s = std::min(sc, 520.0f);   // (an Underground Nuke's fireball is wider than a ramp's, its smoke and chunks are not: their overdraw grows with the square)
+            if (detail > 0 && !light) {   // the shock: smoke, dust and chunks already in the air are shoved away from the new blast
+                const float R = 2.5f * std::min(sc, 200.0f) + 30.0f, push = 70.0f + std::min(sc, 200.0f) * 0.6f;
+                for (auto& q : parts) {
+                    if (q.kind != PK_SMOKE && q.kind != PK_DUST && q.kind != PK_DEBRIS) continue;
+                    const float dx = q.x - f.a.x, dy = q.y - f.a.y, d2 = dx * dx + dy * dy;
+                    if (d2 >= R * R || d2 < 1.0f) continue;
+                    const float d = std::sqrt(d2), k = push * (1.0f - d / R) / d;
+                    q.vx += dx * k; q.vy += dy * k * 0.7f;
+                }
+            }
             int chunks = 2 + (int)(s / 9), sparks = 4 + (int)(s / 3.5f);
-            for (int i = 0; i < chunks; i++) { float an = r.f(0, 6.283f), sp = r.f(50, 70 + s * 3.2f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.7f - r.f(60, 150), r.f(0.5f, 1.0f), r.f(0.7f, 1.2f), r.f(0.7f, 1.2f), shade(rgb(96, 90, 82), r.f(0.6f, 1.2f)), PK_DEBRIS, (u8)r.range(0, 3), 420, 0, r.f(0, 6), r.f(-14, 14)); }
+            for (int i = 0; i < chunks; i++) { float an = r.f(0, 6.283f), sp = r.f(50, 70 + s * 3.2f); emitP(f.a.x, f.a.y, std::cos(an) * sp * 0.6f, std::sin(an) * sp * 0.42f, r.f(1.0f, 1.7f), r.f(0.7f, 1.2f), r.f(0.7f, 1.2f), shade(rgb(96, 90, 82), r.f(0.6f, 1.2f)), PK_DEBRIS, (u8)r.range(0, 3), -r.f(70, 170), 0, r.f(0, 6), r.f(-14, 14)); }   // (a negative ay: the chunk's launch speed upward, see updateParticles)
             for (int i = 0; i < sparks; i++) { float an = r.f(0, 6.283f), sp = r.f(80, 140 + s * 4.0f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp, r.f(0.25f, 0.6f), r.f(1.0f, 1.8f), 0.4f, rgb(255, 214, 120), PK_SPARK, 0, 120, 3.0f); }
             int puffs = light ? (r.f() < 0.4f ? 1 : 0) : 1 + (int)(s / 12);
             for (int i = 0; i < puffs; i++) emitP(f.a.x + r.f(-s * 0.3f, s * 0.3f), f.a.y + r.f(-s * 0.3f, s * 0.3f), r.f(-10, 10), r.f(-30, -12), r.f(1.8f, 3.2f), s * r.f(0.35f, 0.55f), s * r.f(0.9f, 1.4f), rgb(52, 50, 48), PK_SMOKE, (u8)r.range(0, 3), 0, 0.6f, r.f(0, 6), r.f(-0.4f, 0.4f));
@@ -746,7 +775,8 @@ void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under 
             }
             case PK_DEBRIS: {
                 float al = clampf((1 - k) * 3.0f, 0, 1);
-                g.drawSized(g.fxs.debris[p.var & 3], s.x, s.y, p.s0 * 7, p.s0 * 7, p.rot, Color{(u8)(p.col.r * amb.r / 255), (u8)(p.col.g * amb.g / 255), (u8)(p.col.b * amb.b / 255), p.col.a}, (u8)(255 * al));
+                if (p.z > 1.0f) g.drawSized(g.fxs.debris[p.var & 3], s.x + p.z * 0.35f, s.y + p.z * 0.3f, p.s0 * 6, p.s0 * 5, p.rot, Color{0, 0, 0, 255}, (u8)(90 * al));   // its shadow on the ground
+                g.drawSized(g.fxs.debris[p.var & 3], s.x, s.y - p.z, p.s0 * 7, p.s0 * 7, p.rot, Color{(u8)(p.col.r * amb.r / 255), (u8)(p.col.g * amb.g / 255), (u8)(p.col.b * amb.b / 255), p.col.a}, (u8)(255 * al));
                 break;
             }
             case PK_SPARK: {

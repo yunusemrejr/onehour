@@ -1931,7 +1931,19 @@ void AiPlayer::think() {
             std::vector<Ref> farIdle;
             for (auto r : reserveUnits) { Entity* e = S.get(r); if (e && e->order == O_IDLE && dist(e->pos, rally) > 4 * TILE && (e->isAir() || g_map.sameGround(e->pos, rally))) farIdle.push_back(r); }   // (one that cannot get there stays put: see below)
             if (!farIdle.empty()) S.cmdGuardArea(farIdle, rally, 6 * TILE);
-            if (reserveValue >= waveThreshold * tu[TU_REINFORCE] && reserveUnits.size() >= 5) {
+            bool reinforce = reserveValue >= waveThreshold * tu[TU_REINFORCE] && reserveUnits.size() >= 5;
+            if (reinforce && on2(F2_REGROUP)) {
+                // F2_REGROUP: no trickling - only a group that is whole and already gathered sets off together. One tank leaving the factory alone
+                // walked into the enemy's guns; the gatherers wait in the guard circle, join a second wave as soon as enough of them stand together
+                int gathered = 0; float gatheredValue = 0;
+                for (Ref r : reserveUnits) {
+                    const Entity* e = S.get(r);
+                    if (e && dist(e->pos, rally) <= 8.0f * TILE) { gathered++; gatheredValue += unitValue(*e); }
+                }
+                reinforce = gathered >= 5 && gatheredValue >= waveThreshold * tu[TU_REINFORCE];
+                if (!reinforce && aiDebug()) fprintf(stderr, "[ai%d t=%.0f] REGROUP gathering %d/%d at the rally\n", player, S.time, gathered, (int)reserveUnits.size());
+            }
+            if (reinforce) {
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] REINFORCE value=%.0f units=%d\n", player, S.time, reserveValue, (int)reserveUnits.size());
                 groupMove(reserveUnits, tgt->pos, true);
                 for (Ref r : reserveUnits) if (Entity* e = S.get(r)) e->waveSerial = pl.waveSerial;
