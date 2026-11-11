@@ -2592,6 +2592,7 @@ void Game::renderWorld() {
     rp.mark("air");
     drawAirlifts(); rp.mark("airlifts");
     if (!(skipL & 64)) drawShroud();
+    drawSonar();
     rp.mark("shroud");
     drawDistrictLabels();
     drawAidDrops();
@@ -2699,6 +2700,7 @@ void Game::drawMinimap(int x, int y, int size) {
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
     }
+    drawSonarMinimap(x, y, size);
     for (auto& D : g_sim.districts) {   // the towns round the lake: a frame in the colour of whoever holds them
         int tx = clampi(tileOf(D.center.x), 0, MAP_W - 1), ty = clampi(tileOf(D.center.y), 0, MAP_H - 1);
         if (!rev && !ex[ty * MAP_W + tx]) continue;

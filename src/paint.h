@@ -31,6 +31,22 @@ inline float sdPoly(const std::vector<P>& v, float px, float py, float sgn) {
     return d;
 }
 
+// The studio pipeline (relight.cpp). While a sprite is painted with a Relief attached to its canvas, every bevelled shape paints its flat
+// colour (its albedo) and raises a height field by its own profile instead of baking a north-west bevel into the colour: a hull is a slab,
+// a turret on it a slab on the slab, a barrel a round bar on top. Glows mark their pixels as emitters. Afterwards relight() lights the
+// sprite from that height field the way a renderer lights a model: real normals, a key light with cast self-shadows, a sky fill,
+// ambient occlusion in the creases, edge wear on the sharp corners and a specular sheen on bare metal. Lines and dots (no bevel) are
+// decals: they colour the surface without changing its shape.
+struct Relief {
+    const Canvas* c = nullptr; int w = 0, h = 0;
+    std::vector<float> z;     // height per canvas pixel (canvas pixels)
+    std::vector<u8> emit;     // 0..255: how much of the pixel is light of its own (never shaded)
+    float zBase = 0;          // a floor every shape stands on while it is set (a building's roof slabs stand on its walls)
+    Relief(const Canvas& cv) : c(&cv), w(cv.w), h(cv.h), z((size_t)cv.w * cv.h, 0.0f), emit((size_t)cv.w * cv.h, 0) {}
+};
+inline Relief* g_relief = nullptr;   // the canvas being painted for the studio pipeline (null: the old baked bevel look)
+inline Relief* reliefOf(const Canvas& c) { return g_relief && g_relief->c == &c ? g_relief : nullptr; }
+
 // straight-alpha "over" so anti-aliased edges keep the right colour on a transparent canvas
 inline void put(Canvas& c, int x, int y, Color s) {
     if (x < 0 || y < 0 || x >= c.w || y >= c.h || s.a == 0) return;
@@ -52,13 +68,23 @@ struct Art {
 
     template <class F> void shape(int x0, int y0, int x1, int y1, F sdf, Color base, float bevel, float kk, float alpha) {
         x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(c.w - 1, x1); y1 = std::min(c.h - 1, y1);
+        Relief* rf = reliefOf(c);
+        // (studio pipeline: the shape's thickness follows its bevel; a translucent or faint-bevel shape is a thin skin, a strong one a slab)
+        const float th = rf && kk != 0 ? std::max(0.6f, bevel) * 0.95f * clampf(std::abs(kk) / 0.5f, 0.35f, 1.5f) * (kk > 0 ? 1.0f : -0.6f) * (base.a / 255.0f) : 0.0f;
         for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
             float px = x + 0.5f, py = y + 0.5f, d = sdf(px, py);
             if (d > 0.75f) continue;
             float cov = clampf(0.5f - d, 0, 1) * alpha;
             if (cov <= 0) continue;
             float f = 1.0f;
-            if (kk != 0) {
+            if (rf) {   // albedo plus height: a rounded shoulder from the edge in over the bevel's width
+                if (th != 0) {
+                    float pr = clampf(-d / std::max(0.5f, bevel), 0, 1); pr = pr * (2 - pr);
+                    float& z = rf->z[y * c.w + x];
+                    float top = std::max(z, rf->zBase) + th * pr;
+                    z += (top - z) * cov;
+                }
+            } else if (kk != 0) {
                 float gx = sdf(px + 0.6f, py) - sdf(px - 0.6f, py), gy = sdf(px, py + 0.6f) - sdf(px, py - 0.6f), gl = hyp(gx, gy);
                 float lit = gl > 1e-4f ? (gx * -0.62f - gy * 0.78f) / gl : 0;
                 float w = clampf((bevel + d) / bevel, 0, 1);
@@ -132,6 +158,7 @@ struct Art {
             if (d >= 1) continue;
             Color q = col; q.a = (u8)(col.a * (1 - d) * (1 - d));
             put(c, x, y, q);
+            if (Relief* rf = reliefOf(c)) if (x >= 0 && y >= 0 && x < c.w && y < c.h) { u8& em = rf->emit[y * c.w + x]; em = (u8)std::min(255, em + q.a); }   // (a light: relight leaves it bright)
         }
     }
     // soft drop shadow of a rectangle (design pixels), offset toward the south-east (light from the north-west)

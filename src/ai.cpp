@@ -276,6 +276,15 @@ void AiPlayer::observe(int enemyInf, int enemyVeh, int enemyAir, float threatVal
 void AiPlayer::init(int p, u64 seed) {
     player = p; rng = Rng(seed);
     varyRng = Rng(seed * 0x9E3779B97F4A7C15ull + 0x5EED); waveTaste = (u32)varyRng.next(); pace = 0.92f + 0.16f * (varyRng.next() % 1001) / 1000.0f;
+    // F2_GAMBIT: one commander in three-and-a-bit does not lean on anything; the others favour air, armour or (where the map has a shore site for a naval
+    // yard near home) navy for the first 12 minutes
+    if (on2(F2_GAMBIT) && g_sim.players[p].difficulty >= 1 && varyRng.f() < 0.3f) {
+        int tx, ty;
+        const bool navy = g_sim.shoreSite(p, g_sim.players[p].faction == F_CYBER ? B_C_NAVAL : B_K_NAVAL, g_sim.players[p].basePos, tx, ty);
+        gambit = (int)(varyRng.f() * (navy ? 3 : 2));
+        gambits++;
+        if (aiDebug()) fprintf(stderr, "[ai%d] GAMBIT: emphasis on %s for the first 12 minutes\n", p, gambit == 0 ? "air" : gambit == 1 ? "armour" : "navy");
+    }
     tu = tuneFor(g_sim.players[p].difficulty);
     nextThink = 2.0f + p * 0.37f;
     if (smart) {
@@ -544,6 +553,8 @@ bool AiPlayer::tryBuild(int buildType, Vec2 preferNear, int maxRing) {
     return g_sim.cmdBuild(g_sim.refOf(*d), buildType, tx, ty);
 }
 
+static const float GAMBIT_SPAN = 720.0f;   // F2_GAMBIT: the emphasis lasts the first 12 minutes of the match
+
 int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAir) {
     Player& pl = g_sim.players[player];
     int base = firstUnitOf(pl.faction);
@@ -628,6 +639,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
             float eff = pl.valueDealt[c.type] / pl.spentOn[c.type];
             w *= clampf(0.7f + 0.6f * (eff / avgEff), 0.5f, 1.8f);
         }
+        if (gambit >= 0 && g_sim.time < GAMBIT_SPAN) { const UnitType& ut = UNITS[c.type]; if ((ut.kind == UK_AIR ? 0 : ut.kind == UK_INF ? -1 : ut.naval ? 2 : 1) == gambit) w *= 1.4f; }   // F2_GAMBIT: the emphasised class, 40% up
         if (pl.money < UNITS[c.type].cost) continue;
         if (w > best) { best = w; pick = c.type; }
     }
@@ -684,6 +696,9 @@ Entity* AiPlayer::pickAttackTarget(const Vec2* from) {
         if (!(g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) continue;
         float s = dist(e.pos, from ? *from : (hasFront ? humanFront : base)) / TILE;   // (with a teammate's push under way, near their front rather than near home)
         if (on2(F2_VARY)) { u32 h = (u32)(&e - &g_sim.ents[0]) * 2654435761u ^ waveTaste ^ e.gen * 40503u; h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; s += (h & 1023) / 1023.0f * 7.0f; }   // (this wave's taste: up to 7 tiles' worth)
+        // F2_SOFTSPOT: lower scores are better, so an objective far from where the enemy's army was last seen (90 seconds ago at most) is subtracted from: up to
+        // 6 tiles' worth for one 35 tiles or more from it. The enemy's army guards what it has, so the wave goes where it is not
+        if (on2(F2_SOFTSPOT) && e.isBuilding() && g_sim.time - armyAtT < 90.0f) s -= clampf(dist(e.pos, armyAt) / TILE - 15.0f, 0.0f, 20.0f) * 0.3f;
         if (e.isBuilding()) {
             BuildRole r = e.bt().role;
             if (e.district >= 0) s += on(FEAT_TOWNS) ? -4.0f : -12.0f;   // a town round the lake: worth hitting (its holder stops earning), but an infiltrator takes it back cheaper
@@ -785,6 +800,7 @@ void AiPlayer::garrisonStrongholds() {
 
 // Feed the outcome of a finished wave back into the model: did it destroy at least as much as it lost?
 void AiPlayer::endWave(float remainingValue) {
+    flank.clear(); flankPhase = 0;   // (F2_PINCER: the wave's flank is over with it)
     if (!waveHasSample) return;
     waveHasSample = false;
     Player& pl = g_sim.players[player];
@@ -976,6 +992,7 @@ void AiPlayer::think() {
     }
     // enemy intel (only what we've explored)
     int enemyInf = 0, enemyVeh = 0, enemyAir = 0, enemyAirfields = 0, enemyShips = 0, enemyRamps = 0; float enemyArmyValue = 0, threatValue = 0;
+    Vec2 armyCen; float armyW = 0;   // F2_SOFTSPOT: the value-weighted centre of the enemy's combat units in sight
     Entity* threat = nullptr; float threatDist = 1e18f; int threatCount = 0;
     std::vector<Entity*> enemyUnits;
     std::vector<Entity*> ownBuildings;
@@ -1005,6 +1022,7 @@ void AiPlayer::think() {
             if (ut.role == UR_COMBAT) {
                 if (ut.kind == UK_INF) enemyInf++; else if (ut.kind == UK_AIR) enemyAir++; else { enemyVeh++; if (ut.naval) enemyShips++; }
                 enemyArmyValue += unitValue(e);
+                if (on2(F2_SOFTSPOT)) { const float v = unitValue(e); armyCen += e.pos * v; armyW += v; }
                 enemyUnits.push_back(&e);
                 // threats: enemy combat units close to any of our structures
                 if (nearOwn(e.pos)) { threatCount++; threatValue += unitValue(e); float db = dist(e.pos, pl.basePos); if (db < threatDist) { threatDist = db; threat = &e; } }
@@ -1012,6 +1030,7 @@ void AiPlayer::think() {
         } else if (e.isBuilding() && e.bt().role == BR_AIRFIELD) enemyAirfields++;
         else if (e.isBuilding() && e.bt().role == BR_NUKE) enemyRamps++;
     }
+    if (on2(F2_SOFTSPOT) && armyW > 0) { armyAt = armyCen * (1.0f / armyW); armyAtT = S.time; }   // F2_SOFTSPOT: where the enemy's army was seen
     prof.mark("survey_intel");
     for (auto& n : S.nukes) if (n.id > seenNukeIds) { seenNukeIds = n.id; if (S.enemies(player, n.owner)) nukesSeen++; }   // warheads launched at anybody on our side's account count: a commander that has seen a nuke builds defences
     if (!threat) {
@@ -1472,6 +1491,7 @@ void AiPlayer::think() {
         if (pl.difficulty >= 1 && battleships < (pl.difficulty >= 3 ? 2 : 1) && destroyers >= 2 && pl.money - reserve > UNITS[bsT].cost + 4000 && S.unitAvailable(player, bsT))
             for (auto* y : yards) if (y->constructed && y->queue.empty()) { if (S.cmdTrain(S.refOf(*y), bsT)) { queuedShips++; break; } }
         int fleetCap = 3 + pl.difficulty + (enemyShips > 0 ? 2 : 0) + (pl.money > 9000 ? 1 : 0) + patrols / 2;   // (patrol boats are small: two take one berth)
+        if (gambit == 2 && S.time < GAMBIT_SPAN) fleetCap = (int)(fleetCap * 1.4f + 0.5f);   // F2_GAMBIT: a navy emphasis holds a bigger fleet
         for (auto* y : yards) if (y->constructed && y->queue.empty() && (int)fleet.size() + queuedShips < fleetCap && pl.money - reserve > 800) {
             bool rich = pl.money - reserve > 2600;
             int want = (cruisers * 2 < destroyers && S.unitAvailable(player, cruiserT)) ? cruiserT : destroyerT;
@@ -1846,10 +1866,11 @@ void AiPlayer::think() {
             if (!again) lastRetarget = S.time;
             if (tgt && !again) {   // on to the next objective; units still in a fight finish it first (the idle ones are sent on below every few seconds)
                 std::vector<Ref> go;
-                for (Ref r : wave) { const Entity* e = S.get(r); if (e && !(on(FEAT_HOLD) && e->engaged.valid())) go.push_back(r); }
+                for (Ref r : wave) { const Entity* e = S.get(r); if (e && !flankWaiting(r) && !(on(FEAT_HOLD) && e->engaged.valid())) go.push_back(r); }   // (a flank still on its way keeps its waypoint)
                 if (!go.empty()) groupMove(go, tgt->pos, true);
             }
         }
+        if (on2(F2_PINCER)) pincerOps(S.get(attackTarget));   // F2_PINCER: the flank goes in once it is in place
         prof.mark("wave_retarget"); bool exhausted = waveNow < waveValue * 0.5f || wave.empty();
         bool stale = S.time - attackStarted > 240.0f;
         if (smart && wits && !exhausted) {
@@ -1891,7 +1912,7 @@ void AiPlayer::think() {
                 std::vector<Ref> idle;
                 for (auto r : wave) {
                     Entity* e = S.get(r);
-                    if (!e) continue;
+                    if (!e || flankWaiting(r)) continue;   // (a flank on its way to its waypoint is not idle: it is waiting there)
                     // idle, or stalled: its route ran out short of the objective and it is not fighting (a route planned through a crowd or a gap
                     // since closed) - it gets a fresh one
                     bool stalled = on(FEAT_HOLD) && !e->isAir() && (e->order == O_ATTACKMOVE || e->order == O_MOVE) && e->pathIdx >= e->path.size() && !e->engaged.valid() && dist(e->pos, tgt->pos) > 6.0f * TILE;
@@ -2006,9 +2027,10 @@ void AiPlayer::think() {
                     S.cmdGuardArea(home, rally, clampf((4.0f + stay * 0.2f) * TILE, 5.0f * TILE, 8.0f * TILE));
                 }
                 if (on2(F2_GUILE) && pl.difficulty >= 1) launchFeint(wave, tgt);   // a fast detachment pulls the defence elsewhere first
+                if (on2(F2_PINCER) && pl.difficulty >= 2) launchPincer(wave, tgt);   // (its fastest third walks round to the flank; the rest go straight in)
                 memcpy(waveX, x, sizeof x); waveHasSample = true; beginWaveLearning();
                 if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] WAVE value=%.0f units=%d (home guard %d) -> %s at %d,%d\n", player, S.time, waveValue, (int)wave.size(), (int)(army.size() - wave.size()), tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y));
-                groupMove(wave, tgt->pos, true);
+                { std::vector<Ref> mainGo; for (Ref r : wave) if (!flankWaiting(r)) mainGo.push_back(r); groupMove(mainGo, tgt->pos, true); }
                 nextOrderTime = S.time + 6;
                 if (on(FEAT_COMBO) && pl.difficulty >= 2 && S.strikesReady(player) > 0) {   // combined arms: the Air Strike goes in on the objective's guns as the wave sets off
                     Vec2 c; float w = 0;

@@ -5,6 +5,7 @@
 #include "art.h"
 #include "art2.h"
 #include "testutil.h"
+#include "relight.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <thread>
@@ -23,7 +24,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --relictest, --subtest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -724,6 +725,7 @@ Vec2 navalBattleScene(std::vector<Ref> side[2]);
 bool microMatrix(u64 seed);
 bool relicTest(u64 seed);         // tests23.cpp: the canal and its bridges, the relic bases, the Hydra, destructible launchers, submarines, swarms, surrender
 bool subTest(u64 seed);           // tests24.cpp: submarine autonomy (idle dive, crash dive, evasion, hunting), its heavy warhead and price; sniper-held bunkers
+bool sonarTest(u64 seed);         // tests25.cpp: the sonar that finds a computer army's dived submarine (human ships and aircraft only), the contact's lingering, surrender of a submarine-only army
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
@@ -2800,10 +2802,10 @@ static void writeArtSheet(const char* path) {
     for (int f = 0; f < 2; f++) {   // f 0: Cyber, f 1: Clanker
         bool cy = f == 0;
         Canvas car(ART_BIG, ART_BIG), crg(ART_BIG, ART_BIG), cj(ART_SIZE, ART_SIZE), aj(ART_SIZE, ART_SIZE);
-        artCarrierBody(car, PLAYER_COLOR[f], cy);
-        artCargoShipBody(crg, PLAYER_COLOR[f], cy);
-        artCarrierJetBody(cj, PLAYER_COLOR[f], cy);
-        artAirstrikeJetBody(aj, PLAYER_COLOR[f], cy);
+        studioPaint(car, rigUnit(), nullptr, [&] { artCarrierBody(car, PLAYER_COLOR[f], cy); });
+        studioPaint(crg, rigUnit(), nullptr, [&] { artCargoShipBody(crg, PLAYER_COLOR[f], cy); });
+        studioPaint(cj, rigUnit(), nullptr, [&] { artCarrierJetBody(cj, PLAYER_COLOR[f], cy); });
+        studioPaint(aj, rigUnit(), nullptr, [&] { artAirstrikeJetBody(aj, PLAYER_COLOR[f], cy); });
         put2x(car, M + f * (bigW + GAP), M);
         put2x(crg, M + (2 + f) * (bigW + GAP), M);
         put2x(cj, M + f * (bigW + GAP) + (bigW - smW) / 2, M + bigW + GAP);
@@ -2815,16 +2817,16 @@ static void writeArtSheet(const char* path) {
     for (int f = 0; f < 2; f++) {
         bool cy = f == 0;
         Canvas bb(ART_BIG, ART_BIG), sub0(ART_BIG, ART_BIG), sub1(ART_BIG, ART_BIG), sub2(ART_BIG, ART_BIG);
-        artBattleshipBody(bb, PLAYER_COLOR[f], cy);
-        artSubBody(sub0, PLAYER_COLOR[f], cy, 0);
-        artSubBody(sub1, PLAYER_COLOR[f], cy, 1);
-        artSubBody(sub2, PLAYER_COLOR[f], cy, 2);
+        studioPaint(bb, rigUnit(), nullptr, [&] { artBattleshipBody(bb, PLAYER_COLOR[f], cy); });
+        studioPaint(sub0, rigUnit(), nullptr, [&] { artSubBody(sub0, PLAYER_COLOR[f], cy, 0); });
+        studioPaint(sub1, rigUnit(), nullptr, [&] { artSubBody(sub1, PLAYER_COLOR[f], cy, 1); });
+        studioPaint(sub2, rigUnit(), nullptr, [&] { artSubBody(sub2, PLAYER_COLOR[f], cy, 2); });
         put2x(bb, M + f * (bigW + GAP), rowBB);
         put2x(sub0, M + (2 + f) * (bigW + GAP), rowBB);
         put2x(sub1, M + f * (bigW + GAP), rowSub);
         put2x(sub2, M + (2 + f) * (bigW + GAP), rowSub);
         Canvas tur(ART_SIZE, ART_SIZE);
-        artBattleshipMount(tur, PLAYER_COLOR[f], cy);
+        studioPaint(tur, rigUnit(), nullptr, [&] { artBattleshipMount(tur, PLAYER_COLOR[f], cy); });
         ShipMounts bm = battleshipMounts();
         for (int i = 0; i < bm.n; i++) {   // the turret centred on its barbette: canvas px from the hull centre, times the sheet scale
             int cx = M + f * (bigW + GAP) + ART_BIG / 2 * S + (int)(bm.x[i] * S), cy2 = rowBB + ART_BIG / 2 * S + (int)(bm.y[i] * S);
@@ -3032,6 +3034,7 @@ int main(int argc, char** argv) {
         else if (a == "--micromatrix") { g_map.generate(); return microMatrix(seed) ? 0 : 1; }
         else if (a == "--relictest") { g_map.generate(); return relicTest(seed) ? 0 : 1; }
         else if (a == "--subtest") { g_map.generate(); return subTest(seed) ? 0 : 1; }
+        else if (a == "--sonartest") { g_map.generate(); return sonarTest(seed) ? 0 : 1; }
         else if (a == "--learnupdatetest") { g_map.generate(); return learnUpdateTest(seed) ? 0 : 1; }
         else if (a == "--chosentest") { g_map.generate(); return chosenTest(seed) ? 0 : 1; }
         else if (a == "--variety") { int n = 20; if (i + 1 < argc && argv[i + 1][0] != '-') n = atoi(argv[++i]); g_map.generate(); return varietyTest(n, seed, d0 >= 0 && d0 <= 3 ? d0 : 2); }

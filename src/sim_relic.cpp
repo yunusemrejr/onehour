@@ -164,8 +164,10 @@ void Sim::updateDiscovery() {
 
 // ------------------------------------------------------------ surrender
 // A computer army that has nothing left to fight on with: not one structure (relic ones and its share of anything included; a Bastion Wall alone is
-// no army), no dozer to found a base with, no submarine, no tank, super-heavy or warship, no heavy aircraft, and its few remaining light units worth less
-// than SURRENDER_VALUE. Its cash does not save it: without a structure or a dozer it cannot spend it.
+// no army), no dozer to found a base with, no tank, super-heavy or warship, no heavy aircraft, and its few remaining light units worth less than
+// SURRENDER_VALUE. Its cash does not save it: without a structure or a dozer it cannot spend it. A submarine keeps it in the fight only together
+// with a structure or a dozer: on its own (or with light units) it is no army, since a boat out of its yard cannot build or repair anything, and
+// its price does not count against the light units either.
 bool Sim::armyBeaten(int p) const {
     float light = 0;
     for (auto& e : ents) {
@@ -173,7 +175,8 @@ bool Sim::armyBeaten(int p) const {
         if (e.isBuilding()) { if (e.district >= 0 || invulnerable(e)) continue; return false; }
         const UnitType& ut = e.ut();
         if (ut.temp || civicDozerType(e.type)) continue;
-        if (ut.role == UR_DOZER || subType(e.type) || chosenType(e.type)) return false;
+        if (subType(e.type)) continue;   // (a submarine alone does not keep an army in the fight: see above)
+        if (ut.role == UR_DOZER || chosenType(e.type)) return false;
         if (ut.naval && e.type != U_C_PATROL && e.type != U_K_PATROL) return false;
         if (ut.kind == UK_VEH && (ut.armor == AR_HEAVY || ut.cost >= 1500)) return false;
         if (ut.kind == UK_AIR && ut.cost >= 2000) return false;

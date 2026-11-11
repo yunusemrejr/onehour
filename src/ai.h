@@ -59,8 +59,15 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_CAND = 8,       // (training only, never shipped: plays TUNE_CAND, see readTuneEnv in ai.cpp)
                F2_RELIC = 64,     // the abandoned relic bases (ai_frontier.cpp relicOps): squads claim them, Hydra Silos fire, relic factories build, bridges are raised
                F2_SUBS = 128,     // nuclear submarines (subOps): a few for a rich commander, kept dived, one surfacing to launch at a target worth a warhead
-               F2_ALL = 7 | 16 | 32 | 64 | 128,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_PINCER = 256,   // a pincer (launchPincer / pincerOps, Hard and Brutal): a wave of 14 or more sends its fastest third round the flank, to a spot 12 tiles
+                                  // out from the objective on the side the enemy holds less; that group goes in once it is in place, or after 45 seconds
+               F2_GAMBIT = 512,   // an emphasis for the first 12 minutes (Normal and up): with a 3-in-10 chance the commander leans on air, armour or (where a shore
+                                  // site for a naval yard exists) navy, and weights that class up by 40% in its production (chooseUnit; fleet size for the navy)
+               F2_SOFTSPOT = 1024,// the soft spot (pickAttackTarget): an objective far from where the enemy's army was last seen (within 90 seconds) scores better
+               F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024,
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
+               // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -199,6 +206,12 @@ struct AiPlayer {
     std::vector<Ref> shadows;       // its Shadow Guard (led apart from the waves)
     std::vector<Ref> feint;         // F2_GUILE: the detachment feinting at the enemy's economy, and until when
     float feintUntil = -100;
+    std::vector<Ref> flank;         // F2_PINCER: the flank group of the wave under way (it stays in the wave: its losses and its retreat count there)
+    int flankPhase = 0;             // 0: on its way to the waypoint and held there, 1: sent on the objective (or no flank)
+    Vec2 flankTo; float flankAt = -1000;   // the waypoint, and when the flank set off for it
+    int gambit = -1;                // F2_GAMBIT: the emphasis for the first 12 minutes (0 air, 1 armour, 2 navy), -1 none
+    Vec2 armyAt; float armyAtT = -1000;    // F2_SOFTSPOT: where the enemy's combat units were last seen (value-weighted centroid) and when
+    int pincers = 0, gambits = 0;   // (statistics)
     int chosenSold = 0, feints = 0, heliHunts = 0;   // (statistics)
     u32 waveTaste = 0; float pace = 1.0f;   // F2_VARY: this wave's taste among near-equal objectives, the first wave's pace this match (0.92 .. 1.08)
     Rng varyRng{ 1 };                       // (their own random stream: everything else plays as before)
@@ -209,6 +222,9 @@ struct AiPlayer {
     void heliHunt(const std::vector<Ref>& aircraft, const std::vector<Entity*>& airfields, int reserve, bool hunting);
     void sellTaken();               // structures the Chosen took deep in enemy ground are sold off (the enemy loses them, the money is ours)
     bool launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget);
+    void launchPincer(std::vector<Ref>& waveUnits, Entity* mainTarget);   // F2_PINCER: the flank share of a wave sets off round to its waypoint
+    void pincerOps(Entity* mainTarget);                                    // F2_PINCER: the flank goes in once it is in place (or after 45 seconds)
+    bool flankWaiting(Ref r) const;                                        // F2_PINCER: a unit of the flank that is still on its way to the waypoint
     void init(int p, u64 seed);
     void endWave(float remainingValue);
     void learnOutcomes();

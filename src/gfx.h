@@ -61,7 +61,11 @@ struct Canvas {
             if (d < 1) { Color k = c; k.a = (u8)(c.a * (1 - d) * (1 - d)); set(i, j, k); }
         }
     }
+    // (the studio pipeline lights sprites like rendered models: the old ink line round every sprite becomes a faint contact edge)
+    static inline float outlineK = 1.0f;
     void outline(Color c) {   // 1px outline around opaque pixels
+        c.a = (u8)(c.a * outlineK);
+        if (c.a == 0) return;
         std::vector<u32> src = px;
         for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
             if (unpack(src[y * w + x]).a > 40) continue;

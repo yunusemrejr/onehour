@@ -195,6 +195,8 @@ private:
     void cancelModes();
     void drawNukes();
     void drawShipWake(const Entity& e, Vec2 p);                    // ui2.cpp: the newer features' rendering
+    void drawSonar();                                              // ui_sonar.cpp: a computer army's dived boat the human's sonar has found (ring, shadow out of sight, HP), a feather for one in sight
+    void drawSonarMinimap(int x, int y, int size);                 // ui_sonar.cpp: a blinking dot on the minimap for each sonar contact
     void drawShipMounts(const Entity& e, Vec2 p, Color mod, u8 alpha = 255);
     void drawCarrierDeck(const Entity& e, Vec2 p, float ang, Color mod, u8 alpha);   // ui2.cpp: the wing parked on deck, the deck crew, the catapults' blast deflectors and steam
     void drawJeepCrew(const Entity& e, Vec2 p);

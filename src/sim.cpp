@@ -1511,7 +1511,7 @@ void Sim::nukeBlast(const Nuke& n) {
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
         Entity* e = get(r); if (!e) continue;
-        if (submerged(*e)) continue;   // (a dived submarine rides it out deep under the surface)
+        if (hiddenSub(*e, n.owner)) continue;   // (a dived submarine rides it out deep under the surface, unless a sonar has it)
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (bridgeEnt(*e)) {   // a bridge anywhere in the blast: the span is thrown down
             float bd = std::max(0.0f, distToEntity(n.pos, *e));
@@ -1952,7 +1952,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (invulnerable(t) && t.constructed && !burnOrder) return false;
     if (districtRuin(t) && t.progress < DISTRICT_RUIN_SAFE) return false;   // a razed town block is rubble until its people have raised it again a way
     if (e.isUnit() && subType(e.type) && e.subState != 0 && !subAimDown) return false;   // a submarine fires only when it is up
-    if (t.isUnit() && submerged(t)) return false;   // (nothing reaches a dived submarine)
+    if (t.isUnit() && hiddenSub(t, e.owner)) return false;   // (nothing reaches a dived submarine: only a sonar contact of the attacker's army)
     if (t.isBuilding() && t.owner < 0 && (bridgeEnt(t) || relicEnt(t) || t.bt().role == BR_ISLANDNUKE)) {   // nobody's bridge, launcher or relic structure: only by order
         int wq = wpn >= 0 ? wpn : e.weapon();
         return t.constructed && wq >= 0 && WEAPONS[wq].ground && e.forceTarget.valid() && get(e.forceTarget) == &t && visibleTo(t, e.owner);
@@ -2254,7 +2254,7 @@ void Sim::finishUnitExperience(Entity& e) {
 
 void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap, bool nuke) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
-    if (submerged(tgt)) return;   // a dived submarine: nothing reaches it
+    if (hiddenSub(tgt, attackerOwner)) return;   // a dived submarine: nothing reaches it (a sonar contact of the attacker's army can be hit)
     if (bridgeEnt(tgt) && !tgt.constructed) return;   // (a broken bridge is a wreck in the water until a dozer raises it)
     if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
         if (tick % 3 == 0) { fx.push_back({FX_SPARK, tgt.pos, tgt.pos, 0, 0.3f, rgb(255, 236, 190), 5}); fx.push_back({FX_RING, tgt.pos, tgt.pos, 0, 0.25f, rgb(255, 255, 255), 16.0f}); }
@@ -2363,7 +2363,7 @@ void Sim::splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref att
     float r = std::max(radiusTiles, 0.05f) * TILE;
     std::vector<Entity*> hits;
     forEachNear(at, r, [&](Entity& t) {
-        if (t.kind == EK_RESOURCE || &t == get(attacker) || submerged(t)) return;   // (a force-fired blast never hits the gun that fired it)
+        if (t.kind == EK_RESOURCE || &t == get(attacker) || hiddenSub(t, owner)) return;   // (a force-fired blast never hits the gun that fired it)
         if (!(enemies(owner, t.owner) || (forced && t.owner >= 0) || (bridgeEnt(t) && t.constructed))) return;   // (a bridge is in any blast's way)
         if (t.isAir() && !w.air) return;
         if (!t.isAir() && !w.ground) return;
@@ -3977,6 +3977,19 @@ int Sim::stealthOf(const Entity& e) {
     return ST_NONE;   // structures are never stealthy: underground bunkers are plainly visible on the surface
 }
 
+// A computer army's dived submarine is a contact for a human player whose sonar found it (updateDetection stamps detUntil while it is in range, and
+// SONAR_LINGER seconds after). Computer players never get one: their own sonar finds nothing under water, as before. hiddenSub is what keeps a dived
+// boat out of every gun, torpedo and blast except a contacted one's: an attacker with no owner (-1) or an AI army reaches nothing that is dived.
+bool Sim::sonarContact(const Entity& sub, int player) const {
+    if (!sub.isUnit() || !subType(sub.type) || sub.owner < 0 || sub.owner >= numPlayers || !players[sub.owner].isAI) return false;
+    if (player < 0 || player >= numPlayers || players[player].isAI) return false;
+    return sub.detUntil[player] > time;
+}
+
+bool Sim::hiddenSub(const Entity& t, int attackerOwner) const {
+    return submerged(t) && !(attackerOwner >= 0 && sonarContact(t, attackerOwner));
+}
+
 // Stealthy things (snipers and spy drones) are invisible to every army that has no detector close enough: they cannot be
 // seen, selected, targeted or shot, and the computer commanders do not know they are there. The owner's team always sees them.
 bool Sim::visibleTo(const Entity& e, int player) const {
@@ -3984,7 +3997,7 @@ bool Sim::visibleTo(const Entity& e, int player) const {
     if (e.secret && !(e.discovered >> player & 1) && (e.owner < 0 || players[e.owner].team != players[player].team)) return false;   // a secret island's structure nobody of theirs has found
     if (e.isUnit() && subType(e.type)) {   // a submarine: dived, nothing finds it; up, only something close sees the low hull (or everyone, just after a launch)
         if (e.owner < 0 || e.owner == player || players[e.owner].team == players[player].team) return true;
-        if (e.subState == 2) return false;
+        if (e.subState == 2) return sonarContact(e, player);   // (dived: only a human's sonar finds a computer army's boat, see updateDetection)
         return e.detUntil[player] > time;
     }
     if (!stealthOf(e)) return true;
@@ -4013,6 +4026,20 @@ void Sim::updateDetection() {
             if (w.isUnit() && submerged(w)) return;   // (a dived submarine sees nothing either)
             for (int q = 0; q < numPlayers; q++) if (players[q].team == players[w.owner].team) sb.detUntil[q] = std::max(sb.detUntil[q], time + 1.5f);
         });
+    }
+    // a computer army's dived submarine: a human's sonar finds it. Ships and naval yards of the human's hear it out to SONAR_RANGE, aircraft to
+    // SONAR_AIR_RANGE; each one that hears it stamps the boat as a contact for SONAR_LINGER seconds more. Only the human's sonar: an AI never hears one
+    for (size_t i = 0; i < ents.size(); i++) {
+        Entity& sb = ents[i];
+        if (!sb.alive || !sb.isUnit() || !subType(sb.type) || sb.subState == 0 || sb.owner < 0 || sb.owner >= numPlayers || !players[sb.owner].isAI) continue;
+        bool heard[MAX_PLAYERS] = {};
+        forEachNearMask(sb.pos, SONAR_RANGE * TILE, enemyMask(sb.owner), [&](Entity& w) {
+            if (w.owner < 0 || w.owner >= numPlayers || players[w.owner].isAI || !players[w.owner].alive || heard[w.owner] || !enemies(sb.owner, w.owner) || w.carrier.valid()) return;
+            if (w.isAir()) { if (dist(w.pos, sb.pos) <= SONAR_AIR_RANGE * TILE) heard[w.owner] = true; return; }
+            if (w.isUnit()) { if (w.ut().naval && dist(w.pos, sb.pos) <= SONAR_RANGE * TILE) heard[w.owner] = true; return; }
+            if (w.isBuilding() && w.constructed && w.bt().role == BR_NAVAL && distToEntity(sb.pos, w) <= SONAR_RANGE * TILE) heard[w.owner] = true;
+        });
+        for (int h = 0; h < numPlayers; h++) if (heard[h]) sb.detUntil[h] = std::max(sb.detUntil[h], time + SONAR_LINGER);
     }
     for (size_t i = 0; i < ents.size(); i++) {
         Entity& d = ents[i];

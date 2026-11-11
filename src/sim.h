@@ -433,6 +433,8 @@ struct Sim {
     void updateDiscovery();                    // who has found the secret islands' structures (from their own sight, never a scan)
     // ---- submarines, battleships, drone swarms (sim_navy.cpp)
     static bool submerged(const Entity& e) { return e.isUnit() && e.subState == 2 && subType(e.type); }
+    bool sonarContact(const Entity& sub, int player) const;     // a computer army's dived submarine that this human player's sonar has found (SONAR_*, updateDetection)
+    bool hiddenSub(const Entity& t, int attackerOwner) const;   // dived, and not a sonar contact of the attacker's army: nothing reaches it (the attacker's owner, -1 for none)
     void cmdDive(const std::vector<Ref>& sel, bool dive);   // submarines dive out of sight (or come up again)
     bool cmdSubNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // a submarine with its missile ready surfaces (if it must) and launches it at pos
     int subNukesReady(int player) const;

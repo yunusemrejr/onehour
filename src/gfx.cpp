@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "relight.h"
 #include "map.h"
 #include "art.h"
 #include "art2.h"
@@ -994,6 +995,7 @@ void Gfx::updateShroud(const std::vector<u8>& fog, bool force) {
 
 static Sprite cropToSprite(Gfx& g, Canvas& c, float cx, float cy, float dscale);   // defined with the buildings below; unit sprites are cropped to their painted area too
 
+
 // ------------------------------------------------------------ units
 // Unit art lives in art.cpp: 2x supersampled sprites (drawn at 0.5 scale, bilinear filtered), with two extra
 // animation frames for anything that walks or rolls, turrets per player, and a spinning rotor for helicopters.
@@ -1028,7 +1030,7 @@ void Gfx::buildUnits() {
                 if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
                 const int cs = artCanvas(t);   // (the big ships are painted at twice the detail on a bigger canvas)
                 Canvas c(cs, cs);
-                artUnitBody(c, t, team, f);
+                studioPaint(c, rigUnit(), nullptr, [&] { artUnitBody(c, t, team, f); });
                 gradeArt(c, 977u + (u32)t, 0.10f, 0.07f);
                 Sprite s = cropToSprite(*this, c, cs / 2, cs / 2, UNIT_SCALE * artScale(t) * ART_SIZE / (float)cs);
                 if (f == 0) unitBody[t][p] = s; else unitAnim[t][p][f - 1] = s;
@@ -1041,7 +1043,9 @@ void Gfx::buildUnits() {
                 subArt[u.faction == F_CYBER ? 0 : 1][p][st - 1] = cropToSprite(*this, c, ART_BIG / 2, ART_BIG / 2, UNIT_SCALE * artScale(t) * ART_SIZE / (float)ART_BIG);
             }
             Canvas tc(ART_SIZE, ART_SIZE);
-            if (artUnitTurret(tc, t, team)) { gradeArt(tc, 1913u + (u32)t, 0.10f, 0.07f); unitTurret[t][p] = cropToSprite(*this, tc, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t)); }
+            bool hasTurret = false;
+            studioPaint(tc, rigUnit(), nullptr, [&] { hasTurret = artUnitTurret(tc, t, team); });
+            if (hasTurret) { gradeArt(tc, 1913u + (u32)t, 0.10f, 0.07f); unitTurret[t][p] = cropToSprite(*this, tc, ART_SIZE / 2, ART_SIZE / 2, UNIT_SCALE * artScale(t)); }
         }
     }
     for (int p = 0; p < MAX_PLAYERS; p++) {
@@ -1078,7 +1082,7 @@ void Gfx::buildBuildings() {
     for (int t = 0; t < B_COUNT; t++) {
         BArtSize sz = artBuildingSize(t);
         Canvas c(sz.w, sz.h), m(sz.w, sz.h);
-        artBuilding(c, m, t);
+        studioPaint(c, rigBuilding(), &m, [&] { artBuilding(c, m, t); });
         finishBuilding(c, t, 3201u + (u32)t);
         gradeArt(c, 3301u + (u32)t, BUILDS[t].role == BR_CIVIC ? 0.04f : 0.08f, BUILDS[t].faction == F_CYBER ? 0.03f : 0.05f);   // (Cyber's ceramic and glass are cleaner than Clanker's field metal)
         // cropped to the painted area like the team masks: the padding round a footprint is mostly empty sky, and the
@@ -1092,7 +1096,7 @@ void Gfx::buildBuildings() {
         if (BUILDS[t].role == BR_RELICSILO) { Canvas a(sz.w, sz.h); artRelicSiloArmed(a, BUILDS[t].w, BUILDS[t].h); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
         if (BUILDS[t].role == BR_BUNKER) for (int u = 0; u < BU_COUNT; u++) {
             Canvas a(sz.w, sz.h);
-            artBunkerUpgrade(a, t, u);
+            studioPaint(a, rigBuilding(), nullptr, [&] { artBunkerUpgrade(a, t, u); });
             finishBuilding(a, t, 3401u + (u32)(t * 8 + u), true);
             gradeArt(a, 3401u + (u32)(t * 8 + u), 0.08f, 0.05f);
             bunkerUpg[BUILDS[t].faction][u] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K);

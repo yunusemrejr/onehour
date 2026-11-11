@@ -775,6 +775,13 @@ static const float SUB_NUKE_COOLDOWN = 360.0f;
 static const float SUB_NUKE_ARM = 120.0f;      // seconds after it is launched from the yard before its missile is ready
 static const float SUB_ARMOR = 0.45f;          // its pressure hull: share of conventional damage it takes when surfaced
 static const float SUB_NUKE_CAP = 0.30f;       // hard ceiling: one warhead takes at most this share of its health
+// Sonar: a computer army's dived submarine is still found, but only by a HUMAN player's sonar (the human's ships, naval yards and aircraft). A computer
+// army's own sonar never finds a dived boat, so the computer commanders play exactly as before. Within SONAR_RANGE tiles of a ship or naval yard of the
+// human's (SONAR_AIR_RANGE tiles of an aircraft) the boat is a contact: it can be targeted, shot at and seen as if it were up, and it stays a contact for
+// SONAR_LINGER seconds after the last of them has gone out of range (a sonar ping fades, it does not drop the boat at once)
+static const float SONAR_RANGE = 11.0f;        // tiles: a ship or naval yard finds a dived computer submarine this close
+static const float SONAR_AIR_RANGE = 8.0f;     // tiles: an aircraft does
+static const float SONAR_LINGER = 4.0f;        // seconds a contact lasts after the last sonar let go of it
 static const int   W_TORPEDO_C = 68, W_TORPEDO_K = 69;   // the submarines' torpedoes (ships only)
 // ---- Battleships: three main turrets (their gun is the UnitType weapon) and cruise-missile cells (W_VLS, its own reload) for anything on the ground or the sea
 static const int   W_BATTLESHIP_C = 70, W_BATTLESHIP_K = 71, W_VLS = 72;

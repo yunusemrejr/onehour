@@ -241,3 +241,68 @@ bool AiPlayer::launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget) {
     if (aiDebugCh()) fprintf(stderr, "[ai%d t=%.0f] FEINT: %d units at the %s, the wave (%d) at the %s\n", player, S.time, (int)feint.size(), best->bt().name, (int)waveUnits.size(), mainTarget->isUnit() ? mainTarget->ut().name : mainTarget->bt().name);
     return true;
 }
+
+// F2_PINCER: a wave of 14 or more sends its fastest third (ground units only: never aircraft or ships) round the flank. The waypoint is 12 tiles out from the
+// objective, square to the approach, on the side the enemy holds less (ties by the commander's own taste), on ground the flank can walk to. The flank stays in
+// the wave (its losses, its retreat and its value all count there, see pincerOps) and goes in once its centre is within 4 tiles of the waypoint, or after 45 s.
+void AiPlayer::launchPincer(std::vector<Ref>& waveUnits, Entity* tgt) {
+    Sim& S = g_sim;
+    flank.clear(); flankPhase = 0;
+    if (!tgt || waveUnits.size() < 14) return;
+    Vec2 cen; int n = 0;
+    for (Ref r : waveUnits) if (const Entity* e = S.get(r)) if (!e->isAir()) { cen += e->pos; n++; }
+    if (n < 10) return;
+    cen = cen * (1.0f / n);
+    if (dist(tgt->pos, cen) < 8.0f * TILE) return;   // (too near to come round by the flank)
+    std::vector<std::pair<float, Ref>> fast;
+    for (Ref r : waveUnits) if (const Entity* e = S.get(r)) if (!e->isAir() && !e->ut().naval) fast.push_back({e->ut().speed, r});
+    const size_t k = std::min(fast.size(), waveUnits.size() / 3);
+    if (k < 4) return;
+    std::sort(fast.begin(), fast.end(), [](const std::pair<float, Ref>& a, const std::pair<float, Ref>& b) { return a.first > b.first; });
+    const Vec2 lead = S.get(fast[0].second)->pos;   // (the fastest: the flank walks on the ground it stands on)
+    const Vec2 u = (tgt->pos - cen).norm();
+    const Vec2 sq(-u.y, u.x);
+    Vec2 side[2]; float foe[2];
+    for (int s = 0; s < 2; s++) {
+        const Vec2 p = tgt->pos + sq * ((s == 0 ? 1.0f : -1.0f) * 12.0f * TILE);
+        side[s] = Vec2(clampf(p.x, 2 * TILE, WORLD_W - 2 * TILE), clampf(p.y, 2 * TILE, WORLD_H - 2 * TILE));
+        foe[s] = enemyStrengthNear(side[s], 10.0f);
+    }
+    const int first = foe[0] < foe[1] - 1.0f ? 0 : foe[1] < foe[0] - 1.0f ? 1 : (varyRng.f() < 0.5f ? 0 : 1);
+    Vec2 way; bool found = false;
+    for (int t = 0; t < 2 && !found; t++) {
+        const Vec2 w = g_map.nearestFree(side[t == 0 ? first : 1 - first], 6);
+        if (g_map.sameGround(lead, w)) { way = w; found = true; }
+        else {   // not on the flank's own ground: the nearest spot of its region (as the rally point is picked)
+            const u16 rg = g_map.region[clampi(tileOf(lead.y), 0, MAP_H - 1) * MAP_W + clampi(tileOf(lead.x), 0, MAP_W - 1)];
+            int bx, by;
+            if (rg && g_map.closestInRegion(rg, clampi(tileOf(w.x), 0, MAP_W - 1), clampi(tileOf(w.y), 0, MAP_H - 1), bx, by)) { way = tileCenter(bx, by); found = true; }
+        }
+        if (found && dist(way, tgt->pos) > 20.0f * TILE) found = false;   // (a walk round by some far shore is no flank)
+    }
+    if (!found) return;
+    for (size_t i = 0; i < k; i++) flank.push_back(fast[i].second);
+    flankTo = way; flankPhase = 0; flankAt = S.time; pincers++;
+    groupMove(flank, way, false);
+    if (aiDebugCh()) fprintf(stderr, "[ai%d t=%.0f] PINCER: %d units round to %d,%d for the %s at %d,%d (main %d)\n", player, S.time, (int)flank.size(), tileOf(way.x), tileOf(way.y), tgt->isUnit() ? tgt->ut().name : tgt->bt().name, tileOf(tgt->pos.x), tileOf(tgt->pos.y), (int)waveUnits.size() - (int)flank.size());
+}
+
+// The flank once it is on its way: prunes the dead, and when its centre is in place (within 4 tiles of the waypoint) or 45 seconds have passed, it attack-moves
+// onto the objective. Until then flankWaiting keeps the wave's other orders off it.
+void AiPlayer::pincerOps(Entity* mainTarget) {
+    Sim& S = g_sim;
+    if (flank.empty()) return;
+    flank.erase(std::remove_if(flank.begin(), flank.end(), [&](Ref r) { const Entity* e = S.get(r); return !e || e->owner != player; }), flank.end());
+    if (flank.empty()) { flankPhase = 1; return; }
+    if (flankPhase != 0) return;
+    Vec2 c; int n = 0;
+    for (Ref r : flank) if (const Entity* e = S.get(r)) { c += e->pos; n++; }
+    c = c * (1.0f / n);
+    if (dist(c, flankTo) >= 4.0f * TILE && S.time - flankAt <= 45.0f) return;
+    flankPhase = 1;
+    if (!mainTarget) return;   // (no objective any more: the flank is released to the wave's own orders)
+    groupMove(flank, mainTarget->pos, true);
+    if (aiDebugCh()) fprintf(stderr, "[ai%d t=%.0f] PINCER goes in on the %s (%d units, %s)\n", player, S.time, mainTarget->isUnit() ? mainTarget->ut().name : mainTarget->bt().name, (int)flank.size(), dist(c, flankTo) < 4.0f * TILE ? "in place" : "after 45 s");
+}
+
+bool AiPlayer::flankWaiting(Ref r) const { return flankPhase == 0 && !flank.empty() && std::find(flank.begin(), flank.end(), r) != flank.end(); }
