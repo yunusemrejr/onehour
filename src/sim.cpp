@@ -162,9 +162,10 @@ Ref Sim::spawnResource(int tx, int ty, int amount) {
 // The map's neutral civilian strongholds. They are ordinary buildings with owner -1: nobody may sell them, they have no production, and no
 // army upgrade ever applies to them. The first infantryman to climb into one claims it (see Sim::board), and its windows become firing ports.
 void Sim::spawnMapLandmarks() {
-    static const int TYPES[7] = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP, B_C_FORTRESS, B_C_ISLANDNUKE };
+    static const int TYPES[10] = { B_C_CASTLE, B_C_CIVBUNKER, B_C_WATCHTOWER, B_C_COTTAGE, B_C_WORKSHOP, B_C_FORTRESS, B_C_ISLANDNUKE, B_N_DERRICK, B_N_LIGHTHOUSE, B_N_DEPOT };
     for (auto& L : g_map.landmarks) {
-        int type = TYPES[clampi(L.kind, 0, 6)];
+        int type = TYPES[clampi(L.kind, 0, 9)];
+        if (L.kind >= 7 && getenv("ONEHOUR_INITPROF")) fprintf(stderr, "prize %s at %d,%d\n", BUILDS[type].name, L.tx, L.ty);
         Ref r = placeBuilding(type, -1, L.tx, L.ty, true);
         if (Entity* e = get(r)) { e->constructed = true; e->progress = 1.0f; e->hp = e->maxHp; if (BUILDS[type].role == BR_ISLANDNUKE) e->siloTimer = time + ISLAND_NUKE_ARM; }
     }
@@ -4093,7 +4094,7 @@ bool Sim::canBoard(const Entity& u, const Entity& c) const {
     if (c.isBuilding()) {
         if (c.bt().role == BR_STRONGHOLD) {   // a neutral landmark is open to any army; a claimed one to its owner and allies
             if (!c.constructed || u.ut().kind != UK_INF) return false;
-            if (c.owner >= 0 && c.owner != u.owner && players[c.owner].team != players[u.owner].team) return false;
+            if (c.owner >= 0 && c.owner != u.owner && players[c.owner].team != players[u.owner].team) return prizeType(c.type) && c.passengers.empty();   // (an empty prize is there for the taking)
             return garrisonInfantry(c) < garrisonCap(c);
         }
         if (u.owner != c.owner) return false;
@@ -4123,7 +4124,7 @@ void Sim::cmdEnter(const std::vector<Ref>& sel, Ref carrier) {
 
 void Sim::board(Entity& u, Entity& c, bool quiet) {
     Ref uref = refOf(u);
-    bool claim = c.isBuilding() && c.bt().role == BR_STRONGHOLD && c.owner < 0;   // the first infantry inside takes the empty landmark for their army
+    bool claim = c.isBuilding() && c.bt().role == BR_STRONGHOLD && (c.owner < 0 || (c.owner != u.owner && players[c.owner].team != players[u.owner].team));   // the first infantry inside takes the empty landmark for their army
     if (claim) {
         c.owner = u.owner;
         c.attacker = NOREF; c.lastDamaged = -100; c.detUntil[MAX_PLAYERS - 1] = 0;
@@ -4587,6 +4588,19 @@ void Sim::updateStronghold(Entity& b) {
         i++;
     }
     if (b.unloading) updateCarrierUnload(b);
+    if (b.owner >= 0 && prizeType(b.type)) {   // what a prize gives its holder
+        if (b.type == B_N_DERRICK && (tick + b.gen * 7) % (u32)(DERRICK_PERIOD * SIM_HZ) == 0) {
+            players[b.owner].money += DERRICK_PAY;
+            fx.push_back({FX_SPARK, b.pos + Vec2(0, -30), b.pos, 0, 0.5f, rgb(255, 214, 96), 6});
+        }
+        if (b.type == B_N_DEPOT && (tick + b.gen * 7) % (u32)SIM_HZ == 0) {
+            const int team = players[b.owner].team;
+            forEachNear(b.pos, DEPOT_RADIUS * TILE, [&](Entity& t) {
+                if (!t.isUnit() || t.owner < 0 || players[t.owner].team != team || t.hp >= t.maxHp || t.carrier.valid() || t.fall > 0) return;
+                t.hp = std::min(t.maxHp, t.hp + std::max(6.0f, t.maxHp * DEPOT_HEAL));
+            });
+        }
+    }
     if (b.passengers.empty()) { b.unloading = false; return; }
     if (b.owner < 0 || (tick + b.gen) % 2 != 0) return;   // a neutral place has no side to shoot for
     static std::vector<Ref> cand; cand.clear();
@@ -5046,11 +5060,12 @@ void Sim::checkVictory() {
             else if (time - beatenSince[p] >= SURRENDER_GRACE) surrender(p);
         } else beatenSince[p] = 0;
         bool any = false;
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type))) && !invulnerable(e) && e.district < 0) { any = true; break; }   // (a town it holds is not its army either)   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type))) && !invulnerable(e) && e.district < 0 && !(e.isBuilding() && prizeType(e.type))) { any = true; break; }   // (nor is a prize landmark it holds: its garrison counts, the landmark does not)   // (a town it holds is not its army either)   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
         if (!any) {
             pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]);
+            if (getenv("ONEHOUR_BENCHDBG")) fprintf(stderr, "[victory] t=%.0f player %d is out (surrendered %d)\n", time, p, (int)(beatenSince[p] > 0));
             for (auto& e : ents) if (e.alive && e.owner == p && e.isUnit() && civicDozerType(e.type)) destroy(e, false);   // its civilian dozers leave the war behind
-            for (auto& e : ents) if (e.alive && e.owner == p && invulnerable(e)) { e.owner = -1; e.attacker = NOREF; for (int q = 0; q < MAX_PLAYERS; q++) e.detUntil[q] = 0; }   // its island launchers and Bastion Walls fall to nobody (any spy may take them)
+            for (auto& e : ents) if (e.alive && e.owner == p && (invulnerable(e) || (e.isBuilding() && prizeType(e.type)))) { e.owner = -1; e.attacker = NOREF; for (int q = 0; q < MAX_PLAYERS; q++) e.detUntil[q] = 0; }   // its island launchers and Bastion Walls fall to nobody (any spy may take them)
             for (int d = 0; d < (int)districts.size(); d++) if (districts[d].owner == p) captureDistrict(d, -1);   // and its towns are free again
         }
     }

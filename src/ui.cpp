@@ -431,7 +431,7 @@ void Game::issueRightClick(Vec2 w) {
         g_sim.cmdMove(selection, t->pos, false); g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
         return;
     }
-    bool neutralFort = t && t->isBuilding() && t->bt().role == BR_STRONGHOLD && (t->owner < 0 || !g_sim.enemies(g_sim.humanPlayer, t->owner));
+    bool neutralFort = t && t->isBuilding() && t->bt().role == BR_STRONGHOLD && (t->owner < 0 || !g_sim.enemies(g_sim.humanPlayer, t->owner) || (prizeType(t->type) && t->passengers.empty()));
     bool boardable = t && ((t->isBuilding() && t->bt().role == BR_BUNKER && t->owner == g_sim.humanPlayer) || neutralFort || (t->isUnit() && t->owner == g_sim.humanPlayer && t->ut().cargoCap > 0));
     if (boardable) {   // climb aboard a cargo chopper / bunker / neutral (or friendly) civilian stronghold
         std::vector<Ref> riders; Ref tr = g_sim.refOf(*t);
@@ -1682,6 +1682,7 @@ void Game::drawSunShadows(float vx0, float vy0, float vx1, float vy1) {
         if (!e.alive || !e.isBuilding() || !e.constructed || Sim::bridgeEnt(e)) continue;
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
         if (!g_sim.shownToHuman(e) || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
+        if (g.bld3d[e.type]) continue;   // (a modelled structure's shadow is rendered into its sprite)
         const BuildType& bt = e.bt();
         float h;
         switch (bt.role) {
@@ -1728,7 +1729,6 @@ void Game::drawEntity(Entity& e) {
             if (selected) g.box((int)fx, (int)fy, (int)fw, (int)fh, rgb(150, 255, 170, 160));
             return;
         }
-        if (bt.role == BR_NAVAL) drawDock(e, p);   // the pier reaches into the lake under the structure
         if (bt.role == BR_WAYMAKER) {   // the grinder at work on its patch: it shudders, and a bar fills as the ground is cleared
             float sh = std::sin(wallTime * 60.0f + e.gen) * 0.8f;
             g.draw(s, p.x + sh, p.y, 0, 1, tint);
@@ -1843,16 +1843,17 @@ void Game::drawEntity(Entity& e) {
                 }
             }
             // rotating heads for defenses
-            if (e.type == B_R_FLAK || e.type == B_R_LASER || e.type == B_R_CANNON) g.draw(g.relicHead[e.type == B_R_FLAK ? 0 : (e.type == B_R_LASER ? 1 : 2)], p.x, p.y, e.angle, 1, tint);   // (the relic defences' own heads)
-            else if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], p.x, p.y, e.angle, 1, tint);
-            else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3], p.x, p.y, e.angle, 1, tint);
+            const int hslot = e.owner < 0 ? Sprite::TEAM_NEUTRAL : slotOf(owner);
+            if (e.type == B_R_FLAK || e.type == B_R_LASER || e.type == B_R_CANNON) g.draw(g.relicHead[e.type == B_R_FLAK ? 0 : (e.type == B_R_LASER ? 1 : 2)].of(hslot), p.x, p.y, e.angle, 1, tint);   // (the relic defences' own heads)
+            else if (bt.role == BR_TURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1].of(hslot), p.x, p.y, e.angle, 1, tint);
+            else if (bt.role == BR_AATURRET) g.draw(g.turretHead[bt.faction == F_CYBER ? 2 : 3].of(hslot), p.x, p.y, e.angle, 1, tint);
             if (g_sim.roofGun(e) >= 0) {   // Defense Guns upgrade: a small laser / machine gun mount on the roof
                 Vec2 gp = p + (g_sim.roofGunPos(e) - e.pos);
                 Color ac = hudAccent(bt.faction);
                 g.fillCircle(gp.x, gp.y + 2.0f, 9.0f, rgb(10, 12, 16, 150));
                 g.fillCircle(gp.x, gp.y + 1.0f, 8.0f, disabled ? rgb(70, 76, 90) : shade(ac, 0.55f));
                 g.fillCircle(gp.x, gp.y + 1.0f, 6.5f, rgb(30, 34, 40));
-                g.draw(g.turretHead[bt.faction == F_CYBER ? 0 : 1], gp.x, gp.y, e.turret2, 0.85f, tint);
+                { const int hi = bt.faction == F_CYBER ? 0 : 1; g.draw(g.turretHead[hi].of(e.owner < 0 ? Sprite::TEAM_NEUTRAL : slotOf(owner)), gp.x, gp.y + g.headLift[hi] * 0.85f, e.turret2, 0.85f, tint); }
             }
             // production activity light
             if (!e.queue.empty() && ((int)(wallTime * 3) & 1)) { Color ac = hudAccent(bt.faction); g.glowAdd(fx + fw - 7, fy + 2, 7, Color{ac.r, ac.g, ac.b, 160}); g.fillCircle(fx + fw - 7, fy + 2, 2.4f, ac); }
@@ -1919,7 +1920,7 @@ void Game::drawEntity(Entity& e) {
     } else {
         if (ut.naval) {   // a hull on the water: the wake round it and a soft dark patch under it
             if (e.fade > 0.35f && subUp > 0.3f) drawShipWake(e, p);   // (a Fleet Call ship still in the haze at the border leaves none yet; a dived submarine none at all)
-            g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), (u8)(64 * clampf(e.fade, 0, 1) * subUp));
+            if (!body.set) g.draw(body, p.x + 1, p.y + 4, e.angle, 1, rgb(0, 0, 0), (u8)(64 * clampf(e.fade, 0, 1) * subUp));   // (a modelled hull throws its own shadow on the water)
         } else if (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) {   // an infiltrator paddling its inflatable raft
             float ca = std::cos(e.angle), sa = std::sin(e.angle);
             if (spd > 5) for (int k = 1; k <= 2; k++) g.drawSized(g.fxs.ring, p.x - ca * 9 * k, p.y - sa * 9 * k, 10.0f + 7 * k, 7.0f + 5 * k, e.angle, rgb(220, 240, 255), (u8)(90 / k));
@@ -1928,8 +1929,10 @@ void Game::drawEntity(Entity& e) {
             g.drawSized(g.disc, p.x + ca * 0.5f, p.y + sa * 0.5f, 15, 7, e.angle, rgb(26, 28, 32));   // the floor
             g.drawSized(g.disc, p.x + ca * 9, p.y + sa * 9, 4, 4, 0, rgb(232, 120, 40));          // the orange bow cap
         } else {
-            g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
-            if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
+            if (!body.set) {   // (a modelled unit's shadow is part of its sprite)
+                g.draw(ut.kind == UK_INF ? g.shadowSmall : g.shadowLarge, p.x, p.y + 3, 0, ut.kind == UK_INF ? 0.55f : 0.75f);
+                if (ut.kind == UK_VEH) g.draw(body, p.x + 2, p.y + 3, e.angle, 1, rgb(0, 0, 0), 55);   // contact shadow in the hull's own shape
+            }
             if (owner >= 0 && fallK <= 0 && detail >= 1) {   // a faint ring of the army's colour on the ground: who is who in a melee at a glance (warmer for an enemy)
                 float rr = e.radius() * 2.5f + 4.0f;
                 bool foe = g_sim.enemies(g_sim.humanPlayer, owner);
@@ -2110,6 +2113,8 @@ void Game::drawEntity(Entity& e) {
     }
     if (ut.kind == UK_AIR && ut.heli) {   // main rotor: motion-blur disc plus a spinning blade pair over the hub
         float spin = paused || disabled ? 0.4f : wallTime * (ut.faction == F_CYBER ? -42.0f : 38.0f);
+        const Vec2 pGround = p;
+        p.y -= g.unitHub[e.type];   // (a modelled airframe: the hub stands above its origin)
         if (ut.cargoCap > 0) {   // a cargo lifter has two big rotors, fore and aft
             Vec2 fw(std::cos(e.angle), std::sin(e.angle));
             for (int k = -1; k <= 1; k += 2) {
@@ -2125,6 +2130,7 @@ void Game::drawEntity(Entity& e) {
             g.draw(g.rotorDisc, hub.x, hub.y, 0, 1, rgb(255, 255, 255), disabled ? 40 : 255);
             g.draw(g.rotorBlades, hub.x, hub.y, spin, 1, ut.faction == F_CYBER ? rgb(200, 240, 255) : rgb(255, 255, 255), 150);
         }
+        p = pGround;
     }
     if (e.cargo > 0) { float bx = p.x - std::cos(e.angle) * 2, by = p.y - std::sin(e.angle) * 2; g.fillCircle(bx, by, 3.2f, rgb(240, 205, 90)); g.fillCircle(bx - 0.8f, by - 0.8f, 1.4f, rgb(255, 240, 170)); }
     drawEscorts(e, p);
@@ -2503,14 +2509,20 @@ void Game::renderWorld() {
         if (e.pos.x < vx0 || e.pos.x > vx1 || e.pos.y < vy0 || e.pos.y > vy1) continue;
         if (!g_sim.shownToHuman(e)) continue;   // never seen, or an enemy unit out of sight (remembered ground shows its structures only)
         if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;   // aboard a carrier / hidden by stealth (and a secret island's structure nobody of ours has found)
-        if (e.kind == EK_RESOURCE || e.isBuilding()) drawEntity(e);
+        if (e.kind == EK_RESOURCE) drawEntity(e);
+        else if (e.isBuilding()) {   // (a structure stands up from the ground: what is north of it is drawn first and shows behind it)
+            if (e.bt().role == BR_NAVAL) drawDock(e, worldToScreen(entPos(e)));   // (its pier lies on the water, under the ships)
+            ground.push_back(&e);
+        }
         else if (e.isAir() || e.fall > 0) air.push_back(&e);
         else if (e.ut().naval) ships.push_back(&e);
         else ground.push_back(&e);
     }
     auto byY = [](Entity* a, Entity* b) { return a->pos.y < b->pos.y; };
+    // (a structure sorts by the south edge of its footprint; flat ones - pads, strips, hatches - go under everything that stands on the ground)
+    auto depth = [](const Entity* a) { if (!a->isBuilding()) return a->pos.y; const BuildType& bt = a->bt(); return bt.role == BR_AIRFIELD || bt.role == BR_BUNKER || bt.role == BR_UNUKE ? -1e9f + a->pos.y : a->pos.y + bt.h * (TILE * 0.5f) - 2.0f; };
     std::sort(ships.begin(), ships.end(), byY);
-    std::sort(ground.begin(), ground.end(), byY);
+    std::sort(ground.begin(), ground.end(), [&](Entity* a, Entity* b) { return depth(a) < depth(b); });
     if (!(skipL & 8)) for (auto* e : ships) drawEntity(*e);
     for (auto* e : bridges) drawEntity(*e);
     if (!(skipL & 8)) for (auto* e : ground) drawEntity(*e);

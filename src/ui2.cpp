@@ -49,7 +49,7 @@ void Game::drawShipMounts(const Entity& e, Vec2 p, Color mod, u8 alpha) {
     ShipMounts m = battleship ? battleshipMounts() : (patrol ? patrolMounts() : shipMounts(cruiser));
     // (a battleship's hull is painted on the 128 px canvas: its mount offsets are in those half-size pixels, and its turret sprite is drawn at half the
     // hull's pixel scale, a quarter of the 64 px turret's own)
-    const float sc = UNIT_SCALE * artScale(e.type) * (battleship ? 0.5f : 1.0f), turScale = battleship ? 0.25f : 0.82f;
+    const float sc = UNIT_SCALE * artScale(e.type) * (battleship ? 0.5f : 1.0f), turScale = tur.set ? 1.0f : (battleship ? 0.25f : 0.82f);   // (a modelled mount is in the hull's own units)
     float ca = std::cos(e.angle), sa = std::sin(e.angle);
     for (int i = 0; i < m.n; i++) {
         float lx = m.x[i] * sc, ly = m.y[i] * sc;

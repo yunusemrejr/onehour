@@ -257,6 +257,9 @@ bool AiManager::raiseDifficulty(int p) {
     if (a.doctrine == DOC_BOOM) incomes = std::min(INCOME_MAX, incomes + 1);
     a.style.incomes = std::max(a.style.incomes, incomes);
     a.style.incomeFrom = std::min(a.style.incomeFrom, (d >= 2 ? 1.2f : 1.8f) - (a.doctrine == DOC_BOOM ? 0.4f : 0.0f));
+    // the step is felt at once: for four minutes the commander presses with what it has (waves go on a thinner margin, the army may grow past its
+    // cap) while the economy, defences and thinking pace of the new level catch up behind it
+    a.surgeUntil = S.time + 240.0f; a.regroupUntil = std::min(a.regroupUntil, S.time + 5.0f); a.failStreak = 0;
     if (d >= 3) pl.money += 6000;   // the Brutal war chest it would have started with (an Easy commander raised to Normal introduces itself at its next think)
     return true;
 }

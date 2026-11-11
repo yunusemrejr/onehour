@@ -531,6 +531,27 @@ Sprite shrinkSprite(Gfx& g, const Sprite& src, float maxDim) {
     bool own = false;
     if (!g.useAtlas) SDL_SetTextureScaleMode(cur, SDL_ScaleModeLinear);   // (an atlas page is bilinear already)
     g.bind(src, rgb(255, 255, 255), 255);
+    if (src.set) {   // a modelled unit: its picture is the hull with the owner's colour laid over it, first put together in a texture of its own
+        const Sprite& b = src.set->base[0]; const Sprite& m = src.set->mask[0];
+        if (SDL_Texture* t = SDL_CreateTexture(g.ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_TARGET, b.w, b.h)) {
+            SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+            SDL_SetRenderTarget(g.ren, t);
+            SDL_SetRenderDrawColor(g.ren, 0, 0, 0, 0);
+            SDL_RenderClear(g.ren);
+            SDL_SetTextureBlendMode(b.tex, SDL_BLENDMODE_NONE);
+            SDL_FRect d0 = { 0, 0, (float)b.w, (float)b.h };
+            SDL_RenderCopyF(g.ren, b.tex, b.srcRect(), &d0);
+            if (m.tex) {
+                const Color tc = src.team < MAX_PLAYERS ? PLAYER_COLOR[src.team] : rgb(206, 200, 180);
+                g.bind(m, tc, 255);
+                SDL_FRect d1 = { std::round(b.ox - m.ox), std::round(b.oy - m.oy), (float)m.w, (float)m.h };
+                SDL_RenderCopyF(g.ren, m.tex, m.srcRect(), &d1);
+            }
+            SDL_SetRenderTarget(g.ren, nullptr);
+            cur = t; own = true;
+        }
+    }
     do {
         int nw = cw > 2 * W ? std::max(W, (cw + 1) / 2) : W;
         int nh = ch > 2 * H ? std::max(H, (ch + 1) / 2) : H;

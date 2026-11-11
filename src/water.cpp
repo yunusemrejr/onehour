@@ -126,11 +126,29 @@ void Game::drawWaterOverlay() {
     static float lastT = -1; static Vec2 lastCam(-1, -1); static bool lastAny = false;
     const float every = detail >= 2 ? 1.0f / 30.0f : 1.0f / 15.0f;
     const int gx0 = (int)std::floor(cam.x / OV), gy0 = (int)std::floor(cam.y / OV);   // texels on a world-aligned grid: nothing shimmers as the view scrolls
-    if (lastT >= 0 && wallTime >= lastT && wallTime - lastT < every && (int)std::floor(lastCam.x / OV) == gx0 && (int)std::floor(lastCam.y / OV) == gy0) {
-        if (lastAny) { SDL_FRect dst = { gx0 * (float)OV - cam.x, gy0 * (float)OV - cam.y, (float)W * OV, (float)H * OV }; SDL_RenderCopyF(g.ren, tex, nullptr, &dst); }
+    // Only the parts of the overlay that hold anything are drawn: it is laid in cells of RC x RC texels, a row's run of lit cells in one draw.
+    // A view with an islet's surf in one corner blends that corner, not the whole screen (blending all of it cost more than working it out)
+    constexpr int RC = 32;
+    static std::vector<u8> cellLit;
+    const int cellsX = (W + RC - 1) / RC, cellsY = (H + RC - 1) / RC;
+    auto blit = [&] {
+        // (the software renderer places a picture on whole pixels: the overlay's corner is rounded once, as it would be in one piece, so the cells meet)
+        const float ox = g.softwareRenderer ? (float)(int)(gx0 * (float)OV - cam.x) : gx0 * (float)OV - cam.x, oy = g.softwareRenderer ? (float)(int)(gy0 * (float)OV - cam.y) : gy0 * (float)OV - cam.y;
+        for (int cyi = 0; cyi < cellsY; cyi++) for (int cxi = 0; cxi < cellsX;) {
+            if (!cellLit[(size_t)cyi * cellsX + cxi]) { cxi++; continue; }
+            int x1 = cxi; while (x1 < cellsX && cellLit[(size_t)cyi * cellsX + x1]) x1++;
+            SDL_Rect src = { cxi * RC, cyi * RC, std::min(W, x1 * RC) - cxi * RC, std::min(H, (cyi + 1) * RC) - cyi * RC };
+            SDL_FRect dst = { ox + (float)(src.x * OV), oy + (float)(src.y * OV), (float)(src.w * OV), (float)(src.h * OV) };
+            SDL_RenderCopyF(g.ren, tex, &src, &dst);
+            cxi = x1;
+        }
+    };
+    if (lastT >= 0 && wallTime >= lastT && wallTime - lastT < every && (int)std::floor(lastCam.x / OV) == gx0 && (int)std::floor(lastCam.y / OV) == gy0 && cellLit.size() == (size_t)cellsX * cellsY) {
+        if (lastAny) blit();
         return;
     }
     lastT = wallTime; lastCam = cam; lastAny = false;
+    cellLit.assign((size_t)cellsX * cellsY, 0);
     const NoiseTab& N = NT();
     const u64 tStart = SDL_GetPerformanceCounter();
     const float t = wallTime, storm = stormLevel(), rough = 0.35f + 0.65f * storm;
@@ -151,6 +169,7 @@ void Game::drawWaterOverlay() {
         }
         const bool allLand = dmax <= 0 && dmin <= 0, calmOpen = dmin > SURF_REACH + 24 && storm <= 0.01f;
         if (allLand || calmOpen) { for (int y = by; y < ey1; y++) std::fill(&px[(size_t)y * W + bx], &px[(size_t)y * W + ex1], 0u); continue; }
+        bool lit = false;
         for (int y = by; y < ey1; y++) {
             const float wy = (gy0 + y + 0.5f) * OV;
             u32* row = &px[(size_t)y * W];
@@ -161,22 +180,32 @@ void Game::drawWaterOverlay() {
                 if (!rev) { int tx = clampi((int)wx >> 5, 0, MAP_W - 1), ty = clampi((int)wy >> 5, 0, MAP_H - 1); if (!ex[(size_t)ty * MAP_W + tx]) { row[x] = 0; continue; } }
                 float foam = 0, dark = 0;
                 if (d < SURF_REACH) {
-                    const float n1 = N.at(wx * 0.009f, wy * 0.009f), n2 = N.at(wx * 0.022f + 19.0f, wy * 0.022f + 7.0f);
                     // rollers: a breaking line with a sharp front on the shore side and a foam trail fading out behind it (seaward); they run in
-                    // toward the beach, break into long segments along their length and fade as they reach the wash
-                    float ph = (d * k + t * v + n1 * 3.0f) * 0.15915494f;
-                    float u = ph - std::floor(ph);   // 0 at a crest, growing seaward behind it
-                    float prof = u < 0.035f ? u / 0.035f : std::exp(-(u - 0.035f) * 11.0f);
-                    float zone = clampf((SURF_REACH - d) / 90.0f, 0, 1) * clampf((d - 6.0f) / 30.0f, 0, 1);
-                    float seg = clampf((n2 - 0.34f + 0.22f * storm) * 3.0f, 0, 1);
-                    foam += prof * zone * seg * (0.62f + 0.33f * rough);
-                    // the wash: foam runs up the sand and slides back; a bright lacy fringe right at the waterline
-                    float run = 7.0f + 6.0f * std::sin(t * 0.8f + n1 * 7.0f) + 7.0f * storm;
-                    float lace = N.at(wx * 0.09f + t * 0.4f, wy * 0.09f) * N.at(wx * 0.21f - t * 0.3f, wy * 0.21f + 3.0f);
-                    float edge = std::exp(-std::abs(d - run) * 0.45f);                       // the bright lip of the swash
-                    float inside = d < run ? clampf(lace * 2.6f - 0.35f, 0, 1) * 0.55f : 0.0f;   // lacy foam left on the wet sand behind it
-                    foam += edge * (0.55f + 0.35f * n2) + inside;
-                    foam += clampf((28.0f - d) / 28.0f, 0, 1) * clampf(lace * 3.0f - 0.9f, 0, 1) * 0.45f;   // flecks in the breakers
+                    // toward the beach, break into long segments along their length and fade as they reach the wash. A third of the water lies
+                    // in the gaps between segments and near the shore's own wash zone nothing else is needed there: it costs one noise lookup
+                    const float n2 = N.at(wx * 0.022f + 19.0f, wy * 0.022f + 7.0f);
+                    const float seg = clampf((n2 - 0.34f + 0.22f * storm) * 3.0f, 0, 1);
+                    const bool wash = d < 36.0f;
+                    if (seg <= 0 && !wash) { if (storm <= 0.01f) { row[x] = 0; continue; } }
+                    const float n1 = (seg > 0 || wash) ? N.at(wx * 0.009f, wy * 0.009f) : 0.0f;
+                    if (seg > 0) {
+                        float ph = (d * k + t * v + n1 * 3.0f) * 0.15915494f;
+                        float u = ph - std::floor(ph);   // 0 at a crest, growing seaward behind it
+                        float prof = u < 0.035f ? u / 0.035f : std::exp(-(u - 0.035f) * 11.0f);
+                        float zone = clampf((SURF_REACH - d) / 90.0f, 0, 1) * clampf((d - 6.0f) / 30.0f, 0, 1);
+                        foam += prof * zone * seg * (0.62f + 0.33f * rough);
+                    }
+                    // the wash: foam runs up the sand and slides back; a bright lacy fringe right at the waterline. All of it lies within 36 px of
+                    // the shore (the swash runs 20 px up at most and its lip is gone 16 px either side), so the rollers further out, most of the
+                    // surf's area and all of it round an islet, skip this half of the work
+                    if (wash) {
+                        float run = 7.0f + 6.0f * std::sin(t * 0.8f + n1 * 7.0f) + 7.0f * storm;
+                        float lace = N.at(wx * 0.09f + t * 0.4f, wy * 0.09f) * N.at(wx * 0.21f - t * 0.3f, wy * 0.21f + 3.0f);
+                        float edge = std::exp(-std::abs(d - run) * 0.45f);                       // the bright lip of the swash
+                        float inside = d < run ? clampf(lace * 2.6f - 0.35f, 0, 1) * 0.55f : 0.0f;   // lacy foam left on the wet sand behind it
+                        foam += edge * (0.55f + 0.35f * n2) + inside;
+                        foam += clampf((28.0f - d) / 28.0f, 0, 1) * clampf(lace * 3.0f - 0.9f, 0, 1) * 0.45f;   // flecks in the breakers
+                    }
                 }
                 if (storm > 0.01f) {   // the storm sea: darker and greyer, choppier further out
                     float open = clampf(d / 110.0f, 0, 1);
@@ -188,17 +217,18 @@ void Game::drawWaterOverlay() {
                 float A = 1.0f - (1.0f - dark) * (1.0f - foam);   // dark under foam, as one colour and coverage
                 float r = (DR * dark * (1 - foam) + fr * foam) / A, gg = (DG * dark * (1 - foam) + fg * foam) / A, b = (DB * dark * (1 - foam) + fb * foam) / A;
                 row[x] = Canvas::pack(Color{ (u8)clampf(r, 0, 255), (u8)clampf(gg, 0, 255), (u8)clampf(b, 0, 255), (u8)(A * 255) });
-                any = true;
+                any = lit = true;
             }
         }
+        // (a texel more on every side: a GPU's smooth stretch fades a lit texel half a texel into its neighbour's cell)
+        if (lit) for (int cyi = std::max(0, by - 1) / RC; cyi <= std::min(H - 1, ey1) / RC; cyi++) for (int cxi = std::max(0, bx - 1) / RC; cxi <= std::min(W - 1, ex1) / RC; cxi++) cellLit[(size_t)cyi * cellsX + cxi] = 1;
     }
     if (getenv("ONEHOUR_WATERDBG")) fprintf(stderr, "water overlay cpu %.3f ms\n", (SDL_GetPerformanceCounter() - tStart) * 1000.0 / SDL_GetPerformanceFrequency());
     if (getenv("ONEHOUR_WATERDBG")) { int lit = 0, strong = 0; for (u32 q : px) { if (q >> 24) lit++; if ((q >> 24) > 100) strong++; } fprintf(stderr, "water overlay: %d lit texels, %d strong (of %d), storm %.2f, t %.1f\n", lit, strong, W * H, storm, t); }
     lastAny = any;
     if (!any) return;
     SDL_UpdateTexture(tex, nullptr, px.data(), W * 4);
-    SDL_FRect dst = { gx0 * (float)OV - cam.x, gy0 * (float)OV - cam.y, (float)W * OV, (float)H * OV };
-    SDL_RenderCopyF(g.ren, tex, nullptr, &dst);
+    blit();
 }
 
 // Sun glitter: points of light that wink on open water by day, strongest on a broad band across the view (toward the low sun at dawn and dusk)

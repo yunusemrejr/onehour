@@ -129,8 +129,9 @@ bool frontierMapTest(u64 seed) {
         if (getenv("ONEHOUR_DEBUG")) fprintf(stderr,"pile shares %.1f %.1f %.1f %.1f\n",share[0],share[1],share[2],share[3]);
         for (int k=1;k<4;k++) VERIFY11(std::abs(share[k]-share[0])<0.01f,"the bases do not have the same number of supply piles nearest to them");
     }
-    VERIFY11(g_map.landmarks.size()==27,"a quadrant lost a settlement building");   // (five settlements per quadrant, a watchtower on the lake island, two ridge fortresses (north and south), four launchers)
-    int kinds[7]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<7,"invalid landmark kind");kinds[l.kind]++; }
+    int kinds[10]={};for (auto& l:g_map.landmarks) { VERIFY11(l.kind>=0 && l.kind<10,"invalid landmark kind");kinds[l.kind]++; }
+    VERIFY11(kinds[0]+kinds[1]+kinds[2]+kinds[3]+kinds[4]+kinds[5]+kinds[6]==27,"a quadrant lost a settlement building");   // (five settlements per quadrant, a watchtower on the lake island, two ridge fortresses (north and south), four launchers)
+    VERIFY11(kinds[7]==8 && kinds[8]==4 && kinds[9]==4,"the prize landmarks are not all there");   // (an oil derrick and a field depot per quadrant inland; a derrick and a lighthouse on cays in every quarter of the sea)
     VERIFY11(kinds[0]==4 && kinds[1]==4 && kinds[2]==5 && kinds[3]==4 && kinds[4]==4 && kinds[5]==2 && kinds[6]==4,"settlements are not distributed fairly");
     // Flood-fill real occupancy after HQs, resources and all landmarks are present.
     Vec2 start=g_map.nearestFree(g_sim.players[0].basePos+Vec2(0,6*TILE),10);

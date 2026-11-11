@@ -99,6 +99,7 @@ bool recoveryTest(u64 seed) {
             runAi(30);
             c = census(1);
             if (verbose) { snprintf(tag, sizeof tag, "%s d%d hq-only +%ds", FACTION_NAME[me], diff, 30 * (k + 1)); printCensus(tag, c); }
+            if (verbose && getenv("ONEHOUR_OWNED")) { for (auto& e : g_sim.ents) if (e.alive && e.owner == 1) printf("      owns %s at %d,%d%s\n", e.isBuilding() ? e.bt().name : e.ut().name, tileOf(e.pos.x), tileOf(e.pos.y), e.carrier.valid() ? " (inside)" : ""); printf("      base at %d,%d, mined %d harvested %d\n", tileOf(g_sim.players[1].basePos.x), tileOf(g_sim.players[1].basePos.y), (int)g_sim.players[1].mined, (int)g_sim.players[1].harvested); }
         }
         snprintf(tag, sizeof tag, "%s d%d HQ only, 3 min", FACTION_NAME[me], diff); printCensus(tag, c);
         CHECK5(c.dozers >= 2, "a computer army left with its Command structure did not train dozers");

@@ -3367,7 +3367,13 @@ int main(int argc, char** argv) {
                 }
                 g_sim.cmdMove(army, crowdAt + Vec2(side ? -6.0f * TILE : 6.0f * TILE, 0), true);
             }
-        } else for (int t = 0, warm = getenv("ONEHOUR_BENCHMIN") ? atoi(getenv("ONEHOUR_BENCHMIN")) * 60 * SIM_HZ : 9600; t < warm; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); }
+        } else for (int t = 0, warm = getenv("ONEHOUR_BENCHMIN") ? atoi(getenv("ONEHOUR_BENCHMIN")) * 60 * SIM_HZ : 9600; t < warm; t++) {
+            g_sim.step(); g_ai.update(); g_sim.events.clear();
+            if (getenv("ONEHOUR_BENCHDBG") && t % 1200 == 1199) for (int p = 0; p < g_sim.numPlayers; p++) {   // (each army's strength, minute by minute)
+                int nb = 0, nu = 0; for (auto& e : g_sim.ents) if (e.alive && e.owner == p) { if (e.isBuilding()) nb++; else if (e.isUnit()) nu++; }
+                fprintf(stderr, "[bench] min %d player %d (ai %d, level %d, alive %d): %d structures, %d units, $%d\n", (t + 1) / 1200, p, (int)g_sim.players[p].isAI, g_sim.players[p].difficulty, (int)g_sim.players[p].alive, nb, nu, (int)g_sim.players[p].money);
+            }
+        }
         std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
         Vec2 fight = g_sim.players[0].basePos, camAt = fight;   // (--gpubench: the camera glides to the latest fighting, picked again every 2 s)
         u64 f0 = SDL_GetPerformanceFrequency(); double worst = 0, total = 0, updTotal = 0, updWorst = 0;

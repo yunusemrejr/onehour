@@ -365,6 +365,50 @@ void Map::generate() {
                 if (inMap(tx, ty) && tiles[ty * MAP_W + tx] == T_GRASS) tiles[ty * MAP_W + tx] = T_TREE;
             }
         }
+        // ... and many more small ones in the gaps between them: cays, sandbars and rock stacks all over the open sea. Two cays in every quarter of
+        // the map are big enough to stand a prize on (a lighthouse or an oil derrick: see the landmarks below), with a clearing kept in the middle.
+        Rng jr(SEED + 4477);
+        isletPrizes.clear();
+        auto farEnough = [&](float x, float y, float coast, float gap) {
+            if (mainIslandInland((int)x, (int)y) > -coast || seaIslandInland((int)x, (int)y) > -coast || secretIslandInland((int)x, (int)y) > -coast) return false;
+            for (auto& o2 : got) if (std::hypot(o2.cx - x, o2.cy - y) < gap + o2.r) return false;
+            return true;
+        };
+        for (int q = 0; q < 4; q++) for (int k = 0; k < 2; k++) for (int attempt = 0; attempt < 600; attempt++) {
+            float x = jr.f(18.0f, MAP_W * 0.5f - 6.0f), y = jr.f(18.0f, MAP_H * 0.5f - 6.0f), r = jr.f(4.3f, 5.2f);
+            if (q & 1) x = MAP_W - x;
+            if (q & 2) y = MAP_H - y;
+            if (!farEnough(x, y, 11.0f, 15.0f)) continue;
+            got.push_back({ x, y, r });
+            paintDisc(*this, x, y, r, T_SAND);
+            paintDisc(*this, x, y, r - 1.4f, T_GRASS);
+            paintDisc(*this, x, y, 1.9f, T_DIRT);
+            for (int n = 0; n < 7; n++) {
+                float a = jr.f(0.0f, 6.2832f), d = jr.f(2.6f, r - 1.6f);
+                int tx = (int)(x + std::cos(a) * d), ty = (int)(y + std::sin(a) * d);
+                if (inMap(tx, ty) && tiles[ty * MAP_W + tx] == T_GRASS && std::hypot(tx + 0.5f - x, ty + 0.5f - y) > 2.4f) tiles[ty * MAP_W + tx] = T_TREE;
+            }
+            isletPrizes.push_back({ (int)x - 1, (int)y - 1, ((q + k) & 1) ? 7 : 8 });   // (derricks and lighthouses alternate round the map)
+            break;
+        }
+        for (int attempt = 0; attempt < 9000 && got.size() < 58; attempt++) {
+            float x = jr.f(10.0f, MAP_W - 10.0f), y = jr.f(10.0f, MAP_H - 10.0f), r = jr.f(1.2f, 3.4f);
+            if (!farEnough(x, y, 8.0f, 11.0f)) continue;
+            got.push_back({ x, y, r });
+            const float kind = jr.f();
+            if (r < 1.8f || kind < 0.22f) { paintDisc(*this, x, y, std::max(1.0f, r * 0.75f), T_ROCK); continue; }   // a bare stack
+            if (kind < 0.42f) {   // a sandbar: a long low strip of sand, nothing on it
+                const float a = jr.f(0.0f, 3.1416f);
+                for (int n = -2; n <= 2; n++) paintDisc(*this, x + std::cos(a) * n * r * 0.55f, y + std::sin(a) * n * r * 0.55f, r * (0.62f - 0.1f * std::abs(n)), T_SAND);
+                continue;
+            }
+            paintDisc(*this, x, y, r, T_SAND);
+            paintDisc(*this, x + jr.f(-0.4f, 0.4f), y + jr.f(-0.4f, 0.4f), r - 1.2f, T_GRASS);
+            for (int n = 0; n < (int)(r * 1.3f); n++) {
+                int tx = (int)(x + jr.f(-r + 1.5f, r - 1.5f)), ty = (int)(y + jr.f(-r + 1.5f, r - 1.5f));
+                if (inMap(tx, ty) && tiles[ty * MAP_W + tx] == T_GRASS) tiles[ty * MAP_W + tx] = T_TREE;
+            }
+        }
         for (auto& g2 : got) seaIslands.push_back({ g2.cx, g2.cy, g2.r, g2.r });
     }
     // ground the jungle has taken back: the jungle islands and the secret islands all over, the relic outposts on the main island (filled in below)
@@ -755,7 +799,27 @@ void Map::generate() {
         {
             int tx = (int)C - 4, ty = (int)C + 1;
             if (landmarkFits(tx, ty, 2, 2)) { landmarks.push_back({ tx, ty, 2 }); setStructure(tx, ty, 2, 2, true); }
+        }        // The prizes. On the main island every base has an Oil Derrick and a Field Depot the same distance out on its way to the lake (one to each
+        // side of the straight line), so nobody starts nearer to one; out at sea each quarter's two big cays carry a lighthouse and a derrick.
+        auto prizeAt = [&](int tx, int ty, int w, int h, int kind, bool apron) {
+            int bx = -1, by = -1; float best = 1e18f;
+            for (int r = 0; r <= 9 && bx < 0; r++) for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r || !landmarkFits(tx + dx, ty + dy, w, h)) continue;
+                float d2 = (float)(dx * dx + dy * dy);
+                if (d2 < best) { best = d2; bx = tx + dx; by = ty + dy; }
+            }
+            if (bx < 0) return;   // (no legal ground on this seed: left out rather than squeezed in)
+            landmarks.push_back({ bx, by, kind });
+            setStructure(bx, by, w, h, true);
+            if (apron) paintDisc(*this, bx + w * 0.5f, by + h * 0.5f, std::max(w, h) * 0.5f + 2.0f, T_DIRT, [](u8 t) { return t == T_GRASS || t == T_GRASS2 || t == T_SAND; });
+        };
+        for (auto& s : starts) {
+            const float dx = C - s.tx, dy = C - s.ty, len = std::max(1.0f, std::hypot(dx, dy));
+            const float px = -dy / len, py = dx / len;   // across the way to the lake
+            prizeAt((int)std::lround(s.tx + dx * 0.40f + px * 10.0f) - 1, (int)std::lround(s.ty + dy * 0.40f + py * 10.0f) - 1, 2, 2, 7, true);
+            prizeAt((int)std::lround(s.tx + dx * 0.40f - px * 10.0f) - 1, (int)std::lround(s.ty + dy * 0.40f - py * 10.0f) - 1, 3, 2, 9, true);
         }
+        for (auto& P : isletPrizes) prizeAt(P.tx, P.ty, 2, 2, P.kind, false);
     }
     // ---- The abandoned relic bases. Each layout is given for the west side (the delta and its banks, the jungle island) or the north (the secret
     // island), in tiles from an anchor, and mirrored for the other; a footprint that does not fit on this map's ground moves to the nearest legal spot

@@ -1,5 +1,7 @@
 #include "terrain.h"
 #include "paint.h"
+#include "m3d.h"
+#include "m3d_reg.h"
 #include <SDL2/SDL.h>
 #include <functional>
 
@@ -86,24 +88,28 @@ inline float samp(const std::vector<float>& m, int w, int h, float fx, float fy)
 }
 
 // ---------------------------------------------------------------- ground colours
-// Warm, sunlit grading: deeper greens against warm earth, pale sand, teal shallows over a navy lake bed. A split-tone
-// grade at the end of the ground pass warms the highlights and cools the shadows, so the whole map reads as one light.
-const F3 GRASS_A = f3(54, 108, 46), GRASS_B = f3(84, 134, 58), GRASS2_A = f3(42, 92, 46), GRASS2_B = f3(74, 124, 56), DRY = f3(150, 146, 78);
-const F3 GRASS_LUSH = f3(104, 152, 66), GRASS_DEEP = f3(30, 76, 50);      // knots of longer grass: sunned, and shaded
-const F3 DIRT_A = f3(142, 104, 70), DIRT_B = f3(114, 82, 54), DIRT_DARK = f3(82, 54, 38), DIRT_PALE = f3(190, 150, 100);
-const F3 SAND_A = f3(236, 214, 156), SAND_B = f3(208, 182, 126), SAND_WET = f3(158, 142, 106);
-const F3 ASPHALT = f3(56, 60, 72), GRAVEL = f3(144, 134, 116);
-const F3 FOREST_A = f3(34, 66, 38), FOREST_B = f3(80, 64, 40), LEAF_LITTER = f3(134, 88, 40);
-const F3 ROCK_A = f3(126, 124, 120), ROCK_B = f3(84, 86, 92), ROCK_OCHRE = f3(160, 122, 82), LICHEN = f3(136, 142, 104);
-const F3 MOSS = f3(72, 106, 54), SCREE = f3(164, 152, 132);
-const F3 WATER_SHALLOW = f3(56, 172, 176), WATER_MID = f3(22, 122, 170), WATER_DEEP = f3(10, 60, 120), WEED = f3(34, 112, 86);
-const F3 OCEAN_ABYSS = f3(6, 36, 86);   // the open sea far from any shore
+// Materials, not tints: each class is built from a small palette that belongs to the thing it is (a meadow's greens run from shaded clover to
+// sun-bleached seed heads; earth runs from damp plough to pale chalk; sand from dry dune crest to wet tide line), so the ground reads as a
+// material under one light rather than as noise. Values are the MATERIAL's own colour; the sun (and its grade) does the rest.
+const F3 GRASS_A = f3(74, 104, 46), GRASS_B = f3(96, 126, 54), GRASS2_A = f3(57, 89, 44), GRASS2_B = f3(84, 112, 48);
+const F3 DRY = f3(158, 148, 88);           // sun-cured grass: the pale straw of a hot meadow
+const F3 GRASS_LUSH = f3(96, 138, 50), GRASS_DEEP = f3(42, 70, 34);      // knots of longer grass: sunned, and shaded
+const F3 DIRT_A = f3(132, 96, 62), DIRT_B = f3(104, 74, 48), DIRT_DARK = f3(72, 48, 32), DIRT_PALE = f3(178, 142, 100);
+const F3 SAND_A = f3(226, 202, 146), SAND_B = f3(200, 172, 116), SAND_WET = f3(142, 126, 92);
+const F3 ASPHALT = f3(62, 64, 70), GRAVEL = f3(138, 128, 110);
+const F3 FOREST_A = f3(48, 62, 34), FOREST_B = f3(84, 66, 42), LEAF_LITTER = f3(146, 96, 44);
+const F3 ROCK_A = f3(152, 144, 130), ROCK_B = f3(106, 103, 101), ROCK_OCHRE = f3(150, 116, 78), LICHEN = f3(130, 136, 98);
+const F3 MOSS = f3(74, 100, 46), SCREE = f3(160, 148, 126);
+const F3 WATER_SHALLOW = f3(84, 186, 172), WATER_MID = f3(26, 124, 162), WATER_DEEP = f3(10, 58, 108), WEED = f3(40, 108, 76);
+const F3 OCEAN_ABYSS = f3(8, 34, 74);   // the open sea far from any shore
 const float SEA_OPEN = 7.5f;            // tiles from land beyond which water is open sea: no sand bars, weed or caustics, only waves and depth
 
 // The grade every baked pixel goes through: an S-curve (deep, clean shadows; highlights that roll off), fuller colour, and a split tone that
 // leans the shadows to teal and the highlights to gold, so the whole map sits in one late-afternoon light.
 inline void gradeRGB(float& vr, float& vg, float& vb) {
-    auto curve = [](float v) { return v * 0.68f + v * v * (3.0f - 2.0f * v) * 0.32f; };
+    float lum0 = vr * 0.299f + vg * 0.587f + vb * 0.114f;
+    float k = lum0 < 0.5f ? 0.55f + 0.9f * lum0 : 1.0f;   // (less crush in the shadows: materials keep their colour down there)
+    auto curve = [k](float v) { return v * (1.0f - 0.32f * k) + v * v * (3.0f - 2.0f * v) * (0.32f * k); };
     vr = curve(vr); vg = curve(vg); vb = curve(vb);
     float lum = vr * 0.299f + vg * 0.587f + vb * 0.114f;
     vr = lum + (vr - lum) * 1.06f; vg = lum + (vg - lum) * 1.06f; vb = lum + (vb - lum) * 1.06f;
@@ -117,17 +123,24 @@ inline float rollShade(float x, float y, const Noise& nz) {
     float c = nz.v(x * 0.041f + 13, y * 0.041f + 77), d = nz.v((x + 3.0f) * 0.041f + 13, (y + 3.5f) * 0.041f + 77);
     return 1.0f + clampf((a - b) * 3.4f + (c - d) * 2.2f, -0.15f, 0.10f);
 }
-
 // Open sea, far from land: what K_WATER below works out to there (depth 1: the bars, weed and caustics are gone), done with a third of the work
 F3 openSeaColor(float x, float y, const Noise& nz, float sea) {
-    float d = clampf(1.0f + (nz.v(x * 0.045f + 17, y * 0.045f + 28) - 0.5f) * 0.14f + (nz.v(x * 0.35f, y * 0.35f) - 0.5f) * 0.03f, 0, 1);
-    F3 col = d < 0.45f ? lerp3(WATER_SHALLOW, WATER_MID, d / 0.45f) : lerp3(WATER_MID, WATER_DEEP, (d - 0.45f) / 0.55f);
-    col = lerp3(col, OCEAN_ABYSS, sstep(SEA_OPEN, 22.0f, sea) * 0.85f);
+    // (the depth waver is fine-grained: a broad one would survive the 565 quantisation as contour lines across the open sea)
+    float d = clampf(1.0f + (nz.v(x * 0.10f + 17, y * 0.10f + 28) - 0.5f) * 0.10f + (nz.v(x * 0.35f, y * 0.35f) - 0.5f) * 0.03f, 0, 1);
+    F3 col = lerp3(WATER_MID, WATER_DEEP, d);
+    col = lerp3(col, OCEAN_ABYSS, sstep(SEA_OPEN, 22.0f, sea) * 0.88f);
     float n2 = nz.v(x * 0.17f + 5, y * 0.17f + 9);
-    float wave = std::sin((x * 0.09f + 5.0f * nz.fbm(x * 0.01f, y * 0.01f)) + y * 0.05f);
-    col = mul3(col, 0.95f + 0.06f * wave + 0.06f * (n2 - 0.5f));
-    float glit = clampf(1.0f - std::abs((x - y) * 0.7071f - 140.0f * std::sin(x * 0.0009f)) / 1000.0f, 0, 1);
-    if (nz.v(x * 1.3f + 13, y * 1.3f + 7) > 0.994f - 0.012f * glit) col = add3(col, mul3(f3(90, 110, 104), 0.35f + 0.65f * glit));
+    // the same two crossed swells as the lake, so open water has one sea on it: their west faces are lit, their troughs hold a deeper blue (the
+    // cosines are shaded through their own gradient rather than as bands, so there is no contour line to read as a map symbol)
+    float sl1 = std::cos(x * 0.030f + 1.7f * nz.fbm(x * 0.008f, y * 0.008f) + y * 0.017f);
+    float sl2 = std::cos(x * 0.014f - 2.2f * nz.v(x * 0.012f + 30, y * 0.012f + 8) - y * 0.040f + 2.1f);
+    col = mul3(col, 1.0f + 0.045f * sl1 + 0.028f * sl2 + 0.02f * (n2 - 0.5f));
+    // a fine chop that survives the half-resolution open sea: two octaves at about 6 and 3 px, tilted against the swell
+    float ch = nz.v(x * 0.34f + y * 0.11f + 3, y * 0.29f + 7) * 0.6f + nz.v(x * 0.9f + y * 0.2f, y * 0.8f + 19) * 0.4f;
+    col = mul3(col, 0.985f + 0.05f * ch);
+    float glit = clampf(1.0f - std::abs((x - 2.0f * y) * 0.4472f - 260.0f * std::sin(x * 0.0007f)) / 440.0f, 0, 1);
+    float th = 0.994f - 0.012f * glit;
+    if (nz.v(x * 1.3f + 13, y * 1.3f + 7) > th) col = add3(col, mul3(f3(90, 110, 104), 0.35f + 0.65f * glit));
     return col;
 }
 
@@ -136,102 +149,165 @@ struct Base { float n1, n2, n3, n4; };
 inline Base baseAt(const Noise& nz, float x, float y) {
     return Base{ nz.v(x * 0.045f, y * 0.045f), nz.v(x * 0.17f + 5, y * 0.17f + 9), nz.v(x * 0.9f + y * 0.3f, y * 1.3f), nz.v(x * 0.55f + 71, y * 0.55f + 13) };
 }
+// ---------------------------------------------------------------- ground materials
+// A material is not a tint: at 1x the eye reads grass by its clumps and the shadow between them, earth by its crust and grit, rock by its
+// ledges. So each class is built in three acts: a broad field tone (the thing seen from far away), mid-scale patches of its own family
+// (drifts of dry grass, damp soil, sand bars), and then fine structure whose LIGHT and DARK are correlated (a clump is lit on its west and
+// shaded on its east), which is what makes it read as three-dimensional ground rather than as noise.
+//
+// A sun-facing slope, in units of tone: dx is the slope worked out from a height noise. The west light: a face turned to the west is lit.
+inline float facing(float hx, float hy) { return clampf(-hx * 0.78f - hy * 0.40f, -1.0f, 1.0f); }
+// F3 helpers for material work
+inline F3 toned(F3 c, float k) { return mul3(c, k); }
+// The materials proper ------------------------------------------------------------------------------------------------
+// Meadow grass: a field of clumps. The lit crown of a clump is the class's grass; its far side falls into shade; a few pale seed heads catch
+// the sun. Dryness (macro) bleaches the whole field towards straw and thins the clumps out.
+F3 grassMaterial(F3 lushA, F3 lushB, float x, float y, const Noise& nz, float macro, float n1, float n2, float n4) {
+    // --- field tone: the average of grass and the dark between it
+    F3 field = lerp3(lushA, lushB, n1);
+    // --- mid: drifts of cure (macro weather) and hollows of new growth
+    float drift = nz.v(x * 0.0045f + 21, y * 0.0045f + 6);
+    float dry = sstep(0.50f, 0.88f, drift) * (0.55f + 0.45f * macro);
+    field = lerp3(field, DRY, dry * 0.62f);
+    field = lerp3(field, GRASS_DEEP, sstep(0.42f, 0.10f, drift) * 0.35f);
+    // --- clumps: a rounded-cell pattern (~9 px) that gives every square its own tilt
+    float cx = x * 0.115f, cy = y * 0.115f;
+    float h0 = nz.v(cx, cy);
+    float hx = nz.v(cx + 0.6f, cy) - h0, hy = nz.v(cx, cy + 0.6f) - h0;   // (one-sided: two samples, not four)
+    float clump = sstep(0.40f, 0.78f, h0) * (1.0f - 0.72f * dry);   // cure thins the clumps out
+    float lit = facing(hx, hy);                                     // the clump's west shoulder
+    // the clump is a tuft: lit crowns on the tone of the field, a shadowed hollow east of each
+    field = mul3(field, 1.0f + 0.26f * lit * clump + 0.16f * clump);
+    field = mul3(field, 1.0f - 0.20f * clampf(hy, 0, 1) * clump);
+    // --- blades: two-pixel strokes, warm where they face the sun, cool in the shade
+    float blade = nz.v(x * 0.62f + 3, y * 0.26f + 8);
+    field = mul3(field, 0.90f + 0.20f * blade);
+    // --- seed heads: pale ticks on tall stems, sparse, denser where the field is curing
+    if (n4 > 0.955f - 0.035f * dry && n4 < 0.985f) field = lerp3(field, f3(196, 184, 120), 0.55f);
+    else if (n4 >= 0.985f) field = lerp3(field, f3(220, 214, 170), 0.4f);
+    // --- flowers as flecks in the field tone (the painted flower patches add the big ones on top)
+    if (n2 > 0.955f) field = lerp3(field, f3(226, 208, 96), 0.5f);
+    return field;
+}
+// Bare earth: damp plough furrows, a dried crust on the crests, gravel and stone showing where the crust has broken.
+F3 dirtMaterial(float x, float y, const Noise& nz, float n1, float n2, float n3, float n4) {
+    F3 col = lerp3(DIRT_A, DIRT_B, n1);
+    // damp hollows (the low ground) and pale dried crests
+    float low = sstep(0.55f, 0.80f, nz.v(x * 0.06f + 33, y * 0.06f + 7));
+    col = lerp3(col, DIRT_DARK, low * 0.62f);
+    col = lerp3(col, DIRT_PALE, sstep(0.66f, 0.86f, n1) * 0.30f);   // (n1 is a 22 px field: the crests)
+    // furrows: long slow ridges, so the earth reads as worked ground
+    float ridge = std::sin((x * 0.012f + y * 0.004f + n1 * 0.9f) * 24.0f);   // (the ridged plough, wavering with the field tone)
+    float ry = nz.v(x * 0.09f, y * 0.09f + 40);
+    col = mul3(col, 0.93f + 0.09f * ridge * (0.4f + 0.6f * ry));
+    // clods: a pebbled field, lit on the west
+    float h0 = nz.v(x * 0.35f + 11, y * 0.35f + 3), hx = nz.v(x * 0.35f + 11.6f, y * 0.35f + 3) - h0, hy = nz.v(x * 0.35f + 11, y * 0.35f + 3.6f) - h0;
+    col = mul3(col, 1.0f + 0.30f * facing(hx, hy) * sstep(0.42f, 0.72f, h0));
+    col = mul3(col, 0.90f + 0.20f * n2);
+    // crust cracks and gravel
+    float crack = std::abs(nz.v(x * 0.055f + 90, y * 0.055f + 40) - 0.5f);
+    if (crack < 0.008f) col = mul3(col, 0.76f);
+    if (n4 > 0.93f) col = lerp3(col, f3(150, 138, 120), 0.55f);            // pale stones
+    else if (n3 > 0.93f) col = mul3(col, 0.86f);                            // dark grit
+    // a little green in the damp hollows: grass creeping back
+    if (low > 0.55f) col = lerp3(col, MOSS, (low - 0.55f) * 0.5f * sstep(0.55f, 0.85f, ry));
+    return col;
+}
+// Sand: dunes and wind ripples, a dry pale crest and a damp darker trough, grit on the sheltered faces.
+F3 sandMaterial(float x, float y, const Noise& nz, float n1, float n2, float n3, float n4) {
+    float swirl = nz.v(x * 0.02f + 4, y * 0.02f + 11);
+    float ripple = std::sin((x * 0.30f + y * 0.14f + 14.0f * swirl) * 0.55f);   // wind ripples (wider and slower than the old ones)
+    float swell = n1;                                                            // (the 22 px field is the dunes)
+    float h = 0.55f * swell + 0.20f * ripple + 0.10f * n2;
+    F3 col = lerp3(SAND_B, SAND_A, clampf(h, 0, 1));
+    float lit = clampf(ripple * 0.6f + (swell - 0.5f), -1, 1);   // crest lit, trough shaded
+    col = mul3(col, 1.0f + 0.07f * lit);
+    col = mul3(col, 0.96f + 0.07f * n3);
+    if (n4 > 0.94f) col = mul3(col, 0.90f);                    // grit
+    else if (n4 < 0.05f) col = lerp3(col, f3(240, 226, 186), 0.5f);   // bleached grains
+    return col;
+}
 // One ground class's colour at a pixel. Land classes are built from several scales: a large drift or sweep, a mid clump, and fine detail.
 F3 classColor(int c, float x, float y, const Noise& nz, const Base& b, float macro, float depth, float sea) {
     float n1 = b.n1, n2 = b.n2, n3 = b.n3, n4 = b.n4;
     switch (c) {
-    case K_GRASS: case K_GRASS2: {
-        bool two = c == K_GRASS2;
-        F3 col = lerp3(two ? GRASS2_A : GRASS_A, two ? GRASS2_B : GRASS_B, n1);
-        // large: broad meadow drifts, sun-bleached sweeps and lush hollows at map scale, so grass reads in weather systems, not speckle
-        float drift = nz.v(x * 0.004f + 21, y * 0.004f + 6);
-        col = lerp3(col, DRY, sstep(0.58f, 0.86f, drift) * 0.30f);
-        col = mul3(col, 0.92f + 0.16f * sstep(0.35f, 0.05f, drift));
-        // mid: knots of longer grass, some sunned to yellow-green and some shaded and cool
-        float knot = nz.v(x * 0.07f + 23, y * 0.07f + 41);
-        col = lerp3(col, GRASS_LUSH, sstep(0.62f, 0.84f, knot) * 0.30f);
-        col = lerp3(col, GRASS_DEEP, sstep(0.42f, 0.18f, knot) * 0.26f);
-        col = mul3(col, 0.90f + 0.20f * n2);
-        col = mul3(col, 0.94f + 0.12f * n3);
-        float dry = sstep(0.60f, 0.85f, macro);
-        col = lerp3(col, DRY, dry * 0.5f * n2);
-        // fine: blades, short upright strokes of light and shade
-        float blade = nz.v(x * 0.55f + 3, y * 0.16f + 8);
-        col = mul3(col, 0.92f + 0.16f * blade);
-        if (n4 > 0.94f) col = mul3(col, 1.12f);           // sunlit tips
-        return col;
-    }
-    case K_DIRT: {
-        F3 col = lerp3(DIRT_A, DIRT_B, n1);
-        col = lerp3(col, DIRT_DARK, sstep(0.55f, 0.8f, nz.v(x * 0.08f + 33, y * 0.08f + 7)) * 0.55f);   // damp hollows
-        col = lerp3(col, DIRT_PALE, sstep(0.68f, 0.84f, nz.v(x * 0.11f + 61, y * 0.11f + 19)) * 0.22f);  // dried crust
-        col = mul3(col, 0.90f + 0.20f * n2);
-        col = mul3(col, 0.93f + 0.14f * n3);
-        float crack = std::abs(nz.v(x * 0.05f + 90, y * 0.05f + 40) - 0.5f);
-        if (crack < 0.006f) col = mul3(col, 0.84f);
-        if (n4 > 0.92f) col = mul3(col, 0.90f);          // pebbled specks
-        else if (n4 < 0.05f) col = lerp3(col, DIRT_PALE, 0.5f);   // grit
-        return col;
-    }
-    case K_SAND: {
-        // wind ripples: long crests that wander a little, over a soft swell of dunes
-        float ripple = std::sin((x * 0.42f + y * 0.17f + 9.0f * nz.v(x * 0.02f + 4, y * 0.02f + 11)) * 0.6f);
-        float swell = nz.v(x * 0.011f + 9, y * 0.011f + 2);
-        F3 col = lerp3(SAND_A, SAND_B, clampf(0.5f + 0.16f * ripple + 0.30f * (n2 - 0.5f) + 0.22f * (swell - 0.5f), 0, 1));
-        col = mul3(col, 0.95f + 0.08f * n3);
-        if (n4 > 0.93f) col = mul3(col, 0.9f);
-        return col;
-    }
+    case K_GRASS: return grassMaterial(GRASS_A, GRASS_B, x, y, nz, macro, n1, n2, n4);
+    case K_GRASS2: return grassMaterial(GRASS2_A, GRASS2_B, x, y, nz, macro, n1, n2, n4);
+    case K_DIRT: return dirtMaterial(x, y, nz, n1, n2, n3, n4);
+    case K_SAND: return sandMaterial(x, y, nz, n1, n2, n3, n4);
     case K_ROAD: {
-        F3 col = mul3(ASPHALT, 0.92f + 0.16f * n3);
-        col = mul3(col, 0.94f + 0.12f * n1);
-        col = mul3(col, 0.96f + 0.08f * n2);                                                              // fine aggregate
-        col = lerp3(col, f3(88, 88, 90), sstep(0.6f, 0.8f, nz.v(x * 0.05f + 27, y * 0.05f + 3)) * 0.14f);   // polished, worn patches
+        // asphalt: coarse aggregate, worn wheel tracks polished pale, patch repairs a shade darker, a tarred seam down the middle
+        F3 col = mul3(ASPHALT, 0.93f + 0.14f * n3);
+        col = mul3(col, 0.95f + 0.10f * n1);
+        float agg = nz.v(x * 0.75f + 21, y * 0.75f + 5);                    // the aggregate itself, not a haze
+        col = mul3(col, 0.90f + 0.22f * agg);
+        col = lerp3(col, f3(96, 96, 96), sstep(0.60f, 0.82f, nz.v(x * 0.05f + 27, y * 0.05f + 3)) * 0.16f);   // polished, worn patches
         float crack = std::abs(nz.v(x * 0.06f + 12, y * 0.06f + 77) - 0.5f);
-        if (crack < 0.006f) col = mul3(col, 0.66f);                                                       // hairline cracks
+        if (crack < 0.005f) col = mul3(col, 0.62f);                                                       // hairline cracks with a lit lip
+        else if (crack < 0.009f) col = mul3(col, 1.10f);
         float patch = sstep(0.66f, 0.74f, nz.v(x * 0.03f + 5, y * 0.03f + 61));
-        col = lerp3(col, f3(80, 80, 82), patch * 0.22f);
+        col = lerp3(col, f3(74, 74, 78), patch * 0.26f);
         float tyre = std::abs(nz.v(x * 0.012f + y * 0.004f + 20, y * 0.012f) - 0.5f);   // faint wheel tracks
-        if (tyre < 0.02f) col = mul3(col, 0.93f);
-        if (n4 > 0.95f) col = add3(col, f3(18, 18, 18));
+        if (tyre < 0.02f) col = mul3(col, 0.91f);
+        if (n4 > 0.96f) col = add3(col, f3(26, 26, 26));                    // a bright chip
         return col;
     }
     case K_FOREST: {
+        // the needle floor under the canopy: deep duff, drifts of fallen leaves, cool moss between the roots, and the odd lit patch of sand
         F3 col = lerp3(FOREST_A, FOREST_B, n2);
-        col = mul3(col, 0.86f + 0.2f * n1);
+        col = mul3(col, 0.84f + 0.24f * n1);
         float litter = nz.v(x * 0.31f + 12, y * 0.31f + 31);                  // fallen leaves in drifts
-        col = lerp3(col, LEAF_LITTER, sstep(0.64f, 0.82f, litter) * 0.45f);
-        col = mul3(col, 0.92f + 0.14f * n3);
+        col = lerp3(col, LEAF_LITTER, sstep(0.58f, 0.82f, litter) * 0.55f);
+        col = lerp3(col, MOSS, sstep(0.62f, 0.84f, nz.v(x * 0.11f + 61, y * 0.11f + 9)) * 0.30f);
+        float h0 = nz.v(x * 0.28f + 7, y * 0.28f + 44);
+        float hx2 = nz.v(x * 0.28f + 7.6f, y * 0.28f + 44) - h0;                 // (one-sided: two samples)
+        col = mul3(col, 1.0f + 0.22f * facing(hx2, 0) * sstep(0.40f, 0.70f, h0));   // needles and twigs in raking light
+        col = mul3(col, 0.93f + 0.14f * n3);
         return col;
     }
     case K_ROCK: {
+        // stone: bedding planes, iron staining, lichen on the sheltered faces, and a lit west lip on every ledge
         float strata = std::sin((y * 0.85f + x * 0.28f + 9.0f * nz.fbm(x * 0.02f, y * 0.02f)) * 0.55f);
         F3 col = lerp3(ROCK_A, ROCK_B, n1 * 0.8f + 0.2f * (0.5f + 0.5f * strata));
+        float h0 = nz.v(x * 0.42f + 3, y * 0.42f + 18);
+        float hx2 = nz.v(x * 0.42f + 3.7f, y * 0.42f + 18) - h0, hy2 = nz.v(x * 0.42f + 3, y * 0.42f + 18.7f) - h0;   // (one-sided: three samples)
+        col = mul3(col, 1.0f + 0.34f * facing(hx2, hy2) * sstep(0.38f, 0.68f, h0));
         col = lerp3(col, ROCK_OCHRE, sstep(0.62f, 0.8f, nz.v(x * 0.05f + 80, y * 0.05f + 12)) * 0.30f);   // iron stains
-        col = lerp3(col, LICHEN, sstep(0.70f, 0.80f, nz.v(x * 0.09f + 14, y * 0.09f + 66)) * 0.35f);      // lichen
-        col = mul3(col, 0.86f + 0.2f * n2);
-        col = mul3(col, 0.93f + 0.14f * n3);
+        col = lerp3(col, LICHEN, sstep(0.70f, 0.80f, nz.v(x * 0.09f + 14, y * 0.09f + 66)) * 0.40f);      // lichen
+        col = mul3(col, 0.88f + 0.18f * n2);
+        col = mul3(col, 0.94f + 0.12f * n3);
         float crack = std::abs(nz.v(x * 0.09f + 3, y * 0.09f + 55) - 0.5f);
-        if (crack < 0.014f) col = mul3(col, 0.62f);
+        if (crack < 0.014f) col = mul3(col, 0.58f);
         return col;
     }
     case K_WATER: {
-        float d = clampf(depth + (nz.v(x * 0.045f + 17, y * 0.045f + 28) - 0.5f) * 0.14f + (nz.v(x * 0.35f, y * 0.35f) - 0.5f) * 0.03f, 0, 1);   // dithered depth: no contour rings on a big lake bed
-        // three-stop depth ramp: pale teal over the sand, a clear mid blue, then a deep navy bed (the old two-stop ramp banded)
-        F3 col = d < 0.45f ? lerp3(WATER_SHALLOW, WATER_MID, d / 0.45f) : lerp3(WATER_MID, WATER_DEEP, (d - 0.45f) / 0.55f);
+        // Clear water over a visible bed. The colour is what you see looking down through it: the seabed's own sand and weed where it is shallow,
+        // a turquoise shelf, a teal drop-off, then the navy of deep water. Depth (0 at the shore, 1 far out) drives the whole ramp, and the waves
+        // only ripple the surface on top of it.
+        float d = clampf(depth + (n1 - 0.5f) * 0.10f + (n3 - 0.5f) * 0.03f, 0, 1);   // dithered depth: no contour rings on a big lake bed
         float open = sstep(SEA_OPEN - 2.0f, SEA_OPEN, sea);   // (fades the shallows' detail out toward the open sea, see openSeaColor)
-        // sand bars and weed beds show through the shallows
+        F3 col;
+        // four-stop ramp: pale sand through the water, bright turquoise, lake teal, then the deep
+        const float sh = sstep(0.00f, 0.30f, d), tu = sstep(0.22f, 0.60f, d), tp = sstep(0.55f, 0.86f, d);
+        col = lerp3(f3(122, 190, 178), f3(58, 170, 176), sh);
+        col = lerp3(col, f3(24, 120, 158), tu);
+        col = lerp3(col, f3(12, 62, 112), tp);
+        // sand bars and weed beds show through the shallows (seen through the water, so softened towards its own colour)
         float bar = sstep(0.62f, 0.8f, nz.v(x * 0.016f + 44, y * 0.016f + 2));
-        col = lerp3(col, lerp3(SAND_B, WATER_SHALLOW, 0.45f), bar * (1.0f - d) * 0.5f * (1.0f - open));
+        col = lerp3(col, lerp3(SAND_B, f3(120, 196, 180), 0.45f), bar * (1.0f - d) * 0.5f * (1.0f - open));
         float weed = sstep(0.6f, 0.82f, nz.v(x * 0.03f + 8, y * 0.03f + 51));
         col = lerp3(col, WEED, weed * clampf(1.0f - d * 1.6f, 0, 1) * 0.45f * (1.0f - open));
-        float wave = std::sin((x * 0.09f + 5.0f * nz.fbm(x * 0.01f, y * 0.01f)) + y * 0.05f);
-        col = mul3(col, 0.95f + 0.06f * wave + 0.06f * (n2 - 0.5f));
+        // the surface: two crossed swells (a broad one from the south-west, a finer chop), lit on their west faces, so the water has a direction
+        float sl1 = std::cos(x * 0.030f + 1.7f * nz.fbm(x * 0.005f, y * 0.005f) + y * 0.017f);
+        float sl2 = std::cos(x * 0.014f - 2.2f * nz.v(x * 0.006f + 30, y * 0.006f + 8) - y * 0.040f + 2.1f);
+        col = mul3(col, 1.0f + 0.050f * sl1 + 0.032f * sl2 + 0.02f * (n2 - 0.5f));
+        // the crests catch the west light, the troughs hold a deeper blue
+        col = add3(col, mul3(f3(20, 30, 26), clampf(sl1, 0, 1) * 0.32f * (1.0f - 0.5f * d)));
         float c1 = 1.0f - std::abs(2.0f * nz.v(x * 0.09f + 3, y * 0.09f + 11) - 1.0f), c2 = 1.0f - std::abs(2.0f * nz.v(x * 0.065f + 40 + y * 0.02f, y * 0.065f + 7) - 1.0f);
         float caus = std::pow(c1 * c2, 6.0f);                                        // finer caustic light networks in the shallows
         col = add3(col, mul3(f3(56, 84, 76), (1.0f - d * 0.8f) * clampf(caus * 2.0f, 0, 1) * (1.0f - open)));
-        // sun glitter: a broken diagonal path of sparkles running away from the north-west light, denser in open water
-        float glit = clampf(1.0f - std::abs((x - y) * 0.7071f - 140.0f * std::sin(x * 0.0009f)) / 1000.0f, 0, 1);
+        // sun glitter: a broken diagonal path of sparkles running away from the west light, denser in open water
+        float glit = clampf(1.0f - std::abs((x - 2.0f * y) * 0.4472f - 260.0f * std::sin(x * 0.0007f)) / 440.0f, 0, 1);
         float th = 0.994f - 0.012f * glit;   // (sparse: a big lake sprinkled evenly read as noise)
         if (nz.v(x * 1.3f + 13, y * 1.3f + 7) > th) col = add3(col, mul3(f3(90, 110, 104), 0.35f + 0.65f * glit));
         return col;
@@ -283,75 +359,59 @@ void blitOver(Canvas& dst, const Canvas& src, int x0, int y0) {
 
 enum { T_BROAD = 0, T_CONIFER, T_AUTUMN, T_BUSH, T_KINDS };
 
+// ---------------------------------------------------------------- the 3D wild (m3d_nature.cpp)
+// Trees, bushes and boulders are solid models now, rendered once here into ordinary sprites: a trunk that flares at the root, boughs, a crown
+// of overlapping leaf clumps lit on the west and shadowed to the east, a soft contact shadow on the ground, all in the same oblique view and
+// under the same low western sun as the units and buildings. The model is rendered twice: once to measure it, then once at the scale that fits
+// the sprite the game already expects (about 2R across), so every existing size relationship, and the repaint that uses it, still holds.
+Canvas modelSprite(m3d::Model& m, float R) {
+    m3d::RenderOpt o; o.scale = 1.0f; o.heading = 0.0f; o.ss = 2;   // (the sun stays in the west: the sprite never turns)
+    m3d::Rendered probe; m3d::render(m, o, probe);
+    int x0 = probe.color.w, x1 = -1, y0 = probe.color.h, y1 = -1;
+    for (int y = 0; y < probe.color.h; y++) for (int x = 0; x < probe.color.w; x++)
+        if ((probe.color.px[(size_t)y * probe.color.w + x] >> 24) > 8) { x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y); }
+    if (x1 < x0) return Canvas(8, 8);
+    // fit the whole model (crown and the shadow it casts) into the sprite the old painters used: about 2R across the crown, a little wider for
+    // the shadow, so nothing about the forest's size, spacing or the area a repaint must recompose changes under it
+    const float want = 2.0f * R + 12.0f;
+    o.scale = want / (float)std::max(x1 - x0 + 1, y1 - y0 + 1);
+    m3d::Rendered r; m3d::render(m, o, r);
+    Canvas out = m3d::composite(r, rgb(255, 255, 255));
+    // a sprite centred on the model's origin (the foot of the trunk), which is the centre convention every tree in the game uses
+    const int hx = std::max((int)R + 6, (int)std::ceil(std::max(r.ox, out.w - r.ox))) + 1;
+    const int hy = std::max((int)R + 6, (int)std::ceil(std::max(r.oy, out.h - r.oy))) + 1;
+    Canvas c(hx * 2, hy * 2);
+    for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
+        int sx = x - hx + (int)r.ox, sy = y - hy + (int)r.oy;
+        if (sx < 0 || sy < 0 || sx >= out.w || sy >= out.h) continue;
+        c.px[(size_t)y * c.w + x] = out.px[(size_t)sy * out.w + sx];
+    }
+    return c;
+}
+Canvas treeSprite(const char* name, int variant, float R, u32 seed) {
+    m3d::PropFn fn = m3d::reg().prop(name);
+    if (!fn) return Canvas(8, 8);
+    m3d::Model m;
+    fn(m, variant + (int)(seed % 3));                 // (variant cycles the model's own random shapes)
+    return modelSprite(m, R);
+}
+
 Canvas makeTree(int kind, float R, u32 seed) {
-    int S = (int)(R * 2 + 12);
-    Canvas big(S * 2, S * 2);
-    Art a(big, rgb(255, 255, 255), 2.0f);
-    Rng r(seed);
-    float cx = S * 0.5f, cy = S * 0.5f;
-    Color deep, mid, hi;
     switch (kind) {
-    case T_CONIFER: deep = rgb(20, 50, 30); mid = rgb(34, 74, 40); hi = rgb(74, 116, 62); break;   // spruce: green, not teal
-    case T_AUTUMN:  deep = rgb(112, 62, 26); mid = rgb(172, 104, 36); hi = rgb(224, 164, 62); break;
-    case T_BUSH:    deep = rgb(46, 86, 40); mid = rgb(74, 120, 54); hi = rgb(118, 160, 80); break;
-    default:        deep = rgb(28, 70, 36); mid = rgb(48, 100, 48); hi = rgb(96, 152, 66); break;
+    case T_CONIFER: return treeSprite("tree.conifer", 0, R, seed);
+    case T_AUTUMN: return treeSprite("tree.autumn", 0, R, seed);
+    case T_BUSH: return treeSprite("bush", 0, R, seed);
+    default: return treeSprite("tree.broad", 0, R, seed);
     }
-    a.shadowCircle(cx, cy, R * 0.85f, R * 0.22f, R * 0.28f, R * 0.4f, 90);
-    if (kind == T_CONIFER) {
-        for (int layer = 0; layer < 3; layer++) {
-            float rad = R * (1.0f - 0.24f * layer), off = -0.07f * R * layer;
-            std::vector<P> v;
-            int n = 12;
-            for (int i = 0; i < n * 2; i++) { float an = i * 3.14159265f / n + layer * 0.26f + r.f(-0.05f, 0.05f); float rr = (i & 1) ? rad * 0.6f : rad * r.f(0.92f, 1.0f); v.push_back({cx + off + std::cos(an) * rr, cy + off + std::sin(an) * rr}); }
-            a.poly(v, layer == 0 ? deep : (layer == 1 ? mid : hi), rad * 0.45f, 0.62f);
-        }
-        a.dot(cx - R * 0.14f, cy - R * 0.16f, R * 0.1f, shade(hi, 1.25f));
-        for (int i = 0; i < (int)(R * 1.5f); i++) { float an = r.f(0, 6.28f), d = r.f(0.1f, 0.9f) * R; a.line(cx + std::cos(an) * d * 0.4f, cy + std::sin(an) * d * 0.4f, cx + std::cos(an) * d, cy + std::sin(an) * d, 0.5f, rgba(shade(deep, 0.7f), 120)); }
-    } else {
-        int n = kind == T_BUSH ? 5 : 9;
-        a.shadowCircle(cx, cy, R * 0.55f, R * 0.06f, R * 0.08f, R * 0.14f, 120);   // a tight occlusion pool under the canopy
-        for (int i = 0; i < n; i++) {                       // the shaded underside: pushed to the south-east, away from the light
-            float an = i * 2.4f + r.f(0, 1), dist = R * (0.38f + 0.24f * (float)((i * 5) % 7) / 7.0f), rr = R * r.f(0.40f, 0.52f);
-            a.circle(cx + R * 0.10f + std::cos(an) * dist, cy + R * 0.12f + std::sin(an) * dist, rr, deep, rr * 0.9f, 0.58f);
-        }
-        for (int i = 0; i < (kind == T_BUSH ? 4 : 9); i++) {   // main leaf clusters, nudged toward the light
-            float an = i * 2.1f + r.f(0, 1), dist = R * 0.46f * r.f(0.1f, 1.0f), rr = R * r.f(0.28f, 0.4f);
-            float mx = cx - R * 0.09f + std::cos(an) * dist, my = cy - R * 0.11f + std::sin(an) * dist;
-            a.circle(mx, my, rr, mid, rr * 0.9f, 0.6f);
-            a.circle(mx - rr * 0.22f, my - rr * 0.26f, rr * 0.52f, shade(mid, 1.18f), rr * 0.4f, 0.6f);   // each cluster catches the light on its top-left
-        }
-        for (int i = 0; i < (kind == T_BUSH ? 3 : 6); i++) {   // sunlit tops
-            float rr = R * r.f(0.16f, 0.26f);
-            a.circle(cx - R * 0.24f + r.f(-0.22f, 0.22f) * R, cy - R * 0.28f + r.f(-0.22f, 0.22f) * R, rr, hi, rr * 0.9f, 0.62f);
-        }
-        for (int i = 0; i < (int)(R * 3.2f); i++) {
-            float an = r.f(0, 6.28f), d = std::sqrt(r.f()) * R * 0.86f;
-            Color cc = r.f() < 0.5f ? shade(hi, 1.1f) : shade(deep, 0.8f); cc.a = 190;
-            a.dot(cx + std::cos(an) * d, cy + std::sin(an) * d, 0.75f, cc);
-        }
-        if (kind == T_BUSH) for (int i = 0; i < 4; i++) a.dot(cx + r.f(-0.6f, 0.6f) * R, cy + r.f(-0.6f, 0.6f) * R, 0.9f, rgb(200, 60, 56));
-    }
-    return downsample2(big);
 }
 
 Canvas makeBoulder(float R, u32 seed) {
-    int S = (int)(R * 2 + 10);
-    Canvas big(S * 2, S * 2);
-    Art a(big, rgb(255, 255, 255), 2.0f);
-    Rng r(seed);
-    float cx = S * 0.5f, cy = S * 0.5f;
-    a.shadowCircle(cx, cy, R * 0.9f, R * 0.35f, R * 0.4f, R * 0.4f, 100);
-    std::vector<P> v;
-    int n = 8;
-    for (int i = 0; i < n; i++) { float an = i * 6.2831853f / n + r.f(-0.2f, 0.2f), rr = R * r.f(0.78f, 1.0f); v.push_back({cx + std::cos(an) * rr, cy + std::sin(an) * rr * 0.86f}); }
-    Color base = shade(rgb(112, 106, 96), r.f(0.85f, 1.1f));
-    a.poly(v, base, R * 0.8f, 0.7f);
-    std::vector<P> top;
-    for (auto& p : v) top.push_back({cx + (p.x - cx) * 0.62f - R * 0.1f, cy + (p.y - cy) * 0.62f - R * 0.12f});
-    a.poly(top, shade(base, 1.14f), R * 0.5f, 0.55f);
-    a.line(cx - R * 0.2f, cy + R * 0.1f, cx + R * 0.3f, cy + R * 0.5f, 0.5f, rgba(rgb(40, 38, 34), 120));
-    if (r.f() < 0.5f) a.ell(cx + R * 0.3f, cy + R * 0.35f, R * 0.35f, R * 0.18f, rgba(rgb(78, 100, 56), 130), 1, 0);   // moss on the shaded side
-    return downsample2(big);
+    // the same 3D path: a weathered block with a shoulder stone, moss on the damp north face, its shadow on the ground to the east
+    m3d::PropFn fn = m3d::reg().prop("boulder");
+    if (!fn) return Canvas(8, 8);
+    m3d::Model m;
+    fn(m, (int)(seed % 3));
+    return modelSprite(m, R * 1.4f);   // (the rock model is smaller than its footprint: the old sprites were mostly shadow)
 }
 
 // Decorative props baked into the ground. kind: 0 fallen log, 1 ruined wall, 2 standing stone, 3 burnt-out hulk, 4 lily pad, 5 broken pillar, 6 stump,
@@ -1276,22 +1336,29 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                     float inv = 1.0f / sum;
                     Base base = baseAt(nz, (float)x, (float)y);   // (shared by every class that blends in here)
                     for (int c = 0; c < K_N; c++) if (w[c] > 0.003f) col = add3(col, mul3(classColor(c, (float)x, (float)y, nz, base, macro, depth, sea), w[c] * inv));
-                    float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wSand = w[K_SAND] * inv, wRock = w[K_ROCK] * inv;
+                    float wWater = w[K_WATER] * inv, wRoad = w[K_ROAD] * inv, wRock = w[K_ROCK] * inv;
                     if ((x & 7) == 4 && (y & 7) == 4) g_waterCover[(size_t)(y >> 3) * g_wcW + (x >> 3)] = (u8)clampf(wWater * 255.0f + 0.5f, 0, 255);
                     // scree aprons: pale rubble shed at the foot of every cliff, strongest where rock coverage is just giving out
                     if (wRock > 0.03f && wRock < 0.5f && wWater < 0.05f) col = lerp3(col, SCREE, (0.5f - wRock) * 0.6f * (0.65f + 0.35f * nz.v(x * 0.4f + 3, y * 0.4f + 8)));
-                    // shorelines: foam on the water side, wet dark sand on the land side
-                    if (wWater > 0.02f && wWater < 0.98f) {
-                        float edge = 1.0f - std::abs(wWater - 0.5f) * 2.0f;
-                        if (wWater > 0.4f) {
-                            float foam = edge * edge * (0.45f + 0.55f * nz.v(x * 0.28f + 5, y * 0.28f + 9));
-                            foam *= 0.5f + 0.5f * std::sin(x * 0.17f + y * 0.11f + 6.0f * nz.v(x * 0.02f, y * 0.02f));
-                            col = lerp3(col, f3(226, 238, 236), clampf(foam * 0.8f, 0, 0.7f));
-                        } else col = mul3(col, 1.0f - 0.12f * edge);
+                    // ---- the beach profile, land side: dry sand, then a darker soaked band at the waterline with a bright rim of dried salt
+                    if (wWater > 0.005f && wWater < 0.5f) {
+                        // how far the tide has soaked in, as a band whose width wanders: the wet sand is a real band, not a gradient
+                        float wob = 0.5f + 0.5f * std::sin(x * 0.045f + y * 0.028f + 5.0f * nz.v(x * 0.01f + 2, y * 0.01f + 7));
+                        float wet = sstep(0.30f + 0.10f * wob, 0.02f, wWater);
+                        col = lerp3(col, SAND_WET, wet * 0.62f);
+                        col = mul3(col, 1.0f - 0.16f * wet);                              // wet sand is darker, not just greyer
+                        // a bright crust of dried salt a little back from the water
+                        float crust = sstep(0.30f, 0.20f, wWater) * sstep(0.10f, 0.20f, wWater);
+                        col = lerp3(col, f3(238, 228, 198), crust * 0.30f);
                     }
-                    if (wSand > 0.05f && wWater > 0.0f) {   // wet sand: darker and greyer where the tide-line soaks it
-                        float wet = clampf(wWater * 3.0f, 0, 1);
-                        col = lerp3(mul3(col, 1.0f - 0.18f * wet), SAND_WET, wet * 0.22f);
+                    // ---- the waterline itself: a shore of lighter, aerated water (the surf) with its own broken foam line
+                    if (wWater > 0.5f && wWater < 0.995f) {
+                        float edge = sstep(0.995f, 0.5f, wWater);
+                        // the surf: shallow water still breaking, pale turquoise and whitened
+                        col = lerp3(col, lerp3(col, f3(150, 226, 214), 0.55f), edge * 0.75f);
+                        float foam = sstep(0.30f, 0.95f, edge) * (0.35f + 0.65f * nz.v(x * 0.30f + 5, y * 0.30f + 9));
+                        foam *= 0.55f + 0.45f * std::sin(x * 0.16f + y * 0.10f + 6.0f * nz.v(x * 0.02f, y * 0.02f));
+                        col = lerp3(col, f3(232, 242, 240), clampf(foam * 0.85f, 0, 0.78f));
                     }
                     // gravel shoulder where a road meets the ground, a darker kerb just inside it
                     if (wRoad > 0.05f && wRoad < 0.95f) {
@@ -1328,7 +1395,9 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                         }
                         float rockish = clampf(h0 / 14.0f, 0, 1);
                         k = 1.0f + (k - 1.0f) * 1.6f;   // north-west faces up, south-east faces down: the cliffs read as lit from the NW
-                        col = mul3(col, clampf(k, 0.42f, 1.7f) * (1.0f - 0.34f * occ));
+                        const float shade = clampf(k, 0.42f, 1.7f) * (1.0f - 0.34f * occ);
+                        col = mul3(col, shade);
+                        if (shade < 1.0f && wRock > 0.02f) col = add3(col, mul3(f3(30, 44, 66), (1.0f - shade) * wRock));   // the sky lights what the sun does not: a cliff's shaded face is blue slate, not a black hole
                         // moss in the cracks at the foot of cliffs, a pale dry rim on the crests
                         if (w[K_ROCK] > 0.4f * sum) { col = lerp3(col, MOSS, (1.0f - rockish) * 0.3f); col = add3(col, mul3(f3(30, 28, 24), clampf((h0 - 28.0f) / 14.0f, 0, 1))); }
                     }

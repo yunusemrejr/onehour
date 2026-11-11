@@ -53,6 +53,7 @@ struct Map {
     std::vector<Island> islands;
     struct SeaIsland { float cx, cy, rx, ry; };   // out in the ocean: [0] the second island, then the islets (tile units)
     std::vector<SeaIsland> seaIslands;
+    std::vector<LandmarkSpot> isletPrizes;   // where the map generator means to stand a prize on a cay (tile, kind): turned into landmarks once the ground is settled
     int oceanComp = 0;              // waterComp id of the ocean round the islands (the largest body of water)
     std::vector<RoadSeg> roads;
     // Interior water (water with water on all four sides), pre-grouped for the animated overlays. The lake and the rivers get caustics everywhere:

@@ -5,6 +5,7 @@
 #include "map.h"
 #include <SDL2/SDL.h>
 #include <unordered_map>
+#include <deque>
 
 struct Canvas {
     int w, h;
@@ -86,9 +87,18 @@ struct Sprite {
     SDL_Texture* tex = nullptr; int w = 0, h = 0; float ox = 0, oy = 0; float dscale = 1;
     SDL_Rect src = { 0, 0, 0, 0 }; u8 blend = SDL_BLENDMODE_BLEND;
     u8 radial = 0;   // 1: nothing outside its inscribed circle (a glow, a puff, a disc); 2: a ring with an empty middle too (big ones draw as meshes, see Gfx::drawRadial)
+    // A modelled thing (m3d.h): one sprite per heading, since a solid seen from the side cannot be turned like a flat picture. Gfx::draw picks the
+    // heading nearest the angle it is given and draws it upright, then its owner-colour areas tinted with the colour of slot 'team'. The fields
+    // above are those of the first heading, so code that only asks "is there a sprite" or reads its size needs no change.
+    const struct SpriteSet* set = nullptr;
+    u8 team = 0;     // (TEAM_NEUTRAL: nobody's)
+    static constexpr u8 TEAM_NEUTRAL = 255;
+    Sprite of(int slot) const { Sprite s = *this; s.team = (u8)slot; return s; }   // the same sprite in another owner's colour
     const SDL_Rect* srcRect() const { return src.w > 0 ? &src : nullptr; }
     SDL_Rect sub(int x, int y, int w2, int h2) const { return SDL_Rect{ src.x + x, src.y + y, w2, h2 }; }   // a part of the sprite, in its texture
 };
+
+struct SpriteSet { int n = 0; std::vector<Sprite> base, mask; };   // n headings, clockwise from east (as Entity::angle); mask: the owner-colour areas in white (no texture where there are none)
 
 extern const Color PLAYER_COLOR[MAX_PLAYERS];   // palette slots: blue, red, yellow, green
 extern int g_colorSlot[MAX_PLAYERS];            // which slot each player of the current match uses (an ally takes the friendly green, enemies the warm colours)
@@ -100,6 +110,11 @@ struct Gfx {
     SDL_Renderer* ren = nullptr;
     SDL_Texture* font = nullptr;
     SDL_Texture* white = nullptr;
+    std::deque<SpriteSet> sets;     // the heading sets of every modelled unit, turret and turret head (never moved: sprites point at them)
+    bool unit3d[U_COUNT] = {};      // the unit type is drawn from a 3D model (its shadow is in the sprite; a turret, if any, is a set too)
+    bool bld3d[B_COUNT] = {};       // ... and the structure type
+    float unitHub[U_COUNT] = {};    // a modelled helicopter: how many screen px above its origin the rotor hub is
+    float headLift[4] = {}, relicLift[3] = {};   // a modelled turret head stands this many px above the ground point it is drawn at (its pedestal)
     Sprite unitBody[U_COUNT][MAX_PLAYERS];
     Sprite unitAnim[U_COUNT][MAX_PLAYERS][2];   // walk / track cycle frames
     Sprite unitTurret[U_COUNT][MAX_PLAYERS];
@@ -143,7 +158,7 @@ struct Gfx {
     // Every chunk is kept as WORLD_SUBS x WORLD_SUBS sub-blocks of WORLD_SUB px: one with land or shallows in reach at full resolution, one of open sea
     // at half (a quarter of the memory; the swell drawn over it carries the fine detail). half: the whole chunk is open sea (a GPU draws it from a
     // half-size texture, scaled up)
-    static constexpr int WORLD_SUB = 256, WORLD_SUBS = 4;
+    static constexpr int WORLD_SUB = 128, WORLD_SUBS = 8;
     struct WorldChunk { std::vector<u16> blk[WORLD_SUBS * WORLD_SUBS]; bool blkHalf[WORLD_SUBS * WORLD_SUBS] = {}; SDL_Texture* tex = nullptr; int w = 0, h = 0; u32 used = 0; bool half = false; };   // used: the drawWorld call that last drew it
     std::vector<WorldChunk> worldChunks;
     int worldCols = 0, worldRows = 0, worldResident = 0;
@@ -194,6 +209,8 @@ struct Gfx {
     void shutdown();
     Sprite fromCanvas(Canvas& c, float ox, float oy);
     void draw(const Sprite& s, float x, float y, float angle = 0, float scale = 1, Color mod = rgb(255, 255, 255), u8 alpha = 255);
+    void drawSet(const Sprite& s, float x, float y, float angle, float scale, Color mod, u8 alpha);   // (a modelled sprite: see Sprite::set)
+    Sprite setSprite(const SpriteSet* set, int team) const { Sprite s = set->base[0]; s.set = set; s.team = (u8)team; return s; }
     void drawRect(const Sprite& s, int x, int y, int w, int h, u8 alpha = 255);
     void copyScaled(SDL_Texture* t, const SDL_Rect* src, const SDL_FRect& dst);   // SDL_RenderCopyF, cut to the screen first on the CPU renderer
     void text(int x, int y, const char* s, Color c, int scale = 1, bool shadow = true);

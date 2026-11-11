@@ -706,6 +706,10 @@ Entity* AiPlayer::pickAttackTarget(const Vec2* from) {
             if (r == BR_SUPPLY) s -= 14; else if (r == BR_POWER) s -= 12; else if (r == BR_FACTORY || r == BR_BARRACKS || r == BR_AIRFIELD) s -= 8;
             else if (r == BR_TURRET || r == BR_AATURRET) s += 4; else if (r == BR_HQ) s += 6;
             if (g_sim.refOf(e) == failedTarget && g_sim.time - failedAt < 240) s += 18;
+            if (on2(F2_COMMAND) && g_sim.players[player].difficulty >= 1) {   // not the same wall twice: what stands near where a wave broke waits its turn
+                const bool keen = g_sim.players[player].difficulty >= 2;
+                for (int k = 0; k < (keen ? 2 : 1); k++) if (g_sim.time - brokeT[k] < (keen ? 360.0f : 240.0f) && dist(e.pos, brokeAt[k]) < 13 * TILE) s += 10;
+            }
             if (smart) for (auto& f : g_sim.fallouts) if (f.t < f.life - 15.0f && dist(e.pos, f.pos) < f.r) s += 30;   // radiation: come back when it has faded
             if (on(FEAT_TEAM) && e.owner == focus) s -= 8;   // the enemy the whole team is after
             if (on(FEAT_PERSONA) && e.owner >= 0 && e.owner < MAX_PLAYERS) s -= 6.0f * pers().finisher * (1.0f - g_sim.control[e.owner]);   // an army fighting its own people is a softer target than it looks
@@ -776,9 +780,15 @@ void AiPlayer::garrisonStrongholds() {
     nextFortOrder = S.time + 12;
     Entity* best = nullptr; float bd = 30 * TILE;
     for (auto& fort : S.ents) {
-        if (!fort.alive || !fort.isBuilding() || fort.bt().role != BR_STRONGHOLD || (fort.owner >= 0 && fort.owner != player)) continue;
-        if (!S.explored(player, fort.tx, fort.ty) || S.garrisonInfantry(fort) >= std::min(4, S.garrisonCap(fort))) continue;
-        float d = dist(fort.pos, rally); if (d < bd && !S.inFallout(fort.pos)) { best = &fort; bd = d; }
+        if (!fort.alive || !fort.isBuilding() || fort.bt().role != BR_STRONGHOLD) continue;
+        // a prize (derrick, lighthouse, depot) is worth a longer walk, and one an enemy left empty is there to be taken; the better commanders
+        // know where the prizes stand without having to stumble on them first
+        const bool prize = prizeType(fort.type);
+        if (prize && haulersNow < 2 && fort.type != B_N_DERRICK) continue;   // no supply line: only a prize that pays is worth its last soldiers
+        if (fort.owner >= 0 && fort.owner != player && !(prize && fort.passengers.empty() && S.enemies(player, fort.owner))) continue;
+        if ((!S.explored(player, fort.tx, fort.ty) && !(prize && S.players[player].difficulty >= 2)) || S.garrisonInfantry(fort) >= std::min(prize ? 3 : 4, S.garrisonCap(fort))) continue;
+        if (fort.owner != player && S.garrisonInfantry(fort) > 0) continue;
+        float d = dist(fort.pos, rally) - (prize ? (6.0f + 5.0f * S.players[player].difficulty) * TILE : 0.0f); if (d < bd && !S.inFallout(fort.pos)) { best = &fort; bd = d; }
     }
     if (!best) return;
     std::vector<Ref> pick;
@@ -791,7 +801,7 @@ void AiPlayer::garrisonStrongholds() {
         if ((int)pick.size() >= want) break;
         if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0) continue;
         if (e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) continue;
-        if (dist(e.pos, best->pos) > 25 * TILE || !S.canBoard(e, *best)) continue;
+        if (dist(e.pos, best->pos) > (prizeType(best->type) ? 46 : 25) * TILE || !S.canBoard(e, *best)) continue;
         Vec2 entry = g_map.nearestFree(best->pos + (e.pos - best->pos).norm() * (best->radius() + TILE), 6);
         if (g_map.findPath(e.pos, entry, path)) pick.push_back(S.refOf(e));
     }
@@ -811,6 +821,7 @@ void AiPlayer::endWave(float remainingValue) {
     if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] wave result: dealt %.0f lost %.0f -> %s\n", player, g_sim.time, dealt, lost, success ? "success" : "failure");
     // FEAT_ADAPT: an army that lost far more than it took has met defences its plan did not reckon with. An all-in opening (a rush, an air force
     // first) gives up after one such wave, any other plan after two: more defences, one more income structure, and waves only when they are bigger
+    if (!success && lost > std::max(1500.0f, dealt * 1.2f)) failStreak = std::min(3, failStreak + 1); else if (success) failStreak = 0;
     if (on(FEAT_ADAPT) && !success && lost > std::max(3000.0f, dealt * 1.5f) && !adapted) {
         failedWaves++;
         if (failedWaves >= ((doctrine == DOC_RUSH || doctrine == DOC_AIR) ? 1 : 2)) {
@@ -1162,6 +1173,7 @@ void AiPlayer::think() {
     if (tu[TU_HARV] != 1.0f) wantHarv = std::min(16, (int)(wantHarv * tu[TU_HARV] + 0.5f));
     int queuedHarv = 0;
     for (auto* h : supplyHubs) for (int t : h->queue) if (UNITS[t].role == UR_HARVESTER) queuedHarv++;
+    haulersNow = harvesters;
     if (harvesters + queuedHarv < wantHarv) {
         for (auto* h : supplyHubs) if (h->constructed && h->queue.empty()) { S.cmdTrain(S.refOf(*h), ubase + 1); break; }
     }
@@ -1421,7 +1433,8 @@ void AiPlayer::think() {
     else armyCap = minutes < rampStart ? 4 : (minutes < rampStart + 2.5f ? 9 : (minutes < rampStart + 5 ? 16 : (pl.difficulty == 0 ? 24 : 40)));
     if (smart) armyCap = (int)(armyCap * style.army * tu[TU_CAP] + 0.5f);
     if (opp && opp->firstHit < 480.0f && S.time > opp->firstHit - 100.0f) armyCap = std::max(armyCap, pl.difficulty >= 2 ? 16 : 10);   // ready for the early attack
-    if (on(FEAT_MACRO) && pl.difficulty >= 1) armyCap += (int)(ease * clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f));   // surplus credits become soldiers, not a bank balance
+    if (on(FEAT_MACRO) && pl.difficulty >= 1) armyCap += (int)(ease * clampf((pl.money - 3000.0f) / 450.0f, 0.0f, 60.0f));
+    if (S.time < surgeUntil) armyCap += 12;   // surplus credits become soldiers, not a bank balance
     // The Chosen (F2_CHOSEN): Normal and up, once the tech structure stands and the treasury can spare it; one at a time
     if (on2(F2_CHOSEN) && pl.difficulty >= 1 && techs > 0 && !barracks.empty() && S.time > CHOSEN_OPEN + chosenDelay(pl.difficulty) && !recovering) {
         const int ct = pl.faction == F_CYBER ? U_C_CHOSEN : U_K_CHOSEN;
@@ -1764,6 +1777,8 @@ void AiPlayer::think() {
     if (pl.difficulty == 0) waveThreshold *= 1.7f; else if (pl.difficulty == 2) waveThreshold *= 0.85f; else if (pl.difficulty == 3) waveThreshold *= 0.6f;
     waveThreshold = std::min(waveThreshold * style.thr * tu[TU_THR] * (on(FEAT_PERSONA) ? pers().patience : 1.0f), 11000.0f);
     float firstWaveAt = (pl.difficulty >= 3 ? 165.0f : (pl.difficulty == 2 ? 270.0f : (pl.difficulty == 1 ? 360.0f : 480.0f))) * style.first * tu[TU_FIRST] * (on2(F2_VARY) ? pace : 1.0f);
+    if (on2(F2_COMMAND) && pl.difficulty >= 1) waveThreshold = std::min(waveThreshold * (1.0f + 0.12f * failStreak), 12500.0f);   // beaten back: the next wave is heavier
+    if (S.time < surgeUntil) { waveThreshold *= 0.7f; firstWaveAt = 0; }   // its difficulty was just raised: it presses now, with what it has
 
     // medics keep up with the army (the healer's own AI handles the last few tiles: it drifts to wounded friends)
     if (smart && !medics.empty()) {
@@ -1903,7 +1918,7 @@ void AiPlayer::think() {
             if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] %s value=%.0f/%.0f units=%d\n", player, S.time, exhausted ? "RETREAT" : "REGROUP", waveNow, waveValue, (int)wave.size());
             endWave(waveNow);
             attacking = false; regroupUntil = S.time + (exhausted ? 40.0f : 10.0f);
-            if (exhausted && tgt) { failedTarget = attackTarget; failedAt = S.time; }
+            if (exhausted && tgt) { failedTarget = attackTarget; failedAt = S.time; brokeAt[1] = brokeAt[0]; brokeT[1] = brokeT[0]; brokeAt[0] = tgt->pos; brokeT[0] = S.time; }
             groupMove(wave, rally, true);
             wave.clear();
         } else {

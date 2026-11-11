@@ -27,36 +27,54 @@ Color heatRamp(float h, bool sv) {
     return c[5];
 }
 
+// A clump of round lobes: whether a point lies in it, how deep inside the nearest lobe it is and which way that lobe's surface faces there, so
+// smoke, dust and fire are lit as rolling volumes (a sunlit flank, a body in half shade, a cool underside) and not as soft discs.
+struct Clump {
+    struct Lobe { float x, y, r; } L[8]; int n = 0;
+    Clump(u32 seed, int count, float spread, float rMin, float rMax) {
+        Rng r(seed); n = count;
+        L[0] = { 0, 0, rMax + 0.14f };
+        for (int i = 1; i < n; i++) { const float an = i * 6.2831853f / (n - 1) + r.f(-0.45f, 0.45f), d = r.f(spread * 0.7f, spread); L[i] = { std::cos(an) * d, std::sin(an) * d, r.f(rMin, rMax) }; }
+    }
+    bool at(float px, float py, float& dens, float& nx, float& ny, float& nz) const {
+        float top = -1; dens = 0;
+        for (int i = 0; i < n; i++) {
+            const float dx = (px - L[i].x) / L[i].r, dy = (py - L[i].y) / L[i].r, d2 = dx * dx + dy * dy;
+            if (d2 >= 1) continue;
+            const float h = std::sqrt(1 - d2), z = h * L[i].r + (i ? 0.10f : 0.0f);
+            dens = std::max(dens, 1 - d2);
+            if (z > top) { top = z; nx = dx; ny = dy; nz = h; }
+        }
+        return top >= 0;
+    }
+};
 void puffCanvas(Canvas& c, int v, bool dust) {
+    const Clump k(700u + v * 31u, 5 + v % 3, 0.50f, 0.30f, 0.44f);
+    const Color lit = dust ? rgb(248, 228, 186) : rgb(250, 248, 242), mid = dust ? rgb(190, 162, 120) : rgb(176, 178, 184), shade = dust ? rgb(112, 88, 62) : rgb(86, 92, 110);
     for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
-        float dx = (x + 0.5f - 32) / 30.0f, dy = (y + 0.5f - 32) / 30.0f, d = std::sqrt(dx * dx + dy * dy);
-        if (d >= 1) continue;
-        float n = fb(x * 0.085f + v * 17, y * 0.085f + v * 5, 91 + v);
-        float a = clampf(std::pow(1 - d, 1.25f) * (0.30f + 1.25f * n), 0, 1) * 0.9f;
-        float lum = clampf(150 + 85 * (-dx * 0.55f - dy * 0.65f) + 46 * (n - 0.5f), 40, 250);
-        Color col = dust ? Color{(u8)lum, (u8)(lum * 0.88f), (u8)(lum * 0.68f), 255} : Color{(u8)lum, (u8)lum, (u8)(lum * 0.98f), 255};
-        col.a = (u8)(a * 255);
+        const float px = (x + 0.5f - 32) / 30.0f, py = (y + 0.5f - 32) / 30.0f;
+        float dens = 0, nx = 0, ny = 0, nz = 1;
+        if (!k.at(px, py, dens, nx, ny, nz)) continue;
+        const float n = fb(x * 0.11f + v * 17, y * 0.11f + v * 5, 91 + v);
+        const float light = -nx * 0.58f - ny * 0.42f + nz * 0.42f + (n - 0.5f) * 0.35f;   // the sun low in the west, a little above
+        Color col = light > 0.15f ? lerpC(mid, lit, clampf((light - 0.15f) / 0.6f, 0, 1)) : lerpC(shade, mid, clampf((light + 0.55f) / 0.7f, 0, 1));
+        const float d = std::sqrt(px * px + py * py);
+        col.a = (u8)(sst(0.0f, 0.36f, dens) * (0.68f + 0.32f * n) * clampf((1.0f - d) * 4.0f, 0, 1) * 0.86f * 255);
         c.px[y * c.w + x] = Canvas::pack(col);
     }
 }
-void fireCanvas(Canvas& c, int f) {   // the fireball's body: a hot orange mass that churns, darkens to red-brown at its ragged edge and cools to smoke
-    float R = 14 + f * 2.6f;
-    float cool = clampf((f - 3) / 4.0f, 0, 1);
+void fireCanvas(Canvas& c, int f) {   // the fireball's body: lobes that are white-hot in their thick, glow red in the creases between them and crust over to lit smoke as the blast ages
+    static const Clump k(883u, 7, 0.48f, 0.30f, 0.42f);
+    const float R = 15 + f * 2.5f, cool = clampf((f - 2) / 5.0f, 0, 1);
     for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
-        float dx = x + 0.5f - 32, dy = y + 0.5f - 32, d = std::sqrt(dx * dx + dy * dy) / R;
-        float n = fb(x * 0.12f + f * 2.3f, y * 0.12f - f * 1.1f, 311);
-        float n2 = fb(x * 0.33f - f * 1.7f, y * 0.33f + f * 0.9f, 317);   // finer churn: the edge breaks up into lumps
-        float t = d + (n - 0.5f) * 0.62f + (n2 - 0.5f) * 0.34f;
-        if (t >= 1.06f) continue;
-        t = std::max(t, 0.0f);
-        Color col;
-        if (t < 0.3f) col = lerpC(rgb(255, 190, 90), rgb(255, 138, 40), t / 0.3f);
-        else if (t < 0.6f) col = lerpC(rgb(255, 138, 40), rgb(206, 70, 24), (t - 0.3f) / 0.3f);
-        else if (t < 0.88f) col = lerpC(rgb(206, 70, 24), rgb(108, 32, 22), (t - 0.6f) / 0.28f);
-        else col = lerpC(rgb(108, 32, 22), rgb(52, 36, 32), (t - 0.88f) / 0.18f);
-        col = lerpC(col, rgb(62, 56, 52), cool * sst(0.05f, 0.8f, t));
-        float a = clampf((1.0f - t) * 2.4f, 0, 1) * (0.78f + 0.22f * n2) * (1.0f - 0.18f * cool);
-        col.a = (u8)(a * 255);
+        const float px = (x + 0.5f - 32) / R, py = (y + 0.5f - 32) / R;
+        float dens = 0, nx = 0, ny = 0, nz = 1;
+        if (!k.at(px, py, dens, nx, ny, nz)) continue;
+        const float n = fb(x * 0.13f + f * 2.3f, y * 0.13f - f * 1.1f, 311), n2 = fb(x * 0.36f - f * 1.7f, y * 0.36f + f * 0.9f, 317);
+        const float h = clampf(0.26f + 0.95f * dens + (n - 0.5f) * 0.7f + (n2 - 0.5f) * 0.3f - cool * 0.66f, 0, 1);
+        Color col = heatRamp(h, false);
+        if (h < 0.3f) { const float light = clampf(0.5f - nx * 0.5f - ny * 0.35f + nz * 0.3f, 0, 1); col = lerpC(col, lerpC(rgb(38, 34, 36), rgb(128, 114, 102), light), 1 - h / 0.3f); }
+        col.a = (u8)(sst(0.0f, 0.22f, dens) * (0.82f + 0.18f * n2) * (1.0f - 0.22f * cool) * 255);
         c.px[y * c.w + x] = Canvas::pack(col);
     }
 }

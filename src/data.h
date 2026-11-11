@@ -128,6 +128,10 @@ enum BuildTypeId {
     // the abandoned relic bases (map landmarks owned by nobody at the start; BuildType.relic): taken one structure at a time
     B_R_COMMAND, B_R_REACTOR, B_R_FOUNDRY, B_R_AIRSTRIP, B_R_FLAK, B_R_LASER, B_R_CANNON, B_R_WALL, B_R_SILO, B_R_BUNKER,
     B_BRIDGE,                     // a canal bridge (see BR_BRIDGE)
+    // prize landmarks (BR_STRONGHOLD rows the map generator places; see prizeType): held by whoever has infantry inside, each with a reward
+    B_N_DERRICK,                  // Oil Derrick: pays its holder
+    B_N_LIGHTHOUSE,               // Lighthouse: sees far out over land and sea
+    B_N_DEPOT,                    // Field Depot: mends the holder's units round it
     B_COUNT
 };
 
@@ -249,6 +253,13 @@ static const float WALL_PD_AA = 190.0f;       // damage a wall laser does to an 
 static const float STRONGHOLD_ARMOR = 0.62f;  // fraction of conventional damage a stronghold takes
 static const float STRONGHOLD_NUKE = 0.58f;   // hard ceiling: one warhead takes at most this share of its max health
 inline bool strongholdRole(BuildRole r) { return r == BR_STRONGHOLD; }
+// A prize landmark: a stronghold with a reward for whoever holds it. Unlike the old castles it changes hands: an enemy's infantry may walk into one
+// that stands empty and take it, so a prize has to be kept garrisoned.
+inline bool prizeType(int t) { return t == B_N_DERRICK || t == B_N_LIGHTHOUSE || t == B_N_DEPOT; }
+static const int DERRICK_PAY = 110;            // $ an Oil Derrick pays its holder every DERRICK_PERIOD seconds
+static const float DERRICK_PERIOD = 10.0f;
+static const float DEPOT_RADIUS = 7.0f;        // tiles round a Field Depot in which its holder's (and allies') units are mended
+static const float DEPOT_HEAL = 0.02f;         // fraction of full health a unit there gets back each second (never less than 6 points)
 inline bool wallRole(BuildRole r) { return r == BR_WALL || r == BR_FWALL; }   // 1x1 segments meant to be chained into a line (no gap rules)
 inline bool neutralRole(BuildRole r) { return r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_BRIDGE; }   // placed by the map generator: never raised by a dozer, never sold
 inline bool invulnerableRole(BuildRole r) { return r == BR_FWALL; }   // nothing damages them: they burn (see Entity.heat) and only a spy takes them (the island launchers can be destroyed now)

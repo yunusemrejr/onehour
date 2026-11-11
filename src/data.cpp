@@ -280,6 +280,10 @@ const BuildType BUILDS[B_COUNT] = {
     { "Sentinel Bunker",    "-", F_CYBER, BR_STRONGHOLD, 30000, 0, 0, 3, 3, 0, 12, W_RELIC_BUNKER, -1, "A secret relic bunker half buried in the jungle: infantry claim it by walking in (up to 40 fire from it) and its own guns cover the island. Extremely tough", 40, 1 },
     // the canal bridges (nobody's): broken by fire, raised again by any dozer in 20 s of work
     { "Bridge",             "-", F_CYBER, BR_BRIDGE,    2200, 0, 20, BRIDGE_W, BRIDGE_L, 0, 0, -1, -1, "A bridge over the canal. Anyone can break it (an attack order, artillery, a warhead): the span drops into the water and nothing can cross until a dozer of any army raises it again. Ships pass under it" },
+    // prize landmarks (nobody's at the start; see prizeType)
+    { "Oil Derrick",        "-", F_CYBER, BR_STRONGHOLD, 6000, 0, 0, 2, 2, 0, 8, -1, -1, "An old oil well that still pumps. Send infantry in to claim it: it pays its holder $110 every 10s. An enemy's infantry can walk in and take it whenever it stands empty, so keep it garrisoned", 6 },
+    { "Lighthouse",         "-", F_CYBER, BR_STRONGHOLD, 6500, 0, 0, 2, 2, 0, 26, -1, -1, "A tall lighthouse. Send infantry in to claim it: its holder sees 26 tiles out over land and sea from the lamp room. An enemy's infantry can walk in and take it whenever it stands empty", 6 },
+    { "Field Depot",        "-", F_CYBER, BR_STRONGHOLD, 8000, 0, 0, 3, 2, 0, 9, -1, -1, "An abandoned army depot with a working repair shop. Send infantry in to claim it: its holder's units within 7 tiles are mended and healed. An enemy's infantry can walk in and take it whenever it stands empty", 6 },
 };
 
 // income per payout (every CIVIC_INTERVAL s), seconds between free dozers, townsfolk walking about it (decoration only)

@@ -172,7 +172,7 @@ bool Sim::armyBeaten(int p) const {
     float light = 0;
     for (auto& e : ents) {
         if (!e.alive || e.owner != p || e.kind == EK_RESOURCE) continue;
-        if (e.isBuilding()) { if (e.district >= 0 || invulnerable(e)) continue; return false; }
+        if (e.isBuilding()) { if (e.district >= 0 || invulnerable(e) || prizeType(e.type)) continue; return false; }   // (a prize landmark it holds is no base: it cannot build or repair anything)
         const UnitType& ut = e.ut();
         if (ut.temp || civicDozerType(e.type)) continue;
         if (subType(e.type)) continue;   // (a submarine alone does not keep an army in the fight: see above)

@@ -66,8 +66,10 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_SOFTSPOT = 1024,// the soft spot (pickAttackTarget): an objective far from where the enemy's army was last seen (within 90 seconds) scores better
                F2_REGROUP = 2048, // no trickling: reinforcements for a wave under way gather at the home rally and set off together (five at the least), never
                                   // one by one as they leave the factory (the value gate alone let a lone tank walk into the enemy's guns every 30 seconds)
-               F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_COMMAND = 4096, // a commander that does not repeat itself (Normal and up): the ground a wave broke on is left alone for some minutes (Hard and
+                                  // Brutal remember the last two such places, for longer), and after a beating the next wave is heavier, not the same again
+               F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
 
@@ -134,6 +136,8 @@ struct AiPlayer {
     int failedWaves = 0; bool adapted = false;   // FEAT_ADAPT: waves thrown away so far, and whether the plan has changed
     Ref droppedTarget; float lastRetarget = -100;   // the objective last dropped for radiation, and when the wave was last sent to a new one
     Ref failedTarget; float failedAt = -1000;   // last target a wave broke against
+    Vec2 brokeAt[2]; float brokeT[2] = { -1000, -1000 }; int failStreak = 0;   // F2_COMMAND: where the last two waves broke, and how many broke in a row
+    float surgeUntil = -1000;                   // the human raised this army's difficulty: until then it presses with what it has (AiManager::raiseDifficulty)
     Vec2 huntPoint; float huntAt = -1000;       // where the army sweeps when only the enemy's hidden things are left, and when to pick the next spot
 
     Brain* brain = &g_brain;    // the learned components this commander consults (a different one per army only in --evalai)
@@ -180,6 +184,7 @@ struct AiPlayer {
     float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
     bool recovering = false;    // most of the base is gone: rebuild the core before anything else (see FEAT_RECOVER)
+    int haulersNow = 0;         // haulers at the last census (an army without a supply line has better things for its soldiers than a lighthouse)
     float relocatedAt = -100;   // when the commander last moved its home to a new site (relocateBase)
     int relocations = 0;        // (statistics)
     Vec2 groundFrom; bool groundCheck = false;   // findSpot: only spots a dozer standing at groundFrom can drive to

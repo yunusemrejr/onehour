@@ -1,4 +1,7 @@
 #include "gfx.h"
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include "relight.h"
 #include "map.h"
 #include "art.h"
@@ -6,6 +9,9 @@
 #include "artb.h"
 #include "terrain.h"
 #include "icons.h"
+#include "m3d_reg.h"
+#include <filesystem>
+static std::string modelCacheFile(const char* name);   // (below: where the rendered models are kept between runs)
 
 Gfx g_gfx;
 
@@ -86,9 +92,32 @@ bool Gfx::init(int scale, bool software, int reqW, int reqH) {
     {   // (ONEHOUR_INITPROF=1: how long each part of the startup bake takes)
         static const bool prof = getenv("ONEHOUR_INITPROF") != nullptr;
         u64 t0 = SDL_GetPerformanceCounter();
-        auto lap = [&](const char* what) { if (!prof) return; u64 t1 = SDL_GetPerformanceCounter(); fprintf(stderr, "[init] %-14s %7.0f ms\n", what, (t1 - t0) * 1000.0 / SDL_GetPerformanceFrequency()); t0 = t1; };
-        buildFont(); lap("font"); bakeTerrain(); lap("terrain"); buildUnits(); lap("units"); buildBuildings(); lap("buildings");
+        auto lap = [&](const char* what) {
+            if (!prof) return;
+            u64 t1 = SDL_GetPerformanceCounter();
+            long pages = 0, rss = 0; if (FILE* f = fopen("/proc/self/statm", "r")) { if (fscanf(f, "%ld %ld", &pages, &rss) != 2) rss = 0; fclose(f); }
+            fprintf(stderr, "[init] %-14s %7.0f ms, resident %4.0f MB\n", what, (t1 - t0) * 1000.0 / SDL_GetPerformanceFrequency(), rss * 4096.0 / 1048576.0); t0 = t1;
+        };
+        // The start-up screen. The first start renders every model once (afterwards they come from the cache), and the window must not sit blank through it.
+        const bool cold = [&] { FILE* f = fopen(modelCacheFile("structures.bin").c_str(), "rb"); if (f) fclose(f); return f == nullptr; }();
+        auto note = [&](const char* what, int step) {
+            SDL_SetRenderDrawColor(ren, 14, 44, 62, 255); SDL_RenderClear(ren);
+            const char* title = "ONE HOUR";
+            text(SCREEN_W / 2 - textW(title, 4) / 2, SCREEN_H / 2 - 70, title, rgb(238, 226, 190), 4);
+            text(SCREEN_W / 2 - textW(what) / 2, SCREEN_H / 2 - 16, what, rgb(150, 204, 214));
+            const int bw = 260, bx = SCREEN_W / 2 - bw / 2, by = SCREEN_H / 2 + 4;
+            SDL_Rect back = { bx, by, bw, 6 }, bar = { bx, by, bw * step / 4, 6 };
+            SDL_SetRenderDrawColor(ren, 24, 70, 92, 255); SDL_RenderFillRect(ren, &back);
+            SDL_SetRenderDrawColor(ren, 238, 196, 96, 255); SDL_RenderFillRect(ren, &bar);
+            if (cold) { const char* once = "First start: every model is rendered once. About half a minute."; text(SCREEN_W / 2 - textW(once) / 2, by + 22, once, rgb(120, 160, 172)); }
+            SDL_RenderPresent(ren); SDL_PumpEvents();
+        };
+        buildFont(); lap("font"); note("Shaping the land", 0); bakeTerrain(); lap("terrain"); note("Mustering the armies", 1); buildUnits(); lap("units");
+        note("Raising the structures", 2); buildBuildings(); lap("buildings"); note("Last touches", 3);
         buildMisc(); lap("misc"); buildEffects(); lap("effects"); buildMinimap();
+#ifdef __GLIBC__
+        malloc_trim(0); lap("trim");   // the bakes' scratch memory (thousands of canvases, the cache files) goes back to the system instead of sitting in the heap
+#endif
     }
     iconsInit(*this);
     if (getenv("ONEHOUR_ATLASDBG")) {
@@ -326,8 +355,19 @@ void Gfx::copyScaled(SDL_Texture* t, const SDL_Rect* srcIn, const SDL_FRect& dst
     SDL_RenderCopy(ren, t, &s2, &d2);
 }
 
+void Gfx::drawSet(const Sprite& s, float x, float y, float angle, float scale, Color mod, u8 alpha) {
+    const SpriteSet& v = *s.set;
+    int k = (int)std::lround(angle * ((float)v.n / 6.2831853f)) % v.n;
+    if (k < 0) k += v.n;
+    draw(v.base[k], x, y, 0, scale, mod, alpha);
+    if (v.mask[k].tex) {
+        const Color tc = s.team < MAX_PLAYERS ? PLAYER_COLOR[s.team] : rgb(206, 200, 180);
+        draw(v.mask[k], x, y, 0, scale, Color{ (u8)(mod.r * tc.r / 255), (u8)(mod.g * tc.g / 255), (u8)(mod.b * tc.b / 255), 255 }, alpha);
+    }
+}
 void Gfx::draw(const Sprite& s, float x, float y, float angle, float scale, Color mod, u8 alpha) {
     if (!s.tex) return;
+    if (s.set) { drawSet(s, x, y, angle, scale, mod, alpha); return; }
     scale *= s.dscale;
     SDL_Rect dst = { (int)std::lround(x - s.ox * scale), (int)std::lround(y - s.oy * scale), (int)std::lround(s.w * scale), (int)std::lround(s.h * scale) };
     SDL_Point c = { (int)std::lround(s.ox * scale), (int)std::lround(s.oy * scale) };
@@ -370,6 +410,11 @@ void Gfx::flushAdd() {
 void Gfx::drawRolled(const Sprite& s, float x, float y, float angle, float roll, float scale, Color mod, u8 alpha) {
     if (!s.tex) return;
     float c = std::cos(roll), k = std::max(0.22f, std::abs(c));
+    if (s.set) {   // (a modelled aircraft is a solid already: it only darkens while it shows its belly)
+        const float sh = c < 0 ? 0.72f : 1.0f;
+        drawSet(s, x, y, angle, scale * s.dscale, Color{ (u8)(mod.r * sh), (u8)(mod.g * sh), (u8)(mod.b * sh), 255 }, alpha);
+        return;
+    }
     scale *= s.dscale;
     SDL_FRect dst = { x - s.ox * scale, y - s.oy * scale * k, s.w * scale, s.h * scale * k };
     SDL_FPoint pc = { s.ox * scale, s.oy * scale * k };
@@ -634,7 +679,7 @@ static u32 expand565(u16 p) {
 bool Gfx::openSeaBlock(int px0, int py0, int size) const {
     for (int ty = py0 / TILE - 1; ty <= (py0 + size) / TILE; ty++) for (int tx = px0 / TILE - 1; tx <= (px0 + size) / TILE; tx++) {
         if (!inMap(tx, ty)) continue;
-        if (g_map.tiles[ty * MAP_W + tx] != T_WATER || g_map.shoreDist[(size_t)ty * MAP_W + tx] < 10) return false;
+        if (g_map.tiles[ty * MAP_W + tx] != T_WATER || g_map.shoreDist[(size_t)ty * MAP_W + tx] < 8) return false;   // (8 tiles out the baked sea is open water: waves and depth only, see SEA_OPEN in terrain.cpp)
     }
     return true;
 }
@@ -1020,11 +1065,88 @@ static void gradeArt(Canvas& c, u32 seed, float desat, float grime) {
     }
 }
 
+// ------------------------------------------------------------ modelled sprites (m3d.h)
+// Where the rendered views are kept between runs (ONEHOUR_CACHE names another directory; ONEHOUR_NOCACHE: render everything on every start)
+static std::string modelCacheFile(const char* name) {
+    if (getenv("ONEHOUR_NOCACHE")) return "";
+    std::string dir;
+    if (const char* e = getenv("ONEHOUR_CACHE")) dir = e;
+    else if (const char* x = getenv("XDG_CACHE_HOME")) dir = std::string(x) + "/onehour";
+    else if (const char* h = getenv("HOME")) dir = std::string(h) + "/.cache/onehour";
+    else return "";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return ec ? "" : dir + "/" + name;
+}
+static bool use3d() { static const bool off = getenv("ONEHOUR_OLDART") != nullptr; return !off; }   // (ONEHOUR_OLDART: the painted 2D art, for comparison)
+// A set of headings out of baked shots [first, first + n)
+static const SpriteSet* makeSet(Gfx& g, std::vector<m3d::Shot>& shots, int first, int n) {
+    g.sets.emplace_back();
+    SpriteSet& v = g.sets.back();
+    v.n = n; v.base.resize(n); v.mask.resize(n);
+    for (int k = 0; k < n; k++) {
+        m3d::Baked& b = shots[first + k].out;
+        v.base[k] = g.fromCanvasSmooth(b.color, b.ox, b.oy);
+        if (b.hasMask) v.mask[k] = g.fromCanvasSmooth(b.mask, b.mox, b.moy);
+    }
+    return &v;
+}
+// The lowest point of a model (a turret head stands on its pedestal: that is how high)
+static float modelFloor(const m3d::Model& m) {
+    float z = 1e9f;
+    for (const m3d::Prim& p : m.prims) {
+        if (p.flags & m3d::F_SHADOWONLY) continue;
+        const float e = p.kind == 3 ? 0.0f : std::abs(p.R[2]) * p.h.x + std::abs(p.R[5]) * p.h.y + std::abs(p.R[8]) * p.h.z;   // (its half sizes along its own axes, seen along z)
+        z = std::min(z, p.c.z - e);
+    }
+    return z > 1e8f ? 0.0f : std::max(0.0f, z);
+}
+
 void Gfx::buildUnits() {
+    const m3d::Registry& R = m3d::reg();
+    m3d::bakeOpen(modelCacheFile("units.bin"));
+    for (int t = 0; t < U_COUNT && use3d(); t++) {
+        if (!R.unit[t]) continue;
+        const UnitType& u = UNITS[t];
+        const float sc = UNIT_SCALE * artScale(t) * ART_SIZE / (float)artCanvas(t);
+        m3d::Model body[3], tur[3];
+        for (int f = 0; f < 3; f++) R.unit[t](body[f], tur[f], f);
+        if (body[0].prims.empty()) continue;
+        const bool walks = m3d::modelKey(body[0]) != m3d::modelKey(body[1]);          // (a model that ignores the frame is one sprite set, not three)
+        const bool big = artCanvas(t) != ART_SIZE && artScale(t) >= 2.5f;                // carriers, cargo ships, battleships: a view is 150+ px
+        const int n = u.kind == UK_INF ? 16 : (big ? 24 : 32), frames = walks ? 3 : 1;
+        const int nt = tur[0].prims.empty() ? 0 : 32;
+        std::vector<m3d::Shot> shots;
+        shots.reserve((size_t)n * frames + nt);
+        const int ss = u.kind == UK_INF ? 3 : 2;   // (samples per pixel along each axis: the tiny figures need the most)
+        for (int f = 0; f < frames; f++) for (int k = 0; k < n; k++) { m3d::RenderOpt o; o.scale = sc; o.heading = k * 6.2831853f / n; o.ss = ss; shots.push_back(m3d::Shot{ &body[f], o, {} }); }
+        for (int k = 0; k < nt; k++) { m3d::RenderOpt o; o.scale = sc; o.heading = k * 6.2831853f / nt; o.ss = ss; shots.push_back(m3d::Shot{ &tur[0], o, {} }); }
+        m3d::bake(shots);
+        if (getenv("ONEHOUR_INITPROF")) {   // (what each unit's views weigh as textures)
+            size_t px = 0; int mw = 0, mh = 0;
+            for (auto& sh : shots) { px += sh.out.color.px.size() + (sh.out.hasMask ? sh.out.mask.px.size() : 0); mw = std::max(mw, sh.out.color.w); mh = std::max(mh, sh.out.color.h); }
+            if (px * 4 > 0) fprintf(stderr, "[init] %-22s %3zu views up to %3dx%3d, %5.2f MB\n", u.name, shots.size(), mw, mh, px * 4 / 1048576.0);
+        }
+        const SpriteSet* fs[3];
+        for (int f = 0; f < 3; f++) fs[f] = f < frames ? makeSet(*this, shots, f * n, n) : fs[0];
+        const SpriteSet* ts = nt ? makeSet(*this, shots, frames * n, nt) : nullptr;
+        for (int p = 0; p < MAX_PLAYERS; p++) {
+            unitBody[t][p] = setSprite(fs[0], p);
+            unitAnim[t][p][0] = setSprite(fs[walks ? 1 : 0], p); unitAnim[t][p][1] = setSprite(fs[walks ? 2 : 0], p);
+            if (ts) unitTurret[t][p] = setSprite(ts, p);
+        }
+        unit3d[t] = true;
+        unitHub[t] = body[0].hub * sc * m3d::OBL_K;
+    }
+    m3d::bakeClose();
     for (int p = 0; p < MAX_PLAYERS; p++) {
         Color team = PLAYER_COLOR[p];
         for (int t = 0; t < U_COUNT; t++) {
             const UnitType& u = UNITS[t];
+            if (unit3d[t]) {   // (modelled: only a submarine's shadow under the water is still painted)
+                if (subType(t)) { Canvas c(ART_BIG, ART_BIG); artSubBody(c, team, u.faction == F_CYBER, 1); subArt[u.faction == F_CYBER ? 0 : 1][p][0] = cropToSprite(*this, c, ART_BIG / 2, ART_BIG / 2, UNIT_SCALE * artScale(t) * ART_SIZE / (float)ART_BIG); }
+                continue;
+            }
             if ((p == RIOT_PLAYER) != (t == U_RIOTER || t == U_FIREBOMBER) && p == RIOT_PLAYER) continue;   // (the riot crowd's colour only ever paints rioters: a fifth less art to bake and keep)
             for (int f = 0; f < 3; f++) {
                 if (f > 0 && u.kind == UK_AIR) break;   // aircraft have a single frame
@@ -1079,8 +1201,59 @@ static Sprite cropToSprite(Gfx& g, Canvas& c, float cx, float cy, float dscale) 
 }
 
 void Gfx::buildBuildings() {
+    const m3d::Registry& R = m3d::reg();
+    m3d::bakeOpen(modelCacheFile("structures.bin"));
+    {   // the modelled structures: every one rendered in one go (they are the slow ones: a big hall is a hundred solids over 20000 pixels)
+        std::vector<m3d::Model> mdl((size_t)B_COUNT * 2);
+        std::vector<m3d::Shot> shots;
+        std::vector<int> at(B_COUNT, -1), atArmed(B_COUNT, -1);
+        for (int t = 0; t < B_COUNT && use3d(); t++) {
+            const BuildType& bt = BUILDS[t];
+            if (!R.build[t] || bt.role == BR_BRIDGE || t == B_C_BUNKER || t == B_K_BUNKER) continue;
+            R.build[t](mdl[t * 2], 0);
+            if (mdl[t * 2].prims.empty()) continue;
+            m3d::RenderOpt o; o.scale = 1.0f; o.ss = 2;
+            at[t] = (int)shots.size(); shots.push_back(m3d::Shot{ &mdl[t * 2], o, {} });
+            if (bt.role == BR_NUKE || bt.role == BR_UNUKE || bt.role == BR_RELICSILO) {
+                R.build[t](mdl[t * 2 + 1], 1);
+                if (m3d::modelKey(mdl[t * 2 + 1]) != m3d::modelKey(mdl[t * 2])) { atArmed[t] = (int)shots.size(); shots.push_back(m3d::Shot{ &mdl[t * 2 + 1], o, {} }); }
+            }
+        }
+        m3d::bake(shots);
+        for (int t = 0; t < B_COUNT; t++) {
+            if (at[t] < 0) continue;
+            const BuildType& bt = BUILDS[t];
+            const float cx = bt.w * TILE * 0.5f, cy = bt.h * TILE * 0.5f;   // (sprites are anchored on the middle of the footprint; the model's origin is its north-west corner)
+            m3d::Baked& b = shots[at[t]].out;
+            building[t] = fromCanvasSmooth(b.color, b.ox + cx, b.oy + cy);
+            if (b.hasMask) buildingTeam[t] = fromCanvasSmooth(b.mask, b.mox + cx, b.moy + cy);
+            if (atArmed[t] >= 0) {   // the armed look: only what differs from the plain one (the missile on its ramp, the open doors), laid over it
+                m3d::Baked& a = shots[atArmed[t]].out;
+                const int dx = (int)std::lround(a.ox - b.ox), dy = (int)std::lround(a.oy - b.oy);
+                Canvas d(a.color.w, a.color.h);
+                bool any = false;
+                for (int y = 0; y < a.color.h; y++) for (int x = 0; x < a.color.w; x++) {
+                    const u32 pa = a.color.px[(size_t)y * a.color.w + x];
+                    const int bx = x - dx, by = y - dy;
+                    const u32 pb = bx >= 0 && by >= 0 && bx < b.color.w && by < b.color.h ? b.color.px[(size_t)by * b.color.w + bx] : 0u;
+                    if (pa == pb || (pa >> 24) == 0) continue;
+                    const Color ca = Canvas::unpack(pa), cb = Canvas::unpack(pb);
+                    if (std::abs(ca.r - cb.r) + std::abs(ca.g - cb.g) + std::abs(ca.b - cb.b) + std::abs(ca.a - cb.a) < 14) continue;
+                    d.px[(size_t)y * d.w + x] = pa; any = true;
+                }
+                if (any) armed[t] = cropToSprite(*this, d, a.ox + cx, a.oy + cy, 1.0f);
+            }
+            bld3d[t] = true;
+        }
+    }
     for (int t = 0; t < B_COUNT; t++) {
         BArtSize sz = artBuildingSize(t);
+        if (bld3d[t]) {   // (modelled: only its building site is still painted)
+            Canvas s(sz.w, sz.h);
+            artSite(s, t);
+            site[t] = cropToSprite(*this, s, sz.cx, sz.cy, 1.0f / BART_K);
+            continue;
+        }
         Canvas c(sz.w, sz.h), m(sz.w, sz.h);
         studioPaint(c, rigBuilding(), &m, [&] { artBuilding(c, m, t); });
         finishBuilding(c, t, 3201u + (u32)t);
@@ -1114,6 +1287,24 @@ void Gfx::buildBuildings() {
     // rotating heads of the defensive structures
     for (int i = 0; i < 4; i++) { Canvas tc(ART_SIZE, ART_SIZE); artTurretHead(tc, i); turretHead[i] = fromCanvasSmooth(tc, 32, 32); turretHead[i].dscale = 0.5f; }
     for (int i = 0; i < 3; i++) { Canvas tc(ART_SIZE, ART_SIZE); artRelicTurretHead(tc, i); relicHead[i] = fromCanvasSmooth(tc, 32, 32); relicHead[i].dscale = 0.5f; }
+    {   // the modelled heads: a heading set each, standing at the height of the pedestal in their structure's model
+        static const char* const HEAD[7] = { "head.c_laser", "head.k_mg", "head.c_patriot", "head.k_rocket", "head.r_flak", "head.r_laser", "head.r_cannon" };
+        static const int OF[7] = { B_C_LASER, B_K_MG, B_C_PATRIOT, B_K_ROCKET, B_R_FLAK, B_R_LASER, B_R_CANNON };
+        for (int i = 0; i < 7 && use3d(); i++) {
+            m3d::PropFn fn = R.prop(HEAD[i]);
+            if (!fn || !bld3d[OF[i]]) continue;
+            m3d::Model hm; fn(hm, 0);
+            if (hm.prims.empty()) continue;
+            hm.ground = false;
+            std::vector<m3d::Shot> shots;
+            for (int k = 0; k < 32; k++) { m3d::RenderOpt o; o.scale = 1.0f; o.heading = k * 6.2831853f / 32; shots.push_back(m3d::Shot{ &hm, o, {} }); }
+            m3d::bake(shots);
+            Sprite hs = setSprite(makeSet(*this, shots, 0, 32), Sprite::TEAM_NEUTRAL);
+            const float lift = modelFloor(hm) * m3d::OBL_K;
+            if (i < 4) { turretHead[i] = hs; headLift[i] = lift; } else { relicHead[i - 4] = hs; relicLift[i - 4] = lift; }
+        }
+    }
+    m3d::bakeClose();
     // the bridge decks: 3 x 12 tiles with 8 design px round them, at the 2x art scale (centre of the canvas = centre of the footprint)
     for (int i = 0; i < 3; i++) { Canvas bc((BRIDGE_W * TILE + 16) * 2, (BRIDGE_L * TILE + 16) * 2); artBridge(bc, i); bridgeArt[i] = fromCanvasSmooth(bc, bc.w * 0.5f, bc.h * 0.5f); bridgeArt[i].dscale = 0.5f; }
 }
