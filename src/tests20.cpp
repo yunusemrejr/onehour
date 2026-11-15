@@ -124,6 +124,7 @@ bool learnUpdateTest(u64 seed) {
         OppProfile& P = brains[0].prof[doctrineContext(false, F_CLANKER)];
         P.n = 5; P.airPeak = 0.6f; P.mix[0] = 0.2f; P.mix[1] = 0.3f; P.mix[2] = 0.5f; P.airAt = 260.0f; P.firstHit = 900.0f; P.nukeAt = 1500.0f;
         aiScene20(seed, 2, diff, masks, brains);
+        for (auto& ai : g_ai.ais) ai.feat2 &= ~F2_EXPAND;   // (an expansion raises anti-air of its own, which is not what this measures)
         bool enemyAir = false;
         run20(390.0f, [&]() {
             for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isUnit() && e.isAir() && e.ut().role == UR_COMBAT) enemyAir = true;

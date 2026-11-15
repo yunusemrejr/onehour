@@ -429,6 +429,47 @@ void buildIcon(int id, Ico& I) {
         }
         I.poly({ { 0, -21 }, { 9, -10 }, { 3.5f, -10 }, { 3.5f, -1 }, { -3.5f, -1 }, { -3.5f, -10 }, { -9, -10 } }, GOLD, 0.4f);
         break;
+    case ICO_GUNSHIPS: {   // Gunship Call: three gunships seen from above in a V, rotors spinning, coming in nose-first
+        const Color BODY = rgb(150, 162, 120), ROTOR = rgb(214, 222, 232);
+        const float xs[3] = { 0, -12, 12 }, ys[3] = { 6, -9, -9 }, sc[3] = { 1.0f, 0.72f, 0.72f };
+        for (int k = 2; k >= 0; k--) {
+            I.frame(xs[k], ys[k], sc[k]);
+            I.seg(0, -16, 0, -3, 1.6f, BODY, 0.4f);                                   // the tail boom
+            I.seg(-4.5f, -16, 4.5f, -16, 1.2f, BODY, 0.4f);                            // the tail plane
+            I.poly(ellipse(0, 3, 4.6f, 8.5f, 14), BODY, 0.5f);                          // the fuselage
+            I.poly(ellipse(0, 7.5f, 2.6f, 3.0f, 10), rgb(70, 120, 150), 0.3f).deco();  // the canopy
+            I.circle(0, 2, 11.5f, ROTOR, 0.0f).deco().alpha(0.22f);                    // the rotor disc
+            I.seg(-11, -4, 11, 8, 0.9f, ROTOR, 0.1f).deco();                           // the blades
+            I.seg(-11, 8, 11, -4, 0.9f, ROTOR, 0.1f).deco();
+        }
+        I.frame(0, 0, 1);
+        break;
+    }
+    case ICO_SATELLITE: {   // Satellite Scan: a satellite with two solar wings over a bunker dome, its beam sweeping the ground
+        const Color PANEL = rgb(58, 104, 190);
+        I.poly({ { 0, -8 }, { 15, 18 }, { -15, 18 } }, rgb(150, 230, 255), 0.0f).deco().alpha(0.30f);   // the beam
+        I.poly(ellipse(0, 18, 12, 4.0f, 14), rgb(134, 150, 170), 0.4f);                                  // the bunker dome
+        I.box(-13, -13, 7.5f, 4.0f, 0.6f, PANEL, 0.5f);                                                  // the solar wings
+        I.box(13, -13, 7.5f, 4.0f, 0.6f, PANEL, 0.5f);
+        for (int k = -1; k <= 1; k++) { I.seg(-13 + k * 4.0f, -16.5f, -13 + k * 4.0f, -9.5f, 0.4f, rgb(150, 190, 240), 0.0f).deco(); I.seg(13 + k * 4.0f, -16.5f, 13 + k * 4.0f, -9.5f, 0.4f, rgb(150, 190, 240), 0.0f).deco(); }
+        I.seg(-6, -13, 6, -13, 1.0f, GREY, 0.3f);                                                        // the boom
+        I.box(0, -13, 4.0f, 5.0f, 1.0f, GOLD, 0.5f);                                                     // the body in its gold foil
+        I.circle(0, -6.5f, 2.0f, SILVER, 0.4f);                                                          // the dish
+        break;
+    }
+    case ICO_HUNT: {   // Find and Destroy: a magnifying glass with a red reticle in its lens
+        I.seg(8, 8, 19, 19, 3.4f, WOOD, 0.5f);                    // the handle
+        I.circle(-3, -3, 14.5f, rgb(196, 214, 228), 0.4f);       // the rim
+        I.circle(-3, -3, 12.0f, rgb(30, 44, 60), 0.2f).deco();   // the lens
+        I.ring(-3, -3, 7.5f, 1.6f, HOT).deco();
+        I.seg(-3, -13, -3, -7.5f, 1.3f, HOT).deco();
+        I.seg(-3, 1.5f, -3, 7, 1.3f, HOT).deco();
+        I.seg(-13, -3, -7.5f, -3, 1.3f, HOT).deco();
+        I.seg(1.5f, -3, 7, -3, 1.3f, HOT).deco();
+        I.circle(-3, -3, 2.0f, HOT, 0.3f);
+        I.circle(-8, -9, 2.4f, WHITE, 0.0f).deco().alpha(0.5f);  // a glint
+        break;
+    }
     case ICO_UNLOAD:   // everybody out of a door
         I.box(-12, 0, 7, 14, 1.5f, rgb(110, 118, 130), 0.3f);
         I.box(-12, 0, 4, 11, 0.8f, rgb(24, 28, 36), 0).deco();

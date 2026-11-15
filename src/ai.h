@@ -70,10 +70,26 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_PRIZE = 8192,   // an Oil Derrick is an objective, not a chance find (Normal and up): a squad of three is told off for the nearest one nobody holds and walks there
                                   // whatever the army is doing, and a derrick once held is kept manned
                                   // Brutal remember the last two such places, for longer), and after a beating the next wave is heavier, not the same again
+               F2_EXPAND = 16384, // expansion bases (Normal 1, Hard and Brutal 2; ai_frontier.cpp expansionOps): from about minute five a dozer founds a second base 25 to 60
+                                  // tiles from home, near supply piles or a prize and away from the enemy, with a barracks, a supply hub, power, guns and a garrison of its own;
+                                  // a raid on it is met by the nearest groups, and when the Command structure falls the commander moves home to a living expansion
+               F2_SPLIT = 32768,  // a strike group: when the wave sets off strong, a quarter of it (the fastest) takes a second objective that is soft - a hauler, an outlying
+                                  // economic structure - and goes back to the army when that is done (the feint of F2_GUILE only pulls the defence away)
+               F2_PUSH = 65536,   // no idling: an army that outguns the enemy's field army and has stood at home for 75 seconds goes for the softest objective in reach
+                                  // when the preferred one is too strong for it
                F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
+               // (Nov 2026, new side with one bit against the defaults, 48 games per seed, wins-losses, seeds 1 and 2 pooled; the null control is the same masks on both sides:
+               //  Normal: null 41-39, F2_EXPAND 42-42, F2_PUSH 40-39.   Hard: null 48-41, F2_EXPAND 49-43, F2_PUSH 47-41, F2_SPLIT 47-43.
+               //  Every bit is inside the noise of the null control (a null series alone read 27-18 and 19-21): none shows a gain and none a loss. All three are on by default
+               //  all the same, because they are what was asked for: commanders that found more than one base, raid soft targets and never stand idle.
+               //  F2_EXPAND does what it is meant to: in 192 Normal and Hard games a second base was founded in 162, 194 of 214 founded were finished (hub where there are
+               //  piles, barracks, power, guns), raids on them were met 246 times; but the commander moved home to an expansion in only 11 games and one of those armies
+               //  was alive at the end, so it has not yet saved an army.
+               //  F2_PUSH hardly ever has a case: when the army is idle it is almost always outgunned by the enemy's field army (army 6000 against 35000 in a traced game),
+               //  and when it outguns the target the launch rule already sends it. F2_SPLIT fires only for waves of 12 or more.)
 
 // A commander's personality (FEAT_PERSONA). The opening doctrine (learned from match results) decides the broad plan; the persona is the person
 // carrying it out and colours everything around it: how hard and how often they raid, how patient they are before a big push, how much they
@@ -234,6 +250,8 @@ struct AiPlayer {
     void heliHunt(const std::vector<Ref>& aircraft, const std::vector<Entity*>& airfields, int reserve, bool hunting);
     void sellTaken();               // structures the Chosen took deep in enemy ground are sold off (the enemy loses them, the money is ours)
     bool launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget);
+    bool launchSplit(std::vector<Ref>& waveUnits, Entity* mainTarget);   // F2_SPLIT: a quarter of a strong wave strikes an exposed economic target of its own, then is back with the army
+    float idleSince = 0; int pushes = 0, splits = 0;   // F2_PUSH: when the army last had something to do (a wave out, too few to go); (statistics: pushes at a soft objective, splits)
     void launchPincer(std::vector<Ref>& waveUnits, Entity* mainTarget);   // F2_PINCER: the flank share of a wave sets off round to its waypoint
     void pincerOps(Entity* mainTarget);                                    // F2_PINCER: the flank goes in once it is in place (or after 45 seconds)
     bool flankWaiting(Ref r) const;                                        // F2_PINCER: a unit of the flank that is still on its way to the waypoint
@@ -244,6 +262,29 @@ struct AiPlayer {
     void garrisonStrongholds();
     void frontier();                    // FEAT_FRONTIER (ai_frontier.cpp): take the island launchers, fire them, call the Nuclear Bomber
     float nextFrontier = 0;
+    // ---- F2_EXPAND (ai_frontier.cpp): a second base (two on Hard and Brutal) beside supply piles 25 to 60 tiles from home. Its structures are kept apart
+    // from the home base's in the survey (they do not count for its turrets, production or threat), its fighters stay and guard it, and a raid on it is met
+    // by the nearest idle groups. When the Command structure falls and the home is poor, home moves to a living expansion (promoteExpansion).
+    struct Expansion {
+        bool active = false;            // a site is chosen
+        Vec2 pos;                       // its centre: a supply pile
+        float chosenAt = 0, firstAt = -1, lostAt = -1000, nextStep = 0, lastHelp = -100;
+        bool finished = false;          // supply hub (where there are piles), barracks, power and a gun are up
+        bool piles = false;             // supply piles lie round the site (then its first structure is a hub)
+        int nAll = 0, nHub = 0, nBar = 0, nFac = 0, nPow = 0, nGun = 0, nAA = 0;   // its structures, counted in the survey (the site and the finished)
+        int cHub = 0, cBar = 0, cPow = 0, cGun = 0;                                 // ... the finished ones among them
+        std::vector<Ref> guards;        // the fighters that stay (not part of any wave)
+    };
+    Expansion xs[2];
+    float nextExpand = 0;
+    std::vector<std::pair<Vec2, float>> xLostSites;     // where an expansion fell or never took, and when (a new site keeps clear of them for a while)
+    int xFounded = 0, xFinished = 0, xLost = 0, xPromoted = 0, xHelps = 0;   // (statistics: sites founded, finished, lost, made the new home, raids met)
+    float xHeldSecs = 0; float xLastT = 0;                                    // (statistics: seconds with a finished expansion standing)
+    int xSlotOf(Vec2 p) const;          // the expansion whose ground p lies on (-1 none)
+    bool xGuard(const Entity& e) const; // a guard of one of them
+    void expansionOps(float tm, bool coreReady, bool threat, const std::vector<Entity*>& enemyUnits, const std::vector<Ref>& idleArmy, int harvesters);
+    bool promoteExpansion(float homeDanger, Vec2 dozerAt);   // home is lost: the commander moves to the best expansion standing that the dozer can reach (true if home moved)
+    bool buildAt(int buildType, Vec2 site, Vec2 prefer, int maxRing);   // a structure round a site far from home, by the dozer that is free
     void relicOps();                    // F2_RELIC / F2_SUBS (ai_frontier.cpp): the relic bases, the canal's bridges, the submarines
     void subOps();
     float nextRelic = 0, nextRelicBuild = 0, nextSecretLook = 0, relicSince = 0, relicBadAt = -1000;
@@ -257,6 +298,7 @@ struct AiPlayer {
 private:
     bool tryBuild(int buildType, Vec2 preferNear, int maxRing = 22);
     int chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAir);
+    Entity* softObjective(const std::vector<Ref>& attackers, const Entity* skip);   // F2_PUSH: the softest economic objective the army outguns (null: none)
     Entity* pickAttackTarget(const Vec2* from = nullptr);   // from: score the distance from there (a wave in the field) instead of from home
     float assaultRatio(const std::vector<Ref>& attackers, Vec2 at, float radiusTiles, bool wholeEnemy);
     float enemyStrengthNear(Vec2 p, float radiusTiles);

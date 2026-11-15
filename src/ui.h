@@ -29,6 +29,11 @@ struct Particle { float x, y, vx, vy, ay, drag, age, life, s0, s1, rot, vrot; Co
 struct Decal { float x, y, r, rot, age, life; u8 kind; };       // ground scorch marks
 struct Tread { float x, y, rot, age, life; u8 kind; };          // a short dark track-pressed dash left by a vehicle on soft ground
 
+static const float SCIENCE_EVERY = 600.0f;      // seconds of play between two Science Breaks
+static const float SCIENCE_LOCK = 20.0f;        // seconds before the promise can be clicked
+static const int   SCIENCE_CLICKS = 5;          // clicks of the promise that close it
+std::vector<std::string> wrapTip(Gfx& g, const std::string& s, int maxW);   // (ui.cpp) words wrapped to lines no wider than maxW at scale 1
+
 struct Game {
     GameState state = GS_MENU;
     MenuSettings menu;
@@ -60,6 +65,7 @@ struct Game {
     bool dropMode = false;          // picking a paradrop zone
     bool strikeMode = false;        // picking the spot a Phone Strike package is called in on
     bool fleetMode = false;         // picking the stretch of ocean a Fleet Call sails to
+    bool heliMode = false;          // picking the spot a Gunship Call flies to
     bool aidMode = false;           // picking the spot for an Aid Drop
     bool rallyMode = false;
     bool dropoffMode = false;       // picking the spot where a cargo chopper sets down and unloads
@@ -81,6 +87,17 @@ struct Game {
     u64 seed = 1;
     bool quitRequested = false;
     // pause menu (Esc): game speed, sound, help, restart, surrender, quit
+    // Science Break (ui_facts.cpp): every SCIENCE_EVERY seconds of a human player's match the game stops for one lesson
+    bool scienceBreaks = false;     // only the interactive game loop turns them on (tests and screenshots never meet one)
+    bool scienceOpen = false;
+    int scienceFact = 0, scienceClicks = 0;
+    float scienceOpenedAt = 0, scienceNextAt = SCIENCE_EVERY;
+    bool pausedBeforeScience = false;
+    void checkScience();
+    void openScience(int fact = -1);
+    void scienceEvent(const SDL_Event& e);
+    void renderScience();
+    bool scienceButton(int& x, int& y, int& w, int& h);
     bool menuOpen = false;
     int menuCursor = 0;
     int menuConfirm = -1;           // row waiting for a second confirmation, -1 none

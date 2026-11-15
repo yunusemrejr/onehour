@@ -296,24 +296,39 @@ static void wallClanker(Model& m, int) { wall(m, false); }
 M3D_BUILD(B_K_WALL, wallClanker)
 
 // ---------------------------------------------------------------- bastion walls (1 x 1 tile, edge to edge)
-// Heavier and taller than a wall: a dark armoured block that fills its tile, a thick cap, a hex armour plate on top, an owner stripe
-// across the cap and a light seam (Cyber) or hazard chevrons (Clanker) on the south face.
+// A fortress rampart, nothing like the plated wall: pale dressed stone in courses on a dark granite plinth, a heavy coping, and a square
+// merlon at every corner, so a line of them reads as one battlemented curtain wall (two merlons meet at each joint, an embrasure between
+// pairs). Cyber: white composite stone, a light inlaid in the coping and a lit point on each merlon. Clanker: sandstone bound by riveted
+// iron straps, iron-capped merlons. The owner's colour runs as a pennant band round the coping.
 void bastion(Model& m, bool cy) {
     using namespace pal;
-    const float H = zh(12);
-    const Color face = cy ? C(0x242830) : C(0x2C2822), top = cy ? C(0x424854) : C(0x524E44), plate = cy ? C(0x5C6472) : C(0x68645A);
-    m.dirt = cy ? 0.0f : 0.3f;
-    m.slab(16, 16, 16, 16, 0, H, face).t(T_PANEL, 8, top).bev(1.0f);                                  // the heavy block, edge to edge
-    m.slab(16, 16, 16, 16, H, 1.2f, top).t(T_PANEL, 6, face).bev(0.5f);                              // the thick armoured cap
-    m.plan(ngon(16, 6, 5, 6), H + 1.2f, H + 1.8f, plate).bev(0.3f);                                  // hex armour plate on top
-    m.box(16, 24, H + 1.35f, 13, 2.5f, 0.15f, OWNER).bev(0.05f);                                     // owner's stripe across the cap
-    for (float x : { 2.5f, 10.5f, 21.5f, 29.5f }) m.box(x, 31.6f, H * 0.5f, 1.0f, 0.5f, H * 0.5f, top).bev(0.2f);   // buttress ribs on the face
-    for (float y : { 1.0f, 30.0f }) m.box(16, y, H + 1.7f, 16, 1.0f, 0.5f, plate).bev(0.2f);                       // ridges along the cap
-    for (float a = 0; a < 3; a++) m.ball(16 + std::cos(a * 2.094f) * 2.5f, 6 + std::sin(a * 2.094f) * 2.5f, H + 2.1f, 0.6f, 0.6f, 0.6f, top); // bolts on the plate
+    const float H = zh(13), P = 1.6f;
+    const Color stone = cy ? C(0xE4E8EE) : C(0xD2AE78), course = cy ? C(0xB8C2CE) : C(0xA67E48), plinth = cy ? C(0x4A5262) : C(0x4E4234),
+                coping = cy ? C(0xF6F8FA) : C(0xE0C694), walk = cy ? C(0x8E9AAA) : C(0x86663E), iron = cy ? C(0x9AB0C4) : C(0x2E2A28);
+    m.dirt = cy ? 0.05f : 0.35f;
+    m.slab(16, 16, 16, 16, 0, P, plinth).m(MATTE).bev(0.4f);                                                   // the granite plinth
+    m.slab(16, 16, 16, 16, P, H - P, stone).t(T_BRICK, 4.2f, course).m(MATTE).bev(0.5f);                     // the dressed stone, course on course
+    m.slab(16, 16, 16, 16, H, 1.3f, coping).m(MATTE).bev(0.5f);                                               // the coping
+    m.slab(16, 16, 16.1f, 16.1f, H * 0.52f, 0.9f, OWNER).bev(0.1f);                                         // the owner's band round the faces
+    m.slab(16, 16, 12.5f, 12.5f, H + 1.3f, 0.4f, walk).t(T_PANEL, 6.2f, course).m(MATTE).bev(0.2f);                                  // the wall walk between the merlons
+    const float mz = H + 1.65f, mh = zh(5);
+    for (float x : { 3.6f, 28.4f }) for (float y : { 3.6f, 28.4f }) {
+        m.slab(x, y, 3.6f, 3.6f, mz, mh, stone).t(T_BRICK, 4.2f, course).m(MATTE).bev(0.4f);                  // a merlon
+        m.taper(x, y, mz + mh, 3.9f, 3.9f, 1.0f, 3.2f, 3.2f, coping).m(MATTE).bev(0.2f);                    // its capstone
+        if (cy) m.ball(x, y, mz + mh + 1.4f, 0.8f, 0.8f, 0.8f, C(0x7EF0FF)).m(EMIT);                         // a lit point
+        else m.taper(x, y, mz + mh + 1.0f, 2.2f, 2.2f, 1.8f, 0.3f, 0.3f, iron).m(METAL);                      // an iron spike cap
+    }
     if (cy) {
-        m.box(16, 31.9f, 9.0f, 16, 0.2f, 0.25f, cGlow).m(EMIT);                                       // a seam of light along the face
+        for (float y : { 0.15f, 31.85f }) m.box(16, y, H + 0.65f, 15.6f, 0.2f, 0.18f, C(0x58ECFF)).m(EMIT);   // the light inlaid along the coping
+        for (float x : { 0.15f, 31.85f }) m.box(x, 16, H + 0.65f, 0.2f, 15.6f, 0.18f, C(0x58ECFF)).m(EMIT);
     } else {
-        m.box(16, 31.9f, 3.0f, 16, 0.3f, 1.2f, kHaz).t(T_HAZARD, 2.2f, kDark).bev(0.05f);             // hazard chevrons along the face
+        for (float z : { H * 0.34f, H * 0.72f }) {                                                             // two riveted iron straps
+            m.slab(16, 16, 16.15f, 16.15f, z - 0.6f, 1.2f, iron).m(METAL).bev(0.1f);
+            for (float k = 0; k < 4; k++) {
+                m.ball(4 + 8 * k, 32.2f, z, 0.45f, 0.3f, 0.45f, C(0x6A625A)).m(METAL);
+                m.ball(32.2f, 4 + 8 * k, z, 0.3f, 0.45f, 0.45f, C(0x6A625A)).m(METAL);
+            }
+        }
     }
 }
 static void fwallCyber(Model& m, int) { bastion(m, true); }

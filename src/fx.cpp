@@ -171,20 +171,28 @@ void Gfx::buildEffects() {
     { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blobAdd = fromCanvasAdd(c, 16, 16); blobAdd.radial = 1; }
     for (int v = 0; v < 4; v++) { Canvas c(64, 64); puffCanvas(c, v, false); fxs.smoke[v] = fromCanvasSmooth(c, 32, 32); fxs.smoke[v].radial = 1; }
     for (int v = 0; v < 3; v++) { Canvas c(64, 64); puffCanvas(c, v + 4, true); fxs.dust[v] = fromCanvasSmooth(c, 32, 32); fxs.dust[v].radial = 1; }
-    for (int v = 0; v < 4; v++) {   // the billows of a mushroom cloud: a clump of rolling lobes lit from the west, dark in the creases where lobes meet (grey: the cloud tints them)
+    for (int v = 0; v < 4; v++) {   // the billows of a mushroom cloud: one turbulent mass, not a heap of balls - small lobes fused by a body, eroded by two
+        // scales of noise into curls and wisps at the edge, lit from the west by the slope of its own density, the underside in its own shadow (grey: the cloud tints them)
         Canvas c(96, 96);
-        const Clump k(960u + v * 17u, 6 + v % 2, 0.44f, 0.30f, 0.44f);
+        const Clump k(960u + v * 17u, 7 + v % 2, 0.40f, 0.24f, 0.38f);
+        auto dens = [&](float px, float py) {
+            float d0 = 0, nx = 0, ny = 0, nz = 1;
+            k.at(px, py, d0, nx, ny, nz);
+            const float r = std::sqrt(px * px + py * py), body = std::max(d0, clampf(1.0f - r * 1.3f, 0, 1));
+            return body + (fb(px * 5.2f + v * 3.1f, py * 5.2f + v * 1.7f, 900 + v) - 0.5f) * 0.62f + (fb(px * 12.5f + v, py * 12.5f - v, 950 + v) - 0.5f) * 0.26f;
+        };
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
-            const float px = (x + 0.5f - 48) / 46.0f, py = (y + 0.5f - 48) / 46.0f, d = std::sqrt(px * px + py * py);
-            float dens = 0, nx = 0, ny = 0, nz = 1;
-            if (!k.at(px, py, dens, nx, ny, nz)) continue;
-            const float n = fb(x * 0.09f + v * 5.0f, y * 0.09f + v * 2.0f, 900 + v);
-            const float light = -nx * 0.56f - ny * 0.48f + nz * 0.50f + (n - 0.5f) * 0.4f;
-            const float lum = clampf(0.50f + 0.56f * light, 0.20f, 1.10f) * (0.74f + 0.36f * sst(0.0f, 0.45f, dens));
-            const float a = sst(0.0f, 0.26f, dens) * clampf((1.0f - d) * 5.0f, 0, 1);
+            const float px = (x + 0.5f - 48) / 46.0f, py = (y + 0.5f - 48) / 46.0f, r = std::sqrt(px * px + py * py);
+            const float D = dens(px, py);
+            const float a = sst(0.05f, 0.36f, D) * clampf((1.0f - r) * 4.0f, 0, 1);
             if (a <= 0.01f) continue;
-            const u8 L = (u8)clampf(lum * 255, 0, 255);
-            c.px[y * 96 + x] = Canvas::pack(Color{L, L, L, (u8)(a * 240)});
+            const float e = 0.035f, gx = dens(px + e, py) - dens(px - e, py), gy = dens(px, py + e) - dens(px, py - e);
+            float nx = -gx * 5.0f, ny = -gy * 5.0f, nz = 1.0f; const float nl = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= nl; ny /= nl; nz /= nl;
+            const float light = -nx * 0.60f - ny * 0.50f + nz * 0.45f;
+            float lum = (0.46f + 0.68f * light) * (0.70f + 0.40f * clampf(0.55f - py * 0.75f, 0, 1));
+            lum *= 0.92f + 0.14f * (1.0f - sst(0.05f, 0.5f, D));   // thin edges let light through
+            const u8 L = (u8)clampf(lum * 236, 0, 255);
+            c.px[y * 96 + x] = Canvas::pack(Color{L, L, L, (u8)(a * 245)});
         }
         fxs.billow[v] = fromCanvasSmooth(c, 48, 48);
     }
@@ -742,7 +750,9 @@ void Game::drawFx() {
             float fade = clampf((1 - k) * 3.5f, 0, 1);
             float heat = clampf(1 - t / 7.5f, 0, 1);   // (the glows fade with this)
             const float hc = clampf(1 - t / 12.0f, 0, 1);   // the colour cools more slowly: white, then orange, then dark red-brown, before the smoke
-            float H = R * 2.05f * grow, Rc = R * (0.2f + 0.78f * grow);
+            const float spread = clampf((t - 6.0f) / 30.0f, 0, 1);   // the cap goes on spreading and flattening long after it has stopped climbing
+            float H = R * 2.05f * grow * (1.0f + 0.12f * spread), Rc = R * (0.2f + 0.78f * grow) * (1.0f + 0.45f * spread);
+            auto jit = [](int i, int salt) { float x = std::sin(i * 12.9898f + salt * 78.233f) * 43758.5453f; return x - std::floor(x); };   // a fixed 0..1 per billow
             Vec2 top(a.x, a.y - H);
             auto lerpc = [](Color x, Color y, float u) { u = clampf(u, 0, 1); return Color{(u8)(x.r + (y.r - x.r) * u), (u8)(x.g + (y.g - x.g) * u), (u8)(x.b + (y.b - x.b) * u), 255}; };
             const bool sv = f.color.r != 255 || f.color.g != 255 || f.color.b != 255;   // a tinted cloud: the silver of an Underground Nuke
@@ -762,7 +772,13 @@ void Game::drawFx() {
                 float rad = (R * (0.2f + 0.1f * sg) + 8) * sb;
                 g.drawSized(g.fxs.billow[i & 3], a.x + std::cos(an) * rr, a.y + std::sin(an) * rr * 0.42f + 4, rad * 2.4f, rad * 1.6f, 0, lerpc(sv ? Color{160, 164, 172, 255} : Color{168, 146, 120, 255}, ash, sg), (u8)(150 * fade * (1.0f - 0.4f * sg)));
             }
-            // stem: turbulent billows, fat at the foot, narrow in the middle, flaring into the cap; the lower part still glows
+            // stem: turbulent billows, fat at the foot, narrow in the middle, flaring into the cap; the lower part still glows. A soft column behind
+            // them first, so the stem is one rising body and never a stack of beads
+            for (int i = 0; i < 6; i++) {
+                float u = (i + 0.5f) / 6.0f, prof = 1.45f - 0.95f * std::sin(u * 3.1416f * 0.62f) + 0.55f * u * u * u;
+                float w = R * 0.34f * prof * (0.65f + 0.35f * grow) + 10;
+                g.drawSized(g.fxs.smoke[i & 3], a.x, a.y - H * u * 0.95f, w * 1.5f, H * 0.36f, 0, lerpc(soot, heatRamp(hc * (1 - u), sv), clampf(hc * (1.3f - u), 0, 1)), (u8)(200 * fade));
+            }
             const int NS = 30;
             for (int i = 0; i < NS; i += st) {
                 float u = i / (float)(NS - 1);
@@ -771,7 +787,8 @@ void Game::drawFx() {
                 float rad = (R * 0.15f * prof * (0.65f + 0.35f * grow) + 7) * sb;
                 Vec2 p(a.x + wob, a.y - H * u * 0.97f);
                 Color c = lerpc(lerpc(ash, soot, u * 0.4f), heatRamp(hc * (1 - u * 0.9f), sv), clampf(hc * (1.6f - u), 0, 1));   // (the foot is hottest, cooling up the stem)
-                g.drawSized(g.fxs.billow[i & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(235 * fade));
+                const float js = 0.78f + 0.44f * jit(i, 1);
+                g.drawSized(g.fxs.billow[(i + (int)(jit(i, 2) * 4)) & 3], p.x + (jit(i, 3) - 0.5f) * rad * 0.5f, p.y, rad * 2.5f * js, rad * 2.3f * js, 0, c, (u8)(235 * fade));
             }
             // condensation collar: a pale ring that opens around the stem and fades
             { float cu = clampf((t - 1.5f) / 2.5f, 0, 1), cf = cu * clampf(1 - (t - 4.0f) / 9.0f, 0, 1) * fade;
@@ -791,12 +808,16 @@ void Game::drawFx() {
                         float up = std::sin(phi) * 0.5f + 0.5f;                                // top of the roll catches the light, the underside glows
                         const float hl = clampf(hc * (0.55f + 0.45f * (1 - up)) * (sn > 0 ? 1.0f : 0.8f), 0, 1);   // the underside of the rolling cap is the hottest part
                         Color c = lerpc(lerpc(ash, lit, up * 0.8f), heatRamp(hl, sv), clampf(hl * 1.5f, 0, 1));
-                        if (up > 0.5f) c = lerpc(c, soot, clampf((t - 8.0f) / 10.0f, 0, 0.6f));
-                        float rad = (rm * 1.08f + 9) * sb;
-                        g.drawSized(g.fxs.billow[(i + ring) & 3], p.x, p.y, rad * 2.5f, rad * 2.5f, 0, c, (u8)(255 * fade));
+                        c = lerpc(c, soot, clampf((t - 8.0f) / 10.0f, 0, 1) * (0.55f - 0.3f * up));   // (it darkens as it ages, the sunlit tops of the rolls least)
+                        const float js = 0.74f + 0.52f * jit(i + ring * 40, 4);
+                        float rad = (rm * 1.08f + 9) * sb * js;
+                        g.drawSized(g.fxs.billow[(i + ring + (int)(jit(i, 5) * 4)) & 3], p.x, p.y, rad * 2.6f, rad * 2.3f, 0, c, (u8)(255 * fade));
                     }
                 }
             };
+            // the body of the cap: a broad soft mass behind the rolls, darker below, so the cap reads as one heavy cloud
+            g.drawSized(g.fxs.smoke[1], top.x, top.y + Rc * 0.06f, Rc * 2.5f, Rc * 1.25f, 0, lerpc(soot, heatRamp(hc * 0.9f, sv), clampf(hc * 1.2f, 0, 1)), (u8)(235 * fade));
+            g.drawSized(g.fxs.smoke[2], top.x, top.y - Rc * 0.18f, Rc * 2.1f, Rc * 1.0f, 0, lerpc(ash, lit, 0.25f), (u8)(170 * fade));
             torus(false);
             for (int i = 0; i < 10; i += st) {   // dense core of the cap
                 float an = i * 0.628f + t * 0.2f; Vec2 p(top.x + std::cos(an) * Rc * 0.4f, top.y - Rc * 0.14f + std::sin(an) * Rc * 0.16f);
@@ -805,11 +826,11 @@ void Game::drawFx() {
             torus(true);
             for (int i = 0; i < 9; i += st) {    // pale smooth hat riding on top of the cap
                 float an = i * 0.698f + t * 0.1f; Vec2 p(top.x + std::cos(an) * Rc * 0.38f, top.y - Rc * 0.34f + std::sin(an) * Rc * 0.1f);
-                g.drawSized(g.fxs.billow[(i + 3) & 3], p.x, p.y, Rc * 0.7f, Rc * 0.45f, 0, lit, (u8)(190 * fade * grow));
+                g.drawSized(g.fxs.billow[(i + 3) & 3], p.x, p.y, Rc * 0.7f, Rc * 0.45f, 0, lit, (u8)(120 * fade * grow));
             }
             if (heat > 0) {
                 g.glowAdd(top.x, top.y + Rc * 0.18f, Rc * 1.15f, sv ? Color{200, 210, 228, (u8)(180 * heat * fade)} : Color{255, 160, 70, (u8)(200 * heat * fade)});
-                g.glowAdd(top.x, top.y + Rc * 0.05f, Rc * 0.62f, sv ? Color{240, 244, 252, (u8)(210 * heat * fade)} : Color{255, 238, 196, (u8)(210 * heat * fade)});
+                g.glowAdd(top.x, top.y + Rc * 0.12f, Rc * 0.55f, sv ? Color{240, 244, 252, (u8)(170 * heat * fade)} : Color{255, 200, 130, (u8)(160 * heat * fade)});
                 g.glowAdd(a.x, a.y - H * 0.25f, R * 0.35f, sv ? Color{210, 216, 228, (u8)(120 * heat * fade)} : Color{255, 170, 80, (u8)(120 * heat * fade)});
             }
             break;

@@ -1796,11 +1796,7 @@ bool Sim::cmdScan(int player) {
     if (time < pl.scanReady || !techOnline(player)) return false;
     const ScanType& sc = SCANS[pl.faction];
     pl.scanReady = time + sc.cooldown;
-    pl.revealUntil = time + sc.duration;
-    if (!pl.isAI) std::fill(pl.explored.begin(), pl.explored.end(), 1);   // the satellite pass charts the whole map for good (its live picture lasts SCANS[].duration)
-    fx.push_back({FX_EMP, pl.basePos, pl.basePos, 0, 1.6f, pl.faction == F_CYBER ? rgb(110, 230, 255) : rgb(222, 178, 60), (float)WORLD_W * 0.6f});
-    emit(EV_SOUND, player, SND_AIR, pl.basePos);
-    emit(EV_MSG, player, SND_NONE, pl.basePos, (std::string(sc.name) + ": the whole map is visible").c_str());
+    satellitePass(player, pl.basePos, sc.duration, sc.name);   // (charts a human's whole map for good; the live picture lasts SCANS[].duration)
     return true;
 }
 
@@ -5115,6 +5111,7 @@ void Sim::step() {
     updateInterceptors();
     updateAidDrops();
     updateFleetArrivals();
+    updateHunts();
     updateFallout();
     separateUnits();
     updateFx();

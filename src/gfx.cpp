@@ -601,19 +601,73 @@ void Gfx::bevelPanel(int x, int y, int w, int h, Color base, bool raised) {
     fill(x, y, w, 1, hi); fill(x, y, 1, h, hi);
     fill(x, y + h - 1, w, 1, lo); fill(x + w - 1, y, 1, h, lo);
 }
+// Characters past ASCII. Symbols get a glyph of their own (rows of five dots, '#' lit); superscripts and subscripts reuse an ASCII glyph
+// drawn at half size, raised or lowered, so x² and m₁ read as they are printed in a book.
+struct ExtraGlyph { u32 cp; const char* rows[7]; };
+static const ExtraGlyph EXTRA_GLYPHS[] = {
+    { 0x00D7, { ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "....." } },   // multiplication sign
+    { 0x00F7, { ".....", "..#..", ".....", "#####", ".....", "..#..", "....." } },   // division sign
+    { 0x221A, { "...##", "...#.", "...#.", "#..#.", ".#.#.", "..#..", "....." } },   // square root
+    { 0x03C0, { ".....", "#####", ".#.#.", ".#.#.", ".#.#.", ".#..#", "....." } },   // pi
+    { 0x2248, { ".....", ".#..#", "#.##.", ".....", ".#..#", "#.##.", "....." } },   // approximately equal
+    { 0x00B1, { "..#..", "..#..", "#####", "..#..", "..#..", ".....", "#####" } },   // plus or minus
+    { 0x00B0, { ".##..", "#..#.", "#..#.", ".##..", ".....", ".....", "....." } },   // degree
+    { 0x2192, { ".....", "..#..", "...#.", "#####", "...#.", "..#..", "....." } },   // arrow
+    { 0x2261, { ".....", "#####", ".....", "#####", ".....", "#####", "....." } },   // identical to
+    { 0x00B7, { ".....", ".....", ".....", "..#..", ".....", ".....", "....." } },   // middle dot
+    { 0x03B3, { ".....", "#...#", ".#.#.", "..#..", "..#..", ".#.#.", "..#.." } },   // gamma
+    { 0x03C8, { "..#..", "#.#.#", "#.#.#", "#.#.#", ".###.", "..#..", "..#.." } },   // psi
+    { 0x00F6, { ".#.#.", ".....", ".###.", "#...#", "#...#", "#...#", ".###." } },   // o with two dots
+};
+static const int EXTRA_N = (int)(sizeof(EXTRA_GLYPHS) / sizeof(EXTRA_GLYPHS[0]));
+struct SmallGlyph { u32 cp; char ch; bool sup; };
+static const SmallGlyph SMALL_GLYPHS[] = {
+    { 0x2070, '0', true }, { 0x00B9, '1', true }, { 0x00B2, '2', true }, { 0x00B3, '3', true }, { 0x2074, '4', true }, { 0x2075, '5', true },
+    { 0x2076, '6', true }, { 0x2077, '7', true }, { 0x2078, '8', true }, { 0x2079, '9', true }, { 0x207B, '-', true }, { 0x207F, 'n', true },
+    { 0x02E3, 'x', true }, { 0x1D4F, 'k', true }, { 0x1D57, 't', true },
+    { 0x2080, '0', false }, { 0x2081, '1', false }, { 0x2082, '2', false }, { 0x2083, '3', false }, { 0x2084, '4', false },
+};
+// The next character of a UTF-8 string (a broken sequence reads as '?' and moves on by one byte)
+static u32 nextCodepoint(const char*& p) {
+    const u8* q = (const u8*)p;
+    u32 c = q[0];
+    int n = c < 0x80 ? 0 : (c >> 5) == 6 ? 1 : (c >> 4) == 14 ? 2 : (c >> 3) == 30 ? 3 : -1;
+    if (n < 0) { p++; return '?'; }
+    if (n > 0) c &= 0x3F >> n;
+    for (int i = 1; i <= n; i++) {
+        if ((q[i] & 0xC0) != 0x80) { p++; return '?'; }
+        c = c << 6 | (q[i] & 0x3F);
+    }
+    p += n + 1;
+    return c;
+}
+// A character's cell in the font texture, and how it sits: 0 on the line, 1 raised small, 2 lowered small
+static int glyphOf(u32 cp, int& mode) {
+    mode = 0;
+    if (cp >= 32 && cp <= 126) return (int)cp - 32;
+    for (int i = 0; i < EXTRA_N; i++) if (EXTRA_GLYPHS[i].cp == cp) return 95 + i;
+    for (const SmallGlyph& s : SMALL_GLYPHS) if (s.cp == cp) { mode = s.sup ? 1 : 2; return s.ch - 32; }
+    return '?' - 32;
+}
+static int glyphScale(int mode, int scale) { return mode && scale >= 2 ? scale / 2 : scale; }
+int Gfx::textW(const char* s, int scale) {
+    int w = 0, mode;
+    if (s) for (const char* p = s; *p; ) { glyphOf(nextCodepoint(p), mode); w += 6 * glyphScale(mode, scale); }
+    return w;
+}
 void Gfx::text(int x, int y, const char* s, Color c, int scale, bool shadow) {
     if (!s) return;
     for (int pass = shadow ? 0 : 1; pass < 2; pass++) {
         int cx = x + (pass == 0 ? scale : 0), cy = y + (pass == 0 ? scale : 0);
         if (pass == 0) SDL_SetTextureColorMod(font, 0, 0, 0); else SDL_SetTextureColorMod(font, c.r, c.g, c.b);
         SDL_SetTextureAlphaMod(font, pass == 0 ? (u8)(c.a * 0.7f) : c.a);
-        for (const char* p = s; *p; p++) {
-            int ch = (u8)*p;
-            if (ch < 32 || ch > 126) ch = '?';
-            SDL_Rect src = { (ch - 32) * 6, 0, 6, 8 };
-            SDL_Rect dst = { cx, cy, 6 * scale, 8 * scale };
+        for (const char* p = s; *p; ) {
+            int mode, gi = glyphOf(nextCodepoint(p), mode), sc = glyphScale(mode, scale);
+            int dy = mode == 0 ? 0 : sc < scale ? (mode == 1 ? -scale / 2 : 4 * scale) : (mode == 1 ? -2 : 2);   // (at scale 1 the small glyph cannot shrink: it only moves)
+            SDL_Rect src = { gi * 6, 0, 6, 8 };
+            SDL_Rect dst = { cx, cy + dy, 6 * sc, 8 * sc };
             SDL_RenderCopy(ren, font, &src, &dst);
-            cx += 6 * scale;
+            cx += 6 * sc;
         }
     }
 }
@@ -627,9 +681,11 @@ void Gfx::present() { SDL_RenderPresent(ren); }
 
 // ------------------------------------------------------------ font
 void Gfx::buildFont() {
-    Canvas c(95 * 6, 8);
+    Canvas c((95 + EXTRA_N) * 6, 8);
     for (int g = 0; g < 95; g++) for (int col = 0; col < 5; col++) for (int row = 0; row < 7; row++)
         if (FONT5x7[g][col] >> row & 1) c.set(g * 6 + col, row, rgb(255, 255, 255));
+    for (int g = 0; g < EXTRA_N; g++) for (int row = 0; row < 7; row++) for (int col = 0; col < 5; col++)
+        if (EXTRA_GLYPHS[g].rows[row][col] == '#') c.set((95 + g) * 6 + col, row, rgb(255, 255, 255));
     font = fromCanvasSolo(c, 0, 0, false).tex;   // (its own texture: text cuts glyphs out of it by position, nearest-filtered at every scale)
 }
 

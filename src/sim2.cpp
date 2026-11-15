@@ -1121,12 +1121,13 @@ void Sim::updateFleetArrivals() {
         Ref r = spawnUnit(f.type, f.owner, f.from);
         Entity& e = ents[r.idx];
         e.angle = e.turret = std::atan2(f.dir.y, f.dir.x);
-        e.fade = 0.02f;   // out of the haze (see updateUnit)
+        if (f.air) { e.pos = e.prevPos = e.lastPos = f.from; e.alt = 1; e.airspeed = e.ut().speed; e.ammo = e.ut().ammo; }   // a Gunship Call gunship: in flight from the start
+        else e.fade = 0.02f;   // out of the haze (see updateUnit)
         e.guardPos = f.to;
         cmdMove({r}, f.to, true);
         bool last = true;
-        for (auto& o : fleetArrivals) if (o.owner == f.owner) { last = false; break; }
-        if (last) emit(EV_MSG, f.owner, SND_UNIT_READY, f.to, "The fleet has arrived: it is yours to command");
+        for (auto& o : fleetArrivals) if (o.owner == f.owner && o.air == f.air) { last = false; break; }
+        if (last) emit(EV_MSG, f.owner, SND_UNIT_READY, f.to, f.air ? "The gunships are on station: they are yours to command" : "The fleet has arrived: it is yours to command");
     }
     for (size_t i = 0; i < fleetMarks.size();) { if (time - fleetMarks[i].t0 > 30.0f) fleetMarks.erase(fleetMarks.begin() + i); else i++; }
 }

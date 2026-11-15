@@ -74,6 +74,11 @@ struct Entity {
     float strikeTimer = 0;  // tech structure: sim time it can take another Phone Strike call
     float aidTimer = 0;     // tech structure: sim time its next Aid Drop flight is ready (human players only)
     float fleetTimer = 0;   // tech structure: sim time it can call another fleet (Fleet Call)
+    float heliTimer = 0;    // tech structure: sim time it can call another Gunship Call (HELI_CALL_COUNT gunships)
+    float scanTimer = 0;    // bunker: sim time its own satellite pass (Satellite Scan) is ready again
+    Ref huntRef;            // Find and Destroy: the enemy thing this unit is hunting
+    float huntSince = 0;    // ... since when (a chase that leads nowhere for HUNT_GIVEUP seconds is dropped)
+    Ref huntSkip;           // ... the last one it gave up on
     float cooldown2 = 0;    // structure: the roof gun of the Defense Guns upgrade (its own target, cooldown and facing)
     Ref engaged2;
     float turret2 = 0;
@@ -254,6 +259,8 @@ struct Player {
     float scanReady = 0;        // sim time when the map scan is available
     float dropReady = 0;        // sim time when paradrops unlock (the opening delay); after that every tech structure has its own cooldown
     float revealUntil = -1;     // the whole map is visible until this sim time
+    bool hunting = false;       // Find and Destroy (human armies): every armed unit seeks out and destroys every enemy thing until none is left
+    bool huntFresh = false;     // ... just switched on: the next pass sends every unit, busy or not
     bool advTech = false;       // Advanced Program researched: special units unlocked
     bool researching = false;
     float researchProgress = 0; // 0..1
@@ -398,7 +405,7 @@ struct Sim {
     struct StrikeWave { int owner = -1, type = 0, n = 0; Vec2 target, dir; float at = 0; };
     std::vector<StrikeWave> strikeWaves;
     // the ships of a Fleet Call still to come out of the haze at the map border: each enters at 'at' at 'from' heading 'dir' and sails to its place 'to'
-    struct FleetShip { int owner = -1, type = 0; Vec2 from, dir, to; float at = 0; };
+    struct FleetShip { int owner = -1, type = 0; Vec2 from, dir, to; float at = 0; bool air = false; };   // (air: a gunship of a Gunship Call)
     std::vector<FleetShip> fleetArrivals;
     // where a called fleet comes in (for the caller's eyes: the lane is drawn while the ships are still arriving)
     struct FleetMark { Vec2 entry, goal; int owner = -1; float t0 = 0; };
@@ -507,6 +514,15 @@ struct Sim {
     void cmdHarvest(const std::vector<Ref>& sel, Ref pile);
     // area assignments (Zero Hour style): combat units and aircraft protect the circle, haulers search it for supplies
     void cmdGuardArea(const std::vector<Ref>& sel, Vec2 center, float radius);
+    // ---- Gunship Call, the bunkers' Satellite Scan and Find and Destroy (sim_calls.cpp)
+    int heliCallsReady(int player) const;                 // tech structures that can call a Gunship Call right now
+    float heliCallWait(int player) const;                 // seconds until the soonest one can (0 ready, -1 no tech structure)
+    bool cmdHeliCall(int player, Vec2 pos);               // HELI_CALL_COUNT gunships fly in from the nearest map edge and fight round pos
+    int bunkerScansReady(int player) const;               // finished bunkers whose satellite pass is ready
+    float bunkerScanWait(int player) const;
+    bool cmdBunkerScan(int player, Ref prefer = NOREF);   // any ready bunker (prefer first) calls a satellite pass: the whole map is visible for a while
+    void satellitePass(int player, Vec2 from, float duration, const char* name);
+    void cmdFindDestroy(int player, bool on);
     void cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius);
     void cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius);   // guard for fighters, gather for haulers
     bool cmdBuild(Ref dozer, int buildType, int tx, int ty);  // places a foundation and sends the dozer (a Waymaker needs no dozer: it clears its ground itself)
@@ -563,7 +579,10 @@ struct Sim {
     // what an infiltrator of 'player' may capture: an enemy structure, a neutral one (see neutralTakeable), and - for a human player only, never a
     // computer army - an ally's structure (the human takes it over; the ally is not asked)
     bool allyTakeable(int player, const Entity& b) const { return b.isBuilding() && player >= 0 && b.owner >= 0 && b.owner != player && !players[player].isAI && !enemies(player, b.owner); }
-    bool spyMayTake(int player, const Entity& b) const { return enemies(player, b.owner) || neutralTakeable(b) || allyTakeable(player, b); }
+    bool spyMayTake(int player, const Entity& b) const {
+        if (b.isBuilding() && b.bt().role == BR_FWALL && (player < 0 || player >= numPlayers || players[player].isAI)) return false;   // a Bastion Wall: no computer army ever takes one (nor breaks it: see invulnerable)
+        return enemies(player, b.owner) || neutralTakeable(b) || allyTakeable(player, b);
+    }
     // ---- The Chosen and its Shadow Guard (sim_chosen.cpp)
     void convertUnit(Entity& u, int to, const Entity* by);   // u (and whoever rides in it) changes sides on the spot
     bool mayConvert(const Entity& by, const Entity& t) const;   // can a Chosen of by's army turn t (an enemy soldier, vehicle or ship; never aircraft, a loan or another Chosen)
@@ -772,6 +791,7 @@ private:
     void updateStrikeMarks();
     void updateAidDrops();
     void updateFleetArrivals();
+    void updateHunts();
     void updateAntiNuke(Entity& b);                      // a defence watching the sky over its area: engages a warhead closing in on it
     void breakNuke(Nuke& n);                             // a warhead shot down: the airburst, and only its pieces fall on the target now
     void updateInterceptors();

@@ -347,3 +347,205 @@ void AiPlayer::relicOps() {
     for (auto& e : S.ents) if (e.alive && e.isUnit() && e.owner == player && e.type == spyT && !e.carrier.valid() && e.order != O_CAPTURE) { S.cmdCapture({S.refOf(e)}, gref); relicClaims++; return; }
     if (S.techOnline(player) && pl.money > 2500) for (auto& b : S.ents) if (b.alive && b.isBuilding() && b.owner == player && b.constructed && b.bt().role == BR_BARRACKS && b.queue.empty()) { if (S.cmdTrain(S.refOf(b), spyT)) break; }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// F2_EXPAND: expansion bases. From about minute five a dozer founds a second base beside supply piles 25 to 60 tiles from home, on the side away from
+// the enemy: a supply hub first (the income), a gun, a barracks (its fighters stay and guard the place), power, an anti-air battery, a second gun, and
+// a war factory for a rich Hard or Brutal commander. Its structures are tallied apart from the home base's in the survey, so they never count for the
+// home's turrets, production or threat detection. A raid on it is met by the idle groups at home, and when the Command structure falls and the home is
+// poor, the commander moves home to the best expansion standing (promoteExpansion, called from relocateBase). One that falls is looked for again after
+// a pause, at a site away from where it fell.
+namespace {
+const float X_R = 13.0f;                 // tiles: how far from its centre an expansion's structures lie
+bool aiDebugX() { static int v = -1; if (v < 0) v = getenv("ONEHOUR_DEBUG") ? 1 : 0; return v == 1; }
+}
+
+int AiPlayer::xSlotOf(Vec2 p) const {
+    for (int i = 0; i < 2; i++)
+        if (xs[i].active && dist(p, xs[i].pos) < X_R * TILE && dist(p, g_sim.players[player].basePos) > 18.0f * TILE) return i;
+    return -1;
+}
+
+bool AiPlayer::xGuard(const Entity& e) const {
+    const Ref r = g_sim.refOf(e);
+    for (const Expansion& x : xs) for (Ref g : x.guards) if (g == r) return true;
+    return false;
+}
+
+bool AiPlayer::buildAt(int buildType, Vec2 site, Vec2 prefer, int maxRing) {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    if (!S.buildAvailable(player, buildType) || !S.canAfford(player, BUILDS[buildType].cost)) return false;
+    Entity* d = idleDozer();
+    if (!d) return false;
+    int tx, ty;
+    groundFrom = d->pos; groundCheck = true;   // (only where this dozer can drive)
+    const Vec2 saved = pl.basePos; pl.basePos = site;   // (findSpot searches round home)
+    const bool found = findSpot(buildType, prefer, maxRing, tx, ty);
+    pl.basePos = saved; groundCheck = false;
+    return found && S.cmdBuild(S.refOf(*d), buildType, tx, ty);
+}
+
+void AiPlayer::expansionOps(float tm, bool coreReady, bool threat, const std::vector<Entity*>& enemyUnits, const std::vector<Ref>& idleArmy, int harvesters) {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    const int slots = pl.difficulty >= 2 ? 2 : (pl.difficulty == 1 ? 1 : 0);
+    if (!on2(F2_EXPAND) || slots == 0 || S.time < nextExpand) return;
+    nextExpand = S.time + 1.5f;
+    const int base = firstBuildOf(pl.faction);
+    const int guardCap = pl.difficulty >= 3 ? 7 : (pl.difficulty == 2 ? 5 : 3);
+    const Vec2 fwd = enemyDir, side(-enemyDir.y, enemyDir.x);
+    for (int i = 0; i < 2; i++) if (xs[i].active && xs[i].finished) xHeldSecs += std::min(3.0f, S.time - xLastT);
+    xLastT = S.time;
+
+    // where: supply piles of some wealth 25 to 60 tiles from home, on ground the dozer can drive to, in country we have seen, away from the
+    // enemy (never nearer to it than to home) and from its guns, and clear of the other expansion and of where one fell lately; prizes nearby count
+    auto chooseSite = [&](const Entity& d, int slot, Vec2& out, bool& piles) {
+        const Vec2 home = pl.basePos;
+        const Vec2 foe = mainEnemy >= 0 ? S.players[mainEnemy].basePos : Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f);
+        std::vector<Vec2> cand;   // supply piles and prizes in reach, and rings of open ground round home (the piles are few: a base may stand without any)
+        for (auto& e : S.ents) {
+            if (!e.alive) continue;
+            if ((e.kind == EK_RESOURCE && e.amount > 0) || (e.isBuilding() && prizeType(e.type) && (e.owner < 0 || e.owner == player))) cand.push_back(e.pos);
+        }
+        for (float r : { 28.0f, 40.0f, 52.0f }) for (int k = 0; k < 16; k++) {
+            const Vec2 p = home + Vec2(std::cos(k * 0.3927f), std::sin(k * 0.3927f)) * (r * TILE);
+            if (p.x > 8 * TILE && p.y > 8 * TILE && p.x < WORLD_W - 8 * TILE && p.y < WORLD_H - 8 * TILE) cand.push_back(p);
+        }
+        float best = -1e18f; bool any = false; int nSeen = 0, nOpen = 0, nQuiet = 0;
+        for (Vec2 c : cand) {
+            const Vec2 g = g_map.nearestFree(c, 6);
+            const float dh = dist(g, home) / TILE, df = dist(g, foe) / TILE;
+            if (dh < 25.0f || dh > 62.0f || df < 40.0f || df < dh * 0.9f) continue;
+            if (!S.explored(player, clampi(tileOf(g.x), 0, MAP_W - 1), clampi(tileOf(g.y), 0, MAP_H - 1)) || !g_map.sameGround(d.pos, g)) continue;
+            nSeen++;
+            bool clash = false;
+            for (int j = 0; j < 2; j++) if (j != slot && xs[j].active && dist(g, xs[j].pos) < 30.0f * TILE) clash = true;
+            for (auto& l : xLostSites) if (S.time - l.second < 400.0f && dist(g, l.first) < 20.0f * TILE) clash = true;
+            if (clash || S.inFallout(g, 6.0f * TILE)) continue;
+            int open = 0;   // room to build: free ground within 6 tiles
+            for (int j = -6; j <= 6; j++) for (int i = -6; i <= 6; i++) if (g_map.passable(tileOf(g.x) + i, tileOf(g.y) + j)) open++;
+            if (open < 110) continue;   // (of 169)
+            nOpen++;
+            float rich = 0, prize = 0;
+            for (auto& o : S.ents) {
+                if (!o.alive || dist(o.pos, g) > 14.0f * TILE) continue;
+                if (o.kind == EK_RESOURCE) rich += (float)o.amount;
+                else if (o.isBuilding() && prizeType(o.type) && (o.owner < 0 || o.owner == player)) prize += 5.0f;
+            }
+            const float danger = enemyStrengthNear(g, 18.0f);
+            if (danger > 1500.0f) continue;
+            nQuiet++;
+            const float score = std::min(rich, 90000.0f) / 5000.0f + prize - dh * 0.3f + df * 0.25f - danger / 150.0f + (open - 110) / 20.0f;
+            if (score > best) { best = score; out = g; piles = rich >= 15000.0f; any = true; }
+        }
+        if (!any && aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] no expansion site: %d candidates, %d seen and reachable, %d open, %d quiet\n", player, S.time, (int)cand.size(), nSeen, nOpen, nQuiet);
+        return any;
+    };
+
+    for (int i = 0; i < slots; i++) {
+        Expansion& x = xs[i];
+        if (x.active) {
+            // the guards: the dead leave the list; idle fighters standing at the place join it, up to the cap
+            x.guards.erase(std::remove_if(x.guards.begin(), x.guards.end(), [&](Ref r) { const Entity* e = S.get(r); return !e || e->owner != player; }), x.guards.end());
+            if (x.nBar > 0) for (Ref r : idleArmy) {
+                if ((int)x.guards.size() >= guardCap) break;
+                Entity* e = S.get(r);
+                if (e && !e->isAir() && dist(e->pos, x.pos) < 12.0f * TILE && std::find(x.guards.begin(), x.guards.end(), r) == x.guards.end()) {
+                    x.guards.push_back(r); S.cmdGuardArea({r}, x.pos + fwd * (3.0f * TILE), 6.0f * TILE);
+                }
+            }
+            // lost (every structure of it is gone), or never took (nothing placed in 150 s)
+            if ((x.firstAt >= 0 && x.nAll == 0 && S.time - x.firstAt > 5.0f) || (x.firstAt < 0 && S.time - x.chosenAt > 150.0f)) {
+                if (x.firstAt >= 0) xLost++;
+                xLostSites.push_back({x.pos, S.time});
+                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d %s at %d,%d\n", player, S.time, i, x.firstAt >= 0 ? "LOST" : "abandoned", tileOf(x.pos.x), tileOf(x.pos.y));
+                const float lost = x.firstAt >= 0 ? S.time : S.time - 90.0f;
+                x = Expansion(); x.lostAt = lost;
+                continue;
+            }
+            if (!x.finished && (x.cHub > 0 || !x.piles) && x.cBar > 0 && x.cPow > 0 && x.cGun > 0) {
+                x.finished = true; xFinished++;
+                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d finished at %d,%d (%d guards)\n", player, S.time, i, tileOf(x.pos.x), tileOf(x.pos.y), (int)x.guards.size());
+            }
+            // a raid on it: the idle groups at home go to meet it unless home itself is under attack (the guards and the guns are already at it)
+            float fv = 0; Vec2 fc; int fn = 0;
+            for (Entity* u : enemyUnits) if (u->isUnit() && u->ut().role == UR_COMBAT && dist(u->pos, x.pos) < 16.0f * TILE) { const float v = UNITS[u->type].cost * (u->hp / u->maxHp); fv += v; fc += u->pos * v; fn++; }
+            if (fn > 0 && !threat && S.time - x.lastHelp > 3.0f) {
+                float gv = 0;
+                for (Ref r : x.guards) if (const Entity* e = S.get(r)) gv += UNITS[e->type].cost * (e->hp / e->maxHp);
+                if (fv > gv * 0.7f + 100.0f) {
+                    x.lastHelp = S.time;
+                    const Vec2 at = fc * (1.0f / fv);
+                    std::vector<std::pair<float, Ref>> c;
+                    for (Ref r : idleArmy) { const Entity* e = S.get(r); if (e && !e->isAir() && g_map.sameGround(e->pos, x.pos) && dist(e->pos, x.pos) < 90.0f * TILE) c.push_back({dist(e->pos, x.pos), r}); }
+                    std::sort(c.begin(), c.end(), [](const std::pair<float, Ref>& a, const std::pair<float, Ref>& b) { return a.first < b.first; });
+                    std::vector<Ref> pick; float pv = gv;
+                    for (auto& k : c) { pick.push_back(k.second); pv += UNITS[S.get(k.second)->type].cost; if (pv > fv * 1.8f) break; }
+                    if (!pick.empty()) {
+                        groupMove(pick, at, true); xHelps++;
+                        if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d raided (%d enemies worth %.0f, guards %.0f): %d units sent\n", player, S.time, i, fn, fv, gv, (int)pick.size());
+                    }
+                }
+            }
+        }
+        if (!coreReady || threat) continue;   // (no new work while home is short of its core or under attack)
+        if (!x.active) {
+            if ((i > 0 && !xs[0].finished) || S.time - x.lostAt < 150.0f || tm < (i == 0 ? 5.0f : 9.0f) || S.time < (i == 0 ? 270.0f : 480.0f) || pl.money < 2400 || harvesters < 2 || S.time < x.nextStep) continue;
+            Entity* d = idleDozer();
+            if (!d) continue;
+            Vec2 site; bool piles = false;
+            if (!chooseSite(*d, i, site, piles)) { x.nextStep = S.time + 20.0f; continue; }
+            x = Expansion(); x.active = true; x.pos = site; x.chosenAt = S.time; x.piles = piles;
+            if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d chosen at %d,%d (%.0f tiles from home, %s)\n", player, S.time, i, tileOf(site.x), tileOf(site.y), dist(site, pl.basePos) / TILE, piles ? "beside supply piles" : "no piles near");
+        }
+        if (S.time < x.nextStep) continue;
+        x.nextStep = S.time + 2.0f;
+        struct Step { int role, have, want; Vec2 at; };
+        const Step steps[] = {
+            { BR_SUPPLY,   x.nHub, x.piles ? 1 : 0, x.pos },
+            { BR_TURRET,   x.nGun, 1, x.pos + fwd * (6.0f * TILE) },
+            { BR_BARRACKS, x.nBar, 1, x.pos - fwd * (3.0f * TILE) + side * (4.0f * TILE) },
+            { BR_POWER,    x.nPow, 1, x.pos - fwd * (7.0f * TILE) },
+            { BR_AATURRET, x.nAA,  1, x.pos - side * (5.0f * TILE) },
+            { BR_TURRET,   x.nGun, 2, x.pos + side * (7.0f * TILE) },
+            { BR_FACTORY,  x.nFac, pl.difficulty >= 2 && pl.money > 6000 ? 1 : 0, x.pos - fwd * (5.0f * TILE) - side * (4.0f * TILE) },
+        };
+        for (const Step& st : steps) {
+            if (st.have >= st.want) continue;
+            const int type = base + st.role;
+            if (pl.money < BUILDS[type].cost + 500) break;   // (the next piece in its turn: the army keeps its share of the money)
+            if (buildAt(type, x.pos, st.at, 12)) {
+                if (x.firstAt < 0) { x.firstAt = S.time; xFounded++; }
+                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d: %s placed\n", player, S.time, i, BUILDS[type].name);
+            }
+            break;
+        }
+    }
+}
+
+// Home is gone (no Command structure, the old ground lost or too hot): an expansion with a hub or a barracks standing becomes home, and what stands
+// there counts as the home base from the next survey on. It is chosen only if the old home keeps no more production and supply than it does, or the
+// enemy holds the old home (homeDanger, as relocateBase measures it).
+bool AiPlayer::promoteExpansion(float homeDanger, Vec2 dozerAt) {
+    Sim& S = g_sim;
+    Player& pl = S.players[player];
+    if (!on2(F2_EXPAND)) return false;
+    int home = 0;
+    for (auto& e : S.ents) if (e.alive && e.isBuilding() && e.owner == player && e.constructed && xSlotOf(e.pos) < 0 && e.district < 0 && dist(e.pos, pl.basePos) < 30.0f * TILE) {
+        const BuildRole r = e.bt().role;
+        if (r == BR_BARRACKS || r == BR_FACTORY || r == BR_SUPPLY) home++;
+    }
+    int best = -1, bestN = 0;
+    for (int i = 0; i < 2; i++) {
+        const Expansion& x = xs[i];
+        const int n = x.cHub + x.cBar + x.nFac;
+        if (x.active && x.firstAt >= 0 && x.cBar + x.cHub > 0 && n > bestN && g_map.sameGround(dozerAt, x.pos)) { best = i; bestN = n; }
+    }
+    if (best < 0 || (home > bestN && homeDanger < 2500.0f)) return false;
+    const Vec2 from = pl.basePos;
+    pl.basePos = xs[best].pos; relocatedAt = S.time; relocations++; xPromoted++;
+    if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d is home now: %d,%d -> %d,%d (old home kept %d, expansion %d)\n", player, S.time, best, tileOf(from.x), tileOf(from.y), tileOf(pl.basePos.x), tileOf(pl.basePos.y), home, bestN);
+    xs[best] = Expansion(); xs[best].lostAt = S.time - 60.0f;
+    return true;
+}

@@ -214,7 +214,7 @@ struct Gfx {
     void drawRect(const Sprite& s, int x, int y, int w, int h, u8 alpha = 255);
     void copyScaled(SDL_Texture* t, const SDL_Rect* src, const SDL_FRect& dst);   // SDL_RenderCopyF, cut to the screen first on the CPU renderer
     void text(int x, int y, const char* s, Color c, int scale = 1, bool shadow = true);
-    int textW(const char* s, int scale = 1) { return (int)strlen(s) * 6 * scale; }
+    int textW(const char* s, int scale = 1);   // (in pixels: UTF-8 aware, small superscripts count half)
     void fill(int x, int y, int w, int h, Color c);
     void box(int x, int y, int w, int h, Color c);
     void line(float x0, float y0, float x1, float y1, Color c);

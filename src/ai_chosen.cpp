@@ -242,6 +242,45 @@ bool AiPlayer::launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget) {
     return true;
 }
 
+// F2_SPLIT: a strong wave (12 or more) sets off with a strike group - its fastest quarter, ground units only - that goes for an exposed economic target of
+// its own instead of the objective: a hauler, a hub, an income or power structure at least 14 tiles from the objective that the group outguns by 1.6 on
+// the combat estimate (the feint of F2_GUILE goes for the structure that pulls the defence furthest, whatever it holds). It is the army's again after 60
+// seconds (the survey lists it again), when the errand is done.
+bool AiPlayer::launchSplit(std::vector<Ref>& waveUnits, Entity* mainTarget) {
+    Sim& S = g_sim;
+    if (!mainTarget || waveUnits.size() < 12 || mainEnemy < 0 || S.time < feintUntil) return false;
+    std::vector<std::pair<float, Ref>> fast;
+    for (Ref r : waveUnits) if (const Entity* e = S.get(r)) if (!e->isAir() && !e->ut().naval) fast.push_back({e->ut().speed, r});
+    std::sort(fast.begin(), fast.end(), [](const std::pair<float, Ref>& a, const std::pair<float, Ref>& b) { return a.first > b.first; });
+    const size_t n = waveUnits.size() / 4;
+    if (fast.size() < n || n < 3) return false;
+    std::vector<Ref> group;
+    for (size_t k = 0; k < n; k++) group.push_back(fast[k].second);
+    Entity* best = nullptr; float bs = 0;
+    for (auto& e : S.ents) {
+        if (!e.alive || e.owner != mainEnemy || e.district >= 0) continue;
+        float worth;
+        if (e.isBuilding()) {
+            const BuildRole r = e.bt().role;
+            if (!e.constructed || !(r == BR_SUPPLY || r == BR_INCOME || r == BR_POWER)) continue;
+            worth = r == BR_POWER ? 1.0f : 1.6f;
+        } else if (e.isUnit() && e.ut().role == UR_HARVESTER) worth = 1.0f;
+        else continue;
+        if (!(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
+        if (dist(e.pos, mainTarget->pos) < 14.0f * TILE || !g_map.sameGround(rally, g_map.nearestFree(e.pos, 6))) continue;
+        const float strength = enemyStrengthNear(e.pos, 9.0f);
+        const float sc = worth / (1.0f + strength / 800.0f);
+        if (sc > bs) { bs = sc; best = &e; }
+    }
+    if (!best || assaultRatio(group, best->pos, 9.0f, false) < 1.6f) return false;
+    feint = group;
+    waveUnits.erase(std::remove_if(waveUnits.begin(), waveUnits.end(), [&](Ref r) { return std::find(feint.begin(), feint.end(), r) != feint.end(); }), waveUnits.end());
+    groupMove(feint, best->pos, true);
+    feintUntil = S.time + 60.0f; splits++;
+    if (aiDebugCh()) fprintf(stderr, "[ai%d t=%.0f] SPLIT: %d units at the %s, the wave (%d) at the %s\n", player, S.time, (int)feint.size(), best->isUnit() ? best->ut().name : best->bt().name, (int)waveUnits.size(), mainTarget->isUnit() ? mainTarget->ut().name : mainTarget->bt().name);
+    return true;
+}
+
 // F2_PINCER: a wave of 14 or more sends its fastest third (ground units only: never aircraft or ships) round the flank. The waypoint is 12 tiles out from the
 // objective, square to the approach, on the side the enemy holds less (ties by the commander's own taste), on ground the flank can walk to. The flank stays in
 // the wave (its losses, its retreat and its value all count there, see pincerOps) and goes in once its centre is within 4 tiles of the waypoint, or after 45 s.

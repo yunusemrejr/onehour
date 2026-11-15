@@ -303,6 +303,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
     g_brain.learning = false;
     g_brain.profileLearning = getenv("ONEHOUR_EVALPROFILE") != nullptr;   // FEAT_PROFILE's opponent model learns over the series (nothing else does)
     int wins = 0, losses = 0, draws = 0, tieWins = 0, tieLosses = 0, punishes = 0; double winTime = 0, loseTime = 0;
+    int expTot[2][7] = {}, expGames[2] = {}, expPromAlive[2] = {};   // ONEHOUR_EVALEXP: [old, new][founded, finished, lost, home moved, raids met, pushes, splits]
     for (int i = 0; i < games; i++) {
         if (getenv("ONEHOUR_EVALGAME") && i != atoi(getenv("ONEHOUR_EVALGAME"))) continue;   // (diagnostics: replay one game of the series)
         Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
@@ -353,6 +354,12 @@ static int evalAi(int games, u64 seed, int difficulty) {
             printf("    P%d %s: $%d inf %d veh %d air %d dozers %d haulers %d | structures %d (factories %d barracks %d turrets %d) alive %d wave=%d\n", p, p == (flip ? 1 : 0) ? "new" : "old", pl.money, inf, veh, air, dz, hv, g_sim.countBuildings(p, -1, false), g_sim.countRole(p, BR_FACTORY, false), g_sim.countRole(p, BR_BARRACKS, false), g_sim.countRole(p, BR_TURRET, false) + g_sim.countRole(p, BR_AATURRET, false), (int)pl.alive, (int)g_ai.ais[p].attacking);
         }
         printf("  game %2d (%s%s vs %s%s): %s at %.0f s, doctrine %s\n", i + 1, flip ? "old " : "new ", FACTION_NAME[fac[0]], flip ? "new " : "old ", FACTION_NAME[fac[1]], res, g_sim.time, DOCTRINE_NAME[g_ai.ais[flip ? 1 : 0].doctrine]);
+        if (getenv("ONEHOUR_EVALEXP")) for (int p = 0; p < 2; p++) {   // (F2_EXPAND: what each side's expansions did; summed over the series below)
+            const AiPlayer& a = g_ai.ais[p]; const bool isNew = p == newTeam;
+            printf("    P%d %s: expansions founded %d finished %d lost %d, home moved to one %d, raids met %d, a finished one held %.0f s, army alive at the end %d (home moves %d), structures %d, pushes %d, splits %d\n", p, isNew ? "new" : "old", a.xFounded, a.xFinished, a.xLost, a.xPromoted, a.xHelps, a.xHeldSecs, (int)g_sim.players[p].alive, a.relocations, g_sim.countBuildings(p, -1, false), a.pushes, a.splits);
+            expTot[isNew][0] += a.xFounded; expTot[isNew][1] += a.xFinished; expTot[isNew][2] += a.xLost; expTot[isNew][3] += a.xPromoted; expTot[isNew][4] += a.xHelps; expTot[isNew][5] += a.pushes; expTot[isNew][6] += a.splits;
+            expGames[isNew] += a.xFounded > 0; expPromAlive[isNew] += a.xPromoted > 0 && g_sim.players[p].alive;
+        }
         if (getenv("ONEHOUR_EVALCHOSEN")) for (int p = 0; p < 2; p++) {   // (what each side's Chosen did)
             const Player& pl = g_sim.players[p]; const AiPlayer& a = g_ai.ais[p];
             printf("    P%d %s: chosen bought %d first %.0f, calls %d, turned %d, taken %d, sold %d, lost to the enemy's %d, hunts %d, feints %d\n", p, p == newTeam ? "new" : "old", a.chosenBought, a.chosenFirstAt, pl.shadowCalls, pl.converted, pl.chosenTaken, a.chosenSold, pl.convertedLost, a.heliHunts, a.feints);
@@ -362,6 +369,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
     printf("new AI vs previous generation: %d wins, %d losses, %d unresolved (of %d)%s\n", wins, losses, draws, games, "");
     printf("tiebreak at the limit (material held, >10%% apart): %d new, %d old\n", tieWins, tieLosses);
     printf("counterattacks by the new commander: %d\n", punishes);
+    if (getenv("ONEHOUR_EVALEXP")) for (int k = 1; k >= 0; k--) printf("expansions, %s side: %d of %d games founded one; founded %d, finished %d, lost %d, home moved to one %d (%d of those armies alive at the end), raids met %d, pushes %d, splits %d\n", k ? "new" : "old", expGames[k], games, expTot[k][0], expTot[k][1], expTot[k][2], expTot[k][3], expPromAlive[k], expTot[k][4], expTot[k][5], expTot[k][6]);
     if (wins) printf("  mean time of its wins %.0f s", winTime / wins);
     if (losses) printf("  mean time of its losses %.0f s", loseTime / losses);
     printf("\n");
@@ -736,6 +744,7 @@ bool sonarTest(u64 seed);         // tests25.cpp: the sonar that finds a compute
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
+bool callsTest(u64 seed);       // tests_calls.cpp: Bastion Walls no computer army takes, bunker Satellite Scans, Gunship Call, Find and Destroy
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
 void navyShowcase(int vp, Vec2& camOut);   // tests3.cpp: ONEHOUR_NAVY=1 --shot scene
@@ -3078,6 +3087,7 @@ int main(int argc, char** argv) {
         else if (a == "--updatetest") { g_map.generate(); return updateTest(seed) ? 0 : 1; }
         else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
+        else if (a == "--callstest") { g_map.generate(); return callsTest(seed) ? 0 : 1; }
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
         else if (a == "--oceantest") { g_map.generate(); return oceanTest(seed) ? 0 : 1; }
         else if (a == "--fleettest") { g_map.generate(); return fleetTest(seed) ? 0 : 1; }
@@ -4205,11 +4215,35 @@ int main(int argc, char** argv) {
                 if (boom) for (int t = 0, tn = getenv("ONEHOUR_BOOMT") ? atoi(getenv("ONEHOUR_BOOMT")) : 22; t < tn; t++) { g_sim.step(); g_sim.events.clear(); g_game.spawnFromFx(); g_game.updateParticles(SIM_DT); g_game.frameDt = SIM_DT; g_game.wallTime += SIM_DT; }
                 g_game.cam = Vec2(clampf(g_sim.get(last)->pos.x - SCREEN_W / 2 + (boom ? 300 : 100), 0, WORLD_W - SCREEN_W), clampf(g_sim.get(last)->pos.y + (boom ? -300 : 0) - VIEW_H * (boom ? 0.8f : 0.5f), 0, WORLD_H - VIEW_H));   // (the cloud climbs above ground zero: frame it low)
             }
+            if (getenv("ONEHOUR_WALLS")) {   // showcase: Bastion Walls of both armies in lines and a corner, beside a plain wall, framed in the middle of the view
+                Vec2 bp = g_sim.players[0].basePos; int cx = tileOf(bp.x), cy = tileOf(bp.y) + 9;
+                for (int k = 0; k < 9; k++) {
+                    g_sim.placeBuilding(B_C_FWALL, 0, cx - 6 + k, cy, true);
+                    g_sim.placeBuilding(B_K_FWALL, 1, cx - 6 + k, cy + 4, true);
+                    g_sim.placeBuilding(B_C_WALL, 0, cx - 6 + k, cy + 8, true);
+                    if (k < 4) { g_sim.placeBuilding(B_C_FWALL, 0, cx + 3, cy - 1 - k, true); g_sim.placeBuilding(B_K_FWALL, 1, cx + 3, cy + 5 + k, true); }
+                }
+                std::fill(g_sim.players[0].explored.begin(), g_sim.players[0].explored.end(), 1);
+                g_game.cam = Vec2(clampf((cx + 0.5f) * TILE - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf((cy + 4) * TILE - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+            }
+            if (const char* sel = getenv("ONEHOUR_SELROLE")) {   // select (placing it first if need be) the human's structure of this role, to show its command bar
+                int role = atoi(sel), bb = firstBuildOf(g_sim.players[0].faction), type = role == BR_BUNKER ? (g_sim.players[0].faction == F_CYBER ? (int)B_C_BUNKER : (int)B_K_BUNKER) : bb + role;
+                Ref got;
+                for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && e.bt().role == role) { got = g_sim.refOf(e); break; }
+                Vec2 bp = g_sim.players[0].basePos;
+                for (int dy = 4; dy < 20 && !got.valid(); dy++) for (int dx = -12; dx < 12 && !got.valid(); dx++) if (g_sim.canPlace(0, type, tileOf(bp.x) + dx, tileOf(bp.y) + dy)) got = g_sim.placeBuilding(type, 0, tileOf(bp.x) + dx, tileOf(bp.y) + dy, true);
+                g_sim.players[0].dropReady = 0;
+                if (got.valid()) { g_game.selection.clear(); g_game.selection.push_back(got); }
+            }
             // select something for the HUD
             if (g_game.selection.empty()) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && !e.queue.empty()) { g_game.selection.push_back(g_sim.refOf(e)); break; }
             if (g_game.selection.empty()) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER) { g_game.selection.push_back(g_sim.refOf(e)); break; }
         }
         if (getenv("ONEHOUR_BOLT")) { g_game.wallTime += 3.0f; g_game.lightningStrike(); g_game.weather.boltT = g_game.wallTime - (float)atof(getenv("ONEHOUR_BOLT")); g_game.weather.bolt = 0.7f; }   // a lightning strike ONEHOUR_BOLT seconds before the shot
+        if (const char* sci = getenv("ONEHOUR_SCIENCE")) {   // ONEHOUR_SCIENCE=fact,clicks,seconds: the Science Break board over the frame
+            int fact = 0, clicks = 0; float secs = 0; sscanf(sci, "%d,%d,%f", &fact, &clicks, &secs);
+            g_game.openScience(fact); g_game.scienceClicks = clicks; g_game.scienceOpenedAt = g_game.wallTime - secs;
+        }
         g_game.render();
         g_game.screenshot(shot);
         printf("wrote %s\n", shot);
@@ -4218,6 +4252,7 @@ int main(int argc, char** argv) {
     }
 
     if (autostart) { g_game.startGame(); if (allAi) { g_sim.players[0].isAI = true; g_ai.init(seed); } g_game.speed = 3.0f; }
+    g_game.scienceBreaks = !getenv("ONEHOUR_NOSCIENCE");   // (the real game loop only: every ten minutes of play a lesson)
     u64 freq = SDL_GetPerformanceFrequency();
     u64 last = SDL_GetPerformanceCounter();
     const bool fpsLog = getenv("ONEHOUR_FPSLOG") != nullptr;
