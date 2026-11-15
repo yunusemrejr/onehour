@@ -52,3 +52,5 @@ void artRelicTurretHead(Canvas& c, int which);
 // The river bridge: a 3 x 12 tile deck running north-south, canvas 224 x 800 (BART_K = 2, 8 design px of margin). state 0 intact, 1 broken
 // (the middle span blown out), 2 under repair (the gap bridged by scaffolding and temporary girders).
 void artBridge(Canvas& c, int state);
+// The same bridge as a 3D model (m3d_bridge.cpp): the same canvas and anchor, the deck over the same tiles. The game draws this one.
+void m3dBridge(Canvas& c, int state);

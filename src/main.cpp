@@ -1,4 +1,7 @@
 // One Hour - entry point
+#include <filesystem>
+#include <system_error>
+#include <ctime>
 #include "ui.h"
 #include "brain.h"
 #include "artb.h"
@@ -214,6 +217,7 @@ extern int g_aiSalt;
 static int varietyTest(int n, u64 seed, int difficulty) {
     const int mask2 = getenv("ONEHOUR_VARYMASK2") ? atoi(getenv("ONEHOUR_VARYMASK2")) : F2_DEFAULT;
     std::vector<std::string> firsts, seqs; std::vector<float> times; int wins = 0;
+    int waves = 0, afterBreak = 0, backAtBreak = 0;
     for (int k = 0; k < n; k++) {
         g_aiSalt = k + 1;
         Faction fac[4] = { F_CYBER, F_CLANKER, F_CYBER, F_CLANKER }; bool brain[4] = { false, false, false, false };
@@ -225,9 +229,12 @@ static int varietyTest(int n, u64 seed, int difficulty) {
         for (int i = 0; i < std::min(3, a.wavesLogged); i++) { char b[40]; snprintf(b, sizeof b, "%s%d@%d,%d", i ? ">" : "", a.waveRole[i], tileOf(a.waveLog[i].x) / 8, tileOf(a.waveLog[i].y) / 8); strcat(s, b); }
         printf("  run %2d: first wave %4.0f s -> %s | first three %s | %s\n", k + 1, a.firstWaveT, f, s, w == 0 ? "army 0 won" : (w < 0 ? "unresolved" : "army 1 won"));
         firsts.push_back(f); seqs.push_back(s); if (a.firstWaveT >= 0) times.push_back(a.firstWaveT); if (w == 0) wins++;
+        for (int p = 0; p < 2; p++) { waves += g_ai.ais[p].waveCount; afterBreak += g_ai.ais[p].wavesAfterBreak; backAtBreak += g_ai.ais[p].wavesBackAtBreak; }
+        if (getenv("ONEHOUR_PRIZEDBG")) for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && prizeType(e.type)) printf("    %s at %d,%d owner %d, %.0f / %.0f tiles from the two bases\n", e.bt().name, e.tx, e.ty, e.owner, dist(e.pos, g_sim.players[0].basePos) / TILE, dist(e.pos, g_sim.players[1].basePos) / TILE);
     }
     auto distinct = [](std::vector<std::string> v) { std::sort(v.begin(), v.end()); return (int)(std::unique(v.begin(), v.end()) - v.begin()); };
     double m = 0, sd = 0; for (float t : times) m += t; m /= std::max<size_t>(1, times.size()); for (float t : times) sd += (t - m) * (t - m); sd = std::sqrt(sd / std::max<size_t>(1, times.size()));
+    printf("repeat (mask2 %d): %d waves by both armies, %d launched within four minutes of a wave breaking, %d of those sent back at the place it broke on\n", mask2, waves, afterBreak, backAtBreak);
     printf("variety (mask2 %d, %d runs): %d distinct first objectives, %d distinct first-three orders, first wave at %.0f s +- %.0f s, army 0 won %d\n", mask2, n, distinct(firsts), distinct(seqs), m, sd, wins);
     return 0;
 }
@@ -2944,6 +2951,54 @@ static void writeRelicBuildSheet(const char* path) {
     printf("wrote %s\n", path);
 }
 
+// What a session really cost on the machine it ran on: one line per session in perf.log in the cache folder (next to the rendered models), written
+// when the game closes. Frames, processor time and the graphics card's time are counted only while a match is being played.
+namespace {
+struct PerfLog {
+    double playSec = 0, ms = 0, cpuSec = 0; long frames = 0, over20 = 0, over34 = 0; u64 prev = 0; clock_t prevCpu = 0; int peakUnits = 0;
+    void frame(u64 now, u64 freq, double frameMs, bool playing) {
+        const clock_t c = clock();
+        if (playing && prev && now > prev && (now - prev) < freq) {
+            playSec += (double)(now - prev) / freq; cpuSec += (double)(c - prevCpu) / CLOCKS_PER_SEC; ms += frameMs; frames++;
+            if (frameMs > 20) over20++;
+            if (frameMs > 34) over34++;
+            if ((frames & 255) == 0) { int n = 0; for (auto& e : g_sim.ents) if (e.alive && !e.isBuilding()) n++; peakUnits = std::max(peakUnits, n); }
+        }
+        prev = now; prevCpu = c;
+    }
+    void write() const {
+        if (playSec < 30 || frames < 100) return;
+        std::string dir;
+        if (const char* e = getenv("ONEHOUR_CACHE")) dir = e;
+        else if (const char* x = getenv("XDG_CACHE_HOME")) dir = std::string(x) + "/onehour";
+        else if (const char* h = getenv("HOME")) dir = std::string(h) + "/.cache/onehour";
+        else return;
+        long rss = 0, peak = 0;
+        if (FILE* f = fopen("/proc/self/status", "r")) { char ln[160]; while (fgets(ln, sizeof ln, f)) { sscanf(ln, "VmRSS: %ld", &rss); sscanf(ln, "VmHWM: %ld", &peak); } fclose(f); }
+        double gpuSec = -1;   // the graphics card's time spent on this process since it started (Linux DRM drivers report it per open device)
+        { std::error_code ec; std::vector<std::pair<long, double>> seen;
+          for (auto& de : std::filesystem::directory_iterator("/proc/self/fdinfo", ec)) {
+              FILE* f = fopen(de.path().c_str(), "r"); if (!f) continue;
+              char ln[200]; long id = -1; double ns = -1; unsigned long long v;
+              while (fgets(ln, sizeof ln, f)) { sscanf(ln, "drm-client-id: %ld", &id); if (sscanf(ln, "drm-engine-gfx: %llu", &v) == 1) ns = (double)v; }
+              fclose(f);
+              if (id < 0 || ns < 0) continue;
+              bool dup = false; for (auto& s2 : seen) if (s2.first == id) dup = true;
+              if (!dup) seen.push_back({ id, ns });
+          }
+          if (!seen.empty()) { gpuSec = 0; for (auto& s2 : seen) gpuSec += s2.second / 1e9; } }
+        SDL_RendererInfo ri; const char* rn = g_gfx.ren && SDL_GetRendererInfo(g_gfx.ren, &ri) == 0 ? ri.name : "?";
+        char when[32]; const time_t t = time(nullptr); strftime(when, sizeof when, "%Y-%m-%d %H:%M", localtime(&t));
+        if (FILE* f = fopen((dir + "/perf.log").c_str(), "a")) {
+            fprintf(f, "%s  %s renderer  played %.1f min  %.0f frames/s  draw+show %.1f ms avg  over 20 ms: %.1f%%  over 34 ms: %.2f%%  processor %.0f%% of one core", when, rn, playSec / 60, frames / playSec, ms / frames, 100.0 * over20 / frames, 100.0 * over34 / frames, 100.0 * cpuSec / playSec);
+            if (gpuSec >= 0) fprintf(f, "  graphics card busy %.1f s in all", gpuSec);
+            fprintf(f, "  most units %d  memory %ld MB now, %ld MB at most\n", peakUnits, rss / 1024, peak / 1024);
+            fclose(f);
+        }
+    }
+} g_perf;
+}  // namespace
+
 int main(int argc, char** argv) {
     if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
     if (const char* bs = getenv("ONEHOUR_BUNKERSHEET")) { writeBunkerSheet(bs); return 0; }
@@ -4192,6 +4247,7 @@ int main(int argc, char** argv) {
         g_game.render();
         g_gfx.present();
         g_game.noteFrameCost((float)((SDL_GetPerformanceCounter() - r0) * 1000.0 / freq));
+        g_perf.frame(now, freq, (SDL_GetPerformanceCounter() - r0) * 1000.0 / freq, !idle);
         if (fpsLog) {   // ONEHOUR_FPSLOG: frames a second, the frame cost and the effects detail every five seconds (a real window, GPU or not)
             static int frames = 0; static double worst = 0; static u64 since = now;
             frames++; worst = std::max(worst, (SDL_GetPerformanceCounter() - now) * 1000.0 / freq);
@@ -4204,6 +4260,7 @@ int main(int argc, char** argv) {
         if (spent < frame - 0.0015) SDL_Delay((Uint32)((frame - spent) * 1000.0 - 1.0));
     }
     leaveMatchLearning();
+    g_perf.write();
     g_audio.shutdown();
     g_gfx.shutdown();
     SDL_Quit();

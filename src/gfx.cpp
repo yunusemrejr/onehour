@@ -1209,7 +1209,7 @@ void Gfx::buildBuildings() {
         std::vector<int> at(B_COUNT, -1), atArmed(B_COUNT, -1);
         for (int t = 0; t < B_COUNT && use3d(); t++) {
             const BuildType& bt = BUILDS[t];
-            if (!R.build[t] || bt.role == BR_BRIDGE || t == B_C_BUNKER || t == B_K_BUNKER) continue;
+            if (!R.build[t] || bt.role == BR_BRIDGE) continue;
             R.build[t](mdl[t * 2], 0);
             if (mdl[t * 2].prims.empty()) continue;
             m3d::RenderOpt o; o.scale = 1.0f; o.ss = 2;
@@ -1246,12 +1246,23 @@ void Gfx::buildBuildings() {
             bld3d[t] = true;
         }
     }
+    // a bunker's upgrade parts: each painted alone and drawn over its body at the same anchor (the body is modelled or painted)
+    auto bunkerUpgrades = [&](int t, BArtSize sz) {
+        for (int u = 0; u < BU_COUNT; u++) {
+            Canvas a(sz.w, sz.h);
+            studioPaint(a, rigBuilding(), nullptr, [&] { artBunkerUpgrade(a, t, u); });
+            finishBuilding(a, t, 3401u + (u32)(t * 8 + u), true);
+            gradeArt(a, 3401u + (u32)(t * 8 + u), 0.08f, 0.05f);
+            bunkerUpg[BUILDS[t].faction][u] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K);
+        }
+    };
     for (int t = 0; t < B_COUNT; t++) {
         BArtSize sz = artBuildingSize(t);
-        if (bld3d[t]) {   // (modelled: only its building site is still painted)
+        if (bld3d[t]) {   // (modelled: only its building site is still painted, and a bunker's upgrade parts)
             Canvas s(sz.w, sz.h);
             artSite(s, t);
             site[t] = cropToSprite(*this, s, sz.cx, sz.cy, 1.0f / BART_K);
+            if (BUILDS[t].role == BR_BUNKER) bunkerUpgrades(t, sz);
             continue;
         }
         Canvas c(sz.w, sz.h), m(sz.w, sz.h);
@@ -1267,13 +1278,7 @@ void Gfx::buildBuildings() {
         site[t] = cropToSprite(*this, s, sz.cx, sz.cy, 1.0f / BART_K);
         if (BUILDS[t].role == BR_NUKE || BUILDS[t].role == BR_UNUKE) { Canvas a(sz.w, sz.h); artArmed(a, t); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
         if (BUILDS[t].role == BR_RELICSILO) { Canvas a(sz.w, sz.h); artRelicSiloArmed(a, BUILDS[t].w, BUILDS[t].h); armed[t] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K); }
-        if (BUILDS[t].role == BR_BUNKER) for (int u = 0; u < BU_COUNT; u++) {
-            Canvas a(sz.w, sz.h);
-            studioPaint(a, rigBuilding(), nullptr, [&] { artBunkerUpgrade(a, t, u); });
-            finishBuilding(a, t, 3401u + (u32)(t * 8 + u), true);
-            gradeArt(a, 3401u + (u32)(t * 8 + u), 0.08f, 0.05f);
-            bunkerUpg[BUILDS[t].faction][u] = cropToSprite(*this, a, sz.cx, sz.cy, 1.0f / BART_K);
-        }
+        if (BUILDS[t].role == BR_BUNKER) bunkerUpgrades(t, sz);
     }
     static const int RW[7] = { 1, 2, 3, 3, 4, 4, 5 }, RH[7] = { 1, 2, 2, 3, 3, 4, 3 };
     for (int i = 0; i < 7; i++) {
@@ -1304,9 +1309,9 @@ void Gfx::buildBuildings() {
             if (i < 4) { turretHead[i] = hs; headLift[i] = lift; } else { relicHead[i - 4] = hs; relicLift[i - 4] = lift; }
         }
     }
-    m3d::bakeClose();
     // the bridge decks: 3 x 12 tiles with 8 design px round them, at the 2x art scale (centre of the canvas = centre of the footprint)
-    for (int i = 0; i < 3; i++) { Canvas bc((BRIDGE_W * TILE + 16) * 2, (BRIDGE_L * TILE + 16) * 2); artBridge(bc, i); bridgeArt[i] = fromCanvasSmooth(bc, bc.w * 0.5f, bc.h * 0.5f); bridgeArt[i].dscale = 0.5f; }
+    for (int i = 0; i < 3; i++) { Canvas bc((BRIDGE_W * TILE + 16) * 2, (BRIDGE_L * TILE + 16) * 2); m3dBridge(bc, i); bridgeArt[i] = fromCanvasSmooth(bc, bc.w * 0.5f, bc.h * 0.5f); bridgeArt[i].dscale = 0.5f; }
+    m3d::bakeClose();   // (the bridge decks are kept in the same cache)
 }
 
 // ------------------------------------------------------------ misc

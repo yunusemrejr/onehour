@@ -67,6 +67,8 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_REGROUP = 2048, // no trickling: reinforcements for a wave under way gather at the home rally and set off together (five at the least), never
                                   // one by one as they leave the factory (the value gate alone let a lone tank walk into the enemy's guns every 30 seconds)
                F2_COMMAND = 4096, // a commander that does not repeat itself (Normal and up): the ground a wave broke on is left alone for some minutes (Hard and
+               F2_PRIZE = 8192,   // an Oil Derrick is an objective, not a chance find (Normal and up): a squad of three is told off for the nearest one nobody holds and walks there
+                                  // whatever the army is doing, and a derrick once held is kept manned
                                   // Brutal remember the last two such places, for longer), and after a beating the next wave is heavier, not the same again
                F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
                F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
@@ -180,6 +182,8 @@ struct AiPlayer {
     float waveX[WAVE_F] = {};   // features at launch, for learning from the outcome
     bool waveHasSample = false;
     float nextFortOrder = 0;
+    float nextPrizeOrder = 0; Ref prizeBad[8]; int prizeBadN = 0;   // F2_PRIZE: derricks no soldier of ours can walk to
+    void prizeRush();
     Vec2 humanFront; bool hasFront = false;   // where a human teammate's army is fighting (computer allies converge on it)
     float lastJoin = -100, lastAllyNote = -100;
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
@@ -223,6 +227,7 @@ struct AiPlayer {
     u32 waveTaste = 0; float pace = 1.0f;   // F2_VARY: this wave's taste among near-equal objectives, the first wave's pace this match (0.92 .. 1.08)
     Rng varyRng{ 1 };                       // (their own random stream: everything else plays as before)
     float firstWaveT = -1; int wavesLogged = 0; Vec2 waveLog[4]; int waveRole[4] = { -1, -1, -1, -1 }; float waveAt[4] = {};   // (--variety: what the first waves went for)
+    int waveCount = 0, wavesAfterBreak = 0, wavesBackAtBreak = 0;   // (--variety: waves launched, those launched within four minutes of a wave breaking, and those of them sent back at the place it broke on)
     int chosenBought = 0; bool chosenAlive = false; float chosenLostAt = -1000, chosenFirstAt = -1;   // Chosen trained so far, when the last one fell, when the first took the field
     void chosenOps(Ref chosen, Entity* threat, float threatValue);
     void shadowOps(Ref chosen, Entity* threat, float threatValue, const std::vector<Ref>& shadowNow);

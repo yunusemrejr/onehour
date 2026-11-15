@@ -138,24 +138,52 @@ void skirtCanvas(Canvas& c, int v) {
         c.px[y * c.w + x] = Canvas::pack(Color{(u8)lum, (u8)(lum * 0.88f), (u8)(lum * 0.7f), (u8)(a * 230)});
     }
 }
+// A projectile's body seen from the side, pointing +x: an ogive nose, a lit upper flank, a belly in shade, a coloured band and tail fins.
+void bodyCanvas(Canvas& c, float len, float rad, float nose, Color body, Color band, float bandAt, float fins) {
+    const float cx = c.w * 0.5f, cy = c.h * 0.5f, x0 = cx - len * 0.5f, x1 = cx + len * 0.5f;
+    for (int y = 0; y < c.h; y++) for (int x = 0; x < c.w; x++) {
+        const float px = x + 0.5f, py = y + 0.5f - cy;
+        float r = rad;
+        if (px > x1 - nose) { const float u = (px - (x1 - nose)) / nose; r = rad * std::sqrt(std::max(0.0f, 1 - u * u)); }
+        if (px < x0 + 2) r = rad * 0.78f;   // (the base is necked in)
+        const bool in = px >= x0 && px <= x1 && std::fabs(py) <= r;
+        const bool fin = fins > 0 && px >= x0 && px < x0 + fins * 1.3f && std::fabs(py) <= rad + fins * (1 - (px - x0) / (fins * 1.3f));
+        if (!in && !fin) continue;
+        const float v = in ? py / std::max(r, 0.5f) : (py < 0 ? -0.1f : 0.7f);   // -1 at the top edge, +1 at the bottom
+        float lum = 1.12f - 0.30f * (v + 1) - 0.22f * std::max(0.0f, v);
+        if (in && v > -0.8f && v < -0.3f) lum += 0.34f;   // the light runs along the upper flank
+        Color col = in ? body : shade(body, 0.62f);
+        if (in && band.a && std::fabs(px - (x0 + len * bandAt)) < 1.7f) col = band;
+        col = shade(col, lum); col.a = 255;
+        c.px[y * c.w + x] = Canvas::pack(col);
+    }
+    c.outline(rgb(8, 10, 14, 170));
+}
 }  // namespace
+
+// a blast there lands on water (the spot is a water tile): spray and foam instead of dirt and soot
+static bool wetAt(Vec2 at) {
+    const int tx = clampi((int)(at.x / TILE), 0, MAP_W - 1), ty = clampi((int)(at.y / TILE), 0, MAP_H - 1);
+    return g_map.waterComp[ty * MAP_W + tx] != 0;
+}
 
 void Gfx::buildEffects() {
     { Canvas c(32, 32); c.glow(16, 16, 16, rgb(255, 255, 255, 255)); for (auto& px : c.px) { Color k = Canvas::unpack(px); k.r = k.g = k.b = 255; px = Canvas::pack(k); } blobAdd = fromCanvasAdd(c, 16, 16); blobAdd.radial = 1; }
     for (int v = 0; v < 4; v++) { Canvas c(64, 64); puffCanvas(c, v, false); fxs.smoke[v] = fromCanvasSmooth(c, 32, 32); fxs.smoke[v].radial = 1; }
     for (int v = 0; v < 3; v++) { Canvas c(64, 64); puffCanvas(c, v + 4, true); fxs.dust[v] = fromCanvasSmooth(c, 32, 32); fxs.dust[v].radial = 1; }
-    for (int v = 0; v < 4; v++) {   // dense, lit billows for the mushroom cloud: a sphere lit from the top-left with a turbulent edge and a puckered surface
+    for (int v = 0; v < 4; v++) {   // the billows of a mushroom cloud: a clump of rolling lobes lit from the west, dark in the creases where lobes meet (grey: the cloud tints them)
         Canvas c(96, 96);
+        const Clump k(960u + v * 17u, 6 + v % 2, 0.44f, 0.30f, 0.44f);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
-            float dx = (x + 0.5f - 48) / 46.0f, dy = (y + 0.5f - 48) / 46.0f, d = std::sqrt(dx * dx + dy * dy);
-            float n = fb(x * 0.07f + v * 5.0f, y * 0.07f + v * 2.0f, 900 + v), n2 = fb(x * 0.17f + v * 3.0f, y * 0.17f, 930 + v);
-            float e = d + (n - 0.5f) * 0.5f;
-            float a = clampf((0.98f - e) / 0.3f, 0, 1); a = a * a * (3 - 2 * a);
+            const float px = (x + 0.5f - 48) / 46.0f, py = (y + 0.5f - 48) / 46.0f, d = std::sqrt(px * px + py * py);
+            float dens = 0, nx = 0, ny = 0, nz = 1;
+            if (!k.at(px, py, dens, nx, ny, nz)) continue;
+            const float n = fb(x * 0.09f + v * 5.0f, y * 0.09f + v * 2.0f, 900 + v);
+            const float light = -nx * 0.56f - ny * 0.48f + nz * 0.50f + (n - 0.5f) * 0.4f;
+            const float lum = clampf(0.50f + 0.56f * light, 0.20f, 1.10f) * (0.74f + 0.36f * sst(0.0f, 0.45f, dens));
+            const float a = sst(0.0f, 0.26f, dens) * clampf((1.0f - d) * 5.0f, 0, 1);
             if (a <= 0.01f) continue;
-            float nz = std::sqrt(std::max(0.0f, 1 - d * d)), nx = dx + (n2 - 0.5f) * 0.5f, ny = dy + (n2 - 0.5f) * 0.4f;
-            float light = nx * -0.5f + ny * -0.6f + nz * 0.62f;
-            float lum = clampf(0.52f + 0.62f * light, 0.22f, 1.12f) * (0.84f + 0.32f * n2);
-            u8 L = (u8)clampf(lum * 255, 0, 255);
+            const u8 L = (u8)clampf(lum * 255, 0, 255);
             c.px[y * 96 + x] = Canvas::pack(Color{L, L, L, (u8)(a * 240)});
         }
         fxs.billow[v] = fromCanvasSmooth(c, 48, 48);
@@ -184,29 +212,63 @@ void Gfx::buildEffects() {
         fxs.fallout[sv][in] = fromCanvasAdd(c, 128, 128); fxs.fallout[sv][in].radial = 1;
     }
     { Canvas c(64, 16); for (int y = 0; y < 16; y++) for (int x = 0; x < 64; x++) { float ax = sst(0, 0.09f, x / 64.0f) * sst(0, 0.09f, 1 - x / 64.0f), v = std::abs((y + 0.5f - 8) / 8.0f), ay = std::pow(1 - v, 1.7f); c.px[y * 64 + x] = Canvas::pack(Color{255, 255, 255, (u8)(clampf(ax * ay, 0, 1) * 255)}); } fxs.beam = fromCanvasAdd(c, 32, 8); }
-    for (int v = 0; v < 4; v++) {
-        Canvas c(16, 16); Art a(c, rgb(255, 255, 255), 2.0f); Rng r(40u + v);
-        std::vector<P> pts; int n = 5 + v % 2;
-        for (int i = 0; i < n; i++) { float an = i * 6.2831853f / n + r.f(-0.3f, 0.3f), rr = r.f(2.6f, 4.2f); pts.push_back({4.0f + std::cos(an) * rr, 4.0f + std::sin(an) * rr}); }
-        a.poly(pts, rgb(150, 150, 150), 2.0f, 0.7f);
+    for (int v = 0; v < 4; v++) {   // a chunk of wreckage: a broken plate folded in two, one face in the light and one in shade, its rim dark
+        Canvas c(16, 16); Rng r(40u + v);
+        float en[6][3]; const int ne = 4 + v % 3;
+        for (int i = 0; i < ne; i++) { const float an = i * 6.2831853f / ne + r.f(-0.35f, 0.35f); en[i][0] = std::cos(an); en[i][1] = std::sin(an); en[i][2] = r.f(4.2f, 6.8f); }
+        const float fa = r.f(0, 3.14f), fx = std::cos(fa), fy = std::sin(fa);
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+            const float px = x + 0.5f - 8, py = y + 0.5f - 8;
+            float edge = 99;
+            for (int i = 0; i < ne; i++) edge = std::min(edge, en[i][2] - (px * en[i][0] + py * en[i][1]));
+            if (edge <= 0) continue;
+            float L = px * fx + py * fy > 0 ? 232.0f : 124.0f;
+            if (edge < 1.2f) L *= 0.6f;
+            c.px[y * 16 + x] = Canvas::pack(Color{(u8)L, (u8)L, (u8)L, (u8)(clampf(edge, 0, 1) * 255)});
+        }
         fxs.debris[v] = fromCanvasSmooth(c, 8, 8);
     }
-    for (int v = 0; v < 3; v++) {   // a blast's scorch: a charred core, the soot falling off to a ragged fringe with flecks of ash at its rim
+    for (int v = 0; v < 3; v++) {   // a blast's mark: a shallow crater (its sunward wall in shade, the far wall lit), a charred floor, soot thrown out in rays, ash at the rim
         Canvas c(96, 96);
         for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
             float dx = (x + 0.5f - 48) / 46.0f, dy = (y + 0.5f - 48) / 46.0f, d = std::sqrt(dx * dx + dy * dy);
-            float n = fb(x * 0.08f + v * 7, y * 0.08f, 505 + v);
-            float a = std::pow(clampf(1.25f - d * 1.15f + (n - 0.5f) * 0.9f, 0, 1), 1.4f);
-            float charred = clampf(1.0f - d * 1.5f, 0, 1);
+            float n = fb(x * 0.08f + v * 7, y * 0.08f, 505 + v), n2 = fb(x * 0.25f, y * 0.25f + v * 3, 525 + v);
+            const float ang = std::atan2(dy, dx);
+            const float rays = std::pow(std::fabs(std::sin(ang * (3.5f + v) + n * 3.0f + v)), 5.0f);
+            const float reach = 0.60f + 0.38f * rays * (0.5f + 0.5f * n2);
+            float a = std::pow(clampf((reach - d) / 0.30f + (n - 0.5f) * 0.6f, 0, 1), 1.3f);
+            const float charred = clampf(1.0f - d * 1.5f, 0, 1);
             if (charred > 0) a = std::max(a, charred * charred * (0.85f + 0.15f * n));
             if (a <= 0) continue;
-            Color col = d > 0.62f ? Color{50, 38, 28, 0} : Color{14, 12, 10, 0};
-            col.a = (u8)(a * (d > 0.62f ? 120 : 200));
-            if (d > 0.7f && d < 1.0f && hh(x, y, 660 + v) > 0.9f) { col = Color{104, 94, 82, 0}; col.a = 120; }   // ash flecks
+            Color col = d > 0.58f ? Color{52, 40, 30, 0} : Color{16, 13, 11, 0};
+            float al = a * (d > 0.58f ? 125 : 205);
+            const float wall = std::exp(-std::pow((d - 0.30f) / 0.075f, 2.0f)), sun = (-dx * 0.78f - dy * 0.62f) / std::max(d, 0.05f);   // sun: +1 on the crater's sunward side
+            if (wall > 0.05f) {
+                if (sun < 0) col = lerpC(col, Color{122, 100, 78, 255}, wall * -sun * 0.75f);   // the far wall faces the sun
+                else col = lerpC(col, Color{4, 3, 3, 255}, wall * sun * 0.8f);
+                al = std::max(al, wall * 170.0f);
+            }
+            if (d > 0.66f && d < 1.0f && hh(x, y, 660 + v) > 0.9f) { col = Color{110, 100, 88, 0}; al = 120; }   // ash flecks
+            col.a = (u8)clampf(al, 0, 255);
             c.px[y * 96 + x] = Canvas::pack(col);
         }
         fxs.scorch[v] = fromCanvasSmooth(c, 48, 48);
     }
+    for (int v = 0; v < 2; v++) {   // what a blast leaves on water: a ragged ring of white lace round a churned middle
+        Canvas c(96, 96);
+        for (int y = 0; y < 96; y++) for (int x = 0; x < 96; x++) {
+            const float dx = (x + 0.5f - 48) / 46.0f, dy = (y + 0.5f - 48) / 46.0f, d = std::sqrt(dx * dx + dy * dy);
+            const float n = fb(x * 0.10f + v * 11, y * 0.10f, 770 + v), lace = sst(0.40f, 0.60f, fb(x * 0.33f, y * 0.33f + v * 3, 790 + v));
+            const float ring = std::exp(-std::pow((d - 0.66f + (n - 0.5f) * 0.28f) / 0.15f, 2.0f)), churn = clampf(1.0f - d / 0.6f, 0, 1) * 0.6f;
+            const float a = clampf(ring * (0.30f + 0.70f * lace) + churn * (0.35f + 0.65f * lace), 0, 1);
+            if (a <= 0.02f) continue;
+            c.px[y * 96 + x] = Canvas::pack(Color{236, 246, 250, (u8)(a * 225)});
+        }
+        fxs.foam[v] = fromCanvasSmooth(c, 48, 48);
+    }
+    { Canvas c(36, 14); bodyCanvas(c, 26, 4.0f, 10, rgb(104, 108, 116), rgb(204, 136, 74), 0.24f, 0); fxs.shell = fromCanvasSmooth(c, 18, 7); fxs.shell.dscale = 0.5f; }
+    { Canvas c(48, 26); bodyCanvas(c, 34, 7.0f, 13, rgb(84, 92, 86), rgb(222, 188, 66), 0.62f, 5.0f); fxs.bomb = fromCanvasSmooth(c, 24, 13); fxs.bomb.dscale = 0.5f; }
+    { Canvas c(40, 16); bodyCanvas(c, 30, 3.0f, 8, rgb(214, 218, 224), rgb(204, 62, 50), 0.70f, 3.6f); fxs.rocket = fromCanvasSmooth(c, 20, 8); fxs.rocket.dscale = 0.5f; }
     for (int v = 0; v < 2; v++) {   // tread marks: a short pressed-in dash, the track cleats showing as darker bars (v 1 is a worn, broken one)
         Canvas c(24, 8);
         for (int y = 0; y < 8; y++) for (int x = 0; x < 24; x++) {
@@ -396,6 +458,14 @@ void Game::spawnFromFx() {
                     q.vx += dx * k; q.vy += dy * k * 0.7f;
                 }
             }
+            if (sc < 150 && wetAt(f.a)) {   // a hit on water: no dirt to throw and nothing to scorch - a column of white water goes up and falls back, spray flies, mist hangs, foam spreads
+                for (int i = 0, nc = light ? 2 : 3 + (int)(s / 10); i < nc; i++) emitP(f.a.x + r.f(-s * 0.2f, s * 0.2f), f.a.y + r.f(-s * 0.12f, s * 0.12f), r.f(-14, 14), -r.f(60, 110 + s * 1.6f), r.f(0.7f, 1.2f), s * r.f(0.16f, 0.26f), s * r.f(0.34f, 0.5f), rgb(240, 247, 252, 240), PK_CONTRAIL, (u8)r.range(0, 3), 190.0f + s, 0.8f, r.f(0, 6), r.f(-0.6f, 0.6f));
+                for (int i = 0, nd = 4 + (int)(s / 4); i < nd; i++) { float an = r.f(0, 6.283f), sp = r.f(70, 120 + s * 3.0f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp * 0.6f - r.f(20, 90), r.f(0.3f, 0.6f), r.f(0.9f, 1.6f), 0.4f, rgb(214, 234, 255), PK_SPARK, 0, 260, 2.4f); }
+                if (!light) for (int i = 0, nm = (int)((2 + s / 14.0f) * dq + 0.5f); i < nm; i++) emitP(f.a.x + r.f(-s * 0.3f, s * 0.3f), f.a.y + r.f(-s * 0.2f, s * 0.2f), r.f(-8, 8), r.f(-20, -8), r.f(1.2f, 2.0f), s * 0.3f, s * 0.8f, rgb(232, 240, 244, 110), PK_CONTRAIL, (u8)r.range(0, 3), 0, 0.7f, r.f(0, 6), r.f(-0.3f, 0.3f));
+                if (s >= 20) emitP(f.a.x, f.a.y, 0, 0, 0.7f, s * 0.3f, s * 2.0f, rgb(214, 238, 255), PK_RING);
+                if (s >= 10 && decals.size() < 56 && (!light || r.f() < 0.25f)) decals.push_back(Decal{ f.a.x, f.a.y, s * (light ? 0.7f : 1.5f), r.f(0, 6.28f), 0, r.f(4.0f, 6.0f), (u8)(8 + r.range(0, 1)) });
+                break;
+            }
             int chunks = 2 + (int)(s / 9), sparks = 4 + (int)(s / 3.5f);
             for (int i = 0; i < chunks; i++) { float an = r.f(0, 6.283f), sp = r.f(50, 70 + s * 3.2f); emitP(f.a.x, f.a.y, std::cos(an) * sp * 0.6f, std::sin(an) * sp * 0.42f, r.f(1.0f, 1.7f), r.f(0.7f, 1.2f), r.f(0.7f, 1.2f), shade(rgb(96, 90, 82), r.f(0.6f, 1.2f)), PK_DEBRIS, (u8)r.range(0, 3), -r.f(70, 170), 0, r.f(0, 6), r.f(-14, 14)); }   // (a negative ay: the chunk's launch speed upward, see updateParticles)
             for (int i = 0; i < sparks; i++) { float an = r.f(0, 6.283f), sp = r.f(80, 140 + s * 4.0f); emitP(f.a.x, f.a.y, std::cos(an) * sp, std::sin(an) * sp, r.f(0.25f, 0.6f), r.f(1.0f, 1.8f), 0.4f, rgb(255, 214, 120), PK_SPARK, 0, 120, 3.0f); }
@@ -453,7 +523,12 @@ void Game::drawGroundFx() {
         if (!onScreen(d.x, d.y, d.r + 8)) continue;
         float k = d.age / d.life, a = 255 * clampf((1 - k) * 4.0f, 0, 1) * 0.85f;
         Vec2 s = worldToScreen(Vec2(d.x, d.y));
+        if (d.kind >= 8) {   // foam on water: it spreads and thins out in a few seconds
+            g.draw(g.fxs.foam[d.kind & 1], s.x, s.y, g.softwareRenderer ? 0.0f : d.rot, d.r * 2.0f / 96.0f * (0.45f + 0.75f * std::sqrt(k)), rgb(255, 255, 255), (u8)(235 * std::pow(1 - k, 1.5f)));
+            continue;
+        }
         g.draw(g.fxs.scorch[d.kind % 3], s.x, s.y, g.softwareRenderer ? 0.0f : d.rot, d.r * 2.0f / 96.0f, rgb(255, 255, 255), (u8)a);   // (a round splotch: the CPU renderer lays it upright)
+        if (d.age < 3.5f && d.r >= 14.0f && detail >= 2) g.glowAdd(s.x, s.y, d.r * 0.42f, Color{255, 118, 44, (u8)(120 * (1 - d.age / 3.5f))});   // the crater floor still glows as it cools
     }
     for (auto& t : treads) {
         if (t.age >= t.life || !onScreen(t.x, t.y, 16)) continue;
@@ -481,7 +556,7 @@ void Game::drawGroundFx() {
                 if (frameDt > 0 && fxRng.f() < 1.4f * frameDt && f.t < 14.0f) emitP(f.a.x + fxRng.f(-0.35f, 0.35f) * w * TILE, f.a.y + fxRng.f(-0.35f, 0.35f) * h * TILE, fxRng.f(-4, 4), fxRng.f(-22, -12), fxRng.f(1.8f, 3.0f), 6, 16, rgb(70, 66, 62), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.5f, fxRng.f(0, 6), 0.2f);
             }
         } else if (f.type == FX_EXPLODE) {   // a mid-size blast: a low ring of dust rolls out along the ground (a nuke's surge is drawn with its fireball)
-            if (f.t < 0 || k > 0.8f || f.size < 50 || f.size >= 160 || f.vel.y < -0.5f || skirts >= skirtMax || !onScreen(f.a.x, f.a.y, f.size * 1.2f)) continue;
+            if (f.t < 0 || k > 0.8f || f.size < 50 || f.size >= 160 || f.vel.y < -0.5f || skirts >= skirtMax || !onScreen(f.a.x, f.a.y, f.size * 1.2f) || wetAt(f.a)) continue;
             Vec2 a = worldToScreen(f.a);
             const float Rk = f.size * (0.5f + 1.1f * std::sqrt(k));   // races out fast, then slows as the dust settles
             g.drawSized(g.fxs.skirt[(int)std::fabs(f.a.x) & 1], a.x, a.y, Rk * 2.1f, Rk * 1.05f, 0, rgb(255, 255, 255), (u8)(200 * clampf((0.8f - k) * 3.0f, 0, 1)));

@@ -2555,9 +2555,11 @@ void Game::renderWorld() {
             float t = clampf(p.arcT, 0, 1), h = std::sin(t * 3.14159f) * 60;
             float sc = 1.0f + 0.5f * std::sin(t * 3.14159f);
             g.drawSized(g.shadowSmall, s.x, s.y + 2, 9 * sc, 5 * sc, 0, rgb(255, 255, 255), 150);
-            g.fillCircle(s.x, s.y - h, 3.0f, rgb(30, 30, 32));
-            g.fillCircle(s.x - 0.8f, s.y - h - 0.8f, 1.3f, rgb(150, 150, 154));
-            g.glowAdd(s.x, s.y - h, 6, Color{255, 190, 110, 70});
+            Vec2 gd = p.dest - p.pos; const float gl = std::hypot(gd.x, gd.y), run = std::max(p.arcLen, 60.0f);   // (the arc tips its nose up on the way out and down on the way in)
+            const float ang = gl > 1.0f ? std::atan2(gd.y / gl * run - 188.0f * std::cos(t * 3.14159f), gd.x / gl * run) : 1.5708f;
+            g.drawSized(g.fxs.streak, s.x - std::cos(ang) * 8 * sc, s.y - h - std::sin(ang) * 8 * sc, 13 * sc, 2.4f, ang, rgb(255, 200, 140), 110);   // the hot air behind it
+            g.draw(g.fxs.shell, s.x, s.y - h, ang, sc);
+            g.glowAdd(s.x, s.y - h, 6, Color{255, 190, 110, 60});
         } else if (w.proj == PJ_BOMB) {   // a bomb dropping from altitude: tumbling fat body, fins, a glow on the nose and a shadow closing in on the impact point
             const bool nuke = p.weapon == W_NUKE_BOMB;   // the Supersonic Bomber's compact nuclear bomb: much smaller than a stick bomb
             float t = clampf(p.arcT, 0, 1), h = (1.0f - t * t) * (nuke ? 54.0f : 78.0f);
@@ -2567,10 +2569,9 @@ void Game::renderWorld() {
             g.drawSized(g.shadowSmall, s.x, s.y + 2, (nuke ? 5.5f : 11.0f) * sc, (nuke ? 3.0f : 6.0f) * sc, 0, rgb(255, 255, 255), (u8)(90 + 90 * t));
             float bx = s.x, by = s.y - h;
             g.drawSized(g.fxs.streak, bx - gd.x * (nuke ? 2.0f : 5.0f), by - (nuke ? 3.0f : 6.0f), nuke ? 2 : 4, nuke ? 7 : 16, 1.5708f, rgb(220, 220, 230), (u8)(120 * (1 - t)));
-            g.fillCircle(bx, by, nuke ? 1.7f : 3.6f, rgb(36, 38, 42));
-            g.fillCircle(bx - 0.45f, by - 0.45f, nuke ? 0.7f : 1.5f, nuke ? rgb(196, 202, 212) : rgb(128, 132, 140));
-            if (nuke) { g.line(bx - 1.2f, by - 2.1f, bx + 1.2f, by - 2.1f, rgb(160, 166, 176)); g.glowAdd(bx, by, 4, glow); }
-            else { g.line(bx - 2.6f, by - 4.6f, bx + 2.6f, by - 4.6f, rgb(70, 74, 82)); g.glowAdd(bx, by, 7, glow); }
+            const Vec2 fall = (gd * ((1.0f - t) * 0.8f) + Vec2(0, 0.25f + t)).norm();   // released along the aircraft's run, it noses over to straight down
+            g.draw(g.fxs.bomb, bx, by, std::atan2(fall.y, fall.x), nuke ? 0.5f : 0.95f, nuke ? rgb(226, 232, 240) : rgb(255, 255, 255));
+            g.glowAdd(bx, by, nuke ? 4 : 7, glow);
         } else if (w.proj == PJ_ROCKET) {
             Vec2 d = p.vel.norm();
             float ang = std::atan2(d.y, d.x);
@@ -2578,13 +2579,15 @@ void Game::renderWorld() {
             Vec2 mid = s - d * (strike ? 18.0f : 9.0f);
             g.drawSized(g.fxs.streak, mid.x, mid.y, strike ? 44 : 22, strike ? 6.0f : 4.0f, ang, rgb(255, 214, 150), 255);
             g.glowAdd(s.x, s.y, strike ? 12 : 7, Color{w.color.r, w.color.g, w.color.b, (u8)(strike ? 190 : 150)});
-            g.fillCircle(s.x, s.y, strike ? 2.4f : 1.9f, rgb(255, 250, 235));
+            g.draw(g.fxs.rocket, s.x + d.x * 4.0f, s.y + d.y * 4.0f, ang, strike ? 1.35f : 0.95f);
+            if (!strike && detail >= 2 && frameDt > 0 && fxRng.f() < 9.0f * frameDt) emitP(p.pos.x - d.x * 8, p.pos.y - d.y * 8, fxRng.f(-4, 4), fxRng.f(-4, 4), fxRng.f(0.5f, 0.8f), 1.8f, 6.0f, rgb(232, 230, 226, 150), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.6f, fxRng.f(0, 6), 0.2f);   // every rocket draws a thin line of smoke
             if (strike && frameDt > 0 && fxRng.f() < 40.0f * frameDt) emitP(p.pos.x - d.x * 12, p.pos.y - d.y * 12, fxRng.f(-6, 6), fxRng.f(-6, 6), fxRng.f(1.2f, 2.0f), 3, 11, rgb(238, 236, 232, 190), PK_SMOKE, (u8)fxRng.range(0, 3), 0, 0.4f, fxRng.f(0, 6), 0.2f);
         } else {
             Vec2 d = p.vel.norm();
             float ang = std::atan2(d.y, d.x);
             Vec2 mid = s - d * 8.0f;
             g.drawSized(g.fxs.streak, mid.x, mid.y, 18, 2.6f, ang, w.color, 255);
+            g.drawSized(g.fxs.streak, s.x - d.x * 3.5f, s.y - d.y * 3.5f, 8, 1.3f, ang, rgb(255, 255, 255), 235);   // the white-hot head of the tracer
             g.glowAdd(s.x, s.y, 4.5f, Color{w.color.r, w.color.g, w.color.b, 110});
         }
     }

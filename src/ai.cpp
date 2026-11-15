@@ -808,6 +808,49 @@ void AiPlayer::garrisonStrongholds() {
     if (!pick.empty()) S.cmdEnter(pick, target);
 }
 
+// F2_PRIZE: the paying prizes are objectives. The nearest Oil Derrick that nobody holds (or that we hold with fewer than two soldiers) gets a squad of
+// three from whatever infantry stands idle, wherever it stands; the walk may be long, the derrick pays for the squad within a minute of its arrival.
+void AiPlayer::prizeRush() {
+    Sim& S = g_sim;
+    const Player& pl = S.players[player];
+    if (!on2(F2_PRIZE) || pl.difficulty < 1 || S.time < nextPrizeOrder || S.time < 60) return;
+    nextPrizeOrder = S.time + 9;
+    Entity* best = nullptr; float bd = (70.0f + 25.0f * pl.difficulty) * TILE;
+    for (auto& d : S.ents) {
+        if (!d.alive || d.type != B_N_DERRICK) continue;
+        const int in = S.garrisonInfantry(d);
+        if (d.owner == player ? in >= 2 : in > 0) continue;   // manned by us, or somebody else is inside
+        bool bad = false; for (int k = 0; k < prizeBadN; k++) if (prizeBad[k] == S.refOf(d)) bad = true;
+        if (bad || S.inFallout(d.pos) || enemyStrengthNear(d.pos, 8) > 500) continue;
+        const float dd = dist(d.pos, pl.basePos); if (dd < bd) { best = &d; bd = dd; }
+    }
+    if (!best) return;
+    const Ref target = S.refOf(*best);
+    int incoming = S.garrisonInfantry(*best);
+    for (auto& e : S.ents) if (e.alive && e.owner == player && e.order == O_ENTER && e.targetEnt == target) incoming++;
+    const int want = std::min(3, S.garrisonCap(*best)) - incoming;
+    if (want <= 0) return;
+    std::vector<std::pair<float, Entity*>> cand;
+    for (auto& e : S.ents) {
+        if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0) continue;
+        if ((e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) || !S.canBoard(e, *best)) continue;
+        cand.push_back({ dist(e.pos, best->pos), &e });
+    }
+    if (cand.empty()) return;
+    std::sort(cand.begin(), cand.end(), [](const std::pair<float, Entity*>& a, const std::pair<float, Entity*>& b) { return a.first < b.first; });
+    std::vector<Vec2> path;
+    const Vec2 entry = g_map.nearestFree(best->pos + (cand[0].second->pos - best->pos).norm() * (best->radius() + TILE), 6);
+    if (!g_map.findPath(cand[0].second->pos, entry, path)) {   // over water, or walled off: not this one
+        if (prizeBadN < 8) prizeBad[prizeBadN++] = target;
+        nextPrizeOrder = S.time + 1;
+        return;
+    }
+    std::vector<Ref> pick;
+    for (int k = 0; k < (int)cand.size() && (int)pick.size() < want; k++) pick.push_back(S.refOf(*cand[k].second));
+    S.cmdEnter(pick, target);
+    if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] %d soldiers sent to the derrick at %d,%d\n", player, S.time, (int)pick.size(), best->tx, best->ty);
+}
+
 // Feed the outcome of a finished wave back into the model: did it destroy at least as much as it lost?
 void AiPlayer::endWave(float remainingValue) {
     flank.clear(); flankPhase = 0;   // (F2_PINCER: the wave's flank is over with it)
@@ -2038,6 +2081,7 @@ void AiPlayer::think() {
                 waveTaste = (u32)varyRng.next();   // (the next wave weighs its objectives anew)
                 if (wavesLogged < 4) { waveLog[wavesLogged] = tgt->pos; waveRole[wavesLogged] = tgt->isBuilding() ? (int)tgt->bt().role : 100; waveAt[wavesLogged] = S.time; wavesLogged++; }
                 if (firstWaveT < 0) firstWaveT = S.time;
+                waveCount++; if (S.time - brokeT[0] < 240.0f) { wavesAfterBreak++; if (dist(tgt->pos, brokeAt[0]) < 13 * TILE) wavesBackAtBreak++; }
                 wave = army;
                 // a home guard stays behind: the commander's own habit (an Iron Wall keeps a quarter home), and more of it while order at home is low
                 // and crowds may rise against the base (FEAT_RIOT). The ones nearest home stay; they hold the rally point.
@@ -2316,6 +2360,7 @@ void AiPlayer::think() {
         if (e->hp < e->maxHp * 0.22f && e->ut().kind == UK_VEH && !attacking && dist(e->pos, pl.basePos) > 12 * TILE && e->order != O_MOVE) S.cmdMove({r}, pl.basePos, false);
     }
     prof.mark("artillery");
+    if (!threat) prizeRush();
     if (!threat && !attacking) garrisonStrongholds();
     prof.mark("garrison");
     civilAffairs(army, spies, threat != nullptr, dozers);   // the towns round the lake (FEAT_TOWNS, ai_civil.cpp)

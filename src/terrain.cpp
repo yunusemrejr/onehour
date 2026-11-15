@@ -1395,9 +1395,10 @@ void terrainBake(const std::function<void(const Canvas& band, int y0)>& emit) {
                         }
                         float rockish = clampf(h0 / 14.0f, 0, 1);
                         k = 1.0f + (k - 1.0f) * 1.6f;   // north-west faces up, south-east faces down: the cliffs read as lit from the NW
-                        const float shade = clampf(k, 0.42f, 1.7f) * (1.0f - 0.34f * occ);
+                        float shade = clampf(k, 0.42f, 1.7f) * (1.0f - 0.34f * occ);
+                        if (wRock > 0.02f) shade += (std::max(shade, 0.60f) - shade) * clampf(wRock * 1.5f, 0, 1);   // pale rock throws light into its own shade: a shaded face is a mid grey, never a dark blot
                         col = mul3(col, shade);
-                        if (shade < 1.0f && wRock > 0.02f) col = add3(col, mul3(f3(30, 44, 66), (1.0f - shade) * wRock));   // the sky lights what the sun does not: a cliff's shaded face is blue slate, not a black hole
+                        if (shade < 1.0f && wRock > 0.02f) col = add3(col, mul3(f3(34, 46, 62), (1.0f - shade) * wRock));   // the sky lights what the sun does not: a cliff's shaded face is blue slate, not a black hole
                         // moss in the cracks at the foot of cliffs, a pale dry rim on the crests
                         if (w[K_ROCK] > 0.4f * sum) { col = lerp3(col, MOSS, (1.0f - rockish) * 0.3f); col = add3(col, mul3(f3(30, 28, 24), clampf((h0 - 28.0f) / 14.0f, 0, 1))); }
                     }
