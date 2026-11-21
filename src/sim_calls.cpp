@@ -113,6 +113,35 @@ bool Sim::cmdHeliCall(int player, Vec2 pos) {
     return true;
 }
 
+// ------------------------------------------------------------ bunker garrison and drop escorts
+// A bunker is finished with its own garrison already in the shaft: snipers (each multiplies an infiltrator's work, see captureTime) and riflemen.
+void Sim::bunkerStartGarrison(Entity& b) {
+    if (b.owner < 0 || b.owner >= numPlayers || !b.isBuilding() || b.bt().role != BR_BUNKER) return;
+    const bool cyber = players[b.owner].faction == F_CYBER;
+    const Ref bunker = refOf(b);
+    for (int k = 0; k < BUNKER_START_SNIPERS + BUNKER_START_RIFLES; k++) {
+        Ref u = spawnUnit(k < BUNKER_START_SNIPERS ? (cyber ? U_C_SNIPER : U_K_SNIPER) : (cyber ? U_C_INF1 : U_K_INF1), b.owner, b.pos);
+        Entity* c = get(bunker); Entity* s = get(u);   // (spawning may move ents: look both up again)
+        if (c && s) boardQuiet(*s, *c);
+    }
+}
+
+// Every Para Backup and Tank Drop of a bunker brings DROP_ESCORT_HELIS gunships along the plane's track; they fight round the drop zone.
+void Sim::dropEscort(int player, Vec2 from, Vec2 dir, Vec2 pos) {
+    if (player < 0 || player >= numPlayers) return;
+    const float m = 1.5f * TILE;
+    const Vec2 side(-dir.y, dir.x);
+    for (int k = 0; k < DROP_ESCORT_HELIS; k++) {
+        const float o = (k - (DROP_ESCORT_HELIS - 1) * 0.5f) * 3.0f * TILE;
+        FleetShip f; f.owner = player; f.type = gunshipType(players[player].faction); f.dir = dir; f.air = true; f.escort = true;
+        Vec2 a = from + side * o, b = pos + side * o;
+        f.from = Vec2(clampf(a.x, m, WORLD_W - m), clampf(a.y, m, WORLD_H - m));
+        f.to = Vec2(clampf(b.x, m, WORLD_W - m), clampf(b.y, m, WORLD_H - m));
+        f.at = time + 0.4f + 0.3f * k;
+        fleetArrivals.push_back(f);
+    }
+}
+
 // ------------------------------------------------------------ Find and Destroy (human armies)
 // Every armed unit of the army, wherever it is, goes after the nearest enemy thing it can reach and hit: units, ships, dived submarines, aircraft,
 // structures and the ones that hide. Hunting units find hidden enemies near them (stealth units, dived boats, the structures of a secret island).
@@ -205,5 +234,40 @@ void Sim::updateHunts() {
         }
         for (auto& kv : attacks) cmdAttack(kv.second, refOf(ents[kv.first]));
         for (auto& kv : moves) cmdMove(kv.second, ents[kv.first].pos, true);
+        // the submarines join with their missiles: each one whose missile is ready launches it at the best enemy spot that spares the army
+        for (auto& e : ents) {
+            if (!e.alive || e.owner != p || !e.isUnit() || !subType(e.type) || time < e.siloTimer || e.nukeSalvo != 0 || e.disabledUntil > time) continue;
+            Vec2 at;
+            if (!huntNukeSpot(p, NUKE_RADIUS * TILE * std::sqrt(SUB_NUKE_SCALE), at)) break;   // (nothing worth a warhead: none of the others finds one either)
+            cmdSubNuke(p, at, false, refOf(e));
+        }
     }
+}
+
+// Where a hunting army's warhead of blast radius R does the most: enemy structures (a Command structure counts most) and big groups of enemy
+// units, and never where the blast would reach a structure of the army or its allies, or more than HUNT_NUKE_OWN of their units.
+bool Sim::huntNukeSpot(int p, float R, Vec2& out) const {
+    const float R2 = R * R;
+    std::vector<Vec2> cand;
+    int u = 0;
+    for (auto& t : ents) {
+        if (!t.alive || t.kind == EK_RESOURCE || t.owner < 0 || !enemies(p, t.owner) || t.carrier.valid() || invulnerable(t) || t.district >= 0) continue;
+        if (t.isBuilding() ? !prizeType(t.type) : (visibleTo(t, p) && (u++ % 4) == 0)) cand.push_back(t.pos);
+        if (cand.size() >= 240) break;
+    }
+    float best = 0;
+    for (Vec2 c : cand) {
+        float score = 0; int own = 0; bool spare = true;
+        for (auto& t : ents) {
+            if (!t.alive || t.kind == EK_RESOURCE || t.owner < 0 || t.carrier.valid() || distSq(t.pos, c) > R2) continue;
+            if (!enemies(p, t.owner)) {   // its own or an ally's
+                if (t.isBuilding() || ++own > HUNT_NUKE_OWN) { spare = false; break; }
+                continue;
+            }
+            if (invulnerable(t) || t.district >= 0) continue;
+            score += t.isBuilding() ? (t.bt().role == BR_HQ ? 12.0f : 3.0f) : 1.0f;
+        }
+        if (spare && score > best) { best = score; out = c; }
+    }
+    return best >= HUNT_NUKE_MIN;
 }

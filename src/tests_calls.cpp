@@ -39,10 +39,10 @@ static bool wallTest(u64 seed) {
     Entity* theirs = g_sim.get(placeNearC(1, B_K_FWALL, g_sim.players[1].basePos + Vec2(6 * TILE, 0)));
     CHECKC(mine && theirs, "could not place the Bastion Walls");
     CHECKC(!g_sim.spyMayTake(1, *mine), "a computer army may take a human's Bastion Wall");
-    CHECKC(g_sim.spyMayTake(0, *theirs), "a human's infiltrator may no longer take an enemy's Bastion Wall");
+    CHECKC(!g_sim.spyMayTake(0, *theirs), "a human's infiltrator may take an enemy's Bastion Wall");
     theirs->owner = -1;
     CHECKC(!g_sim.spyMayTake(1, *theirs), "a computer army may take a Bastion Wall nobody holds");
-    CHECKC(g_sim.spyMayTake(0, *theirs), "a human's infiltrator may not take a Bastion Wall nobody holds");
+    CHECKC(!g_sim.spyMayTake(0, *theirs), "a human's infiltrator may take a Bastion Wall nobody holds");
     // a computer army's infiltrator next to the human's wall does not take it
     Ref spy = g_sim.spawnUnit(U_K_SPY, 1, mine->pos + Vec2(2 * TILE, 0));
     g_sim.cmdCapture({spy}, g_sim.refOf(*mine));
@@ -130,12 +130,61 @@ static bool huntTest(u64 seed) {
     return true;
 }
 
+// a finished bunker comes garrisoned (3 snipers, 2 riflemen); its Para Backup and Tank Drop each bring 2 gunships
+static bool bunkerCrewTest(u64 seed) {
+    initC(seed);
+    Ref B = placeNearC(0, B_C_BUNKER, g_sim.players[0].basePos + Vec2(8 * TILE, 6 * TILE));
+    Entity* b = g_sim.get(B);
+    CHECKC(b, "could not place a bunker");
+    b->constructed = false; g_sim.finishBuildingPublic(*b); b = g_sim.get(B);
+    CHECKC(b->passengers.size() == (size_t)(BUNKER_START_SNIPERS + BUNKER_START_RIFLES), "a finished bunker does not hold its 5-man garrison");
+    CHECKC(g_sim.bunkerSnipers(*b) == BUNKER_START_SNIPERS, "a finished bunker's garrison does not hold 3 snipers");
+    b->bunkerUpg |= (u8)((1 << BU_PARA) | (1 << BU_TANKS)); b->paraReady = b->tankReady = 0;
+    auto escorts = [] { int n = 0; for (auto& f : g_sim.fleetArrivals) if (f.escort && f.owner == 0 && f.air) n++; return n; };
+    const Vec2 spot = g_sim.players[0].basePos + Vec2(0, 14 * TILE);
+    CHECKC(g_sim.cmdBunkerPara(B, spot), "the Para Backup was refused");
+    CHECKC(escorts() == DROP_ESCORT_HELIS, "a Para Backup brought no gunship escort");
+    CHECKC(g_sim.cmdTankDrop(B, spot), "the Tank Drop was refused");
+    CHECKC(escorts() == 2 * DROP_ESCORT_HELIS, "a Tank Drop brought no gunship escort");
+    runC(5);
+    int helis = 0;
+    for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && e.owner == 0 && e.type == U_C_HELI) helis++;
+    CHECKC(helis == 2 * DROP_ESCORT_HELIS, "the drop escorts did not fly in");
+    printf("callstest: bunker garrison %zu (%d snipers), %d escort gunships\n", b->passengers.size(), g_sim.bunkerSnipers(*b), helis);
+    return true;
+}
+
+// Find and Destroy: a submarine with its missile ready launches it at the enemy, never where the blast would reach the army's own structures
+static bool huntSubTest(u64 seed) {
+    initC(seed);
+    Vec2 sea = g_map.nearestWater(Vec2((ISLE_X0 - 34) * TILE, WORLD_H * 0.5f), 14, true, Map::OPEN_SEA);
+    Ref S = g_sim.spawnUnit(U_C_SUB, 0, sea);
+    Entity* sub = g_sim.get(S);
+    CHECKC(sub, "could not launch a submarine");
+    sub->siloTimer = 0.01f;   // (armed: 0 would mean a new boat still arming)
+    g_sim.cmdFindDestroy(0, true);
+    runC(2);
+    sub = g_sim.get(S);
+    CHECKC(sub && (sub->nukeSalvo != 0 || !g_sim.nukes.empty()), "a hunting submarine did not launch its missile");
+    Vec2 at = sub->nukeSalvo != 0 ? sub->nukeSalvoPos : g_sim.nukes.back().pos;
+    const float R = NUKE_RADIUS * TILE * std::sqrt(SUB_NUKE_SCALE);
+    for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0) CHECKC(dist(e.pos, at) > R, "a hunting submarine aimed where its blast reaches the army's own structures");
+    int hit = 0;
+    for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1 && dist(e.pos, at) <= R) hit++;
+    CHECKC(hit > 0, "a hunting submarine aimed where no enemy structure stands");
+    printf("callstest: hunting submarine aimed at %d enemy structures\n", hit);
+    g_sim.cmdFindDestroy(0, false);
+    return true;
+}
+
 bool callsTest(u64 seed) {
     g_okC = true;
     wallTest(seed);
     scanTest(seed);
     heliTest(seed);
     huntTest(seed);
+    bunkerCrewTest(seed);
+    huntSubTest(seed);
     printf("callstest: %s\n", g_okC ? "PASS" : "FAIL");
     return g_okC;
 }

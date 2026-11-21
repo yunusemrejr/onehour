@@ -1125,8 +1125,9 @@ void Sim::updateFleetArrivals() {
         else e.fade = 0.02f;   // out of the haze (see updateUnit)
         e.guardPos = f.to;
         cmdMove({r}, f.to, true);
+        if (f.escort) continue;   // (a drop's escort: it attack-moves onto the drop zone, no fanfare)
         bool last = true;
-        for (auto& o : fleetArrivals) if (o.owner == f.owner && o.air == f.air) { last = false; break; }
+        for (auto& o : fleetArrivals) if (o.owner == f.owner && o.air == f.air && !o.escort) { last = false; break; }
         if (last) emit(EV_MSG, f.owner, SND_UNIT_READY, f.to, f.air ? "The gunships are on station: they are yours to command" : "The fleet has arrived: it is yours to command");
     }
     for (size_t i = 0; i < fleetMarks.size();) { if (time - fleetMarks[i].t0 > 30.0f) fleetMarks.erase(fleetMarks.begin() + i); else i++; }

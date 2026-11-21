@@ -1121,6 +1121,7 @@ bool Sim::cmdParadrop(int player, Vec2 pos, bool attackOn) {
     emit(EV_SOUND, player, SND_AIR, a.pos);
     emit(EV_MSG, player, SND_NONE, pos, (std::string(dt.name) + " inbound").c_str());
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY AIRLIFT DETECTED");
+    dropEscort(player, a.pos, a.dir, pos);
     return true;
 }
 
@@ -1143,9 +1144,10 @@ bool Sim::cmdBunkerPara(Ref bunker, Vec2 pos, bool attackOn) {
     a.releaseAt = -(float)a.load.size() * 0.045f * AIRLIFT_SPEED * 0.5f;   // the stick is centred on the target
     airlifts.push_back(a);
     emit(EV_SOUND, player, SND_AIR, a.pos);
-    char msg[64]; snprintf(msg, sizeof msg, "Para Backup inbound: %d paratroopers", BUNKER_PARA_TROOPS);
+    char msg[64]; snprintf(msg, sizeof msg, "Para Backup inbound: %d paratroopers and %d gunships", BUNKER_PARA_TROOPS, DROP_ESCORT_HELIS);
     emit(EV_MSG, player, SND_NONE, pos, msg);
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY AIRLIFT DETECTED");
+    dropEscort(player, a.pos, a.dir, pos);
     return true;
 }
 
@@ -1207,9 +1209,10 @@ bool Sim::cmdTankDrop(Ref bunker, Vec2 pos, bool attackOn) {
     a.releaseAt = -(float)a.load.size() * 0.09f * AIRLIFT_SPEED * 0.5f;   // the stick is centred on the target
     airlifts.push_back(a);
     emit(EV_SOUND, player, SND_AIR, a.pos);
-    char msg[64]; snprintf(msg, sizeof msg, "Tank Drop inbound: %d tanks and a medic", TANK_DROP_TANKS);
+    char msg[64]; snprintf(msg, sizeof msg, "Tank Drop inbound: %d tanks, a medic and %d gunships", TANK_DROP_TANKS, DROP_ESCORT_HELIS);
     emit(EV_MSG, player, SND_NONE, pos, msg);
     for (int p = 0; p < numPlayers; p++) if (enemies(player, p)) emit(EV_MSG, p, SND_ATTACKED, pos, "ENEMY HEAVY AIRLIFT DETECTED");
+    dropEscort(player, a.pos, a.dir, pos);
     return true;
 }
 
@@ -3853,7 +3856,7 @@ void Sim::finishBuilding(Entity& b) {
     b.constructed = true; b.progress = 1; b.hp = std::max(b.hp, b.maxHp);
     if (b.district >= 0) return;   // a town block raised again from its ruins: no fanfare (see updateDistrictBlock)
     if (b.bt().role == BR_RELICSILO) b.siloTimer = time + RELIC_SILO_ARM;
-    if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; b.siloTimer = time + MINI_NUKE_ARM; }
+    if (b.bt().role == BR_BUNKER) { b.hatchMax = b.hatch = BUNKER_HATCH_HP; b.siloTimer = time + MINI_NUKE_ARM; bunkerStartGarrison(b); }
     if (b.bt().role == BR_UNUKE) b.hatchMax = b.hatch = UNUKE_DOOR_HP;
     emit(EV_BUILD_DONE, b.owner, SND_BUILD_DONE, b.pos, b.bt().name);
     b.actionTimer = 0;

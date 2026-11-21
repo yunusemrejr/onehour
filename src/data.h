@@ -97,7 +97,7 @@ enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIR
                  BR_WALL,        // thick concrete/steel wall segment: unlimited, cheap, very hard to nuke through
                  BR_STRONGHOLD,  // neutral civilian castle / bunker / watchtower: empty at the start, any army's infantry may garrison it and fire from it
                  BR_ISLANDNUKE,  // neutral Island Nuke Launcher on a lake island: indestructible, taken only by an infiltrator, fires small nukes
-                 BR_FWALL,       // Bastion Wall: indestructible wall segment (spies can take it), no guns and no point defence of its own
+                 BR_FWALL,       // Bastion Wall: indestructible wall segment nobody can take, no guns and no point defence of its own
                  BR_WAYMAKER,    // Waymaker: placed like a structure, it clears the trees and rock under it into open ground and is gone (see WAYMAKER_*)
                  BR_HEALANT,     // Healing Antenna: a cheap, unlimited 1x1 mast that mends everything friendly round it and slowly scrubs radiation (see HEALANT_*)
                  BR_RELICCOMMAND,// Relic Command: the heart of an abandoned base; whoever holds one may raise relic structures with their dozers (see RELIC_*)
@@ -262,7 +262,7 @@ static const float DEPOT_RADIUS = 7.0f;        // tiles round a Field Depot in w
 static const float DEPOT_HEAL = 0.02f;         // fraction of full health a unit there gets back each second (never less than 6 points)
 inline bool wallRole(BuildRole r) { return r == BR_WALL || r == BR_FWALL; }   // 1x1 segments meant to be chained into a line (no gap rules)
 inline bool neutralRole(BuildRole r) { return r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_BRIDGE; }   // placed by the map generator: never raised by a dozer, never sold
-inline bool invulnerableRole(BuildRole r) { return r == BR_FWALL; }   // nothing damages them: they burn (see Entity.heat) and only a spy takes them (the island launchers can be destroyed now)
+inline bool invulnerableRole(BuildRole r) { return r == BR_FWALL; }   // nothing damages them and nobody takes them: they only burn (see Entity.heat) (the island launchers can be destroyed now)
 inline bool civilianRole(BuildRole r) { return r == BR_CIVIC || r == BR_STRONGHOLD || r == BR_ISLANDNUKE || r == BR_FWALL || r == BR_WAYMAKER || r == BR_BRIDGE; }   // no Rugged / Hyper / roof-gun upgrades
 inline bool noArmyUpgrades(const BuildType& b) { return civilianRole(b.role) || b.relic; }   // (and the relic structures: their own plating, not the army's)
 // Waymaker: a dozer places it like a structure on trees, rocks or a ridge (never on water, a bridge, a structure or a supply pile) and it clears the
@@ -491,6 +491,8 @@ static const int   BUNKER_INF_CAP = 200, BUNKER_DOZER_CAP = 5;
 static const float BUNKER_SNIPER_CAPTURE = 3.0f;
 static const int   BUNKER_SNIPER_CAP = 12;
 static const float BUNKER_SNIPER_SETBACK = 0.5f;
+static const int   BUNKER_START_SNIPERS = 3, BUNKER_START_RIFLES = 2;   // the garrison a bunker comes with when it is finished (free)
+static const int   DROP_ESCORT_HELIS = 2;      // gunships flying in with every bunker Para Backup and Tank Drop
 static const float BUNKER_HATCH_HP = 1800.0f;     // the surface opening (reinforced plating)
 static const float BUNKER_PLATING = 0.55f;        // share of the damage that reaches the buried bunker once the hatch is gone
 static const float BUNKER_FLOOR = 0.0f;          // aircraft, structures, shells from the sky and radiation can never take it below this share of its health - nuclear warheads ignore it entirely (a direct hit or a barrage destroys the bunker)

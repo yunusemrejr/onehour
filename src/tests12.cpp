@@ -156,7 +156,7 @@ static bool launcherTest() {
     g_sim.cmdCapture({spy3}, w);
     run12(g_sim.captureTime(*we) + 6.0f);
     we = g_sim.get(w);
-    CHECK12(we && we->owner == 1, "an enemy infiltrator could not take a Bastion Wall");
+    CHECK12(we && we->owner == 0, "an enemy infiltrator took a Bastion Wall");
     g_sim.players[0].upg[UPG_GUNS] = false; g_sim.players[0].upg[UPG_ANTIROCKET] = false;
     clearUnits12();
     return true;

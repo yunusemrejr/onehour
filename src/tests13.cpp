@@ -4,8 +4,8 @@
 //  * the Waymaker: $100, placed by a dozer on trees, rock or a ridge, it clears its 3x3 patch into walkable ground by itself (never on water)
 //  * the patrol boat: cheap, fast and fragile, built at the Naval Yard, its one mount hits aircraft, ships, infantry and structures
 //  * the bigger map: a lake with about twice the water of the 146 map, two islands, both launchers out in the water
-//  * the Bastion Wall: a player may pour fire on it and it burns at full health; idle units and the computer never shoot it; an infiltrator
-//    steals it and its new owner may sell it
+//  * the Bastion Wall: a player may pour fire on it and it burns at full health; idle units and the computer never shoot it; no infiltrator
+//    takes it
 #include "sim.h"
 #include "map.h"
 #include "testutil.h"
@@ -236,16 +236,12 @@ static bool bastionTest() {
     we = g_sim.get(w);
     CHECK13(we && we->hp == hp0 && we->heat >= 1.0f, "a warhead did more than set a Bastion Wall ablaze");
     clearUnits13();
-    // an infiltrator steals it, and its new owner sells it to get rid of it
+    // no infiltrator takes it, not even a human player's
     Ref spy = g_sim.spawnUnit(U_C_SPY, 0, g_map.nearestFree(we->pos + Vec2(-1.5f * TILE, 0), 4));
     g_sim.cmdAttack({spy}, w);
     run13(g_sim.captureTime(*we) + 6.0f);
     we = g_sim.get(w);
-    CHECK13(we && we->owner == 0, "an infiltrator could not steal a Bastion Wall");
-    int money = g_sim.players[0].money;
-    g_sim.cmdSell(w);
-    CHECK13(!g_sim.get(w), "the new owner could not sell a stolen Bastion Wall");
-    CHECK13(g_sim.players[0].money > money, "selling a Bastion Wall paid nothing");
+    CHECK13(we && we->owner == 1, "an infiltrator took a Bastion Wall");
     clearUnits13();
     return true;
 }

@@ -405,7 +405,7 @@ struct Sim {
     struct StrikeWave { int owner = -1, type = 0, n = 0; Vec2 target, dir; float at = 0; };
     std::vector<StrikeWave> strikeWaves;
     // the ships of a Fleet Call still to come out of the haze at the map border: each enters at 'at' at 'from' heading 'dir' and sails to its place 'to'
-    struct FleetShip { int owner = -1, type = 0; Vec2 from, dir, to; float at = 0; bool air = false; };   // (air: a gunship of a Gunship Call)
+    struct FleetShip { int owner = -1, type = 0; Vec2 from, dir, to; float at = 0; bool air = false, escort = false; };   // (air: a gunship of a Gunship Call)
     std::vector<FleetShip> fleetArrivals;
     // where a called fleet comes in (for the caller's eyes: the lane is drawn while the ships are still arriving)
     struct FleetMark { Vec2 entry, goal; int owner = -1; float t0 = 0; };
@@ -522,6 +522,9 @@ struct Sim {
     float bunkerScanWait(int player) const;
     bool cmdBunkerScan(int player, Ref prefer = NOREF);   // any ready bunker (prefer first) calls a satellite pass: the whole map is visible for a while
     void satellitePass(int player, Vec2 from, float duration, const char* name);
+    void finishBuildingPublic(Entity& b) { finishBuilding(b); }   // (tests)
+    bool huntNukeSpot(int player, float R, Vec2& out) const;   // Find and Destroy: where a warhead of radius R hurts the enemy most and spares the army (sim_calls.cpp)
+    static constexpr int HUNT_NUKE_OWN = 3;  static constexpr float HUNT_NUKE_MIN = 6.0f;
     void cmdFindDestroy(int player, bool on);
     void cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius);
     void cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius);   // guard for fighters, gather for haulers
@@ -580,7 +583,7 @@ struct Sim {
     // computer army - an ally's structure (the human takes it over; the ally is not asked)
     bool allyTakeable(int player, const Entity& b) const { return b.isBuilding() && player >= 0 && b.owner >= 0 && b.owner != player && !players[player].isAI && !enemies(player, b.owner); }
     bool spyMayTake(int player, const Entity& b) const {
-        if (b.isBuilding() && b.bt().role == BR_FWALL && (player < 0 || player >= numPlayers || players[player].isAI)) return false;   // a Bastion Wall: no computer army ever takes one (nor breaks it: see invulnerable)
+        if (b.isBuilding() && b.bt().role == BR_FWALL) return false;   // a Bastion Wall: nobody ever takes one, human or computer (nor breaks it: see invulnerable)
         return enemies(player, b.owner) || neutralTakeable(b) || allyTakeable(player, b);
     }
     // ---- The Chosen and its Shadow Guard (sim_chosen.cpp)
@@ -616,6 +619,8 @@ struct Sim {
     bool cmdBunkerRain(Ref bunker, Vec2 pos, bool force = false);    // BU_RAIN: RAIN_NUKES small fast warheads at random spots within RAIN_NUKE_AREA of pos
     float bunkerRainWait(const Entity& b) const;                    // seconds until its Rain Nukes are ready (-1: not fitted)
     bool cmdTankDrop(Ref bunker, Vec2 pos, bool attackOn = false);  // BU_TANKS: a heavy cargo plane drops bunkerTankManifest at pos
+    void bunkerStartGarrison(Entity& b);   // a finished bunker's free garrison: BUNKER_START_SNIPERS snipers and BUNKER_START_RIFLES riflemen (sim_calls.cpp)
+    void dropEscort(int player, Vec2 from, Vec2 dir, Vec2 pos);   // DROP_ESCORT_HELIS gunships fly in with a bunker drop and attack-move to pos
     float bunkerTankWait(const Entity& b) const;
     std::vector<int> bunkerTankManifest(int player) const;          // TANK_DROP_TANKS tanks and a medic vehicle
     int bunkerUpgradesMissing(int player, int* cost = nullptr, bool unqueued = false) const;   // fittings its bunkers still lack (unqueued: nor queued)
