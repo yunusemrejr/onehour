@@ -14,6 +14,7 @@ enum IconId : int {
     ICO_BU_SHELL, ICO_BU_LASERS, ICO_BU_MEDIC, ICO_BU_TRIPLE, ICO_BU_SWIFT, ICO_BU_PARA, ICO_BU_RAIN, ICO_BU_TANKS,   // per-bunker upgrades (BunkerUpg order)
     ICO_RAINNUKE, ICO_TANKDROP, ICO_BUNKERALL,   // a bunker's Rain Nukes and Tank Drop calls, and Upgrade All Bunkers
     ICO_GUNSHIPS, ICO_SATELLITE, ICO_HUNT,       // Gunship Call (tech structure), a bunker's Satellite Scan, Find and Destroy (Command Center)
+    ICO_PROTECT,                                 // Protect Us (Command Center)
     ICO_COUNT
 };
 

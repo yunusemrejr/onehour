@@ -21,7 +21,8 @@ enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_ST
        BK_RELICPAGE,    // dozers: the relic structures' page of the bar (id 1) and back (id 0)
        BK_HELICALL,     // tech structure: Gunship Call
        BK_BUNKERSCAN,   // a bunker's Satellite Scan
-       BK_FINDDESTROY }; // Command Center (human armies): Find and Destroy (id 1: call it off)
+       BK_FINDDESTROY,  // Command Center (human armies): Find and Destroy (id 1: call it off)
+       BK_PROTECT };    // Command Center (human armies): Protect Us (id 1: call it off)
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -59,6 +60,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_HELICALL: return "W";
     case BK_BUNKERSCAN: return "O";
     case BK_FINDDESTROY: return "F";
+    case BK_PROTECT: return "Y";
     }
     return nullptr;
 }
@@ -84,6 +86,7 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_HELICALL: return ICO_GUNSHIPS;
     case BK_BUNKERSCAN: return ICO_SATELLITE;
     case BK_FINDDESTROY: return id == 1 ? ICO_CANCEL : ICO_HUNT;
+    case BK_PROTECT: return id == 1 ? ICO_CANCEL : ICO_PROTECT;
     case BK_SELL: return ICO_SELL;
     case BK_RALLY: return ICO_RALLY;
     case BK_ATTACKMOVE: return ICO_ATTACKMOVE;
@@ -603,6 +606,8 @@ void Game::buildButtonsRaw() {
             if (role == BR_HQ && b->owner == g_sim.humanPlayer) {
                 if (pl.hunting) add(BK_FINDDESTROY, 1, true, "Call Off the Hunt", "Call Off the Hunt  [F]  Find and Destroy is on: every armed unit of yours is hunting the enemy down. Click to call it off (units finish what they are doing)");
                 else add(BK_FINDDESTROY, 0, true, "Find and Destroy", "Find and Destroy  [F]  Every armed unit you have, everywhere (soldiers, vehicles, aircraft, ships and submarines), goes full battle mode: each goes after the nearest enemy thing it can reach and destroys it, then the next - units, structures, dived submarines and hidden units, which the hunters find as they close in. It goes on until nothing of the enemy is left. Units you send elsewhere rejoin once they are idle");
+                if (pl.protecting) add(BK_PROTECT, 1, true, "Stand Down", "Stand Down  [Y]  Protect Us is on: your armed units guard your bases. Click to call it off");
+                else add(BK_PROTECT, 0, true, "Protect Us", "Protect Us  [Y]  Every armed unit you have guards what is yours: they patrol round your structures, dozers and harvesters, a few scout the approaches toward the enemy and come back, and any enemy that comes close is driven off by the nearest defenders, who then return instead of chasing it. Ends Find and Destroy");
             }
         }
         if (role == BR_TECH) {
@@ -895,6 +900,7 @@ void Game::cmdSelection(int kind, int id) {
     case BK_HELICALL: if (g_sim.heliCallsReady(g_sim.humanPlayer) > 0) { cancelModes(); heliMode = true; g_audio.play(SND_CLICK, Vec2(), true); } else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_BUNKERSCAN: { Entity* b = selectedBuilding(); if (g_sim.cmdBunkerScan(g_sim.humanPlayer, b ? g_sim.refOf(*b) : NOREF)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break; }
     case BK_FINDDESTROY: g_sim.cmdFindDestroy(g_sim.humanPlayer, id == 0); g_audio.play(SND_ORDER, Vec2(), true); break;
+    case BK_PROTECT: g_sim.cmdProtect(g_sim.humanPlayer, id == 0); g_audio.play(SND_ORDER, Vec2(), true); break;
     case BK_SCAN: if (g_sim.cmdScan(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_RESEARCH: if (g_sim.cmdResearch(g_sim.humanPlayer)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;
     case BK_UPGRADE: if (g_sim.cmdUpgrade(g_sim.humanPlayer, id)) g_audio.play(SND_CLICK, Vec2(), true); else g_audio.play(SND_CANT, Vec2(), true); break;

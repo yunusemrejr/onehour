@@ -150,6 +150,7 @@ void Sim::cmdFindDestroy(int player, bool on) {
     if (player < 0 || player >= numPlayers || players[player].isAI || !players[player].alive) return;
     Player& pl = players[player];
     pl.hunting = on; pl.huntFresh = on;
+    if (on) pl.protecting = false;
     for (auto& e : ents) if (e.alive && e.owner == player && e.isUnit()) { e.huntRef = NOREF; e.huntSkip = NOREF; }
     emit(EV_MSG, player, SND_NONE, pl.basePos, on ? "Find and Destroy: every unit is out to hunt down every enemy thing" : "Find and Destroy called off");
 }
@@ -270,4 +271,108 @@ bool Sim::huntNukeSpot(int p, float R, Vec2& out) const {
         if (spare && score > best) { best = score; out = c; }
     }
     return best >= HUNT_NUKE_MIN;
+}
+
+// ------------------------------------------------------------ Protect Us (human armies)
+// The defensive twin of Find and Destroy. Posts are the army's structures and its unarmed units (dozers, harvesters). Every idle armed unit
+// patrols round a post near it; one in PROTECT_SCOUT_EVERY goes on a short scouting run toward the enemy and comes back; any enemy that comes
+// within PROTECT_ZONE tiles of a post is driven off by the defenders nearest it, who return to their posts once it has gone instead of chasing.
+void Sim::cmdProtect(int player, bool on) {
+    if (player < 0 || player >= numPlayers || players[player].isAI || !players[player].alive) return;
+    Player& pl = players[player];
+    pl.protecting = on;
+    if (on) pl.hunting = false;
+    for (auto& e : ents) if (e.alive && e.owner == player && e.isUnit()) { e.protectJob = 0; if (on) e.huntRef = NOREF; }
+    emit(EV_MSG, player, SND_NONE, pl.basePos, on ? "Protect Us: your units guard your bases, workers and structures and scout the approaches" : "Protect Us called off");
+}
+
+void Sim::updateProtect() {
+    const int every = std::max(1, (int)(1.5f / SIM_DT));
+    if (tick % every) return;
+    for (int p = 0; p < numPlayers; p++) {
+        Player& pl = players[p];
+        if (!pl.protecting) continue;
+        if (!pl.alive || pl.isAI) { pl.protecting = false; continue; }
+        std::vector<Vec2> posts;
+        std::vector<int> hunters;
+        for (int i = 0; i < (int)ents.size(); i++) {
+            const Entity& e = ents[i];
+            if (!e.alive || e.owner != p || e.carrier.valid()) continue;
+            if (e.isBuilding()) { if (e.constructed && !wallRole(e.bt().role)) posts.push_back(e.pos); continue; }
+            if (!e.isUnit()) continue;
+            if (e.weapon() < 0) { if (!e.isAir()) posts.push_back(e.pos); continue; }
+            if (e.fall > 0 || e.ut().temp || e.lifeUntil >= 0) continue;
+            hunters.push_back(i);
+        }
+        if (posts.empty() || hunters.empty()) continue;
+        auto nearestPost = [&](Vec2 at, float* d2 = nullptr) { Vec2 b = posts[0]; float bd = 1e30f; for (Vec2 q : posts) { float d = distSq(q, at); if (d < bd) { bd = d; b = q; } } if (d2) *d2 = bd; return b; };
+        // intruders: enemies the army sees inside the zone round any post
+        const float Z2 = (PROTECT_ZONE * TILE) * (PROTECT_ZONE * TILE);
+        std::vector<int> intruders;
+        for (int i = 0; i < (int)ents.size(); i++) {
+            const Entity& t = ents[i];
+            if (!t.alive || t.kind == EK_RESOURCE || t.owner < 0 || !enemies(p, t.owner) || t.carrier.valid() || invulnerable(t) || !visibleTo(t, p)) continue;
+            if (t.isBuilding() && t.weapon() < 0) continue;   // (an unarmed enemy structure threatens nothing)
+            float d2; nearestPost(t.pos, &d2);
+            if (d2 <= Z2) intruders.push_back(i);
+        }
+        // the enemy the scouts head for: the nearest enemy army's base
+        Vec2 enemyBase = pl.basePos; float eb = 1e30f;
+        for (int q = 0; q < numPlayers; q++) if (q != p && players[q].alive && enemies(p, q)) { float d = distSq(players[q].basePos, pl.basePos); if (d < eb) { eb = d; enemyBase = players[q].basePos; } }
+        std::map<int, std::vector<Ref>> attacks;
+        int n = 0;
+        for (int hi : hunters) {
+            Entity& h = ents[hi];
+            const Ref hr = refOf(h);
+            const bool idle = h.order == O_IDLE || h.order == O_GUARDPOS || h.order == O_GUARDAREA;
+            const bool patrolling = h.protectJob == 1 && h.order == O_ATTACKMOVE;
+            if (h.protectJob == 3 && h.order == O_ATTACK) {   // driving one off: once it has left the zone, back to the post
+                Entity* t = get(h.targetEnt);
+                bool still = false;
+                if (t) for (int ii : intruders) if (&ents[ii] == t) { still = true; break; }
+                if (!still) { cmdMove({hr}, nearestPost(h.pos), true); ents[hr.idx].protectJob = 1; }
+                continue;
+            }
+            if (!idle && !patrolling) continue;   // (scouting, or sent somewhere by its player)
+            // an intruder it can hit and reach within the zone: drive it off
+            const int w = h.weapon();
+            const Weapon& wp = WEAPONS[w];
+            const bool torpedo = w == W_TORPEDO_C || w == W_TORPEDO_K, air = h.isAir(), naval = h.ut().naval;
+            const int hl = air || naval ? 0 : g_map.landNear(h.pos, 1), hs = naval ? g_map.compAt(h.pos) : 0;
+            int best = -1; float bestD = (2.0f * PROTECT_ZONE * TILE) * (2.0f * PROTECT_ZONE * TILE);
+            for (int ii : intruders) {
+                const Entity& t = ents[ii];
+                const bool tAir = t.isAir(), tNaval = t.isUnit() && t.ut().naval;
+                if (tAir ? (!wp.air || torpedo) : torpedo ? !tNaval : !wp.ground) continue;
+                if (!air && (naval ? g_map.compAt(tNaval ? t.pos : g_map.nearestWater(t.pos, 6)) != hs : (hl == 0 || g_map.landNear(t.pos, 2) != hl))) continue;
+                float d = distSq(h.pos, t.pos);
+                if (d < bestD) { bestD = d; best = ii; }
+            }
+            if (best >= 0) { attacks[best].push_back(hr); h.protectJob = 3; continue; }
+            if (!idle) continue;
+            n++;
+            if (n % PROTECT_SCOUT_EVERY == 0 && eb < 1e29f) {   // a short scouting run toward the enemy, then home (see the idle check above)
+                Vec2 post = nearestPost(h.pos), dir = enemyBase - post;
+                float L = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+                if (L > 1) {
+                    dir = dir * (1.0f / L);
+                    float a = rng.f(-0.7f, 0.7f), c = std::cos(a), s = std::sin(a);
+                    Vec2 d2(dir.x * c - dir.y * s, dir.x * s + dir.y * c);
+                    Vec2 to = post + d2 * std::min(L * 0.6f, PROTECT_SCOUT * TILE);
+                    to = Vec2(clampf(to.x, TILE, WORLD_W - TILE), clampf(to.y, TILE, WORLD_H - TILE));
+                    cmdMove({hr}, to, false);
+                    ents[hr.idx].protectJob = 2;
+                    continue;
+                }
+            }
+            // patrol: a point on a ring round one of the posts near it
+            Vec2 post = nearestPost(h.pos + Vec2(rng.f(-10, 10), rng.f(-10, 10)) * TILE);
+            float a = rng.f(0, 6.2832f), r = rng.f(4.0f, 8.0f) * TILE;
+            Vec2 to = post + Vec2(std::cos(a), std::sin(a)) * r;
+            to = Vec2(clampf(to.x, TILE, WORLD_W - TILE), clampf(to.y, TILE, WORLD_H - TILE));
+            cmdMove({hr}, to, true);
+            ents[hr.idx].protectJob = 1;
+        }
+        for (auto& kv : attacks) cmdAttack(kv.second, refOf(ents[kv.first]));
+    }
 }

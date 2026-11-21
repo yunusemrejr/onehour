@@ -3658,6 +3658,9 @@ int main(int argc, char** argv) {
                 if (m == "dozer") {   // the dozer's build menu: both walls and the Waymaker included (every structure unlocked with money to spare)
                     g_sim.players[0].money = 90000;
                     for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER && !civicDozerType(e.type)) { g_game.selection.push_back(g_sim.refOf(e)); focus = e.pos; break; }
+                } else if (m == "hq") {   // the Command Center's bar (Find and Destroy, Protect Us)
+                    g_sim.players[0].isAI = false;
+                    for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && e.bt().role == BR_HQ) { g_game.selection.push_back(g_sim.refOf(e)); focus = e.pos; break; }
                 } else if (m == "tech") {
                     // showcase the tech structure panel: research running, scan active, an elite unit on the field
                     Faction f0 = g_sim.players[0].faction;

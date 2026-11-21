@@ -177,6 +177,40 @@ static bool huntSubTest(u64 seed) {
     return true;
 }
 
+// Protect Us: idle units patrol round the posts, a few scout and come back, an intruder near a post is driven off and nobody chases it home
+static bool protectTest(u64 seed) {
+    initC(seed);
+    const Vec2 base = g_sim.players[0].basePos;
+    std::vector<Ref> tanks;
+    for (int k = 0; k < 16; k++) tanks.push_back(g_sim.spawnUnit(U_C_TANK, 0, g_map.nearestFree(base + Vec2((k % 4 - 1.5f) * 2 * TILE, 10 * TILE + (k / 4) * 2 * TILE), 6)));
+    g_sim.cmdProtect(0, true);
+    CHECKC(g_sim.players[0].protecting, "Protect Us did not switch on");
+    runC(4);
+    int patrol = 0, scout = 0;
+    for (Ref r : tanks) if (Entity* e = g_sim.get(r)) { if (e->protectJob == 1) patrol++; if (e->protectJob == 2) scout++; }
+    CHECKC(patrol >= 10 && scout >= 1, "Protect Us did not send units on patrol and scouting");
+    Entity* hq = nullptr;
+    for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0 && e.bt().role == BR_HQ) hq = &e;
+    CHECKC(hq, "the human army has no Command Center");
+    Ref foe = g_sim.spawnUnit(U_K_TANK, 1, g_map.nearestFree(hq->pos + Vec2(0, -12 * TILE), 6));
+    g_sim.get(foe)->detUntil[0] = g_sim.time + 60;
+    runC(1.6f);
+    int defend = 0;
+    for (Ref r : tanks) if (Entity* e = g_sim.get(r)) if (e->protectJob == 3) defend++;
+    CHECKC(defend >= 3, "Protect Us did not send defenders at an intruder near the Command Center");
+    runC(10);
+    CHECKC(!g_sim.get(foe), "the defenders did not destroy the intruder");
+    runC(3);
+    for (Ref r : tanks) if (Entity* e = g_sim.get(r)) CHECKC(!(e->protectJob == 3 && e->order == O_ATTACK), "a defender did not return to its post after the intruder was gone");
+    g_sim.cmdFindDestroy(0, true);
+    CHECKC(!g_sim.players[0].protecting, "Find and Destroy did not end Protect Us");
+    g_sim.cmdProtect(0, true);
+    CHECKC(!g_sim.players[0].hunting, "Protect Us did not end Find and Destroy");
+    g_sim.cmdProtect(0, false);
+    printf("callstest: Protect Us %d patrolling, %d scouting, %d drove off the intruder\n", patrol, scout, defend);
+    return true;
+}
+
 bool callsTest(u64 seed) {
     g_okC = true;
     wallTest(seed);
@@ -185,6 +219,7 @@ bool callsTest(u64 seed) {
     huntTest(seed);
     bunkerCrewTest(seed);
     huntSubTest(seed);
+    protectTest(seed);
     printf("callstest: %s\n", g_okC ? "PASS" : "FAIL");
     return g_okC;
 }

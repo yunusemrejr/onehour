@@ -5115,6 +5115,7 @@ void Sim::step() {
     updateAidDrops();
     updateFleetArrivals();
     updateHunts();
+    updateProtect();
     updateFallout();
     separateUnits();
     updateFx();

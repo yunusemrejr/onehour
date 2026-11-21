@@ -77,6 +77,7 @@ struct Entity {
     float heliTimer = 0;    // tech structure: sim time it can call another Gunship Call (HELI_CALL_COUNT gunships)
     float scanTimer = 0;    // bunker: sim time its own satellite pass (Satellite Scan) is ready again
     Ref huntRef;            // Find and Destroy: the enemy thing this unit is hunting
+    u8 protectJob = 0;      // Protect Us: 0 none, 1 patrolling round a post, 2 scouting out and back, 3 driving off an intruder
     float huntSince = 0;    // ... since when (a chase that leads nowhere for HUNT_GIVEUP seconds is dropped)
     Ref huntSkip;           // ... the last one it gave up on
     float cooldown2 = 0;    // structure: the roof gun of the Defense Guns upgrade (its own target, cooldown and facing)
@@ -260,6 +261,7 @@ struct Player {
     float dropReady = 0;        // sim time when paradrops unlock (the opening delay); after that every tech structure has its own cooldown
     float revealUntil = -1;     // the whole map is visible until this sim time
     bool hunting = false;       // Find and Destroy (human armies): every armed unit seeks out and destroys every enemy thing until none is left
+    bool protecting = false;    // Protect Us (human armies): armed units patrol the army's structures and workers, scout out a little and drive off intruders
     bool huntFresh = false;     // ... just switched on: the next pass sends every unit, busy or not
     bool advTech = false;       // Advanced Program researched: special units unlocked
     bool researching = false;
@@ -526,6 +528,7 @@ struct Sim {
     bool huntNukeSpot(int player, float R, Vec2& out) const;   // Find and Destroy: where a warhead of radius R hurts the enemy most and spares the army (sim_calls.cpp)
     static constexpr int HUNT_NUKE_OWN = 3;  static constexpr float HUNT_NUKE_MIN = 6.0f;
     void cmdFindDestroy(int player, bool on);
+    void cmdProtect(int player, bool on);   // Protect Us (sim_calls.cpp)
     void cmdGatherArea(const std::vector<Ref>& sel, Vec2 center, float radius);
     void cmdArea(const std::vector<Ref>& sel, Vec2 center, float radius);   // guard for fighters, gather for haulers
     bool cmdBuild(Ref dozer, int buildType, int tx, int ty);  // places a foundation and sends the dozer (a Waymaker needs no dozer: it clears its ground itself)
@@ -797,6 +800,7 @@ private:
     void updateAidDrops();
     void updateFleetArrivals();
     void updateHunts();
+    void updateProtect();
     void updateAntiNuke(Entity& b);                      // a defence watching the sky over its area: engages a warhead closing in on it
     void breakNuke(Nuke& n);                             // a warhead shot down: the airburst, and only its pieces fall on the target now
     void updateInterceptors();

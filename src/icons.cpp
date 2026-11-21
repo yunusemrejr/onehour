@@ -470,6 +470,13 @@ void buildIcon(int id, Ico& I) {
         I.circle(-8, -9, 2.4f, WHITE, 0.0f).deco().alpha(0.5f);  // a glint
         break;
     }
+    case ICO_PROTECT: {   // Protect Us: a steel shield over a small house, a blue chevron on the boss
+        I.poly({ { -15, -16 }, { 15, -16 }, { 15, 0 }, { 0, 18 }, { -15, 0 } }, STEEL, 0.5f);
+        I.poly({ { -11, -12 }, { 11, -12 }, { 11, -1 }, { 0, 13 }, { -11, -1 } }, rgb(58, 104, 190), 0.3f).deco();
+        I.poly({ { -6, 1 }, { 0, -6 }, { 6, 1 } }, WHITE, 0.2f).deco();
+        I.box(0, 4, 4.5f, 3.5f, 0.8f, WHITE, 0.2f).deco();
+        break;
+    }
     case ICO_UNLOAD:   // everybody out of a door
         I.box(-12, 0, 7, 14, 1.5f, rgb(110, 118, 130), 0.3f);
         I.box(-12, 0, 4, 11, 0.8f, rgb(24, 28, 36), 0).deco();
