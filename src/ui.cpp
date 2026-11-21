@@ -183,7 +183,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; heliMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1; scienceOpen = false; scienceNextAt = SCIENCE_EVERY;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; heliMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1; scienceOpen = false; scienceNextAt = SCIENCE_EVERY; sciencePlayed = 0;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -197,6 +197,7 @@ void Game::startGame() {
 void Game::update(float dt) {
     wallTime += dt;
     if (state != GS_PLAYING) return;
+    if (!paused && !menuOpen && !scienceOpen && !g_sim.gameOver) sciencePlayed += dt;
     checkScience();
     if (!menuOpen && !scienceOpen) scroll(dt);
     if (!paused && !g_sim.gameOver) {

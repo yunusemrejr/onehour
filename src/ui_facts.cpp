@@ -1,4 +1,4 @@
-// Science Break: every ten minutes of a match the game stops on a chalkboard with one lesson of mathematics or physics (facts.cpp).
+// Science Break: every ten real minutes of a match (at any game speed) the game stops on a chalkboard with one lesson of mathematics or physics (facts.cpp).
 // The promise button wakes after SCIENCE_LOCK seconds and must be clicked SCIENCE_CLICKS times; each click chalks one tally stroke.
 // Lessons are dealt from a shuffled deck, so none repeats in one session until all 200 have been shown.
 #include "ui.h"
@@ -28,7 +28,7 @@ static int dealLesson() {
 
 void Game::checkScience() {
     if (!scienceBreaks || scienceOpen || menuOpen || g_sim.gameOver || g_sim.players[g_sim.humanPlayer].isAI) return;
-    if (g_sim.time >= scienceNextAt) openScience();
+    if (sciencePlayed >= scienceNextAt) openScience();
 }
 
 void Game::openScience(int fact) {
@@ -75,7 +75,7 @@ void Game::scienceEvent(const SDL_Event& e) {
     if (++scienceClicks < SCIENCE_CLICKS) return;
     scienceOpen = false;
     paused = pausedBeforeScience;
-    while (scienceNextAt <= g_sim.time) scienceNextAt += SCIENCE_EVERY;
+    while (scienceNextAt <= sciencePlayed) scienceNextAt += SCIENCE_EVERY;
 }
 
 void Game::renderScience() {

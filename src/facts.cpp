@@ -1,4 +1,4 @@
-// Science Break: 200 one-line lessons in mathematics and physics, shown one at a time every ten minutes of play (see ui_facts.cpp).
+// Science Break: 200 one-line lessons in mathematics and physics, shown one at a time every ten real minutes of play (see ui_facts.cpp).
 // Each line stands alone: it names the idea, says it in plain words, explains every symbol it uses and gives one concrete number.
 #include "facts.h"
 

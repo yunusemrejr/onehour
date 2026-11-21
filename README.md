@@ -27,7 +27,7 @@ under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of
   - **Strike groups (Hard and Brutal).** A strong wave of 12 or more sends its fastest quarter at a soft target of its own: an exposed hauler, supply hub, income or power structure.
   - **No idling.** An army that outguns yours and has stood at home for 75 s goes for your softest economic target.
   - **Measured.** Against the previous commander at Hard over 96 matches, all three together won 50, lost 42 and drew 4. Two copies of the previous commander against each other read 48-41 over the same matches. In those matches the new commander founded at least one expansion in 74 of 96 games. They make a commander harder to pin down, more than they make it win more often.
-- **Science Breaks.** Every **10 minutes** of a match the game pauses on a chalkboard showing one lesson in mathematics or physics.
+- **Science Breaks.** Every **10 minutes** of real play (on the wall clock, whatever the game speed; paused time does not count) the game pauses on a chalkboard showing one lesson in mathematics or physics.
   - There are **200 lessons**. They run from counting and fractions through algebra, geometry, calculus, probability, mechanics, waves, electricity, relativity and quantum physics.
   - Each lesson is one or two sentences that explain every word and symbol they use, so no prior knowledge is assumed.
   - Lessons are dealt from a shuffled deck, so none repeats in a session until all 200 have been shown.

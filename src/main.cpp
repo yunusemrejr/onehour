@@ -2033,6 +2033,16 @@ static bool uiTest() {
     // pause toggles, speed keys, help, mute, screenshot key path
     key(SDLK_SPACE); if (!g_game.paused) return fail("pause failed"); key(SDLK_SPACE);
     key(SDLK_EQUALS); if (g_game.speed <= 1.0f) return fail("speed up failed"); key(SDLK_MINUS);
+    {   // the Science Break clock counts real seconds of unpaused play: x3 speed runs the battle faster, not the lessons
+        const float sp0 = g_game.speed, p0 = g_game.sciencePlayed, t0 = g_sim.time;
+        g_game.speed = 3.0f;
+        for (int k = 0; k < 30; k++) g_game.update(1.0f / 60);
+        const float played = g_game.sciencePlayed - p0, simRan = g_sim.time - t0;
+        g_game.paused = true; for (int k = 0; k < 30; k++) g_game.update(1.0f / 60); g_game.paused = false;
+        const float pausedAdd = g_game.sciencePlayed - p0 - played;
+        g_game.speed = sp0;
+        if (std::abs(played - 0.5f) > 0.01f || simRan < 1.2f || pausedAdd != 0.0f) { fprintf(stderr, "science clock %.3f s, sim %.3f s, paused %.3f s\n", played, simRan, pausedAdd); return fail("the Science Break clock should count real unpaused seconds at any game speed"); }
+    }
     key(SDLK_F1); if (!g_game.showHelp) return fail("help failed"); key(SDLK_F1);
     // area orders through the real input path: G, then click or drag on the ground
     {
@@ -4252,7 +4262,7 @@ int main(int argc, char** argv) {
     }
 
     if (autostart) { g_game.startGame(); if (allAi) { g_sim.players[0].isAI = true; g_ai.init(seed); } g_game.speed = 3.0f; }
-    g_game.scienceBreaks = !getenv("ONEHOUR_NOSCIENCE");   // (the real game loop only: every ten minutes of play a lesson)
+    g_game.scienceBreaks = !getenv("ONEHOUR_NOSCIENCE");   // (the real game loop only: every ten real minutes of play a lesson, at any game speed)
     u64 freq = SDL_GetPerformanceFrequency();
     u64 last = SDL_GetPerformanceCounter();
     const bool fpsLog = getenv("ONEHOUR_FPSLOG") != nullptr;

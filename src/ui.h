@@ -29,7 +29,7 @@ struct Particle { float x, y, vx, vy, ay, drag, age, life, s0, s1, rot, vrot; Co
 struct Decal { float x, y, r, rot, age, life; u8 kind; };       // ground scorch marks
 struct Tread { float x, y, rot, age, life; u8 kind; };          // a short dark track-pressed dash left by a vehicle on soft ground
 
-static const float SCIENCE_EVERY = 600.0f;      // seconds of play between two Science Breaks
+static const float SCIENCE_EVERY = 600.0f;      // real seconds of unpaused play between two Science Breaks, whatever the game speed
 static const float SCIENCE_LOCK = 20.0f;        // seconds before the promise can be clicked
 static const int   SCIENCE_CLICKS = 5;          // clicks of the promise that close it
 std::vector<std::string> wrapTip(Gfx& g, const std::string& s, int maxW);   // (ui.cpp) words wrapped to lines no wider than maxW at scale 1
@@ -92,6 +92,7 @@ struct Game {
     bool scienceOpen = false;
     int scienceFact = 0, scienceClicks = 0;
     float scienceOpenedAt = 0, scienceNextAt = SCIENCE_EVERY;
+    float sciencePlayed = 0;        // real seconds the match has run unpaused (the Science Break clock: game speed does not shorten it)
     bool pausedBeforeScience = false;
     void checkScience();
     void openScience(int fact = -1);
