@@ -853,6 +853,7 @@ private:
     void updateResearch();
     void finishUpgrade(int player, int upg);
     void updateRoofGun(Entity& b, bool powered);
+    void updateStructureGun(Entity& b);          // a structure's own weapon (bt().weapon): targeting, firing, bursts
     void updateDetection();                              // detectors (spy drones, up-close drones) reveal stealthy enemies to their whole team
     void updateBunkerSelf(Entity& b);                    // the bunker's own business: income, mending, miniguns
     void bunkerMend(Entity& b);                          // ... its own mending (it goes on while the bunker is knocked offline)

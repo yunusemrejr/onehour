@@ -157,6 +157,20 @@ static bool launcherTest() {
     run12(g_sim.captureTime(*we) + 6.0f);
     we = g_sim.get(w);
     CHECK12(we && we->owner == 0, "an enemy infiltrator took a Bastion Wall");
+    // its sentry laser: hidden snipers close by are found, and an intruder is only scratched
+    clearUnits12();
+    we = g_sim.get(w);
+    Ref sn = g_sim.spawnUnit(U_K_SNIPER, 1, g_map.nearestFree(we->pos + Vec2(3 * TILE, 0), 4));
+    run12(1.0f);
+    CHECK12(g_sim.get(sn) && g_sim.visibleTo(*g_sim.get(sn), 0), "a Bastion Wall did not find a hidden sniper beside it");
+    clearUnits12();
+    Ref rif = g_sim.spawnUnit(U_K_INF1, 1, g_map.nearestFree(we->pos + Vec2(3 * TILE, 0), 4));
+    Entity* re = g_sim.get(rif);
+    const float rhp = re->maxHp;
+    run12(8.0f);
+    re = g_sim.get(rif);
+    CHECK12(re && re->hp < rhp, "a Bastion Wall's laser never fired at an intruder");
+    CHECK12(re->hp > rhp * 0.5f, "a Bastion Wall's laser is not weak");
     g_sim.players[0].upg[UPG_GUNS] = false; g_sim.players[0].upg[UPG_ANTIROCKET] = false;
     clearUnits12();
     return true;

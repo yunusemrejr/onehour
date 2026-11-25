@@ -3933,6 +3933,27 @@ void Sim::spawnFromQueue(Entity& b) {
     if (phantomType(type)) emit(EV_MSG, owner, SND_NONE, u.pos, "The Phantom Jeep is ready: only aircraft and snipers can see it");
 }
 
+// A structure's own gun (a turret, a battery, a Bastion Wall's sentry laser): keep the target while it is in reach, else look for one every third tick
+void Sim::updateStructureGun(Entity& b) {
+    Entity* t = get(b.engaged);
+    const Weapon& w = WEAPONS[b.bt().weapon];
+    if (!t || !canTarget(b, *t) || distToEntity(b.pos, *t) > (w.range + 0.2f) * TILE) {
+        t = nullptr; b.engaged = NOREF;
+        if ((tick + b.gen) % 3 == 0) {
+            Entity* f = get(b.forceTarget);   // a friendly target the human turned this turret on: taken up again whenever it is in reach
+            if (f && canTarget(b, *f) && distToEntity(b.pos, *f) <= w.range * TILE && distToEntity(b.pos, *f) >= w.minRange * TILE) t = f;
+            else t = acquireTarget(b, w.range);
+            if (t) b.engaged = refOf(*t);
+        }
+    }
+    if (t) tryFire(b, *t);
+    // burst continuation for structures
+    if (b.burstLeft > 0) {
+        b.burstTimer -= SIM_DT;
+        if (b.burstTimer <= 0) { Entity* tt = get(b.engaged); if (tt && canTarget(b, *tt)) fireWeapon(b, *tt, w); b.burstLeft--; b.burstTimer = 0.14f; }
+    }
+}
+
 void Sim::updateBuilding(Entity& b) {
     if (b.cooldown > 0) b.cooldown -= SIM_DT;
     if (b.cooldown2 > 0) b.cooldown2 -= SIM_DT;
@@ -3943,7 +3964,7 @@ void Sim::updateBuilding(Entity& b) {
     if (b.district >= 0) { updateDistrictBlock(b); return; }   // a block of a town round the lake: it mends and rebuilds itself, the town pays (see updateDistricts)
     if (!b.constructed) return;
     if (b.bt().role == BR_ISLANDNUKE) { b.disabledUntil = -1; updateIslandNuke(b); return; }   // (an island launcher keeps its clock and is never switched off; no upgrades, no guns)
-    if (invulnerable(b)) { b.disabledUntil = -1; return; }   // (a Bastion Wall: burning or not, nothing switches it off; no upgrades, no guns)
+    if (invulnerable(b)) { b.disabledUntil = -1; if (b.owner >= 0 && b.bt().weapon >= 0) updateStructureGun(b); return; }   // (a Bastion Wall: burning or not, nothing switches it off; no upgrades, only its weak sentry laser)
     if (b.disabledUntil > time) { if (b.bt().role == BR_BUNKER && b.owner >= 0) bunkerMend(b); return; }   // (knocked offline, a bunker still mends itself)
     if (b.owner < 0) return;   // a neutral map landmark has nobody to pay, repair or command it until it is garrisoned
     const BuildType& bt = b.bt();
@@ -3970,25 +3991,7 @@ void Sim::updateBuilding(Entity& b) {
             fx.push_back({FX_SPARK, b.pos, b.pos, 0, 0.6f, rgb(255, 224, 90), 9});
         }
     }
-    if (bt.weapon >= 0 && powered) {
-        Entity* t = get(b.engaged);
-        const Weapon& w = WEAPONS[bt.weapon];
-        if (!t || !canTarget(b, *t) || distToEntity(b.pos, *t) > (w.range + 0.2f) * TILE) {
-            t = nullptr; b.engaged = NOREF;
-            if ((tick + b.gen) % 3 == 0) {
-                Entity* f = get(b.forceTarget);   // a friendly target the human turned this turret on: taken up again whenever it is in reach
-                if (f && canTarget(b, *f) && distToEntity(b.pos, *f) <= w.range * TILE && distToEntity(b.pos, *f) >= w.minRange * TILE) t = f;
-                else t = acquireTarget(b, w.range);
-                if (t) b.engaged = refOf(*t);
-            }
-        }
-        if (t) tryFire(b, *t);
-        // burst continuation for structures
-        if (b.burstLeft > 0) {
-            b.burstTimer -= SIM_DT;
-            if (b.burstTimer <= 0) { Entity* tt = get(b.engaged); if (tt && canTarget(b, *tt)) fireWeapon(b, *tt, w); b.burstLeft--; b.burstTimer = 0.14f; }
-        }
-    }
+    if (bt.weapon >= 0 && powered) updateStructureGun(b);
     if (!b.queue.empty()) {
         const UnitType& ut = UNITS[b.queue.front()];
         bool blocked = false;
@@ -4081,6 +4084,7 @@ void Sim::updateDetection() {
             BuildRole role = d.bt().role;
             if (role == BR_BUNKER) sweep(d, d.pos, BUNKER_SENSOR, DET_SPOTTER, true);   // a bunker's seismic sensors feel hidden soldiers (snipers) close by, never a drone in the air
             if (role == BR_TURRET) sweep(d, d.pos, TURRET_INFIL_DETECT, DET_INFIL, false);
+            if (role == BR_FWALL && (tick / 2 + d.gen) % 3 == 0) sweep(d, d.pos, BASTION_DETECT, DET_SPOTTER | DET_DRONE | DET_INFIL, false);   // (walls come by the dozen: each sweeps every third pass, well inside the 1.5 s a find lasts)
             // a garrison keeps watch from inside: a sniper (or an infiltrator) in a bunker or a stronghold spots infiltrators creeping up on it
             if (!d.passengers.empty() && (role == BR_BUNKER || role == BR_STRONGHOLD)) {
                 float best = 0; int mask = 0;

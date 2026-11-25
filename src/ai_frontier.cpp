@@ -355,13 +355,16 @@ void AiPlayer::relicOps() {
 // home's turrets, production or threat detection. A raid on it is met by the idle groups at home, and when the Command structure falls and the home is
 // poor, the commander moves home to the best expansion standing (promoteExpansion, called from relocateBase). One that falls is looked for again after
 // a pause, at a site away from where it fell.
+// F2_SPREAD: up to four slots. Slot 0 stays the economic base; the others are forward bases 30 to 46 tiles from an enemy home (the team's focus first, then
+// the other enemies in turn), on the side of it that the commander's own bases and its teammates' leave open - the commander and its allies close round the
+// enemy instead of sitting at home. A forward base is guns, a barracks, power and anti-air first, the supply hub after.
 namespace {
 const float X_R = 13.0f;                 // tiles: how far from its centre an expansion's structures lie
 bool aiDebugX() { static int v = -1; if (v < 0) v = getenv("ONEHOUR_DEBUG") ? 1 : 0; return v == 1; }
 }
 
 int AiPlayer::xSlotOf(Vec2 p) const {
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < MAX_X; i++)
         if (xs[i].active && dist(p, xs[i].pos) < X_R * TILE && dist(p, g_sim.players[player].basePos) > 18.0f * TILE) return i;
     return -1;
 }
@@ -389,13 +392,14 @@ bool AiPlayer::buildAt(int buildType, Vec2 site, Vec2 prefer, int maxRing) {
 void AiPlayer::expansionOps(float tm, bool coreReady, bool threat, const std::vector<Entity*>& enemyUnits, const std::vector<Ref>& idleArmy, int harvesters) {
     Sim& S = g_sim;
     Player& pl = S.players[player];
-    const int slots = pl.difficulty >= 2 ? 2 : (pl.difficulty == 1 ? 1 : 0);
+    const bool spread = on2(F2_SPREAD);
+    const int slots = spread ? (pl.difficulty >= 3 ? 4 : (pl.difficulty == 2 ? 3 : (pl.difficulty == 1 ? 2 : 0))) : (pl.difficulty >= 2 ? 2 : (pl.difficulty == 1 ? 1 : 0));
     if (!on2(F2_EXPAND) || slots == 0 || S.time < nextExpand) return;
     nextExpand = S.time + 1.5f;
     const int base = firstBuildOf(pl.faction);
     const int guardCap = pl.difficulty >= 3 ? 7 : (pl.difficulty == 2 ? 5 : 3);
-    const Vec2 fwd = enemyDir, side(-enemyDir.y, enemyDir.x);
-    for (int i = 0; i < 2; i++) if (xs[i].active && xs[i].finished) xHeldSecs += std::min(3.0f, S.time - xLastT);
+    const Vec2 fwd = enemyDir;
+    for (const Expansion& x : xs) if (x.active && x.finished) xHeldSecs += std::min(3.0f, S.time - xLastT);
     xLastT = S.time;
 
     // where: supply piles of some wealth 25 to 60 tiles from home, on ground the dozer can drive to, in country we have seen, away from the
@@ -420,7 +424,7 @@ void AiPlayer::expansionOps(float tm, bool coreReady, bool threat, const std::ve
             if (!S.explored(player, clampi(tileOf(g.x), 0, MAP_W - 1), clampi(tileOf(g.y), 0, MAP_H - 1)) || !g_map.sameGround(d.pos, g)) continue;
             nSeen++;
             bool clash = false;
-            for (int j = 0; j < 2; j++) if (j != slot && xs[j].active && dist(g, xs[j].pos) < 30.0f * TILE) clash = true;
+            for (int j = 0; j < MAX_X; j++) if (j != slot && xs[j].active && dist(g, xs[j].pos) < 30.0f * TILE) clash = true;
             for (auto& l : xLostSites) if (S.time - l.second < 400.0f && dist(g, l.first) < 20.0f * TILE) clash = true;
             if (clash || S.inFallout(g, 6.0f * TILE)) continue;
             int open = 0;   // room to build: free ground within 6 tiles
@@ -433,7 +437,7 @@ void AiPlayer::expansionOps(float tm, bool coreReady, bool threat, const std::ve
                 if (o.kind == EK_RESOURCE) rich += (float)o.amount;
                 else if (o.isBuilding() && prizeType(o.type) && (o.owner < 0 || o.owner == player)) prize += 5.0f;
             }
-            const float danger = enemyStrengthNear(g, 18.0f);
+            const float danger = on2(F2_WARY) ? siteRisk(g) : enemyStrengthNear(g, 18.0f);   // (F2_WARY: ground where earlier structures fell counts too)
             if (danger > 1500.0f) continue;
             nQuiet++;
             const float score = std::min(rich, 90000.0f) / 5000.0f + prize - dh * 0.3f + df * 0.25f - danger / 150.0f + (open - 110) / 20.0f;
@@ -443,30 +447,89 @@ void AiPlayer::expansionOps(float tm, bool coreReady, bool threat, const std::ve
         return any;
     };
 
+    // the enemy a forward base is raised against: the team's focus first (else the main enemy), then the other living enemies in turn
+    auto foeFor = [&](int slot) {
+        std::vector<int> foes;
+        const int first = teamFocus() >= 0 ? teamFocus() : mainEnemy;
+        if (first >= 0 && first != player && S.players[first].alive && S.enemies(player, first)) foes.push_back(first);
+        for (int q = 0; q < S.numPlayers; q++) if (q != first && q != player && S.players[q].alive && S.enemies(player, q)) foes.push_back(q);
+        return foes.empty() ? -1 : foes[(slot - 1) % foes.size()];
+    };
+    // where a forward base goes: open ground 30 to 46 tiles from that enemy's home (rings, and supply piles 28 to 50 tiles from it), never within 28 tiles of any
+    // enemy home, quiet by siteRisk, clear of the commander's other expansions and of lost sites. Best is the site the widest angle (seen from the enemy's
+    // home) away from every base of the commander and its teammates, with a taste for wealth and nearness to home. Explored ground is not required.
+    auto chooseForward = [&](const Entity& d, int slot, int target, Vec2& out, bool& piles, float& gapDeg) {
+        const Vec2 foeHome = S.players[target].basePos;
+        std::vector<Vec2> cand;
+        for (float r : { 30.0f, 38.0f, 46.0f }) for (int k = 0; k < 24; k++) {
+            const float a = k * (6.2831853f / 24.0f);
+            const Vec2 p = foeHome + Vec2(std::cos(a), std::sin(a)) * (r * TILE);
+            if (p.x > 8 * TILE && p.y > 8 * TILE && p.x < WORLD_W - 8 * TILE && p.y < WORLD_H - 8 * TILE) cand.push_back(p);
+        }
+        for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0) { const float dt = dist(e.pos, foeHome) / TILE; if (dt >= 28.0f && dt <= 50.0f) cand.push_back(e.pos); }
+        std::vector<Vec2> bases = { pl.basePos };   // what the angle is measured against: this commander's home and other expansions, its teammates' homes and expansions
+        for (int j = 0; j < MAX_X; j++) if (j != slot && xs[j].active) bases.push_back(xs[j].pos);
+        for (int q = 0; q < S.numPlayers; q++) {
+            if (q == player || !S.players[q].alive || S.enemies(player, q)) continue;
+            bases.push_back(S.players[q].basePos);
+            if (q < MAX_PLAYERS && g_ai.ais[q].player >= 0) for (const Expansion& x : g_ai.ais[q].xs) if (x.active) bases.push_back(x.pos);
+        }
+        float best = -1e18f; bool any = false; int nReach = 0, nFar = 0, nOpen = 0, nQuiet = 0;
+        for (Vec2 c : cand) {
+            const Vec2 g = g_map.nearestFree(c, 6);
+            if (!g_map.sameGround(d.pos, g)) continue;
+            nReach++;
+            bool bad = false;
+            for (int q = 0; q < S.numPlayers && !bad; q++) if (S.players[q].alive && S.enemies(player, q) && dist(g, S.players[q].basePos) < 28.0f * TILE) bad = true;
+            for (int j = 0; j < MAX_X && !bad; j++) if (j != slot && xs[j].active && dist(g, xs[j].pos) < 30.0f * TILE) bad = true;
+            for (auto& l : xLostSites) if (S.time - l.second < 400.0f && dist(g, l.first) < 20.0f * TILE) bad = true;
+            if (bad || S.inFallout(g, 6.0f * TILE)) continue;
+            nFar++;
+            int open = 0;   // room to build: free ground within 6 tiles
+            for (int j = -6; j <= 6; j++) for (int i = -6; i <= 6; i++) if (g_map.passable(tileOf(g.x) + i, tileOf(g.y) + j)) open++;
+            if (open < 110) continue;   // (of 169)
+            nOpen++;
+            const float risk = siteRisk(g);
+            if (risk > 3000.0f) continue;
+            nQuiet++;
+            float rich = 0;
+            for (auto& o : S.ents) if (o.alive && o.kind == EK_RESOURCE && dist(o.pos, g) <= 14.0f * TILE) rich += (float)o.amount;
+            const float ang = std::atan2(g.y - foeHome.y, g.x - foeHome.x);
+            float gap = 6.2831853f;
+            for (Vec2 b : bases) gap = std::min(gap, std::fabs(std::remainder(ang - std::atan2(b.y - foeHome.y, b.x - foeHome.x), 6.2831853f)));
+            const float score = gap * 40.0f + std::min(rich, 90000.0f) / 5000.0f - risk / 120.0f - dist(g, pl.basePos) / TILE * 0.15f + rng.f(0.0f, 6.0f);
+            if (score > best) { best = score; out = g; piles = rich >= 15000.0f; gapDeg = gap * 57.2958f; any = true; }
+        }
+        if (!any && aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] no forward site against P%d: %d candidates, %d reachable, %d clear of enemy homes, %d open, %d quiet\n", player, S.time, target, (int)cand.size(), nReach, nFar, nOpen, nQuiet);
+        return any;
+    };
+
     for (int i = 0; i < slots; i++) {
         Expansion& x = xs[i];
+        const bool forward = spread && i >= 1;   // (a slot's kind is fixed by its number: an expansion that falls is replaced by one of the same kind)
         if (x.active) {
+            const Vec2 xf = x.forward ? (S.players[x.target].basePos - x.pos).norm() : fwd;   // (a forward base faces the enemy it was raised against)
             // the guards: the dead leave the list; idle fighters standing at the place join it, up to the cap
             x.guards.erase(std::remove_if(x.guards.begin(), x.guards.end(), [&](Ref r) { const Entity* e = S.get(r); return !e || e->owner != player; }), x.guards.end());
             if (x.nBar > 0) for (Ref r : idleArmy) {
-                if ((int)x.guards.size() >= guardCap) break;
+                if ((int)x.guards.size() >= guardCap + (x.forward ? 2 : 0)) break;
                 Entity* e = S.get(r);
                 if (e && !e->isAir() && dist(e->pos, x.pos) < 12.0f * TILE && std::find(x.guards.begin(), x.guards.end(), r) == x.guards.end()) {
-                    x.guards.push_back(r); S.cmdGuardArea({r}, x.pos + fwd * (3.0f * TILE), 6.0f * TILE);
+                    x.guards.push_back(r); S.cmdGuardArea({r}, x.pos + xf * (3.0f * TILE), 6.0f * TILE);
                 }
             }
             // lost (every structure of it is gone), or never took (nothing placed in 150 s)
             if ((x.firstAt >= 0 && x.nAll == 0 && S.time - x.firstAt > 5.0f) || (x.firstAt < 0 && S.time - x.chosenAt > 150.0f)) {
-                if (x.firstAt >= 0) xLost++;
+                if (x.firstAt >= 0) { xLost++; if (x.forward) xFwdLost++; }
                 xLostSites.push_back({x.pos, S.time});
-                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d %s at %d,%d\n", player, S.time, i, x.firstAt >= 0 ? "LOST" : "abandoned", tileOf(x.pos.x), tileOf(x.pos.y));
+                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d (%s) %s at %d,%d\n", player, S.time, i, x.forward ? "forward" : "economic", x.firstAt >= 0 ? "LOST" : "abandoned", tileOf(x.pos.x), tileOf(x.pos.y));
                 const float lost = x.firstAt >= 0 ? S.time : S.time - 90.0f;
                 x = Expansion(); x.lostAt = lost;
                 continue;
             }
             if (!x.finished && (x.cHub > 0 || !x.piles) && x.cBar > 0 && x.cPow > 0 && x.cGun > 0) {
-                x.finished = true; xFinished++;
-                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d finished at %d,%d (%d guards)\n", player, S.time, i, tileOf(x.pos.x), tileOf(x.pos.y), (int)x.guards.size());
+                x.finished = true; xFinished++; if (x.forward) xFwdFinished++;
+                if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d (%s) finished at %d,%d (%d guards)\n", player, S.time, i, x.forward ? "forward" : "economic", tileOf(x.pos.x), tileOf(x.pos.y), (int)x.guards.size());
             }
             // a raid on it: the idle groups at home go to meet it unless home itself is under attack (the guards and the guns are already at it)
             float fv = 0; Vec2 fc; int fn = 0;
@@ -491,32 +554,61 @@ void AiPlayer::expansionOps(float tm, bool coreReady, bool threat, const std::ve
         }
         if (!coreReady || threat) continue;   // (no new work while home is short of its core or under attack)
         if (!x.active) {
-            if ((i > 0 && !xs[0].finished) || S.time - x.lostAt < 150.0f || tm < (i == 0 ? 5.0f : 9.0f) || S.time < (i == 0 ? 270.0f : 480.0f) || pl.money < 2400 || harvesters < 2 || S.time < x.nextStep) continue;
+            // the slot's turn: later slots wait for the earlier one to be finished, or lost and resting (not for ever behind one that never finishes)
+            const float startT = spread ? 270.0f + 170.0f * i : (i == 0 ? 270.0f : 480.0f);
+            const float startTm = spread ? 5.0f + 3.0f * i : (i == 0 ? 5.0f : 9.0f);
+            const float needMoney = spread ? 2400.0f + 600.0f * i : 2400.0f;
+            bool prevOk = true;
+            if (i > 0) {
+                const Expansion& q = xs[i - 1];
+                if (!spread) prevOk = q.finished;
+                else if (q.finished) prevOk = true;
+                else if (q.active) prevOk = S.time - q.chosenAt > 240.0f;
+                else prevOk = q.lostAt > -999.0f || S.time > 270.0f + 170.0f * (i - 1) + 240.0f;
+            }
+            if (!prevOk || S.time - x.lostAt < 150.0f || tm < startTm || S.time < startT || pl.money < needMoney || harvesters < 2 || S.time < x.nextStep) continue;
             Entity* d = idleDozer();
             if (!d) continue;
-            Vec2 site; bool piles = false;
-            if (!chooseSite(*d, i, site, piles)) { x.nextStep = S.time + 20.0f; continue; }
-            x = Expansion(); x.active = true; x.pos = site; x.chosenAt = S.time; x.piles = piles;
-            if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d chosen at %d,%d (%.0f tiles from home, %s)\n", player, S.time, i, tileOf(site.x), tileOf(site.y), dist(site, pl.basePos) / TILE, piles ? "beside supply piles" : "no piles near");
+            Vec2 site; bool piles = false; float gapDeg = 0; int target = -1;
+            if (forward) {
+                target = foeFor(i);
+                if (target < 0 || !chooseForward(*d, i, target, site, piles, gapDeg)) { x.nextStep = S.time + 20.0f; continue; }
+            } else if (!chooseSite(*d, i, site, piles)) { x.nextStep = S.time + 20.0f; continue; }
+            x = Expansion(); x.active = true; x.pos = site; x.chosenAt = S.time; x.piles = piles; x.forward = forward; x.target = target;
+            if (aiDebugX()) {
+                if (forward) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d (forward) chosen at %d,%d: against P%d, %.0f tiles from its home at %.0f deg, %.0f deg from the nearest base of the team, %.0f tiles from our home, %s\n", player, S.time, i, tileOf(site.x), tileOf(site.y), target, dist(site, S.players[target].basePos) / TILE,
+                                       std::atan2(site.y - S.players[target].basePos.y, site.x - S.players[target].basePos.x) * 57.2958f, gapDeg, dist(site, pl.basePos) / TILE, piles ? "beside supply piles" : "no piles near");
+                else fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d (economic) chosen at %d,%d (%.0f tiles from home, %s)\n", player, S.time, i, tileOf(site.x), tileOf(site.y), dist(site, pl.basePos) / TILE, piles ? "beside supply piles" : "no piles near");
+            }
         }
         if (S.time < x.nextStep) continue;
         x.nextStep = S.time + 2.0f;
+        const Vec2 xf = x.forward ? (S.players[x.target].basePos - x.pos).norm() : fwd, xside(-xf.y, xf.x);
         struct Step { int role, have, want; Vec2 at; };
-        const Step steps[] = {
+        const Step economic[] = {
             { BR_SUPPLY,   x.nHub, x.piles ? 1 : 0, x.pos },
-            { BR_TURRET,   x.nGun, 1, x.pos + fwd * (6.0f * TILE) },
-            { BR_BARRACKS, x.nBar, 1, x.pos - fwd * (3.0f * TILE) + side * (4.0f * TILE) },
-            { BR_POWER,    x.nPow, 1, x.pos - fwd * (7.0f * TILE) },
-            { BR_AATURRET, x.nAA,  1, x.pos - side * (5.0f * TILE) },
-            { BR_TURRET,   x.nGun, 2, x.pos + side * (7.0f * TILE) },
-            { BR_FACTORY,  x.nFac, pl.difficulty >= 2 && pl.money > 6000 ? 1 : 0, x.pos - fwd * (5.0f * TILE) - side * (4.0f * TILE) },
+            { BR_TURRET,   x.nGun, 1, x.pos + xf * (6.0f * TILE) },
+            { BR_BARRACKS, x.nBar, 1, x.pos - xf * (3.0f * TILE) + xside * (4.0f * TILE) },
+            { BR_POWER,    x.nPow, 1, x.pos - xf * (7.0f * TILE) },
+            { BR_AATURRET, x.nAA,  1, x.pos - xside * (5.0f * TILE) },
+            { BR_TURRET,   x.nGun, 2, x.pos + xside * (7.0f * TILE) },
+            { BR_FACTORY,  x.nFac, pl.difficulty >= 2 && pl.money > 6000 ? 1 : 0, x.pos - xf * (5.0f * TILE) - xside * (4.0f * TILE) },
         };
-        for (const Step& st : steps) {
+        const Step forwardBase[] = {   // (guns and a barracks first: it stands in the enemy's reach)
+            { BR_TURRET,   x.nGun, 1, x.pos + xf * (6.0f * TILE) },
+            { BR_BARRACKS, x.nBar, 1, x.pos - xf * (3.0f * TILE) + xside * (4.0f * TILE) },
+            { BR_POWER,    x.nPow, 1, x.pos - xf * (7.0f * TILE) },
+            { BR_AATURRET, x.nAA,  1, x.pos - xside * (5.0f * TILE) },
+            { BR_TURRET,   x.nGun, 2, x.pos + xside * (7.0f * TILE) },
+            { BR_SUPPLY,   x.nHub, x.piles ? 1 : 0, x.pos },
+            { BR_FACTORY,  x.nFac, pl.difficulty >= 2 && pl.money > 6000 ? 1 : 0, x.pos - xf * (5.0f * TILE) - xside * (4.0f * TILE) },
+        };
+        for (const Step& st : (x.forward ? forwardBase : economic)) {
             if (st.have >= st.want) continue;
             const int type = base + st.role;
             if (pl.money < BUILDS[type].cost + 500) break;   // (the next piece in its turn: the army keeps its share of the money)
             if (buildAt(type, x.pos, st.at, 12)) {
-                if (x.firstAt < 0) { x.firstAt = S.time; xFounded++; }
+                if (x.firstAt < 0) { x.firstAt = S.time; xFounded++; if (x.forward) xFwdFounded++; }
                 if (aiDebugX()) fprintf(stderr, "[ai%d t=%.0f] EXPANSION %d: %s placed\n", player, S.time, i, BUILDS[type].name);
             }
             break;
@@ -537,10 +629,11 @@ bool AiPlayer::promoteExpansion(float homeDanger, Vec2 dozerAt) {
         if (r == BR_BARRACKS || r == BR_FACTORY || r == BR_SUPPLY) home++;
     }
     int best = -1, bestN = 0;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < MAX_X; i++) {
         const Expansion& x = xs[i];
         const int n = x.cHub + x.cBar + x.nFac;
-        if (x.active && x.firstAt >= 0 && x.cBar + x.cHub > 0 && n > bestN && g_map.sameGround(dozerAt, x.pos)) { best = i; bestN = n; }
+        if (x.active && x.firstAt >= 0 && x.cBar + x.cHub > 0 && n > bestN && g_map.sameGround(dozerAt, x.pos)
+            && (!on2(F2_WARY) || siteRisk(x.pos) < std::max(homeDanger, 2500.0f))) { best = i; bestN = n; }   // (F2_WARY: never to ground as hot as the home it leaves, or hotter)
     }
     if (best < 0 || (home > bestN && homeDanger < 2500.0f)) return false;
     const Vec2 from = pl.basePos;

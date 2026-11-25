@@ -11,14 +11,15 @@ static bool fail5(const char* m) { fprintf(stderr, "recoverytest: %s\n", m); g_o
 static void runAi(float sec) { int n = (int)(sec * SIM_HZ); for (int t = 0; t < n; t++) { g_sim.step(); g_ai.update(); g_sim.events.clear(); } }
 
 // player 0 is a human who does nothing; player 1 a computer army at 'diff', the clock already well into the match
-static void recoveryScene(Faction me, int diff, u64 seed) {
+static void recoveryScene(Faction me, int diff, u64 seed, int mask2 = F2_DEFAULT) {
     Faction fac[2] = { F_CYBER, me };
     bool ai[2] = { false, true }; int dif[2] = { 1, diff }; int team[2] = { 0, 1 };
     g_sim.init(2, fac, ai, dif, team, seed);
     for (int p = 0; p < 2; p++) std::fill(g_sim.players[p].explored.begin(), g_sim.players[p].explored.end(), 1);
     g_ai.featMask[1] = getenv("ONEHOUR_NORECOVER") ? (FEAT_DEFAULT & ~FEAT_RECOVER) : FEAT_DEFAULT;   // (to see what the scenario does without recovery mode)
+    g_ai.featMask2[1] = mask2;
     g_ai.init(seed);
-    g_ai.featMask[1] = FEAT_DEFAULT;
+    g_ai.featMask[1] = FEAT_DEFAULT; g_ai.featMask2[1] = F2_DEFAULT;
     g_sim.time = 9 * 60.0f;   // (late enough for every timed gate of the commander)
 }
 
@@ -64,6 +65,28 @@ static void reliefDrop(int money) {
     int dz = firstUnitOf(g_sim.players[1].faction) + 0;
     g_sim.spawnUnit(dz, 1, g_map.nearestFree(g_sim.players[1].basePos + Vec2(0, 120.0f), 20));
     g_sim.players[1].money += money;
+}
+
+// the human army razes a computer army's whole base and goes; a relief drop (a dozer and $20000) lands next to the ruins. Where does the new Command structure go up?
+// The base stands for ten seconds first, so the commander has listed what it owns and sees the structures and soldiers die at its next think.
+struct Razed { Vec2 old, human, first; float scar = 0; int relocations = 0; bool built = false; };
+static Razed razedThenAided(Faction me, u64 seed, int mask2) {
+    Razed r;
+    recoveryScene(me, 2, seed, mask2);
+    r.old = g_sim.players[1].basePos; r.human = g_sim.players[0].basePos;
+    runAi(10);
+    for (auto& e : g_sim.ents) if (e.alive && e.owner == 1) g_sim.destroy(e, false);
+    const int inf = firstUnitOf(g_sim.players[1].faction) + 2;   // (two soldiers survive: an army with nothing left is out of the match)
+    for (int k = 0; k < 2; k++) g_sim.spawnUnit(inf, 1, g_map.nearestFree(r.old + Vec2(60.0f + 14.0f * k, 90.0f), 20));
+    runAi(30);
+    r.scar = g_ai.ais[1].scarNear(r.old, 16.0f);
+    reliefDrop(AID_MONEY);
+    for (int t = 0; t < 180 && !r.built; t++) {
+        runAi(1);
+        for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isBuilding() && e.bt().role == BR_HQ) { r.first = e.pos; r.built = true; break; }
+    }
+    r.relocations = g_ai.ais[1].relocations;
+    return r;
 }
 
 bool recoveryTest(u64 seed) {
@@ -176,6 +199,20 @@ bool recoveryTest(u64 seed) {
         CHECK5(dist(g_sim.players[1].basePos, old) > 12.0f * TILE, "a commander whose old base the enemy holds did not pick a new home");
         char tag[96]; snprintf(tag, sizeof tag, "%s old base held by the enemy", FACTION_NAME[me]);
         printf("  %-34s home moved %.0f tiles\n", tag, dist(g_sim.players[1].basePos, old) / TILE);
+    }
+    // ---- 6. the base is razed and the enemy leaves; a relief drop lands on the ruins: the commander remembers where its structures fell and builds elsewhere
+    // (the same scene without F2_WARY rebuilds on the ruins - the bit is what moves it)
+    for (int fi = 0; fi < 2; fi++) {
+        Faction me = (Faction)fi;
+        const Razed w = razedThenAided(me, seed + 500 + fi, F2_DEFAULT);
+        const Razed o = razedThenAided(me, seed + 500 + fi, F2_DEFAULT & ~F2_WARY);
+        char tag[96]; snprintf(tag, sizeof tag, "%s razed, then aided", FACTION_NAME[me]);
+        printf("  %-34s scars at the ruins %.0f; new Command structure %.0f tiles from the ruins, %.0f tiles from the enemy's base (ruins: %.0f); without F2_WARY: %.0f from the ruins\n", tag, w.scar, dist(w.first, w.old) / TILE, dist(w.first, w.human) / TILE, dist(w.old, w.human) / TILE, dist(o.first, o.old) / TILE);
+        CHECK5(w.scar >= 2500.0f, "a commander whose whole base was razed did not remember where it fell");
+        CHECK5(w.built && w.relocations >= 1, "a commander given a relief drop after its base was razed did not found a new home");
+        CHECK5(dist(w.first, w.old) >= 20.0f * TILE, "a razed commander rebuilt on its ruins");
+        CHECK5(dist(w.first, w.human) > dist(w.old, w.human), "a razed commander rebuilt nearer to the enemy than its ruins were");
+        CHECK5(o.built && dist(o.first, o.old) < 16.0f * TILE, "without F2_WARY the commander no longer rebuilds on its ruins (the test no longer shows what the bit changes)");
     }
     if (g_ok5) printf("recoverytest: ok\n");
     return g_ok5;

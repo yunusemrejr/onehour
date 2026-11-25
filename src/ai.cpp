@@ -379,10 +379,14 @@ bool AiPlayer::recoverBase(int dozers, bool hasHq) {
 // base lies across the water), or the enemy holds the ground - founds a new base: the spot its dozer can reach that is safest from what it knows of
 // the enemy, with supply piles near it, not too far to drive and clear of radiation. Home (basePos) moves there, so every rebuilt structure, the
 // garrison and the haulers follow it. True if home moved.
+// F2_WARY: the commander also knows where its army was hurt. A home where several structures fell in the last minutes is burned and is never rebuilt on,
+// though nobody stands there now (a relief drop would otherwise put the base back under the same guns); the site is scored by risk (siteRisk) as well as by
+// the drive and the supply piles, from piles, rings round the dozer and the ground beside its teammates' bases, with a taste of its own among near-equal sites.
 bool AiPlayer::relocateBase() {
     Sim& S = g_sim;
     Player& pl = S.players[player];
     if (S.time - relocatedAt < 20.0f || S.countRole(player, BR_HQ, false) > 0) return false;
+    const bool wary = on2(F2_WARY);
     const Vec2 homeGround = g_map.nearestFree(pl.basePos, 8);   // (home itself may be rubble or a wreck: the free ground next to it)
     Entity* d = nullptr; float dd = 1e18f;   // the founder: a free dozer, one that can still drive home first
     for (auto& e : S.ents) {
@@ -391,42 +395,65 @@ bool AiPlayer::relocateBase() {
         if (k < dd) { dd = k; d = &e; }
     }
     if (!d) return false;
-    auto danger = [&](Vec2 p) { return enemyStrengthNear(p, 16.0f) + (S.inFallout(p, 4.0f * TILE) ? 6000.0f : 0.0f); };
+    auto danger = [&](Vec2 p) { return wary ? siteRisk(p) : enemyStrengthNear(p, 16.0f) + (S.inFallout(p, 4.0f * TILE) ? 6000.0f : 0.0f); };
     const bool reach = g_map.sameGround(d->pos, homeGround);
     const float here = danger(pl.basePos);
+    const Vec2 oldHome = pl.basePos;
+    const bool burned = wary && scarNear(oldHome, 16.0f) >= 2500.0f;
     if (on2(F2_EXPAND) && promoteExpansion(here, d->pos)) return true;   // an expansion stands: that is home now
-    if (reach && here < 2500.0f) return false;   // the old home will do
-    // candidates: supply piles on the dozer's ground, and a ring of spots round the dozer
+    if (reach && here < 2500.0f && !burned) return false;   // the old home will do
+    // candidates: supply piles on the dozer's ground, and rings of spots round the dozer (F2_WARY: more of them, and the ground beside the teammates' bases)
     std::vector<Vec2> cand;
-    for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0 && g_map.sameGround(d->pos, e.pos)) cand.push_back(e.pos);
+    auto addRing = [&](Vec2 c, float r, int n) {
+        for (int k = 0; k < n; k++) {
+            const float a = k * (6.2831853f / n);
+            Vec2 p = c + Vec2(std::cos(a), std::sin(a)) * (r * TILE);
+            if (p.x > TILE && p.y > TILE && p.x < WORLD_W - TILE && p.y < WORLD_H - TILE && g_map.sameGround(d->pos, p)) cand.push_back(p);
+        }
+    };
+    for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0 && g_map.sameGround(d->pos, e.pos) && (!wary || dist(e.pos, d->pos) < 75.0f * TILE)) cand.push_back(e.pos);
     cand.push_back(d->pos);
-    for (float r : { 8.0f, 16.0f, 26.0f }) for (int k = 0; k < 8; k++) {
-        Vec2 p = d->pos + Vec2(std::cos(k * 0.785f), std::sin(k * 0.785f)) * (r * TILE);
-        if (p.x > TILE && p.y > TILE && p.x < WORLD_W - TILE && p.y < WORLD_H - TILE && g_map.sameGround(d->pos, p)) cand.push_back(p);
+    if (wary) {
+        for (float r : { 10.0f, 18.0f, 28.0f, 40.0f }) addRing(d->pos, r, 12);
+        for (int q = 0; q < S.numPlayers; q++)
+            if (q != player && S.players[q].alive && !S.enemies(player, q)) addRing(S.players[q].basePos, 14.0f, 8);   // (shelter beside an ally)
+    } else {
+        for (float r : { 8.0f, 16.0f, 26.0f }) addRing(d->pos, r, 8);
     }
     struct Site { Vec2 p; float score; };
     std::vector<Site> sites;
+    auto richAt = [&](Vec2 p) { float rich = 0; for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0 && dist(e.pos, p) < 12.0f * TILE) rich += (float)e.amount; return rich; };
+    auto allyNear = [&](Vec2 p) { for (int q = 0; q < S.numPlayers; q++) if (q != player && S.players[q].alive && !S.enemies(player, q) && dist(p, S.players[q].basePos) < 30.0f * TILE) return true; return false; };
+    auto foeDist = [&](Vec2 p) { float m = 1e18f; for (int q = 0; q < S.numPlayers; q++) if (S.players[q].alive && S.enemies(player, q)) m = std::min(m, dist(p, S.players[q].basePos)); return m / TILE; };
+    const float homeFoe = foeDist(oldHome);
+    auto score = [&](Vec2 p, float jitter) {   // (lower is better)
+        if (!wary) return danger(p) + dist(p, d->pos) / TILE * 30.0f - std::min(richAt(p), 60000.0f) / 30.0f;
+        // (a new home nearer to an enemy home than the old one was is no refuge: 25 per tile of that)
+        return danger(p) + dist(p, d->pos) / TILE * 12.0f - std::min(richAt(p), 60000.0f) / 30.0f - (allyNear(p) ? 900.0f : 0.0f) + 25.0f * std::max(0.0f, homeFoe - foeDist(p)) + jitter;
+    };
     for (Vec2 p : cand) {
-        float rich = 0;
-        for (auto& e : S.ents) if (e.alive && e.kind == EK_RESOURCE && e.amount > 0 && dist(e.pos, p) < 12.0f * TILE) rich += (float)e.amount;
-        float score = danger(p) + dist(p, d->pos) / TILE * 30.0f - std::min(rich, 60000.0f) / 30.0f;
-        sites.push_back({p, score});
+        if (burned && dist(p, oldHome) < 16.0f * TILE) continue;   // (never on the ruins)
+        sites.push_back({p, score(p, wary ? rng.f(0.0f, 350.0f) : 0.0f)});
     }
     std::sort(sites.begin(), sites.end(), [](const Site& a, const Site& b) { return a.score < b.score; });
+    // an old home that is merely hot (nothing burned there) is left only for a site that is clearly better
+    const float homeScore = wary && reach && !burned ? score(oldHome, 0.0f) : 0.0f;
+    const bool needBetter = wary && reach && !burned;
     const int hqType = firstBuildOf(pl.faction) + BR_HQ;
-    for (size_t i = 0; i < sites.size() && i < 4; i++) {   // the best few, where a Command structure actually fits
+    for (size_t i = 0; i < sites.size() && i < (wary ? 6u : 4u); i++) {   // the best few, where a Command structure actually fits
+        if (needBetter && !(sites[i].score < homeScore - 0.4f * std::fabs(homeScore))) break;
         int tx, ty;
         groundFrom = d->pos; groundCheck = true;
         Vec2 saved = pl.basePos; pl.basePos = sites[i].p;   // (findSpot searches round home)
         bool fits = findSpot(hqType, sites[i].p, 12, tx, ty);
         groundCheck = false;
-        if (!fits) { pl.basePos = saved; continue; }
+        if (!fits || (burned && dist(S.buildingCenter(hqType, tx, ty), oldHome) < 20.0f * TILE)) { pl.basePos = saved; continue; }   // (the structure may stand a few tiles off the site: never beside the ruins)
         pl.basePos = S.buildingCenter(hqType, tx, ty);
         relocatedAt = S.time; relocations++;
-        if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] RELOCATE home %d,%d -> %d,%d (dozer %s home, danger there %.0f)\n", player, S.time, tileOf(saved.x), tileOf(saved.y), tileOf(pl.basePos.x), tileOf(pl.basePos.y), reach ? "can reach" : "cannot reach", here);
+        if (aiDebug()) fprintf(stderr, "[ai%d t=%.0f] RELOCATE home %d,%d -> %d,%d (dozer %s home, danger there %.0f%s, site score %.0f)\n", player, S.time, tileOf(saved.x), tileOf(saved.y), tileOf(pl.basePos.x), tileOf(pl.basePos.y), reach ? "can reach" : "cannot reach", here, burned ? ", burned" : "", sites[i].score);
         return true;
     }
-    relocatedAt = S.time;   // (nowhere fits: look again later)
+    relocatedAt = S.time;   // (nowhere fits, or nowhere better: look again later)
     return false;
 }
 
@@ -612,7 +639,7 @@ int AiPlayer::chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAi
                 if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || (!e.isUnit() && !e.isBuilding())) continue;
                 if (e.owner == player) { if (e.isUnit() && e.ut().role == UR_COMBAT) cc.A.add(e, 1.0f); }
                 else if (g_sim.enemies(player, e.owner) && (g_sim.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && g_sim.visibleTo(e, player))) {
-                    if (e.isBuilding() && e.weapon() < 0) { float h = e.hp * 0.15f; cc.B.hp += h; cc.B.hpBy[AR_STRUCT] += h; }   // the objective: a little of every structure
+                    if (e.isBuilding() && (e.weapon() < 0 || e.bt().role == BR_FWALL)) { float h = e.hp * 0.15f; cc.B.hp += h; cc.B.hpBy[AR_STRUCT] += h; }   // the objective: a little of every structure
                     else cc.B.add(e, e.isBuilding() ? 0.6f : 1.0f);
                 }
             }
@@ -660,10 +687,63 @@ float AiPlayer::enemyStrengthNear(Vec2 p, float radiusTiles) {
         if (e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner) || dist2(e.pos, p) > R2) return;
         float hpf = e.hp / e.maxHp;
         if (e.isUnit()) { if (e.ut().role == UR_COMBAT) v += UNITS[e.type].cost * hpf; }
-        else if (e.constructed && e.bt().weapon >= 0) v += BUILDS[e.type].cost * 1.6f * hpf;
+        else if (e.constructed && e.bt().weapon >= 0) v += BUILDS[e.type].cost * (e.bt().role == BR_FWALL ? 0.16f : 1.6f) * hpf;   // (a Bastion Wall's sentry laser is a token gun: a tenth)
     });
     return v;
 }
+// ---- F2_WARY: where the army got hurt
+namespace { const float SCAR_TAU = 360.0f; const size_t SCAR_MAX = 48; }
+
+// One pass per think: what stood in the last pass's list and is gone now (dead, or taken by another army) leaves a scar where it stood, worth what it cost;
+// then the list is made again from what stands now - the structures it built (the towns' blocks and what it took from the enemy apart) and the fighters within 20 tiles of home.
+void AiPlayer::noteLosses() {
+    Sim& S = g_sim;
+    for (const Watched& w : watched) {
+        const Entity* e = S.get(w.ref);
+        if (!e || e->owner != player) addScar(w.pos, w.value);
+    }
+    watched.clear();
+    const Vec2 home = S.players[player].basePos;
+    const float near2 = (20.0f * TILE) * (20.0f * TILE);
+    for (auto& e : S.ents) {
+        if (!e.alive || e.owner != player) continue;
+        if (e.isBuilding()) { if (e.district < 0 && (e.takenFrom < 0 || e.takenFrom == player)) watched.push_back({ S.refOf(e), e.pos, (float)BUILDS[e.type].cost }); }
+        else if (e.isUnit() && e.ut().role == UR_COMBAT && !e.carrier.valid() && dist2(e.pos, home) < near2) watched.push_back({ S.refOf(e), e.pos, UNITS[e.type].cost * 0.5f });
+    }
+}
+
+void AiPlayer::addScar(Vec2 p, float value) {
+    const float now = g_sim.time;
+    for (Scar& c : scars) {
+        if (dist(c.pos, p) >= 6.0f * TILE) continue;
+        const float old = c.value * std::exp(-(now - c.time) / SCAR_TAU);
+        c.pos = (c.pos * old + p * value) * (1.0f / (old + value));
+        c.value = old + value; c.time = now;
+        return;
+    }
+    if (scars.size() >= SCAR_MAX) {   // (full: the faintest goes)
+        size_t weakest = 0; float wv = 1e18f;
+        for (size_t i = 0; i < scars.size(); i++) { const float v = scars[i].value * std::exp(-(now - scars[i].time) / SCAR_TAU); if (v < wv) { wv = v; weakest = i; } }
+        scars.erase(scars.begin() + weakest);
+    }
+    scars.push_back({ p, value, now });
+}
+
+float AiPlayer::scarNear(Vec2 p, float rTiles) const {
+    float v = 0;
+    const float R = rTiles * TILE;
+    for (const Scar& c : scars) if (dist(c.pos, p) < R) v += c.value * std::exp(-(g_sim.time - c.time) / SCAR_TAU);
+    return v;
+}
+
+float AiPlayer::siteRisk(Vec2 p) {
+    Sim& S = g_sim;
+    float risk = enemyStrengthNear(p, 16.0f) + 1.5f * scarNear(p, 14.0f) + (S.inFallout(p, 4.0f * TILE) ? 6000.0f : 0.0f);
+    for (int q = 0; q < S.numPlayers; q++)
+        if (S.players[q].alive && S.enemies(player, q)) risk += std::max(0.0f, 48.0f - dist(p, S.players[q].basePos) / TILE) * 90.0f;   // (any enemy home, not only the main one)
+    return risk;
+}
+
 // Enemy guns (constructed turrets and anti-air batteries of 'owner') whose centre lies within r px of p
 static int turretsNear(int owner, Vec2 p, float r) {
     int n = 0; const float r2 = r * r;
@@ -963,6 +1043,7 @@ void AiPlayer::think() {
         escort.erase(std::remove_if(escort.begin(), escort.end(), lost), escort.end());
         feint.erase(std::remove_if(feint.begin(), feint.end(), lost), feint.end());
     }
+    if (on2(F2_WARY)) noteLosses();
     if (!pendingMoves.empty()) flushMoves();   // the rest of a big group order given in an earlier think
     // The survey below keeps plain pointers into the entity array (hq, yards, factories, ...) and the orders it gives may place construction
     // sites: room for them up front, so a site placed mid-think can never move the array under those pointers.
@@ -1012,7 +1093,8 @@ void AiPlayer::think() {
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
     std::vector<Entity*> xHubs, xBarracks, xFactories;   // F2_EXPAND: the expansions' own (kept out of the home base's lists and counts)
-    const bool expanding = on2(F2_EXPAND) && (xs[0].active || xs[1].active);
+    bool expanding = false;
+    if (on2(F2_EXPAND)) for (const Expansion& x : xs) if (x.active) expanding = true;
     if (expanding) for (Expansion& x : xs) { x.nAll = x.nHub = x.nBar = x.nFac = x.nPow = x.nGun = x.nAA = x.cHub = x.cBar = x.cPow = x.cGun = 0; }
     int turrets = 0, aaTurrets = 0, powerPlants = 0, techs = 0, incomes = 0, ramps = 0, antiNukes = 0, bunkers = 0, civics = 0, silos = 0, walls = 0, masts = 0;
     thinkId = ++g_thinkSeq;
@@ -2185,7 +2267,7 @@ void AiPlayer::think() {
                     Vec2 c; float w = 0;
                     for (auto& o : S.ents) {
                         if (!o.alive || o.kind == EK_RESOURCE || !S.enemies(player, o.owner) || o.isAir() || dist(o.pos, tgt->pos) > 9.0f * TILE) continue;
-                        float v = o.isBuilding() ? (o.constructed && o.bt().weapon >= 0 && o.bt().role != BR_BUNKER && o.district < 0 ? BUILDS[o.type].cost * 1.4f : 0.0f)
+                        float v = o.isBuilding() ? (o.constructed && o.bt().weapon >= 0 && o.bt().role != BR_BUNKER && o.district < 0 ? BUILDS[o.type].cost * (o.bt().role == BR_FWALL ? 0.14f : 1.4f) : 0.0f)
                                                  : (o.ut().role == UR_COMBAT ? (float)UNITS[o.type].cost : 0.0f);
                         if (v > 0) { c += o.pos * v; w += v; }
                     }
@@ -2246,7 +2328,7 @@ void AiPlayer::think() {
             float armed = 0;
             S.forEachNear(e.pos, 6.5f * TILE, [&](Entity& g) {
                 if (g.kind == EK_RESOURCE || g.owner < 0 || !(g.owner == e.owner || S.players[g.owner].team == S.players[e.owner].team)) return;
-                if (g.weapon() >= 0 && (g.isBuilding() ? g.constructed : g.ut().role == UR_COMBAT)) armed += g.isBuilding() ? 1.5f : 1.0f;
+                if (g.weapon() >= 0 && (g.isBuilding() ? g.constructed : g.ut().role == UR_COMBAT)) armed += g.isBuilding() ? (g.bt().role == BR_FWALL ? 0.15f : 1.5f) : 1.0f;
             });
             Entity* sp = S.get(spies[0]);
             float sc = BUILDS[e.type].cost * w * 0.4f - 900.0f * armed - (sp ? dist(e.pos, sp->pos) / TILE * 12.0f : 0.0f);

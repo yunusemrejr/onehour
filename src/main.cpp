@@ -303,7 +303,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
     g_brain.learning = false;
     g_brain.profileLearning = getenv("ONEHOUR_EVALPROFILE") != nullptr;   // FEAT_PROFILE's opponent model learns over the series (nothing else does)
     int wins = 0, losses = 0, draws = 0, tieWins = 0, tieLosses = 0, punishes = 0; double winTime = 0, loseTime = 0;
-    int expTot[2][7] = {}, expGames[2] = {}, expPromAlive[2] = {};   // ONEHOUR_EVALEXP: [old, new][founded, finished, lost, home moved, raids met, pushes, splits]
+    int expTot[2][10] = {}, expGames[2] = {}, expPromAlive[2] = {};   // ONEHOUR_EVALEXP: [old, new][founded, finished, lost, home moved, raids met, pushes, splits, forward founded, forward finished, forward lost]
     for (int i = 0; i < games; i++) {
         if (getenv("ONEHOUR_EVALGAME") && i != atoi(getenv("ONEHOUR_EVALGAME"))) continue;   // (diagnostics: replay one game of the series)
         Faction fac[4] = { (Faction)(i & 1), (Faction)((i >> 1) & 1), F_CYBER, F_CLANKER };
@@ -358,6 +358,8 @@ static int evalAi(int games, u64 seed, int difficulty) {
             const AiPlayer& a = g_ai.ais[p]; const bool isNew = p == newTeam;
             printf("    P%d %s: expansions founded %d finished %d lost %d, home moved to one %d, raids met %d, a finished one held %.0f s, army alive at the end %d (home moves %d), structures %d, pushes %d, splits %d\n", p, isNew ? "new" : "old", a.xFounded, a.xFinished, a.xLost, a.xPromoted, a.xHelps, a.xHeldSecs, (int)g_sim.players[p].alive, a.relocations, g_sim.countBuildings(p, -1, false), a.pushes, a.splits);
             expTot[isNew][0] += a.xFounded; expTot[isNew][1] += a.xFinished; expTot[isNew][2] += a.xLost; expTot[isNew][3] += a.xPromoted; expTot[isNew][4] += a.xHelps; expTot[isNew][5] += a.pushes; expTot[isNew][6] += a.splits;
+            expTot[isNew][7] += a.xFwdFounded; expTot[isNew][8] += a.xFwdFinished; expTot[isNew][9] += a.xFwdLost;
+            if (a.on2(F2_SPREAD)) printf("      forward bases founded %d finished %d lost %d\n", a.xFwdFounded, a.xFwdFinished, a.xFwdLost);
             expGames[isNew] += a.xFounded > 0; expPromAlive[isNew] += a.xPromoted > 0 && g_sim.players[p].alive;
         }
         if (getenv("ONEHOUR_EVALCHOSEN")) for (int p = 0; p < 2; p++) {   // (what each side's Chosen did)
@@ -369,7 +371,7 @@ static int evalAi(int games, u64 seed, int difficulty) {
     printf("new AI vs previous generation: %d wins, %d losses, %d unresolved (of %d)%s\n", wins, losses, draws, games, "");
     printf("tiebreak at the limit (material held, >10%% apart): %d new, %d old\n", tieWins, tieLosses);
     printf("counterattacks by the new commander: %d\n", punishes);
-    if (getenv("ONEHOUR_EVALEXP")) for (int k = 1; k >= 0; k--) printf("expansions, %s side: %d of %d games founded one; founded %d, finished %d, lost %d, home moved to one %d (%d of those armies alive at the end), raids met %d, pushes %d, splits %d\n", k ? "new" : "old", expGames[k], games, expTot[k][0], expTot[k][1], expTot[k][2], expTot[k][3], expPromAlive[k], expTot[k][4], expTot[k][5], expTot[k][6]);
+    if (getenv("ONEHOUR_EVALEXP")) for (int k = 1; k >= 0; k--) printf("expansions, %s side: %d of %d games founded one; founded %d, finished %d, lost %d, home moved to one %d (%d of those armies alive at the end), raids met %d, pushes %d, splits %d; forward bases founded %d, finished %d, lost %d\n", k ? "new" : "old", expGames[k], games, expTot[k][0], expTot[k][1], expTot[k][2], expTot[k][3], expPromAlive[k], expTot[k][4], expTot[k][5], expTot[k][6], expTot[k][7], expTot[k][8], expTot[k][9]);
     if (wins) printf("  mean time of its wins %.0f s", winTime / wins);
     if (losses) printf("  mean time of its losses %.0f s", loseTime / losses);
     printf("\n");

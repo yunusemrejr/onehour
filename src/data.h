@@ -248,7 +248,10 @@ static const float WALL_PD_CHANCE = 0.38f;    // chance to burn down one incomin
 static const float WALL_PD_RELOAD = 3.2f;     // seconds before the same wall can engage again
 static const float WALL_PD_AA = 190.0f;       // damage a wall laser does to an aircraft it catches
 // Bastion Walls: the same price as a wall but nothing breaks them, not even a warhead. They catch fire like the island launchers, an enemy spy can
-// take a segment (and its new owner may sell it), and they never mount a gun or a point-defence laser: only the ordinary wall does that.
+// take a segment (and its new owner may sell it). Each carries a very weak sentry laser (W_BASTION_LASER) and sensors that find hidden snipers, spy
+// drones and infiltrators within BASTION_DETECT tiles (not The Chosen or a Phantom Jeep); no point-defence laser: only the ordinary wall has that.
+static const int   W_BASTION_LASER = 76;      // WEAPONS index of the sentry laser
+static const float BASTION_DETECT = 6.0f;     // tiles a Bastion Wall's sensors reach
 // Neutral civilian strongholds (Old Castle / Civilian Bunker / Watchtower): map landmarks that start empty and unowned. Any army's infantry
 // can walk in; the first one inside claims the place for their army and the garrison fires from its windows and loopholes. They are deliberately
 // tough: heavy masonry, a damage reduction and a per-warhead ceiling, but no army upgrade ever applies to them.

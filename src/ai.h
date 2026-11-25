@@ -80,8 +80,22 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                F2_PHANTOM = 131072, // the Phantom Jeep (ai_phantom.cpp): one per army from a factory and the tech structure. It mends at home when badly hurt
                                   // or hunted by three aircraft, meets the enemy's soldiers round its own base, and otherwise raids the enemy's power, tech,
                                   // airfields, nuke silos, factories and naval yards - planting TNT while it has charges, shelling them after. Never in a wave
+               F2_WARY = 262144,  // a memory of where the army got hurt, and a safe new home: every structure of its own that dies (or is taken), and every fighter
+                                  // that falls near home, leaves a scar that fades over some minutes (scarNear). A commander whose Command structure is gone and whose
+                                  // old home is burned (scars worth 2500 there) or too hot never rebuilds on the ruins: it scores the supply piles, rings round its
+                                  // dozer and spots beside its teammates' bases by risk (siteRisk: guns and fighters in sight, the scars, fallout, and nearness to
+                                  // any enemy home), distance to drive, wealth and a random taste, and founds the new home there; new expansions avoid scarred ground too.
+                                  // (--recoverytest: a razed base given a relief drop founds its Command structure 21 to 26 tiles from the ruins and not nearer to
+                                  //  the enemy; without the bit it rebuilds 3 tiles from them. Hard, 48 games per seed set against the same commander with F2_WARY and
+                                  //  F2_SPREAD off, wins-losses: 28-20 and 22-24 (2 unresolved), pooled 50-44: inside the noise of the null controls above.)
+               F2_SPREAD = 524288,// more bases, ringing the enemy: expansion slots Normal 2, Hard 3, Brutal 4 (F2_EXPAND alone: 1, 2, 2). Slot 0 stays the economic
+                                  // base; the others are forward bases 30 to 46 tiles from an enemy home (the team's focus first, then the other enemies in turn),
+                                  // each on the side of the enemy that the commander and its allies hold least (the widest angle to every base of the team), with
+                                  // a gun, a barracks, power and anti-air first and guards of their own. (Same series: the new side founded 160 expansions in 96
+                                  //  games, 81 of them forward bases, of which 34 were finished and 28 lost; the old side 104, 0 forward. 2400 s, 2 against 2 selftests at
+                                  //  Hard and Brutal, seeds 1-4: forward bases stood at 3 to 150 degrees round the enemy's home from the nearest base of the team.)
                F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM | F2_WARY | F2_SPREAD };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
                // (Nov 2026, new side with one bit against the defaults, 48 games per seed, wins-losses, seeds 1 and 2 pooled; the null control is the same masks on both sides:
@@ -208,6 +222,16 @@ struct AiPlayer {
     float incomeRate = 0, incomeAt = 0, incomeT = 0;   // credits per second coming in, measured over the last ten seconds or so
     bool recovering = false;    // most of the base is gone: rebuild the core before anything else (see FEAT_RECOVER)
     int haulersNow = 0;         // haulers at the last census (an army without a supply line has better things for its soldiers than a lighthouse)
+    // ---- F2_WARY: where the army got hurt. Structures of its own (towns excepted) and the fighters near home are listed every think; what is gone from the
+    // list at the next one died (or was taken) there and leaves a scar, which fades with a time constant of six minutes.
+    struct Scar { Vec2 pos; float value, time; };
+    struct Watched { Ref ref; Vec2 pos; float value; };
+    std::vector<Scar> scars;                // at most 48; losses within 6 tiles of one merge into it
+    std::vector<Watched> watched;
+    void noteLosses();                      // one pass per think
+    void addScar(Vec2 p, float value);
+    float scarNear(Vec2 p, float rTiles) const;   // the faded value of the scars within rTiles of p
+    float siteRisk(Vec2 p);                 // what makes p a poor place for a base: guns and fighters in sight, scars, fallout, nearness to an enemy home
     float relocatedAt = -100;   // when the commander last moved its home to a new site (relocateBase)
     int relocations = 0;        // (statistics)
     Vec2 groundFrom; bool groundCheck = false;   // findSpot: only spots a dozer standing at groundFrom can drive to
@@ -270,23 +294,28 @@ struct AiPlayer {
     void garrisonStrongholds();
     void frontier();                    // FEAT_FRONTIER (ai_frontier.cpp): take the island launchers, fire them, call the Nuclear Bomber
     float nextFrontier = 0;
-    // ---- F2_EXPAND (ai_frontier.cpp): a second base (two on Hard and Brutal) beside supply piles 25 to 60 tiles from home. Its structures are kept apart
+    // ---- F2_EXPAND (ai_frontier.cpp): a second base (two on Hard and Brutal; F2_SPREAD: up to four, the later ones forward bases round the enemy) beside
+    // supply piles 25 to 60 tiles from home. Its structures are kept apart
     // from the home base's in the survey (they do not count for its turrets, production or threat), its fighters stay and guard it, and a raid on it is met
     // by the nearest idle groups. When the Command structure falls and the home is poor, home moves to a living expansion (promoteExpansion).
     struct Expansion {
         bool active = false;            // a site is chosen
         Vec2 pos;                       // its centre: a supply pile
         float chosenAt = 0, firstAt = -1, lostAt = -1000, nextStep = 0, lastHelp = -100;
+        bool forward = false;           // F2_SPREAD: a forward base against the enemy 'target' (an economic one is beside supply piles, away from the enemy)
+        int target = -1;
         bool finished = false;          // supply hub (where there are piles), barracks, power and a gun are up
         bool piles = false;             // supply piles lie round the site (then its first structure is a hub)
         int nAll = 0, nHub = 0, nBar = 0, nFac = 0, nPow = 0, nGun = 0, nAA = 0;   // its structures, counted in the survey (the site and the finished)
         int cHub = 0, cBar = 0, cPow = 0, cGun = 0;                                 // ... the finished ones among them
         std::vector<Ref> guards;        // the fighters that stay (not part of any wave)
     };
-    Expansion xs[2];
+    static const int MAX_X = 4;         // expansion slots (F2_SPREAD: Normal 2, Hard 3, Brutal 4)
+    Expansion xs[MAX_X];
     float nextExpand = 0;
     std::vector<std::pair<Vec2, float>> xLostSites;     // where an expansion fell or never took, and when (a new site keeps clear of them for a while)
     int xFounded = 0, xFinished = 0, xLost = 0, xPromoted = 0, xHelps = 0;   // (statistics: sites founded, finished, lost, made the new home, raids met)
+    int xFwdFounded = 0, xFwdFinished = 0, xFwdLost = 0;                       // (statistics: the same for the forward bases alone, which are counted in the totals too)
     float xHeldSecs = 0; float xLastT = 0;                                    // (statistics: seconds with a finished expansion standing)
     int xSlotOf(Vec2 p) const;          // the expansion whose ground p lies on (-1 none)
     bool xGuard(const Entity& e) const; // a guard of one of them

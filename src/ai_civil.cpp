@@ -63,7 +63,7 @@ void AiManager::updateTeamFocus() {
         if (e.isUnit() && e.ut().role == UR_COMBAT && !e.ut().temp) {
             str[e.owner] += UNITS[e.type].cost;
             for (int t = 0; t < S.numPlayers; t++) if (t != e.owner && S.enemies(t, e.owner) && dist(e.pos, S.players[t].basePos) < 28.0f * TILE) pressure[t][e.owner] += UNITS[e.type].cost;   // its fighters at t's door
-        } else if (e.isBuilding() && e.constructed && e.bt().weapon >= 0) str[e.owner] += BUILDS[e.type].cost * 0.6f;
+        } else if (e.isBuilding() && e.constructed && e.bt().weapon >= 0) str[e.owner] += BUILDS[e.type].cost * (e.bt().role == BR_FWALL ? 0.06f : 0.6f);   // (a Bastion Wall's sentry laser counts a tenth)
     }
     for (int t = 0; t < MAX_PLAYERS; t++) focus[t] = -1;
     for (int team = 0; team < MAX_PLAYERS; team++) {
@@ -137,7 +137,7 @@ void AiPlayer::civilAffairs(const std::vector<Ref>& army, const std::vector<Ref>
             if (g.kind == EK_RESOURCE || !S.enemies(player, g.owner) || g.weapon() < 0 || g.carrier.valid()) return;
             if (g.isBuilding() ? !g.constructed : g.ut().role != UR_COMBAT) return;
             if (!S.visibleTo(g, player)) return;
-            v += g.isUnit() ? UNITS[g.type].cost : BUILDS[g.type].cost * 1.6f;
+            v += g.isUnit() ? UNITS[g.type].cost : BUILDS[g.type].cost * (g.bt().role == BR_FWALL ? 0.16f : 1.6f);
         });
         return v;
     };
