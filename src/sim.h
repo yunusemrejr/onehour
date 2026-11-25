@@ -12,7 +12,8 @@ enum Order : u8 { O_IDLE = 0, O_MOVE, O_ATTACKMOVE, O_ATTACK, O_HARVEST, O_RETUR
                   O_UNLOAD,     // transport: fly to 'target' and let the passengers out there
                   O_STRIKERUN,  // Air Strike fighter: one bombing pass over 'target', a hard break, then off the map (see Sim::strikeJetRun)
                   O_NUKERUN,    // Nuclear Bomber call-in: straight over 'target', one bomb, on off the map (see Sim::nukeBomberRun)
-                  O_CARRIERJET };   // a carrier's jet: fights near its carrier ('home') and lands on it again (see Sim::carrierJetRun)
+                  O_CARRIERJET,     // a carrier's jet: fights near its carrier ('home') and lands on it again (see Sim::carrierJetRun)
+                  O_PLANT };        // Phantom Jeep: drive to the enemy structure targetEnt, plant a TNT charge (see Sim::plantRun)
 
 struct Ref {
     i32 idx = -1; u32 gen = 0;
@@ -198,6 +199,11 @@ struct Entity {
     float capHit = -100;              // infiltrator: the last hit it took while breaking into a sniper-held bunker (each one sets its work back)
     float subEvadeAt = 0;             // ... sim time before which it does not pick another place to run to
     float vlsCd = 0;                  // battleship: sim time its cruise-missile cells are loaded again
+    // ---- the Phantom Jeep (sim_phantom.cpp). Its second mount (the missile pod) reuses gunCd[0] / gunTgt[0] / gunAng[0], which only bunkers use otherwise
+    Ref airHit[PHANTOM_AIR_SLOTS];    // the aircraft that hit it lately (damage grows with how many are on it at once) ...
+    float airHitAt[PHANTOM_AIR_SLOTS] = {};   // ... and when each one last did
+    u8 tntLeft = 0;                   // TNT charges it carries
+    float tntNext = 0;                // sim time the next charge is ready (while it carries fewer than PHANTOM_TNT_MAX)
 
     bool isUnit() const { return kind == EK_UNIT; }
     bool isBuilding() const { return kind == EK_BUILDING; }
@@ -580,7 +586,11 @@ struct Sim {
     static bool wall(const Entity& b) { return b.isBuilding() && b.bt().role == BR_WALL; }
     static bool invulnerable(const Entity& b) { return b.isBuilding() && invulnerableRole(b.bt().role); }   // island launchers and Bastion Walls: never damaged, they only burn
     static bool swimmer(const Entity& e) { return e.isUnit() && !e.isAir() && e.ut().role == UR_SPY; }   // infiltrators paddle across water they cannot walk round (see SWIM_COST)
-    static bool walkable(const Entity& e, int tx, int ty) { return swimmer(e) ? g_map.swimPassable(tx, ty) : g_map.passable(tx, ty); }
+    static bool climber(const Entity& e) { return e.isUnit() && phantomType(e.type); }   // the Phantom Jeep drives over everything but Bastion Walls and non-wall structures (Map::climbPassable)
+    static PathMode pathModeOf(const Entity& e) { return climber(e) ? PM_CLIMB : (swimmer(e) ? PM_SWIM : PM_WALK); }
+    static bool walkable(const Entity& e, int tx, int ty) { return g_map.passableFor(pathModeOf(e), tx, ty); }
+    // the nearest tile this unit may stand on (a Phantom's own ground rule for it)
+    static Vec2 freeSpot(const Entity& e, Vec2 p, int maxR = 6) { return g_map.nearestFree(p, maxR, pathModeOf(e)); }
     static bool neutralTakeable(const Entity& b) { return b.isBuilding() && b.owner < 0 && (invulnerableRole(b.bt().role) || b.bt().role == BR_STRONGHOLD || b.bt().role == BR_ISLANDNUKE || b.bt().relic || b.district >= 0); }   // nobody's: any army's spy may take it (a town: the whole of it; a relic structure: plain infantry too)
     // what an infiltrator of 'player' may capture: an enemy structure, a neutral one (see neutralTakeable), and - for a human player only, never a
     // computer army - an ally's structure (the human takes it over; the ally is not asked)
@@ -589,6 +599,20 @@ struct Sim {
         if (b.isBuilding() && b.bt().role == BR_FWALL) return false;   // a Bastion Wall: nobody ever takes one, human or computer (nor breaks it: see invulnerable)
         return enemies(player, b.owner) || neutralTakeable(b) || allyTakeable(player, b);
     }
+    // ---- The Phantom Jeep (sim_phantom.cpp)
+    struct TntCharge { Ref site, by; int owner; float blowAt; };
+    std::vector<TntCharge> tnts;                           // charges sitting on structures, counting down
+    Ref phantomOf(int player) const;                       // the army's Phantom Jeep, if it has one in the field
+    bool phantomInProduction(int player) const;            // one in the field, queued, or on its way down from a transport: no second one
+    void updatePhantom(Entity& e);                         // regeneration, TNT recharge, the missile mount, holding its post (every tick)
+    bool phantomVolley(Entity& e, Entity& tgt);            // the rotary gun: a volley spread over up to PHANTOM_GUN_TARGETS soldiers (tryFire routes W_PHANTOM_GUN here)
+    bool phantomHit(Entity& p, const Entity* attacker, float& real, bool warhead);   // applyDamage's rules for it: aircraft stack, ground fire is plated; true when its health may not fall under PHANTOM_NUKE_FLOOR (warheads, fallout)
+    void phantomIdle(Entity& e);                           // O_IDLE: fires at what is in range, steps at most PHANTOM_LEASH tiles off its post for it, then back
+    void plantRun(Entity& e);                              // O_PLANT: drive to the footprint, plant, done
+    bool cmdPlant(const std::vector<Ref>& units, Ref site);   // Plant TNT: the selected Phantoms go and plant charges on an enemy structure (false: none can)
+    bool plantable(int player, const Entity& site) const;  // an enemy structure a charge may go on (never a Bastion Wall or a structure nobody owns)
+    void updateTnt();                                      // charges burn down and blow
+    static bool phantomSeekable(const Entity& t) { return t.isUnit() && t.ut().kind == UK_INF; }
     // ---- The Chosen and its Shadow Guard (sim_chosen.cpp)
     void convertUnit(Entity& u, int to, const Entity* by);   // u (and whoever rides in it) changes sides on the spot
     bool mayConvert(const Entity& by, const Entity& t) const;   // can a Chosen of by's army turn t (an enemy soldier, vehicle or ship; never aircraft, a loan or another Chosen)

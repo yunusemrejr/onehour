@@ -488,6 +488,17 @@ void buildIcon(int id, Ico& I) {
         I.seg(0, -19, 0, 4, 2.0f, AMBER, 0.3f);
         I.poly({ { -11, 0 }, { 11, 0 }, { 0, 12 } }, AMBER, 0.3f);
         break;
+    case ICO_PLANT: {   // Plant TNT: three red sticks bound with a band, a fuse with a spark on top
+        I.box(-10, 6, 4.6f, 12, 1.5f, HOT, 0.5f);
+        I.box(0, 6, 4.6f, 12, 1.5f, RED, 0.5f);
+        I.box(10, 6, 4.6f, 12, 1.5f, HOT, 0.5f);
+        I.box(0, 6, 15.5f, 2.4f, 0.8f, PALE, 0.4f);                 // the binding
+        I.seg(0, -7, 0, -12, 1.1f, BRASS, 0.3f);                     // the fuse
+        I.seg(0, -12, 6, -17, 1.1f, BRASS, 0.3f);
+        I.glow(6.5f, -17.5f, 8.0f, ORANGE);
+        I.circle(6.5f, -17.5f, 2.6f, AMBER, 0.2f).deco();            // the spark
+        break;
+    }
     default: break;
     }
 }

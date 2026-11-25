@@ -203,7 +203,7 @@ void AiPlayer::heliHunt(const std::vector<Ref>& aircraft, const std::vector<Enti
     if (!stay.empty()) S.cmdGuardArea(stay, pl.basePos, 9.0f * TILE);   // the watch over the base
     if (seen) {   // and the nearest fighters go for it too
         std::vector<Ref> near;
-        S.forEachNear(seen->pos, 14.0f * TILE, [&](Entity& e) { if (e.isUnit() && e.owner == player && e.ut().role == UR_COMBAT && !e.isAir() && !chosenType(e.type) && near.size() < 12) near.push_back(S.refOf(e)); });
+        S.forEachNear(seen->pos, 14.0f * TILE, [&](Entity& e) { if (e.isUnit() && e.owner == player && e.ut().role == UR_COMBAT && !e.isAir() && !chosenType(e.type) && !phantomType(e.type) && near.size() < 12) near.push_back(S.refOf(e)); });
         if (!near.empty()) S.cmdAttack(near, S.refOf(*seen));
     }
 }

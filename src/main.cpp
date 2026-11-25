@@ -27,7 +27,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --phantomtest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -100,7 +100,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "NaN position at tick %d\n", t); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "entity out of world at tick %d (%s %s owner %d at %.0f,%.0f order %d)\n", t, e.isUnit() ? "unit" : "other", e.isUnit() ? e.ut().name : (e.isBuilding() ? e.bt().name : "resource"), e.owner, e.pos.x, e.pos.y, (int)e.order); return false; }
             // (an infiltrator may be out on the water: it swims)
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y)))))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) || Sim::climber(e)))) { fprintf(stderr, "ground unit on impassable terrain at tick %d (%s idx %d P%d order %d at %.1f,%.1f prev %.1f,%.1f fall %.2f)\n", t, e.ut().name, (int)(&e - &g_sim.ents[0]), e.owner, (int)e.order, e.pos.x, e.pos.y, e.prevPos.x, e.prevPos.y, e.fall); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "hp above max at tick %d\n", t); return false; }
             // a fixed-wing aircraft away from its airfield never flies slower than its stall speed (it circles instead of hovering)
             size_t ix = (size_t)(&e - &g_sim.ents[0]);
@@ -744,6 +744,7 @@ bool sonarTest(u64 seed);         // tests25.cpp: the sonar that finds a compute
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
+bool phantomTest(u64 seed);      // tests26.cpp: the Phantom Jeep (stealth, snipers cannot target it, warheads and aircraft damage, self-repair, TNT, climbing, one per army, the AI's)
 bool callsTest(u64 seed);       // tests_calls.cpp: Bastion Walls no computer army takes, bunker Satellite Scans, Gunship Call, Find and Destroy
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
 bool moveTest(u64 seed);
@@ -2721,7 +2722,7 @@ static bool fuzzTest(u64 seed, int seconds) {
     auto where = [&]() { return Vec2(rng.f(-200, WORLD_W + 200), rng.f(-200, WORLD_H + 200)); };
     for (int t = 0; t < n && !g_sim.gameOver; t++) {
         if (t % 6 == 0) {
-            int c = rng.range(0, 37);
+            int c = rng.range(0, 38);
             cmds++;
             switch (c) {
             case 0: g_sim.cmdMove(sel(), where(), rng.range(0, 1)); break;
@@ -2788,6 +2789,13 @@ static bool fuzzTest(u64 seed, int seconds) {
                 else { for (auto& e : g_sim.ents) if (e.alive && e.isUnit() && subType(e.type) && rng.range(0, 2) == 0) e.siloTimer = 0; g_sim.cmdSubNuke(ow, where(), rng.range(0, 1) == 0, anyEnt(-2, 1)); }
                 break;
             }
+            case 38: {   // the Phantom Jeep, for whoever: one per army, planting TNT, driving over rock, water and walls
+                int ow = rng.range(0, 3);
+                Ref ph = g_sim.phantomOf(ow);
+                if (!ph.valid()) ph = g_sim.spawnUnit(g_sim.players[ow].faction == F_CYBER ? U_C_PHANTOM : U_K_PHANTOM, ow, g_map.nearestFree(g_sim.players[ow].basePos + Vec2(rng.f(-300, 300), rng.f(-300, 300)), 10, PM_CLIMB));
+                if (Entity* pe = g_sim.get(ph)) { pe->tntLeft = (u8)rng.range(0, PHANTOM_TNT_MAX); if (rng.range(0, 2) == 0) g_sim.cmdPlant({ ph }, anyEnt(rng.range(-2, 3), 2)); else g_sim.cmdMove({ ph }, where(), rng.range(0, 1) == 0); }
+                break;
+            }
             case 34: { int bt = rng.range(0, 1) ? B_C_FWALL : B_K_FWALL; int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 2) == 0 ? rng.range(-1, 1) : 0, tx, ty, rng.range(0, 1) == 0); break; }   // Bastion Walls, any owner
             case 25: { int bt = B_C_BUNKER + rng.range(0, 5); int tx = tileOf(g_sim.players[0].basePos.x) + rng.range(-12, 12), ty = tileOf(g_sim.players[0].basePos.y) + rng.range(-12, 12); if (g_sim.canPlace(0, bt, tx, ty)) g_sim.placeBuilding(bt, rng.range(0, 3) == 0 ? rng.range(0, 3) : 0, tx, ty, rng.range(0, 1) == 0); break; }
             }
@@ -2798,7 +2806,7 @@ static bool fuzzTest(u64 seed, int seconds) {
             if (!e.alive) continue;
             if (!(e.pos.x == e.pos.x) || !(e.pos.y == e.pos.y)) { fprintf(stderr, "fuzz: NaN position at tick %d (%s)\n", t, e.isUnit() ? e.ut().name : "?"); return false; }
             if (e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_W || e.pos.y > WORLD_H) { fprintf(stderr, "fuzz: entity out of world at tick %d (%s %.0f,%.0f)\n", t, e.isUnit() ? e.ut().name : "building", e.pos.x, e.pos.y); return false; }
-            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y)))))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
+            if (e.isUnit() && !e.isAir() && e.fall <= 0 && !e.carrier.valid() && (e.ut().naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !(g_map.terrainPassable(tileOf(e.pos.x), tileOf(e.pos.y)) || (Sim::swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) || Sim::climber(e)))) { fprintf(stderr, "fuzz: ground unit on impassable terrain at tick %d (%s)\n", t, e.ut().name); return false; }
             if (e.hp > e.maxHp + 0.01f) { fprintf(stderr, "fuzz: hp above max at tick %d\n", t); return false; }
             if (e.isUnit() && e.ammo < 0) { fprintf(stderr, "fuzz: negative ammo\n"); return false; }
             if (e.kind != EK_RESOURCE && g_sim.players[e.owner >= 0 ? e.owner : 0].money < -1) { fprintf(stderr, "fuzz: negative money at tick %d\n", t); return false; }
@@ -3097,6 +3105,7 @@ int main(int argc, char** argv) {
         else if (a == "--updatetest") { g_map.generate(); return updateTest(seed) ? 0 : 1; }
         else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
+        else if (a == "--phantomtest") { g_map.generate(); return phantomTest(seed) ? 0 : 1; }
         else if (a == "--callstest") { g_map.generate(); return callsTest(seed) ? 0 : 1; }
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
         else if (a == "--oceantest") { g_map.generate(); return oceanTest(seed) ? 0 : 1; }
@@ -3603,6 +3612,53 @@ int main(int argc, char** argv) {
                 stealthCam = Vec2(clampf(c.x - SCREEN_W / 2 + 120, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H)); haveStealthCam = true;
                 g_game.selection.clear(); if (!spotted) g_game.selection.push_back(ch);
             }
+            if (const char* ph = getenv("ONEHOUR_PHANTOM")) {   // ONEHOUR_PHANTOM=1: the viewed army's Phantom Jeep amid a crowd of soldiers, tanks, builder and civilian dozers (the camera on it); =spotted: an enemy one, found by your helicopter; =tnt: one at an enemy structure with a charge planted. ONEHOUR_PHANTOMT=s moves the blink clock on by s seconds
+                const std::string mode = ph;
+                const bool spotted = mode == "spotted", tnt = mode == "tnt";
+                int vp = std::min(viewPlayer, g_sim.numPlayers - 1), foe = vp == 0 ? 1 : 0;
+                if (spotted) std::swap(vp, foe);   // (then the Phantom is the enemy's, and one of your helicopters hovers over it)
+                const Faction f = g_sim.players[vp].faction, ff = g_sim.players[foe].faction;
+                for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);
+                const int ptype = f == F_CYBER ? U_C_PHANTOM : U_K_PHANTOM;
+                Vec2 c = g_map.nearestFree(b + (Vec2(WORLD_W * 0.5f, WORLD_H * 0.5f) - b).norm() * 520.0f, 12);
+                Ref pj = NOREF;
+                if (tnt) {   // the enemy's factory (any structure of its, failing that): the jeep drives up from the south and plants
+                    const Entity* site = nullptr;
+                    for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.constructed && e.owner == foe && (!site || e.bt().role == BR_FACTORY)) site = &e;
+                    if (!site) { fprintf(stderr, "ONEHOUR_PHANTOM=tnt: no enemy structure to plant on\n"); return 1; }
+                    const Ref sr = g_sim.refOf(*site);
+                    pj = g_sim.spawnUnit(ptype, vp, g_map.nearestFree(site->pos + Vec2(0, site->bt().h * TILE * 0.5f + 90.0f), 10));
+                    for (int t = 0; t < 400 && g_sim.tnts.empty(); t++) { g_sim.step(); g_sim.events.clear(); if (g_sim.tnts.empty() && g_sim.get(pj)->order != O_PLANT) g_sim.cmdPlant({ pj }, sr); }   // (it takes a moment before the structure is in the jeep's sight)
+                    if (g_sim.tnts.empty()) { fprintf(stderr, "ONEHOUR_PHANTOM=tnt: the Phantom Jeep planted nothing\n"); return 1; }
+                    for (int t = 0; t < 20 * 2; t++) { g_sim.step(); g_sim.events.clear(); }   // (two seconds into the fuse)
+                    const Vec2 mid = (g_sim.get(pj)->pos + site->pos) * 0.5f;
+                    stealthCam = Vec2(clampf(mid.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(mid.y - VIEW_H / 2 + 30, 0, WORLD_H - VIEW_H));
+                } else {
+                    pj = g_sim.spawnUnit(ptype, vp, c);
+                    const int mix[] = { 2, 3, 4, 5, 6, 7, 9, 10, 2, 3, 5, 6 };   // soldiers and tanks of the army, round the jeep
+                    for (int k = 0; k < (spotted ? 0 : 12); k++) {
+                        const float a2 = k * 0.5236f + 0.3f, rr = 52.0f + 26.0f * (k % 3);
+                        g_sim.cmdStop({ g_sim.spawnUnit(firstUnitOf(f) + mix[k], vp, g_map.nearestFree(c + Vec2(std::cos(a2), std::sin(a2)) * rr, 8)) });
+                    }
+                    for (int k = 0; k < (spotted ? 0 : 5); k++) {   // builder dozers and civilian dozers of the army, mixed in with them
+                        const float a2 = k * 1.26f + 0.9f, rr = 84.0f + 18.0f * (k & 1);
+                        g_sim.cmdStop({ g_sim.spawnUnit(k % 2 ? (f == F_CYBER ? U_C_CIVDOZER : U_K_CIVDOZER) : (f == F_CYBER ? U_C_DOZER : U_K_DOZER), vp, g_map.nearestFree(c + Vec2(std::cos(a2), std::sin(a2)) * rr, 8)) });
+                    }
+                    for (int k = 0; k < 2; k++) {   // and an enemy builder and an enemy civilian dozer that wandered in
+                        const Vec2 q = g_map.nearestFree(c + Vec2(150.0f, -50.0f + 70.0f * k), 8);
+                        g_sim.cmdStop({ g_sim.spawnUnit(k ? (ff == F_CYBER ? U_C_CIVDOZER : U_K_CIVDOZER) : (ff == F_CYBER ? U_C_DOZER : U_K_DOZER), foe, q) });
+                    }
+                    if (spotted) {
+                        for (int k = 0; k < 2; k++) { Ref h = g_sim.spawnUnit(ff == F_CYBER ? U_C_HELI : U_K_AIR, foe, c + Vec2(70 + 30 * k, -60 + 50 * k)); g_sim.get(h)->alt = 1; g_sim.cmdStop({h}); }
+                    }
+                    // (the jeep's missiles would bring the helicopters down within seconds: the spotted scene is a moment, not a fight)
+                    for (int t = 0; t < (spotted ? 8 : 20 * 3); t++) { g_sim.step(); g_sim.events.clear(); }
+                    stealthCam = Vec2(clampf(c.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(c.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                }
+                haveStealthCam = true;
+                if (const char* pt = getenv("ONEHOUR_PHANTOMT")) g_game.wallTime += (float)atof(pt);
+                g_game.selection.clear(); if (!spotted) g_game.selection.push_back(pj);
+            }
             if (const char* hs = getenv("ONEHOUR_HELI")) {   // ONEHOUR_HELI=N: N helicopters of the viewed army hover over its base, a few more parked at an airfield
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), ht = g_sim.players[vp].faction == F_CYBER ? (int)U_C_HELI : (int)U_K_AIR, n = std::max(1, atoi(hs));
                 std::vector<Ref> hs2;
@@ -3661,6 +3717,19 @@ int main(int argc, char** argv) {
                 } else if (m == "hq") {   // the Command Center's bar (Find and Destroy, Protect Us)
                     g_sim.players[0].isAI = false;
                     for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && e.bt().role == BR_HQ) { g_game.selection.push_back(g_sim.refOf(e)); focus = e.pos; break; }
+                } else if (m == "factory" || m == "factory1") {   // the factory's build menu with the Phantom Jeep unlocked (=factory1: one already in the field, so its button is greyed)
+                    Faction f0 = g_sim.players[0].faction;
+                    Vec2 bp = g_sim.players[0].basePos; Ref fr;
+                    for (int role : { (int)BR_TECH, (int)BR_FACTORY }) {
+                        int bt = firstBuildOf(f0) + role; Ref r;
+                        for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && e.type == bt && e.constructed) r = g_sim.refOf(e);
+                        for (int dy = 4; dy < 16 && !r.valid(); dy++) for (int dx = -14; dx < 14 && !r.valid(); dx++) { int tx = tileOf(bp.x) + dx, ty = tileOf(bp.y) + dy; if (g_sim.canPlace(0, bt, tx, ty)) r = g_sim.placeBuilding(bt, 0, tx, ty, true); }
+                        if (role == BR_FACTORY) fr = r;
+                    }
+                    g_sim.players[0].money = 20000; g_sim.updatePowerPublic();
+                    if (m == "factory1") g_sim.spawnUnit(f0 == F_CYBER ? U_C_PHANTOM : U_K_PHANTOM, 0, g_map.nearestFree(bp + Vec2(-120, 140), 10, PM_CLIMB));
+                    for (int t = 0; t < 20; t++) g_sim.step();
+                    if (Entity* fe = g_sim.get(fr)) { g_game.selection.push_back(fr); focus = fe->pos; }
                 } else if (m == "tech") {
                     // showcase the tech structure panel: research running, scan active, an elite unit on the field
                     Faction f0 = g_sim.players[0].faction;

@@ -5,6 +5,11 @@
 
 enum Tile : u8 { T_GRASS = 0, T_GRASS2, T_DIRT, T_SAND, T_ROAD, T_WATER, T_ROCK, T_TREE, T_COUNT };
 
+// What a ground unit's route may cross: PM_WALK open ground only; PM_SWIM an infiltrator's, which also paddles over open water; PM_CLIMB the Phantom Jeep's, which
+// drives over everything (rock, trees, ridges, water) except Bastion Walls and the footprints of structures that are not wall segments (Map::climbPassable)
+enum PathMode : u8 { PM_WALK = 0, PM_SWIM, PM_CLIMB };
+enum WallMark : u8 { WM_NONE = 0, WM_WALL, WM_BASTION };   // what kind of wall segment stands on a tile (Map::wallMark)
+
 struct StartSpot { int tx, ty; };
 struct SupplySpot { int tx, ty; int amount; };
 // Places on the map where the old civilian strongholds stand. kind: 0 castle, 1 civilian bunker, 2 watchtower, 3 cottage, 4 workshop,
@@ -39,6 +44,7 @@ struct Map {
     u8 variant[MAP_W * MAP_H];      // visual variation
     u8 bridge[MAP_W * MAP_H];       // road laid over a river (drawn as a timber deck)
     u16 waterComp[MAP_W * MAP_H];   // connected body of water a water tile belongs to (0 = not water), see waterSize
+    u8 wallMark[MAP_W * MAP_H];     // WallMark: which tiles hold an ordinary wall segment (a Phantom Jeep drives over) or a Bastion Wall (it cannot); set with setStructure
     u8 clearable[MAP_W * MAP_H];    // vegetation a structure may be built over (it is cleared away): 1 a tree, 2 a small rock outcrop (not a ridge)
     std::vector<int> cleared;       // footprint tiles of structures placed since the renderer last repainted the baked ground: tile | kind << 24 (1 footprint, 2 quarried rock), each footprint closed by -1
     std::vector<int> waterSize;     // tiles of each body of water, indexed by waterComp (the central lake is by far the biggest)
@@ -76,6 +82,16 @@ struct Map {
     void generate();
     u8 tile(int x, int y) const { return tiles[y * MAP_W + x]; }
     bool passable(int x, int y) const { return inMap(x, y) && blocked[y * MAP_W + x] == 0; }
+    // The Phantom Jeep's ground: every tile of the map but those of Bastion Walls and of structures that are not ordinary wall segments (a resource pile is no obstacle)
+    bool climbPassable(int x, int y) const { return inMap(x, y) && ((blocked[y * MAP_W + x] & 2) == 0 || wallMark[y * MAP_W + x] == WM_WALL); }
+    bool passableFor(PathMode m, int x, int y) const { return m == PM_CLIMB ? climbPassable(x, y) : (m == PM_SWIM ? swimPassable(x, y) : passable(x, y)); }
+    // step cost of a tile for the Phantom's search: open 1, water 1.1, rock and trees 1.3, an ordinary wall tile 1.5 (a road keeps its 0.8)
+    float climbCost(int x, int y) const {
+        const int i = y * MAP_W + x;
+        if (wallMark[i] == WM_WALL) return 1.5f;
+        const u8 t = tiles[i];
+        return t == T_WATER ? 1.1f : (t == T_ROCK || t == T_TREE) ? 1.3f : moveCost(x, y);
+    }
     bool terrainPassable(int x, int y) const { return inMap(x, y) && (blocked[y * MAP_W + x] & 1) == 0; }
     // Trees, bushes and small rocks never stop a structure: they are cleared away when it is placed (clearForStructure). Water, ridges, other
     // structures, supply piles and bridge decks do.
@@ -102,7 +118,7 @@ struct Map {
     // Would a w x h structure at (x, y) cut the ground around it in two (a corridor between rock and water, a gap between two other structures)? Counts the
     // 4-connected regions of free ground in the window of a few tiles round the footprint before and after: more of them after means it would plug something.
     bool wouldPlug(int x, int y, int w, int h, bool strict = false) const;   // strict: sealing off even a small nook counts (the commander's walls: a unit may stand in it)
-    void setStructure(int x, int y, int w, int h, bool on);
+    void setStructure(int x, int y, int w, int h, bool on, WallMark wall = WM_NONE);   // wall: what kind of wall segment it is (cleared again with on = false)
     void setResource(int x, int y, bool on);
     // Connected ground: every passable tile carries the id of the 4-connected region it belongs to (0 = blocked). A* moves diagonally only between two
     // open orthogonal neighbours, so these are exactly the places a ground route can reach from each other. A search for a spot in another region is
@@ -130,16 +146,16 @@ struct Map {
     // Pathfinding: fills out with tile centers (excluding start tile), returns false if unreachable.
     // If the goal is blocked, the nearest reachable tile is used.
     // swim: an infiltrator may also cross open water (see swimTile); it costs more than walking, so land is still preferred where it goes.
-    bool findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H, bool swim = false) const;
+    bool findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H, PathMode mode = PM_WALK) const;
     // Path to the nearest reachable tile beside a w x h footprint at (x, y) (any of its sides, by real path length): dozers and spies walk up to
     // the face of a structure that is on their side instead of a fixed doorstep that may be round the back. False if no side can be reached.
-    bool findPathToRect(Vec2 from, int x, int y, int w, int h, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H, bool swim = false) const;
-    bool lineClear(Vec2 a, Vec2 b, bool swim = false) const;   // straight ground line free of blocked tiles (swim: water is free too)
-    void pullString(Vec2 from, const std::vector<Vec2>& tiles, std::vector<Vec2>& out, bool swim = false) const;   // a tile route into straight-line waypoints
+    bool findPathToRect(Vec2 from, int x, int y, int w, int h, std::vector<Vec2>& out, int maxNodes = MAP_W * MAP_H, PathMode mode = PM_WALK) const;
+    bool lineClear(Vec2 a, Vec2 b, PathMode mode = PM_WALK) const;   // straight ground line free of blocked tiles (swim: water is free too; climb: see climbPassable)
+    void pullString(Vec2 from, const std::vector<Vec2>& tiles, std::vector<Vec2>& out, PathMode mode = PM_WALK) const;   // a tile route into straight-line waypoints
     // Water an infiltrator can swim through: any water tile (lake, river, pond) with nothing standing in it
     bool swimTile(int x, int y) const { return inMap(x, y) && tiles[y * MAP_W + x] == T_WATER && (blocked[y * MAP_W + x] & ~1) == 0; }
     bool swimPassable(int x, int y) const { return passable(x, y) || swimTile(x, y); }
-    Vec2 nearestFree(Vec2 p, int maxR = 6) const;
+    Vec2 nearestFree(Vec2 p, int maxR = 6, PathMode mode = PM_WALK) const;
 
     // ---- the lake: ships sail on water only. A tile is sailable if it is water with no structure on it (bridges are road, so they close a
     // river to ships); a tile is "open" if it and its four neighbours are sailable, which leaves room for a hull between the shores.

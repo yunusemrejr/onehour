@@ -22,7 +22,8 @@ enum { BK_BUILD = 1, BK_TRAIN, BK_SELL, BK_RALLY, BK_POWER, BK_ATTACKMOVE, BK_ST
        BK_HELICALL,     // tech structure: Gunship Call
        BK_BUNKERSCAN,   // a bunker's Satellite Scan
        BK_FINDDESTROY,  // Command Center (human armies): Find and Destroy (id 1: call it off)
-       BK_PROTECT };    // Command Center (human armies): Protect Us (id 1: call it off)
+       BK_PROTECT,      // Command Center (human armies): Protect Us (id 1: call it off)
+       BK_PLANT };      // the Phantom Jeep: Plant TNT on an enemy structure
 
 static const char* kindHotkey(int kind, int id) {
     switch (kind) {
@@ -61,6 +62,7 @@ static const char* kindHotkey(int kind, int id) {
     case BK_BUNKERSCAN: return "O";
     case BK_FINDDESTROY: return "F";
     case BK_PROTECT: return "Y";
+    case BK_PLANT: return "T";
     }
     return nullptr;
 }
@@ -87,6 +89,7 @@ static int buttonIcon(int kind, int id, const char* label, Faction f) {
     case BK_BUNKERSCAN: return ICO_SATELLITE;
     case BK_FINDDESTROY: return id == 1 ? ICO_CANCEL : ICO_HUNT;
     case BK_PROTECT: return id == 1 ? ICO_CANCEL : ICO_PROTECT;
+    case BK_PLANT: return ICO_PLANT;
     case BK_SELL: return ICO_SELL;
     case BK_RALLY: return ICO_RALLY;
     case BK_ATTACKMOVE: return ICO_ATTACKMOVE;
@@ -186,7 +189,7 @@ void Game::startGame() {
     for (auto& g : groups) g.clear();
     messages.clear();
     parts.clear(); decals.clear(); treads.clear(); treadHead = 0; nukeFlash = 0; frameDt = 0;   // no smoke, scorch or flash left over from the previous match
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; heliMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1; scienceOpen = false; scienceNextAt = SCIENCE_EVERY; sciencePlayed = 0;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; heliMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; plantMode = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF; zoneFlashes.clear(); paused = false; speed = 1.0f; menuOpen = false; menuConfirm = -1; scienceOpen = false; scienceNextAt = SCIENCE_EVERY; sciencePlayed = 0;
     accumulator = 0;
     Vec2 b = g_sim.players[0].basePos;
     cam = Vec2(clampf(b.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(b.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
@@ -472,6 +475,15 @@ bool Game::issueForceFire(Vec2 w) {
     return true;
 }
 
+// Plant TNT: the click must land on an enemy structure a charge can go on; the selected Phantom Jeeps with a charge left go and plant one
+bool Game::issuePlant(Vec2 w) {
+    Entity* t = pickEntity(w, false);
+    if (!t || !t->isBuilding() || !g_sim.plantable(g_sim.humanPlayer, *t)) return false;
+    if (!g_sim.cmdPlant(selection, g_sim.refOf(*t))) return false;
+    g_audio.play(SND_ORDER, Vec2(), true, 0.6f);
+    return true;
+}
+
 void Game::issueAttackMove(Vec2 w) {
     Entity* t = pickEntity(w, false);
     if (t && t->kind != EK_RESOURCE && (t->owner >= 0 || Sim::invulnerable(*t) || neutralTarget(*t)) && forceFireKey()) {
@@ -586,6 +598,11 @@ void Game::buildButtonsRaw() {
             }
             if (ok && chosenType(u) && g_sim.chosenInProduction(g_sim.humanPlayer)) {   // one at a time: it says why it is greyed out
                 snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s  (You already have The Chosen, in the field or in training: only one at a time)", ut.name, ut.cost, ut.hotkey, ut.desc);
+                add(BK_TRAIN, u, false, ut.name, tip);
+                continue;
+            }
+            if (ok && phantomType(u) && g_sim.phantomInProduction(g_sim.humanPlayer)) {   // one at a time, too
+                snprintf(tip, sizeof tip, "%s  $%d  [%s]  %s  (There is only ever one Phantom Jeep: yours is in the field, in training or on its way down)", ut.name, ut.cost, ut.hotkey, ut.desc);
                 add(BK_TRAIN, u, false, ut.name, tip);
                 continue;
             }
@@ -793,6 +810,15 @@ void Game::buildButtonsRaw() {
         add(BK_SHADOWCALL, 0, wait <= 0, "Call Shadow Guard", tip);
         break;
     }
+    for (auto r : selection) {   // the Phantom Jeep: Plant TNT (greyed while it carries no charge; it says when the next one is ready)
+        Entity* e = g_sim.get(r);
+        if (!e || !e->isUnit() || !phantomType(e->type)) continue;
+        if (e->tntLeft > 0) snprintf(tip, sizeof tip, "Plant TNT  [T]  Pick an enemy structure: the Phantom Jeep drives up, plants a charge and slips away; it blows %d s later for %d damage plus %d%% of the structure's health. TNT %d of %d, another every %d s. Right-clicking an enemy structure does the same",
+                                     (int)PHANTOM_TNT_FUSE, (int)PHANTOM_TNT_DAMAGE, (int)(PHANTOM_TNT_SHARE * 100), (int)e->tntLeft, PHANTOM_TNT_MAX, (int)PHANTOM_TNT_RECHARGE);
+        else snprintf(tip, sizeof tip, "Plant TNT  [T]  Out of charges: the next one is ready in %d s (another every %d s)", (int)std::ceil(std::max(0.0f, e->tntNext - g_sim.time)), (int)PHANTOM_TNT_RECHARGE);
+        add(BK_PLANT, 0, e->tntLeft > 0, "Plant TNT", tip);
+        break;
+    }
     {   // submarines: dive / surface, and the nuclear missile
         int subs = 0, dived = 0, ready = 0;
         for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && subType(e->type)) { subs++; if (e->subState == 2 || e->subState == 1) dived++; if (g_sim.time >= e->siloTimer && e->nukeSalvo == 0) ready++; } }
@@ -861,7 +887,7 @@ bool Game::launchNuke(Vec2 at) {
 }
 
 void Game::cancelModes() {
-    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; heliMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF;
+    placingType = -1; attackMoveMode = false; forceMode = false; forceLatch = false; powerMode = false; nukeMode = false; nukeMini = false; nukeDeep = false; nukeIsland = false; nukeRelic = false; nukeSub = false; bomberMode = false; dropMode = false; strikeMode = false; fleetMode = false; heliMode = false; aidMode = false; rallyMode = false; areaMode = false; areaDrag = false; dropoffMode = false; plantMode = false; bulkDrag = false; paraBunker = NOREF; tankBunker = NOREF; rainBunker = NOREF;
 }
 
 void Game::clickButton(const Button& b) {
@@ -931,6 +957,7 @@ void Game::cmdSelection(int kind, int id) {
         break;
     }
     case BK_DROPOFF: cancelModes(); dropoffMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
+    case BK_PLANT: cancelModes(); plantMode = true; g_audio.play(SND_CLICK, Vec2(), true); break;
     case BK_SHADOWCALL: {
         Ref c = NOREF; for (auto r : selection) { Entity* e = g_sim.get(r); if (e && e->isUnit() && chosenType(e->type)) { c = r; break; } }
         g_audio.play(g_sim.cmdShadowCall(g_sim.humanPlayer, c) ? SND_CLICK : SND_CANT, Vec2(), true);
@@ -1079,7 +1106,7 @@ void Game::gameEvent(const SDL_Event& e) {
         SDL_Keycode k = e.key.keysym.sym;
         u16 mod = e.key.keysym.mod;
         if (k == SDLK_ESCAPE) {
-            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || fleetMode || heliMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode) cancelModes();
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || fleetMode || heliMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode || plantMode) cancelModes();
             else if (showHelp) showHelp = false;
             else openPauseMenu();
             return;
@@ -1168,13 +1195,14 @@ void Game::gameEvent(const SDL_Event& e) {
             if (dropoffMode) { for (auto r : selection) { Entity* o = g_sim.get(r); if (o && !o->passengers.empty()) g_sim.cmdUnload(r, true, w); } dropoffMode = false; g_audio.play(SND_ORDER, Vec2(), true, 0.6f); return; }
             if (attackMoveMode) { issueAttackMove(w); attackMoveMode = false; return; }
             if (forceMode) { if (issueForceFire(w)) forceMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
+            if (plantMode) { if (issuePlant(w)) plantMode = false; else g_audio.play(SND_CANT, Vec2(), true); return; }
             if (rallyMode) { Entity* b = selectedBuilding(); if (b) g_sim.cmdSetRally(g_sim.refOf(*b), w); rallyMode = false; return; }
             if (areaMode) { areaDrag = true; areaStart = w; areaRadius = 0; return; }
             dragging = true; dragStart = w; dragNow = w;
             return;
         }
         if (btn == SDL_BUTTON_RIGHT) {
-            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || fleetMode || heliMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode) { cancelModes(); return; }
+            if (placingType >= 0 || attackMoveMode || forceMode || powerMode || nukeMode || dropMode || strikeMode || fleetMode || heliMode || bomberMode || aidMode || rallyMode || areaMode || dropoffMode || plantMode) { cancelModes(); return; }
             issueRightClick(w);
             return;
         }
@@ -1981,10 +2009,11 @@ void Game::drawEntity(Entity& e) {
         float pulse = 0.65f + 0.35f * std::sin(wallTime * 7.0f + (float)e.gen);
         float gy = p.y + (air ? 14 * alt : 0) + 2;
         const bool ch = Sim::stealthOf(e) == ST_CHOSEN;   // The Chosen and its guard: violet, and the Chosen named (every gun nearby can now see it)
-        const Color mc = ch ? rgb(214, 160, 255) : rgb(110, 230, 255);
+        const bool ph = phantomType(e.type);   // an enemy Phantom Jeep that something of yours sees: named, in an alarm colour
+        const Color mc = ch ? rgb(214, 160, 255) : (ph ? rgb(255, 128, 98) : rgb(110, 230, 255));
         g.circle(p.x, gy, e.radius() + 6 + 2 * pulse, mc, 18);
-        if (chosenType(e.type)) g.circle(p.x, gy, ut.radius + 11 + 3 * pulse, Color{ mc.r, mc.g, mc.b, 150 }, 24);
-        const char* lab = chosenType(e.type) ? "THE CHOSEN" : "SPOTTED";
+        if (chosenType(e.type) || ph) g.circle(p.x, gy, ut.radius + 11 + 3 * pulse, Color{ mc.r, mc.g, mc.b, 150 }, 24);
+        const char* lab = chosenType(e.type) ? "THE CHOSEN" : (ph ? "PHANTOM" : "SPOTTED");
         g.text((int)p.x - g.textW(lab) / 2, (int)(p.y - e.radius() - 20), lab, mc);
     }
     if (selected && ut.detect > 0 && ut.role == UR_SCOUT) {   // a selected spy drone shows how far it finds hidden snipers and bunkers
@@ -2126,6 +2155,7 @@ void Game::drawEntity(Entity& e) {
         if (ut.weapon >= 0 && !paused) { const Weapon& w = WEAPONS[ut.weapon]; float since = w.cooldown - e.cooldown; if (w.cooldown > 0.6f && since >= 0 && since < 0.15f) rec = 1.0f - since / 0.15f; }
         g.draw(tur, p.x - std::cos(e.turret) * 3.2f * rec, p.y - std::sin(e.turret) * 3.2f * rec, e.turret, 1, mod);
     }
+    if (fallK <= 0 && !air && ut.kind == UK_VEH) { drawDozerBeacon(e, p); drawPhantomMark(e, p); }   // (beacons and the Phantom's markers sit on top of the hull)
     if (fallK > 0) {   // parachute: shroud lines up to the canopy, which opens just after the drop and collapses as the unit touches down
         float cs = ut.kind == UK_VEH ? 1.7f : 1.05f;
         float opened = clampf((e.fallTime - e.fall) / 0.4f, 0.2f, 1.0f), flare = clampf(e.fall / 0.35f, 0.0f, 1.0f);
@@ -2563,6 +2593,7 @@ void Game::renderWorld() {
     for (auto* e : bridges) drawEntity(*e);
     if (!(skipL & 8)) for (auto* e : ground) drawEntity(*e);
     g.flushAdd();
+    g.beginAdd(); drawTntCharges(vx0, vy0, vx1, vy1); g.flushAdd();   // (the red lights of planted charges, over the structures and the units beside them)
     rp.mark("entities");
     // flags: every finished structure flies its owner's flag from a mast on the roof edge (over units, under aircraft)
     for (auto& e : g_sim.ents) {
@@ -2658,6 +2689,11 @@ void Game::renderWorld() {
     // cursor hints
     if (areaMode) {}
     else if (attackMoveMode) g.text(mouseX + 12, mouseY - 4, "ATTACK", rgb(255, 90, 80));
+    else if (plantMode) {
+        Entity* h = mouseY < VIEW_H ? pickEntity(screenToWorld(mouseX, mouseY), false) : nullptr;
+        const bool ok = h && h->isBuilding() && g_sim.plantable(g_sim.humanPlayer, *h);
+        g.text(mouseX + 12, mouseY - 4, ok ? "PLANT TNT HERE" : "PLANT TNT: pick an enemy structure", ok ? rgb(255, 120, 90) : rgb(255, 214, 140));
+    }
     else if (forceMode) {
         Entity* h = mouseY < VIEW_H ? pickEntity(screenToWorld(mouseX, mouseY), false) : nullptr;
         char buf[96];
@@ -2750,6 +2786,12 @@ void Game::drawMinimap(int x, int y, int size) {
         if (e.carrier.valid() || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
         Color c = e.owner < 0 ? rgb(198, 190, 170) : playerColor(e.owner);
         int s = e.isBuilding() ? std::max(2, (int)(e.bt().w * sc)) : 2;
+        if (phantomType(e.type) && e.owner == g_sim.humanPlayer) {   // your Phantom Jeep: a bigger blip flashing between your colour and white
+            const int mx = (int)(x + e.pos.x / WORLD_W * size), my = (int)(y + e.pos.y / WORLD_H * size);
+            g.box(mx - 4, my - 4, 8, 8, rgb(0, 0, 0, 200));
+            g.fill(mx - 3, my - 3, 6, 6, (int)(wallTime * 4.0f) & 1 ? rgb(255, 255, 255) : c);
+            continue;
+        }
         g.fill((int)(x + e.pos.x / WORLD_W * size) - s / 2, (int)(y + e.pos.y / WORLD_H * size) - s / 2, s, s, c);
     }
     drawSonarMinimap(x, y, size);
@@ -2901,9 +2943,17 @@ void Game::renderHud() {
                     else snprintf(buf, sizeof buf, "Takes structures at once, turns units in %.1f tiles   Shadow Guard READY [C]", WEAPONS[W_CONVERT].range);
                     g.text(INFO_X + 86, hy + 70, buf, rgb(226, 206, 255));
                 }
-                if (e->rank > 0) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
+                if (phantomType(e->type) && e->owner == g_sim.humanPlayer) {   // its charges and the next one's wait; it heals itself all the time
+                    const int wait = (int)std::ceil(std::max(0.0f, e->tntNext - g_sim.time));
+                    if (e->tntLeft >= PHANTOM_TNT_MAX) snprintf(buf, sizeof buf, "TNT %d / %d [T]   Mends itself", (int)e->tntLeft, PHANTOM_TNT_MAX);
+                    else snprintf(buf, sizeof buf, "TNT %d / %d, next in %d:%02d%s   Mends itself", (int)e->tntLeft, PHANTOM_TNT_MAX, wait / 60, wait % 60, e->tntLeft > 0 ? " [T]" : "");
+                    if (e->rank > 0) { const size_t n = strlen(buf); snprintf(buf + n, sizeof buf - n, ",  %s", e->rank == 2 ? "ELITE" : "VETERAN"); }
+                    g.text(INFO_X + 86, hy + 70, buf, rgb(255, 160, 120));
+                }
+                if (e->rank > 0 && !phantomType(e->type)) { snprintf(buf, sizeof buf, "%s: %d kills (+%d%% damage)", e->rank == 2 ? "ELITE" : "VETERAN", (int)e->kills, 20 * e->rank); g.text(INFO_X + 86, hy + 70, buf, e->rank == 2 ? rgb(255, 224, 110) : rgb(200, 236, 255)); }
                 else if (ut.kind == UK_INF && ut.weapon >= 0 && !chosenType(e->type)) { snprintf(buf, sizeof buf, "Kills %d (veteran at %d, elite at %d)", (int)e->kills, VET_KILLS, ELITE_KILLS); g.text(INFO_X + 86, hy + 70, buf, hudDim()); }
-                if (ut.stealth) g.text(INFO_X + 86 + 190, hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : (ut.stealth == ST_CHOSEN ? "STEALTH: helicopters & snipers only" : "STEALTH: only enemy spy drones see it"), ut.stealth == ST_CHOSEN ? rgb(226, 206, 255) : rgb(150, 220, 255));
+                // (the Phantom's longer line takes a row of its own under its state: the right-hand slot would run under the command buttons)
+                if (ut.stealth) g.text(INFO_X + 86 + (ut.stealth == ST_PHANTOM ? 0 : 190), ut.stealth == ST_PHANTOM ? hy + 110 : hy + 36, ut.stealth == ST_DRONE ? "STEALTH: only enemy drones see it" : (ut.stealth == ST_CHOSEN ? "STEALTH: helicopters & snipers only" : (ut.stealth == ST_PHANTOM ? "STEALTH: only aircraft & snipers see it" : "STEALTH: only enemy spy drones see it")), ut.stealth == ST_CHOSEN ? rgb(226, 206, 255) : (ut.stealth == ST_PHANTOM ? rgb(190, 214, 255) : rgb(150, 220, 255)));
                 g.text(INFO_X + 86, hy + 84, ut.desc, hudDim());
                 const char* st = (e->zoneR > 0 && (e->order == O_GUARDAREA || e->postOrder == O_GUARDAREA)) ? (e->order == O_ATTACK ? "Defending assigned area" : "Guarding assigned area") : (e->zoneR > 0 && (e->order == O_HARVEST || e->order == O_RETURN)) ? (e->order == O_RETURN ? "Returning (assigned area)" : "Gathering in assigned area") : e->order == O_IDLE ? "Idle" : e->order == O_MOVE ? "Moving" : e->order == O_ATTACKMOVE ? "Attack-moving" : e->order == O_ATTACK ? "Attacking" : e->order == O_HARVEST ? "Gathering" : e->order == O_RETURN ? "Returning" : e->order == O_BUILD ? "Constructing" : e->order == O_REARM ? "Rearming" : "Guarding";
                 g.text(INFO_X + 86, hy + 98, st, accent);

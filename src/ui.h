@@ -69,6 +69,7 @@ struct Game {
     bool aidMode = false;           // picking the spot for an Aid Drop
     bool rallyMode = false;
     bool dropoffMode = false;       // picking the spot where a cargo chopper sets down and unloads
+    bool plantMode = false;         // Plant TNT: the next click on an enemy structure sends the selected Phantom Jeeps to plant a charge there
     bool areaMode = false;          // picking the circle a selection should guard / gather in
     bool areaDrag = false; Vec2 areaStart; float areaRadius = 0;
     struct ZoneFlash { Vec2 pos; float r; float time; bool gather; };
@@ -220,6 +221,9 @@ private:
     void drawCarrierDeck(const Entity& e, Vec2 p, float ang, Color mod, u8 alpha);   // ui2.cpp: the wing parked on deck, the deck crew, the catapults' blast deflectors and steam
     void drawJeepCrew(const Entity& e, Vec2 p);
     void drawEscorts(const Entity& e, Vec2 p);
+    void drawDozerBeacon(const Entity& e, Vec2 p);                // ui2.cpp: a builder dozer blinks red and a civilian dozer blue (a roof light and a ground ring), so they show in a crowd
+    void drawPhantomMark(const Entity& e, Vec2 p);                // ui2.cpp: your Phantom Jeep's blinking ring and caret, an ally's ring
+    void drawTntCharges(float vx0, float vy0, float vx1, float vy1);   // ui2.cpp: the red light on every structure with a charge on it, blinking faster as the fuse runs down
     void drawStrikeMarks();
     void drawFleetCall();          // ui2.cpp: the Fleet Call target (where the fleet would come in) and the lanes of fleets still coming in
     void drawCoverRing(Vec2 sp, float radiusPx, Color col, bool powered, const char* label);
@@ -236,6 +240,7 @@ private:
     void selectBox(Vec2 a, Vec2 b, bool add);
     void selectSameType(Entity* e);
     void issueAttackMove(Vec2 world);
+    bool issuePlant(Vec2 world);      // Plant TNT: send the selected Phantom Jeeps at the enemy structure under the click
     bool issueForceFire(Vec2 world);   // Force Fire button: attack the unit or structure under the click on purpose (friends included)
     void cleanSelection();
     struct Button { int x, y, w, h; int kind; int id; bool enabled; const char* label; std::string tip; };

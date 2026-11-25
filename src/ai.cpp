@@ -113,6 +113,10 @@ static float chosenDelay(int difficulty) {
     return difficulty >= 3 ? 0.0f : (difficulty == 2 ? 120.0f : 300.0f);
 }
 static int featOff2() { static const int off = getenv("ONEHOUR_FEATOFF2") ? atoi(getenv("ONEHOUR_FEATOFF2")) : 0; return off; }
+// F2_PHANTOM: the earliest match time a commander buys its Phantom Jeep (the later the difficulty, the sooner)
+static float phantomDelay(int difficulty) {
+    return difficulty >= 3 ? 180.0f : (difficulty == 2 ? 240.0f : (difficulty == 1 ? 360.0f : 600.0f));
+}
 
 const char* const TUNE_NAME[TU_COUNT] = { "thr", "first", "launch", "cap", "def", "walls", "reassess", "retreat", "reinforce", "guard", "harv", "counter", "punishThr", "punishRa" };
 const float TUNE_HAND[TU_COUNT] = { 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.8f, 1.9f, 0.6f, 0.0f, 1.0f, 1.2f, 0.5f, 1.15f };
@@ -928,7 +932,7 @@ void AiPlayer::dodgeNukes() {
     float reach = 0; Vec2 lo(1e30f, 1e30f), hi(-1e30f, -1e30f);
     for (int k = 0; k < nt; k++) { reach = std::max(reach, th[k].safe); lo = Vec2(std::min(lo.x, th[k].at.x), std::min(lo.y, th[k].at.y)); hi = Vec2(std::max(hi.x, th[k].at.x), std::max(hi.y, th[k].at.y)); }
     for (auto& e : S.ents) {
-        if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || e.carrier.valid()) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger); a soldier aboard goes where its carrier goes
+        if (!e.alive || e.owner != player || !e.isUnit() || e.isAir() || e.carrier.valid() || phantomType(e.type)) continue;   // aircraft cannot outrun a warhead (see Sim::dodgeDanger), a soldier aboard goes where its carrier goes, and a Phantom Jeep (ai_phantom.cpp) takes a warhead on the chin
         if (e.pos.x < lo.x - reach || e.pos.y < lo.y - reach || e.pos.x > hi.x + reach || e.pos.y > hi.y + reach || !inside(e.pos)) continue;
         if (e.order == O_MOVE && !inside(e.target)) continue;   // already on its way out of every circle
         Vec2 away;
@@ -1004,6 +1008,7 @@ void AiPlayer::think() {
     int dozers = 0, civDozers = 0, harvesters = 0, armyCount = 0, shipsOrJeeps = 0; float armyValue = 0, fleetValue = 0;
     std::vector<Ref> army, idleArmy, aircraft, haulers, medics, spies, scouts, fleet, jeeps, decon, shadowNow;
     Ref chosen;   // The Chosen and its Shadow Guard are led apart from the army (ai_chosen.cpp)
+    Ref phantomRef;   // the Phantom Jeep is led apart from the army and every defence (ai_phantom.cpp, F2_PHANTOM)
     Entity* hq = nullptr;
     std::vector<Entity*> supplyHubs, barracks, factories, airfields, damaged, yards;
     std::vector<Entity*> xHubs, xBarracks, xFactories;   // F2_EXPAND: the expansions' own (kept out of the home base's lists and counts)
@@ -1022,6 +1027,7 @@ void AiPlayer::think() {
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
             else if (chosenType(e.type) && on2(F2_CHOSEN)) chosen = S.refOf(e);
             else if (shadowType(e.type) && on2(F2_CHOSEN)) shadowNow.push_back(S.refOf(e));
+            else if (phantomType(e.type)) { if (on2(F2_PHANTOM)) phantomRef = S.refOf(e); }   // (never in the army, a wave, a group or a defence: ai_phantom.cpp drives it)
             else if (S.time < feintUntil && std::find(feint.begin(), feint.end(), S.refOf(e)) != feint.end()) {}   // (a feint is on its own errand for a while)
             else if (expanding && xGuard(e)) {}   // (an expansion's guards stay at it: no wave, no reserve)
             else if (ut.role == UR_SCOUT) scouts.push_back(S.refOf(e));      // spy drones see what is hidden and coordinate as a swarm
@@ -1538,6 +1544,12 @@ void AiPlayer::think() {
         if (!S.chosenInProduction(player) && pl.money - need > UNITS[ct].cost + (rebuy ? 1500 : 200) && (!rebuy || S.time - chosenLostAt > 150.0f) && S.unitAvailable(player, ct))
             for (auto* b : barracks) if (b->constructed && b->queue.size() < 2 && S.cmdTrain(S.refOf(*b), ct)) { chosenBought++; break; }
     }
+    // The Phantom Jeep (F2_PHANTOM): a factory and the tech structure, and money above the usual reserve; one per army at a time
+    if (on2(F2_PHANTOM) && techs > 0 && !factories.empty() && S.time >= phantomDelay(pl.difficulty) && !recovering) {
+        const int pt = pl.faction == F_CYBER ? U_C_PHANTOM : U_K_PHANTOM;
+        if (!S.phantomInProduction(player) && pl.money > UNITS[pt].cost + reserve && S.unitAvailable(player, pt))
+            for (auto* f : factories) if (f->constructed && f->queue.size() < 2 && S.cmdTrain(S.refOf(*f), pt)) break;
+    }
     int queuedArmy = 0;
     for (auto* b : barracks) queuedArmy += (int)b->queue.size();
     for (auto* f : factories) queuedArmy += (int)f->queue.size();
@@ -1922,6 +1934,7 @@ void AiPlayer::think() {
         chosenOps(chosen, threat, threatValue); shadowOps(chosen, threat, threatValue, shadowNow); if (S.time > nextSellLook) { nextSellLook = S.time + 3.0f; sellTaken(); }
     }
     if (on2(F2_HELIHUNT)) heliHunt(aircraft, airfields, reserve, hunting);
+    if (on2(F2_PHANTOM) && S.time >= nextPhantom) { nextPhantom = S.time + 1.0f; phantomOps(phantomRef, enemyUnits); }   // (modest cadence: it steers on its own between looks)
     prof.mark("army_team");
     if (attacking || armyCount < 4) idleSince = S.time;   // F2_PUSH: the army has something to do (or nothing worth sending)
     // defense has priority

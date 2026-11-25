@@ -525,3 +525,74 @@ void Game::drawCarrierDeck(const Entity& e, Vec2 p, float ang, Color mod, u8 alp
         }
     }
 }
+
+// ---- units and charges that have to be found at a glance
+
+// Builder dozers blink red and civilian dozers blue, every one of them the human can see (own, allied and enemy): a bright roof light, lit for a
+// third of a second at 1.5 Hz, with a thin ground ring round it. The two colours take turns (red in the first half of each cycle, blue in the
+// second) so a crowd reads as alternating flashes, and nothing is drawn but a few lines and one additive blob: no big blended blit per unit.
+void Game::drawDozerBeacon(const Entity& e, Vec2 p) {
+    const bool civil = civicDozerType(e.type);
+    if (!civil && e.type != U_C_DOZER && e.type != U_K_DOZER) return;
+    Gfx& g = g_gfx;
+    const float cycle = std::fmod(wallTime * 1.5f, 1.0f);
+    const bool on = civil ? cycle >= 0.5f : cycle < 0.5f;
+    const Color hot = civil ? rgb(70, 150, 255) : rgb(255, 48, 36), core = civil ? rgb(214, 234, 255) : rgb(255, 224, 210), dim = civil ? rgb(18, 40, 90) : rgb(86, 14, 10);
+    const float lx = p.x, ly = p.y - e.radius() * 0.5f - 4.0f;   // the roof of the cab
+    if (!on) { g.discFill(lx, ly, 1.7f, dim); return; }
+    const float rr = e.radius() + 7.0f;
+    g.circle(p.x, p.y + 2, rr, Color{ hot.r, hot.g, hot.b, 230 }, 24);
+    g.circle(p.x, p.y + 2, rr + 1.0f, Color{ hot.r, hot.g, hot.b, 150 }, 24);
+    g.circle(p.x, p.y + 2, rr + 2.5f, Color{ hot.r, hot.g, hot.b, 70 }, 24);
+    g.glowAdd(lx, ly, 22.0f, Color{ hot.r, hot.g, hot.b, 235 });
+    g.discFill(lx, ly, 5.2f, rgb(10, 10, 14));   // (a dark rim, so the lamp stands out on a pale hull)
+    g.discFill(lx, ly, 4.0f, hot);
+    g.discFill(lx, ly, 2.0f, core);
+}
+
+// Your Phantom Jeep is stealthy, dark and usually among a crowd: a bright ring round it and a caret over it, flashing between the army's colour
+// and white twice a second. An allied one gets the ring alone. (An enemy one that something of yours has found is marked in drawEntity.)
+void Game::drawPhantomMark(const Entity& e, Vec2 p) {
+    if (!phantomType(e.type) || e.owner < 0 || g_sim.players[e.owner].team != g_sim.players[g_sim.humanPlayer].team) return;
+    Gfx& g = g_gfx;
+    const bool mine = e.owner == g_sim.humanPlayer;
+    const Color pc = playerColor(e.owner);
+    const Color c = (int)(wallTime * 4.0f) & 1 ? rgb(255, 255, 255) : Color{ pc.r, pc.g, pc.b, 255 };
+    const float rr = e.radius() + 10.0f, gy = p.y + 2;
+    g.circle(p.x, gy, rr + 2.5f, rgb(0, 0, 0, 150), 32);   // (a dark edge outside and inside the ring, so it shows on pale ground and dark road alike)
+    g.circle(p.x, gy, rr - 2.5f, rgb(0, 0, 0, 120), 32);
+    for (float d = -1.0f; d <= 1.0f; d += 1.0f) g.circle(p.x, gy, rr + d, c, 32);   // three rings thick
+    if (!mine) return;
+    // the caret: a solid downward triangle over the hull and its health bar, dark-edged
+    const float tip = p.y - e.radius() - 11.0f;
+    for (int pass = 0; pass < 2; pass++) for (int row = 0; row < 12; row++) {   // (the dark edge first, then the fill over it)
+        const int half = 8 - (row * 2 + 1) / 3;   // 8 wide at the top, a point at the bottom
+        const int y = (int)tip - 12 + row;
+        if (pass == 0) g.fill((int)p.x - half - 1, y - 1, 2 * half + 3, 3, rgb(0, 0, 0, 200));
+        else g.fill((int)p.x - half, y, 2 * half + 1, 1, c);
+    }
+}
+
+// A charge on a structure: a small dark box with a red light that blinks faster as the fuse burns down (2 Hz at planting, 9 Hz at the blast).
+// Everyone who can see the structure sees it, whichever army planted it.
+void Game::drawTntCharges(float vx0, float vy0, float vx1, float vy1) {
+    Gfx& g = g_gfx;
+    for (const auto& c : g_sim.tnts) {
+        const Entity* b = g_sim.get(c.site);
+        if (!b || b->pos.x < vx0 || b->pos.x > vx1 || b->pos.y < vy0 || b->pos.y > vy1) continue;
+        if (!g_sim.shownToHuman(*b) || !g_sim.visibleTo(*b, g_sim.humanPlayer)) continue;
+        const float t = clampf(PHANTOM_TNT_FUSE - (c.blowAt - g_sim.time), 0.0f, PHANTOM_TNT_FUSE);   // seconds since it was planted
+        const float phase = 2.0f * t + 0.5f * (7.0f / PHANTOM_TNT_FUSE) * t * t;   // the integral of a rate that climbs from 2 to 9 Hz
+        const bool on = std::fmod(phase, 1.0f) < 0.5f;
+        const Vec2 sp = worldToScreen(b->pos);
+        const float x = sp.x + (float)b->bt().w * TILE * 0.18f, y = sp.y + (float)b->bt().h * TILE * 0.30f;   // low on the front face, where it shows over the roof
+        g.fill((int)x - 4, (int)y - 2, 9, 5, rgb(24, 22, 24));
+        g.fill((int)x - 3, (int)y - 1, 2, 3, rgb(176, 36, 30));
+        g.fill((int)x, (int)y - 1, 2, 3, rgb(176, 36, 30));
+        if (on) {
+            g.glowAdd(x + 3, y - 1, 13.0f, Color{ 255, 40, 28, 230 });
+            g.discFill(x + 3, y - 1, 2.2f, rgb(255, 70, 50));
+            g.discFill(x + 3, y - 1, 1.0f, rgb(255, 230, 220));
+        } else g.discFill(x + 3, y - 1, 1.3f, rgb(90, 14, 10));
+    }
+}

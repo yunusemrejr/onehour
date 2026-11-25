@@ -54,7 +54,16 @@ bool learnUpdateTest(u64 seed) {
         VERIFY20(r.prof[2].n == 6 && std::abs(r.prof[2].airPeak - P.airPeak) < 1e-3f && std::abs(r.prof[2].firstHit - P.firstHit) < 0.11f && r.unitSamples[U_C_TANK] == 17 && r.docN[DOC_TURTLE] == 5, "the opponent model did not round-trip");
         FILE* f = fopen(path.c_str(), "r"); VERIFY20(f, "cannot read the brain file");
         std::string text; char buf[512]; while (fgets(buf, sizeof buf, f)) text += buf; fclose(f);
-        VERIFY20(text.compare(0, 16, "onehour-brain 21") == 0, "the file is not v21");
+        VERIFY20(text.compare(0, 16, "onehour-brain 22") == 0, "the file is not v22");
+        {   // a v21 file (76 unit rows: before the Phantom Jeeps joined the table) keeps its rows, doctrines and model
+            std::string v21 = "onehour-brain 21" + text.substr(16);
+            size_t r0 = v21.find('\n', v21.find('\n') + 1) + 1, cut21 = r0;
+            for (int k = 0; k < 76; k++) cut21 = v21.find('\n', cut21) + 1;
+            v21 = v21.substr(0, cut21) + v21.substr(v21.find("doctrines"));
+            FILE* f21 = fopen(path.c_str(), "w"); fputs(v21.c_str(), f21); fclose(f21);
+            Brain o21; VERIFY20(o21.load(path.c_str()), "a v21 file (the player's brain before the Phantom Jeeps) did not load");
+            VERIFY20(o21.unitSamples[U_C_TANK] == 17 && o21.docN[DOC_TURTLE] == 5 && o21.prof[2].n == 6 && o21.unitSamples[U_C_PHANTOM] == 0, "a v21 file lost its rows, doctrines or model");
+        }
         {   // a v20 file (69 unit rows: before the submarines, battleships and relic units joined the table) keeps its rows, doctrines and model
             std::string v20 = "onehour-brain 20" + text.substr(16);
             size_t r0 = v20.find('\n', v20.find('\n') + 1) + 1, cut20 = r0;

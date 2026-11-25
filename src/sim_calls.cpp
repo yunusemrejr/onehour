@@ -168,6 +168,7 @@ void Sim::updateHunts() {
             const Entity& t = ents[i];
             if (!t.alive || t.kind == EK_RESOURCE || t.owner < 0 || !enemies(p, t.owner) || t.carrier.valid()) continue;
             if (invulnerable(t) || t.district >= 0 || (t.isBuilding() && prizeType(t.type))) continue;   // (what the defeat rule does not count as an army either)
+            if (phantomType(t.type) && !visibleTo(t, p)) continue;   // (a Phantom Jeep is found only by aircraft and snipers, never by a hunt's sight)
             Prey q; q.idx = i; q.air = t.isAir(); q.naval = t.isUnit() && t.ut().naval;
             q.land = g_map.landNear(t.pos, 2);
             q.sea = q.naval ? g_map.compAt(t.pos) : g_map.compAt(g_map.nearestWater(t.pos, 6));
@@ -183,7 +184,7 @@ void Sim::updateHunts() {
         std::vector<int> hunters;
         for (int i = 0; i < (int)ents.size(); i++) {
             const Entity& h = ents[i];
-            if (!h.alive || h.owner != p || !h.isUnit() || h.weapon() < 0 || h.carrier.valid() || h.fall > 0 || h.ut().temp || h.lifeUntil >= 0) continue;
+            if (!h.alive || h.owner != p || !h.isUnit() || h.weapon() < 0 || h.carrier.valid() || h.fall > 0 || h.ut().temp || h.lifeUntil >= 0 || climber(h)) continue;   // (a Phantom Jeep is never taken by a hunt)
             hunters.push_back(i);
         }
         // the hunters find what hides near them
@@ -300,6 +301,7 @@ void Sim::updateProtect() {
             if (!e.alive || e.owner != p || e.carrier.valid()) continue;
             if (e.isBuilding()) { if (e.constructed && !wallRole(e.bt().role)) posts.push_back(e.pos); continue; }
             if (!e.isUnit()) continue;
+            if (e.isUnit() && (climber(e) || phantomType(e.type))) continue;   // (a Phantom Jeep is hand-driven: Protect Us never patrols it, see ai_phantom.cpp for a computer's)
             if (e.weapon() < 0) { if (!e.isAir()) posts.push_back(e.pos); continue; }
             if (e.fall > 0 || e.ut().temp || e.lifeUntil >= 0) continue;
             hunters.push_back(i);

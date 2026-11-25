@@ -71,6 +71,7 @@ static int unitLocal(int type) {
     if (type == U_C_LASERCMD || type == U_K_LASERCMD) return 32;        // laser commandos (art_commando.cpp)
     if (chosenType(type)) return 33;                                    // The Chosen (art_chosen.cpp)
     if (shadowType(type)) return 34;                                    // its Shadow Guard (art_chosen.cpp)
+    if (phantomType(type)) return 18;                                   // the Phantom Jeep: the jeep's art and scale when its 3D model is missing (ONEHOUR_OLDART)
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }

@@ -589,6 +589,7 @@ void Map::generate() {
     // SMALL_ROCK tiles away from the map border). The ridges, the rocky headlands' cores and the border cliffs stay hard obstacles.
     cleared.clear();
     memset(clearable, 0, sizeof(clearable));
+    memset(wallMark, 0, sizeof(wallMark));
     {
         const int SMALL_ROCK = 70;
         static u8 seenR[MAP_W * MAP_H];
@@ -1148,11 +1149,11 @@ bool Map::clearWayTile(int i, int j) {
     return was;
 }
 
-void Map::setStructure(int x, int y, int w, int h, bool on) {
+void Map::setStructure(int x, int y, int w, int h, bool on, WallMark wall) {
     regionDirty = true; noteNavChange(x, y, x + w - 1, y + h - 1);
     for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) {
         if (!inMap(i, j)) continue;
-        if (on) blocked[j * MAP_W + i] |= 2; else blocked[j * MAP_W + i] &= ~2;
+        if (on) { blocked[j * MAP_W + i] |= 2; wallMark[j * MAP_W + i] = wall; } else { blocked[j * MAP_W + i] &= ~2; wallMark[j * MAP_W + i] = WM_NONE; }
     }
 }
 void Map::setResource(int x, int y, bool on) {
@@ -1161,20 +1162,20 @@ void Map::setResource(int x, int y, bool on) {
     if (on) blocked[y * MAP_W + x] |= 4; else blocked[y * MAP_W + x] &= ~4;
 }
 
-Vec2 Map::nearestFree(Vec2 p, int maxR) const {
+Vec2 Map::nearestFree(Vec2 p, int maxR, PathMode mode) const {
     int tx = clampi(tileOf(p.x), 0, MAP_W - 1), ty = clampi(tileOf(p.y), 0, MAP_H - 1);
     p = Vec2(clampf(p.x, 0, WORLD_W - 1.0f), clampf(p.y, 0, WORLD_H - 1.0f));
-    if (passable(tx, ty)) return p;
+    if (mode == PM_CLIMB ? climbPassable(tx, ty) : passable(tx, ty)) return p;   // (a swimmer's ground in the search is the plain ground's: it only crosses water on a route)
     for (int r = 1; r <= maxR; r++) {
         for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
             if (std::abs(dx) != r && std::abs(dy) != r) continue;
-            if (passable(tx + dx, ty + dy)) return tileCenter(tx + dx, ty + dy);
+            if (mode == PM_CLIMB ? climbPassable(tx + dx, ty + dy) : passable(tx + dx, ty + dy)) return tileCenter(tx + dx, ty + dy);
         }
     }
     return p;
 }
 
-bool Map::lineClear(Vec2 a, Vec2 b, bool swim) const {
+bool Map::lineClear(Vec2 a, Vec2 b, PathMode mode) const {
     // Sample along the segment at sub-tile spacing, checking a small footprint round each sample so units don't scrape corners. Neighbouring samples
     // mostly land on the same tiles: a sample whose four corner tiles are the ones just checked is not checked again (the same answer, a third of
     // the look-ups: this ran over two and a half million times a game, nearly all of it smoothing paths)
@@ -1188,8 +1189,7 @@ bool Map::lineClear(Vec2 a, Vec2 b, bool swim) const {
         const int x0 = fl((x - 6.0f) * (1.0f / TILE)), x1 = fl((x + 6.0f) * (1.0f / TILE)), y0 = fl((y - 6.0f) * (1.0f / TILE)), y1 = fl((y + 6.0f) * (1.0f / TILE));
         if (x0 == px0 && x1 == px1 && y0 == py0 && y1 == py1) continue;
         px0 = x0; px1 = x1; py0 = y0; py1 = y1;
-        if (swim) { if (!swimPassable(x0, y0) || !swimPassable(x1, y0) || !swimPassable(x0, y1) || !swimPassable(x1, y1)) return false; }
-        else if (!passable(x0, y0) || !passable(x1, y0) || !passable(x0, y1) || !passable(x1, y1)) return false;
+        if (!passableFor(mode, x0, y0) || !passableFor(mode, x1, y0) || !passableFor(mode, x0, y1) || !passableFor(mode, x1, y1)) return false;
     }
     return true;
 }
@@ -1379,17 +1379,19 @@ static void buildGroundLandmarks(const Map& m) {
     }
 }
 
-bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, bool swim) const {
-    auto open_ = [&](int x, int y) { return swim ? swimPassable(x, y) : passable(x, y); };
+bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, PathMode mode) const {
+    const bool swim = mode != PM_WALK;   // (a swimmer's and a climber's searches leave the ground-only shortcuts below out)
+    auto open_ = [&](int x, int y) { return passableFor(mode, x, y); };
+    if (mode == PM_CLIMB) maxNodes = std::min(maxNodes, 30000);   // (nearly every tile is open to it: a goal walled in by structures must not flood the map)
     out.clear();
     if (!std::isfinite(from.x) || !std::isfinite(from.y) || !std::isfinite(to.x) || !std::isfinite(to.y) || maxNodes <= 0) return false;
     to = Vec2(clampf(to.x, 0, WORLD_W - 1.0f), clampf(to.y, 0, WORLD_H - 1.0f));
     int sx = clampi(tileOf(from.x), 0, MAP_W - 1), sy = clampi(tileOf(from.y), 0, MAP_H - 1);
     int gx = clampi(tileOf(to.x), 0, MAP_W - 1), gy = clampi(tileOf(to.y), 0, MAP_H - 1);
-    if (!open_(sx, sy)) { Vec2 nf = nearestFree(from); sx = tileOf(nf.x); sy = tileOf(nf.y); }
+    if (!open_(sx, sy)) { Vec2 nf = nearestFree(from, 6, mode); sx = tileOf(nf.x); sy = tileOf(nf.y); }
     if (!open_(sx, sy)) return false;
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
-    if (swim) {   // an infiltrator's goal it cannot get to even swimming (walled in): no flood of the whole map
+    if (mode == PM_SWIM) {   // an infiltrator's goal it cannot get to even swimming (walled in): no flood of the whole map
         if (regionDirty || swimDirty) buildSwimRegions();
         u16 ws = swimRegion[sy * MAP_W + sx];
         if (ws != 0 && swimRegion[gy * MAP_W + gx] != ws && swimPassable(gx, gy)) return false;
@@ -1399,7 +1401,7 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
         u16 rs = region[sy * MAP_W + sx];
         if (rs != 0 && region[gy * MAP_W + gx] != rs) {
             int bx = sx, by = sy;
-            if (closestInRegion(rs, gx, gy, bx, by) && !(bx == sx && by == sy)) findPath(from, tileCenter(bx, by), out, maxNodes, false);
+            if (closestInRegion(rs, gx, gy, bx, by) && !(bx == sx && by == sy)) findPath(from, tileCenter(bx, by), out, maxNodes, PM_WALK);
             return false;
         }
     }
@@ -1433,7 +1435,7 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
             if (bestX >= 0 && passable(bestX, bestY) && !(bestX == sx && bestY == sy)) {
                 std::vector<Vec2> leg;
                 Vec2 wp = tileCenter(bestX, bestY);
-                if (findPath(from, wp, out, maxNodes, false) && !out.empty() && findPath(wp, to, leg, maxNodes, false)) {
+                if (findPath(from, wp, out, maxNodes, PM_WALK) && !out.empty() && findPath(wp, to, leg, maxNodes, PM_WALK)) {
                     out.insert(out.end(), leg.begin(), leg.end());
                     return true;
                 }
@@ -1503,7 +1505,7 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
             }
             int ni = ny * MAP_W + nx;
             if (closedGen[ni] == curGen) continue;
-            float step = (d >= 4 ? 1.4142f : 1.0f) * (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny));
+            float step = (d >= 4 ? 1.4142f : 1.0f) * (mode == PM_CLIMB ? climbCost(nx, ny) : (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny)));
             float ng = gScore[n.idx] + step;
             if (visitGen[ni] != curGen) {
                 visitGen[ni] = curGen; hCache[ni] = h(ni); gScore[ni] = ng; parentIdx[ni] = n.idx;
@@ -1520,36 +1522,38 @@ bool Map::findPath(Vec2 from, Vec2 to, std::vector<Vec2>& out, int maxNodes, boo
     if (rev.empty()) return false;
     std::reverse(rev.begin(), rev.end());
     if (found) rev.back() = to;
-    pullString(from, rev, out, swim);
+    pullString(from, rev, out, mode);
     return found;
 }
 
 // String pulling: skip the waypoints reachable in a straight line, looking at most PULL_AHEAD tiles along the route at a time (testing every
 // later waypoint of a long route against the start made the pass quadratic in the path length: an eighth of a crowded tick)
-void Map::pullString(Vec2 from, const std::vector<Vec2>& rev, std::vector<Vec2>& out, bool swim) const {
+void Map::pullString(Vec2 from, const std::vector<Vec2>& rev, std::vector<Vec2>& out, PathMode mode) const {
     const size_t PULL_AHEAD = 14;
     Vec2 cur = from;
     size_t i = 0;
     while (i < rev.size()) {
         size_t j = std::min(rev.size() - 1, i + PULL_AHEAD);
-        while (j > i && !lineClear(cur, rev[j], swim)) j--;
+        while (j > i && !lineClear(cur, rev[j], mode)) j--;
         out.push_back(rev[j]);
         cur = rev[j];
         i = j + 1;
     }
 }
 
-bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<Vec2>& out, int maxNodes, bool swim) const {
-    auto open_ = [&](int x, int y) { return swim ? swimPassable(x, y) : passable(x, y); };
+bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<Vec2>& out, int maxNodes, PathMode mode) const {
+    const bool swim = mode != PM_WALK;
+    auto open_ = [&](int x, int y) { return passableFor(mode, x, y); };
+    if (mode == PM_CLIMB) maxNodes = std::min(maxNodes, 30000);
     out.clear();
     if (!std::isfinite(from.x) || !std::isfinite(from.y) || maxNodes <= 0 || rw <= 0 || rh <= 0) return false;
     int sx = clampi(tileOf(from.x), 0, MAP_W - 1), sy = clampi(tileOf(from.y), 0, MAP_H - 1);
-    if (!open_(sx, sy)) { Vec2 nf = nearestFree(from); sx = tileOf(nf.x); sy = tileOf(nf.y); }
+    if (!open_(sx, sy)) { Vec2 nf = nearestFree(from, 6, mode); sx = tileOf(nf.x); sy = tileOf(nf.y); }
     if (!open_(sx, sy)) return false;
     // goal: a free tile in the ring round the footprint (its eight neighbours' band)
-    auto isGoal = [&](int x, int y) { return passable(x, y) && x >= rx - 1 && x <= rx + rw && y >= ry - 1 && y <= ry + rh && !(x >= rx && x < rx + rw && y >= ry && y < ry + rh); };
+    auto isGoal = [&](int x, int y) { return (mode == PM_CLIMB ? climbPassable(x, y) : passable(x, y)) && x >= rx - 1 && x <= rx + rw && y >= ry - 1 && y <= ry + rh && !(x >= rx && x < rx + rw && y >= ry && y < ry + rh); };
     if (isGoal(sx, sy)) { out.push_back(tileCenter(sx, sy)); return true; }
-    if (swim) {   // an infiltrator: no side of it it can reach even swimming (walled in): no flood
+    if (mode == PM_SWIM) {   // an infiltrator: no side of it it can reach even swimming (walled in): no flood
         if (regionDirty || swimDirty) buildSwimRegions();
         u16 ws = swimRegion[sy * MAP_W + sx];
         bool any = false;
@@ -1563,7 +1567,7 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
         for (int y = ry - 1; y <= ry + rh && !any; y++) for (int x = rx - 1; x <= rx + rw; x++) if (inMap(x, y) && isGoal(x, y) && region[y * MAP_W + x] == rs) { any = true; break; }
         if (rs != 0 && !any) {
             int bx = sx, by = sy;
-            if (closestInRegion(rs, rx + rw / 2, ry + rh / 2, bx, by) && !(bx == sx && by == sy)) findPath(from, tileCenter(bx, by), out, maxNodes, false);
+            if (closestInRegion(rs, rx + rw / 2, ry + rh / 2, bx, by) && !(bx == sx && by == sy)) findPath(from, tileCenter(bx, by), out, maxNodes, PM_WALK);
             return false;
         }
     }
@@ -1631,7 +1635,7 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
             }
             int ni = ny * MAP_W + nx;
             if (closedGen[ni] == curGen) continue;
-            float ng = gScore[n.idx] + (d >= 4 ? 1.4142f : 1.0f) * (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny));
+            float ng = gScore[n.idx] + (d >= 4 ? 1.4142f : 1.0f) * (mode == PM_CLIMB ? climbCost(nx, ny) : (swim && tiles[ni] == T_WATER ? SWIM_COST : moveCost(nx, ny)));
             if (visitGen[ni] != curGen) { visitGen[ni] = curGen; hCache[ni] = h(ni); gScore[ni] = ng; parentIdx[ni] = n.idx; open.push({ng + hCache[ni], ni}); }
             else if (ng < gScore[ni]) { gScore[ni] = ng; parentIdx[ni] = n.idx; open.push({ng + hCache[ni], ni}); }
         }
@@ -1640,7 +1644,7 @@ bool Map::findPathToRect(Vec2 from, int rx, int ry, int rw, int rh, std::vector<
     for (int i = best; i != -1 && i != start; i = parentIdx[i]) rev.push_back(tileCenter(i % MAP_W, i / MAP_W));
     if (rev.empty()) return false;
     std::reverse(rev.begin(), rev.end());
-    pullString(from, rev, out, swim);
+    pullString(from, rev, out, mode);
     return found;
 }
 

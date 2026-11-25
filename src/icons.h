@@ -15,6 +15,7 @@ enum IconId : int {
     ICO_RAINNUKE, ICO_TANKDROP, ICO_BUNKERALL,   // a bunker's Rain Nukes and Tank Drop calls, and Upgrade All Bunkers
     ICO_GUNSHIPS, ICO_SATELLITE, ICO_HUNT,       // Gunship Call (tech structure), a bunker's Satellite Scan, Find and Destroy (Command Center)
     ICO_PROTECT,                                 // Protect Us (Command Center)
+    ICO_PLANT,                                   // Plant TNT (Phantom Jeep)
     ICO_COUNT
 };
 

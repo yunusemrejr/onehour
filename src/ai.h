@@ -77,8 +77,11 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                                   // economic structure - and goes back to the army when that is done (the feint of F2_GUILE only pulls the defence away)
                F2_PUSH = 65536,   // no idling: an army that outguns the enemy's field army and has stood at home for 75 seconds goes for the softest objective in reach
                                   // when the preferred one is too strong for it
+               F2_PHANTOM = 131072, // the Phantom Jeep (ai_phantom.cpp): one per army from a factory and the tech structure. It mends at home when badly hurt
+                                  // or hunted by three aircraft, meets the enemy's soldiers round its own base, and otherwise raids the enemy's power, tech,
+                                  // airfields, nuke silos, factories and naval yards - planting TNT while it has charges, shelling them after. Never in a wave
                F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
                // (Nov 2026, new side with one bit against the defaults, 48 games per seed, wins-losses, seeds 1 and 2 pooled; the null control is the same masks on both sides:
@@ -247,6 +250,11 @@ struct AiPlayer {
     int chosenBought = 0; bool chosenAlive = false; float chosenLostAt = -1000, chosenFirstAt = -1;   // Chosen trained so far, when the last one fell, when the first took the field
     void chosenOps(Ref chosen, Entity* threat, float threatValue);
     void shadowOps(Ref chosen, Entity* threat, float threatValue, const std::vector<Ref>& shadowNow);
+    // ---- the Phantom Jeep (ai_phantom.cpp): led apart from every wave, group and defence
+    Ref phantomGoal; float phantomGoalAt = -100, nextPhantom = 0;   // the structure it raids, and when it last looked for one
+    Ref phantomBad; float phantomBadAt = -1000;   // a goal that would not die or could not be reached: left alone for a while
+    bool phantomHome = false;                      // it is mending at home (or hiding from aircraft) until it is well again
+    void phantomOps(Ref phantom, const std::vector<Entity*>& enemyUnits);
     void heliHunt(const std::vector<Ref>& aircraft, const std::vector<Entity*>& airfields, int reserve, bool hunting);
     void sellTaken();               // structures the Chosen took deep in enemy ground are sold off (the enemy loses them, the money is ours)
     bool launchFeint(std::vector<Ref>& waveUnits, Entity* mainTarget);

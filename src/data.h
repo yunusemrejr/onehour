@@ -45,10 +45,11 @@ enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone
                     ST_DRONE = 2,                    // the spy drone itself: only drones (its own kind, or the cheap bomber drones up close) find it
                     ST_INFIL = 3,                    // infiltrators / spies (a class c is found by detector bit 1 << (c - 1)): only snipers, drones, aircraft (not the heavy bombers), jeeps, other
                                                      // infiltrators and the light defence turrets (Laser Turret / Gun Nest) find them
-                    ST_CHOSEN = 4 };                 // The Chosen and its Shadow Guard: only helicopters (gunships and lifters, see helicopterType and
+                    ST_CHOSEN = 4,                   // The Chosen and its Shadow Guard: only helicopters (gunships and lifters, see helicopterType and
                                                      // CHOSEN_DETECT) and snipers (their scope, DET_CHOSEN in detectMask) find them - not drones, planes,
                                                      // turrets, bunkers or scans - firing or not
-static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4, DET_CHOSEN = 8;
+                    ST_PHANTOM = 5 };                // The Phantom Jeep: only aircraft (every UK_AIR unit, see PHANTOM_DETECT) and snipers (DET_PHANTOM in detectMask) find it
+static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4, DET_CHOSEN = 8, DET_PHANTOM = 16;
 static const float INFIL_DETECT = 5.0f;   // tiles: how close an ordinary infiltrator-spotter (infantry, jeep, aircraft) has to be to find one
 // Infiltrators swim: one sent somewhere it cannot walk to (an island launcher out in the lake, the far bank of a river with no crossing near)
 // paddles across on a small inflatable raft. Land is preferred: a water tile costs SWIM_COST in the route search, and the raft is slow.
@@ -86,6 +87,7 @@ enum UnitTypeId {
     U_C_SUB, U_K_SUB,               // nuclear submarines (Naval Yard + tech structure, SUB_MAX per army): dive out of every sight, surface to fire torpedoes or a nuke (SUB_*)
     U_C_BATTLESHIP, U_K_BATTLESHIP, // battleships (Naval Yard + tech structure): three heavy gun turrets, vertical-launch cruise missiles and a drone swarm (BATTLESHIP_*)
     U_R_JUGGERNAUT, U_R_STRIDER, U_R_THUNDERHAWK,   // the relic army's war machines: built only at relic factories an army captured or raised (UnitType.relic)
+    U_C_PHANTOM, U_K_PHANTOM,       // the Phantom Jeep: one per army at a time (factory + tech structure), hand-driven, seen only by aircraft and snipers (see PHANTOM_*)
     U_COUNT
 };
 
@@ -828,3 +830,33 @@ static const int UNITS_PER_FACTION = 12;
 static const int BUILDS_PER_FACTION = 11;
 static const float HELI_SPACE = 46.0f;        // px between the centres of neighbouring hovering helicopters (the drawn hulls are about 40 px
                                               // across, so this leaves a small gap between them)
+
+// ---- The Phantom Jeep
+// One per army at a time. Stealth class ST_PHANTOM: only an enemy aircraft within PHANTOM_DETECT tiles (every UK_AIR unit) or a sniper's scope finds it;
+// turrets, bunkers, ground units, scans, hunt sights and captures never do. It drives over everything but Bastion Walls and the footprints of structures that
+// are not wall segments (Map::climbPassable), and it is the player's own hand: no automatic group order ever takes it.
+static const int   W_PHANTOM_GUN = 74;            // the rotary gun (WEAPONS index): mows infantry, a volley spread over up to PHANTOM_GUN_TARGETS soldiers
+static const int   W_PHANTOM_MISSILE = 75;        // the second mount: aircraft first, then ships, then vehicles
+static const int   PHANTOM_GUN_TARGETS = 3;
+static const float PHANTOM_DETECT = 7.0f;         // tiles: how close an enemy aircraft has to be to find it
+static const float PHANTOM_LINGER = 2.5f;         // s it stays found once the aircraft (or sniper) is gone
+static const float PHANTOM_ARMOR = 0.22f;         // share of what any ground weapon (units, ships, structures, turrets) does to it
+static const float PHANTOM_NUKE_FLOOR = 0.06f;    // share of its health a warhead or fallout can never take it below
+static const float PHANTOM_AIR_BASE = 0.7f;       // aircraft damage multiplier with one aircraft on it ...
+static const float PHANTOM_AIR_STEP = 0.35f;      // ... plus this for every further distinct aircraft that hit it within PHANTOM_AIR_WINDOW ...
+static const float PHANTOM_AIR_CAP = 3.0f;        // ... up to this
+static const float PHANTOM_AIR_WINDOW = 4.0f;     // s
+static const int   PHANTOM_AIR_SLOTS = 8;         // aircraft remembered at once (Entity.airHit)
+static const float PHANTOM_REGEN = 0.012f;        // share of its health mended per second once PHANTOM_CALM seconds have passed without damage ...
+static const float PHANTOM_REGEN_HOT = 0.003f;    // ... and while it is under fire
+static const float PHANTOM_CALM = 5.0f;
+static const float PHANTOM_LEASH = 3.0f;          // tiles an idle Phantom may leave its post to fire; it never chases further
+static const float PHANTOM_SPEED_WATER = 0.9f, PHANTOM_SPEED_ROUGH = 0.85f;   // shares of its speed while swimming and over rock and trees
+static const int   PHANTOM_TNT_MAX = 3;           // charges it carries ...
+static const float PHANTOM_TNT_RECHARGE = 25.0f;  // ... one more every so many seconds
+static const float PHANTOM_TNT_PLANT = 1.5f;      // s it takes to plant one (within a tile of the footprint)
+static const float PHANTOM_TNT_FUSE = 6.0f;       // s from planting to the blast
+static const float PHANTOM_TNT_DAMAGE = 3500.0f;  // flat damage of a charge, plus ...
+static const float PHANTOM_TNT_SHARE = 0.30f;     // ... this share of the structure's maximum health
+static const float PHANTOM_TNT_REVEAL = 2.0f;     // s the planting shows it to the structure's army
+inline bool phantomType(int t) { return t == U_C_PHANTOM || t == U_K_PHANTOM; }

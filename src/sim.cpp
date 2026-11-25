@@ -66,10 +66,11 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e = Entity();
     e.gen = gen; e.alive = true; e.kind = EK_UNIT; e.type = type; e.owner = owner;
     const UnitType& t = UNITS[type];
-    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 60, true) : g_map.nearestFree(pos));   // (a ship is always put on the lake or the ocean, however far it is from where it was asked for)
+    e.pos = t.kind == UK_AIR ? pos : (t.naval ? g_map.nearestWater(pos, 60, true) : g_map.nearestFree(pos, 6, phantomType(type) ? PM_CLIMB : PM_WALK));   // (a ship is always put on the lake or the ocean, however far it is from where it was asked for)
     e.lastPos = e.pos; e.prevPos = e.pos;
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
+    if (phantomType(type)) e.tntLeft = PHANTOM_TNT_MAX;
     e.guardPos = e.pos;
     if (t.role == UR_SCOUT) e.autoHoldUntil = time + 18.0f;   // wait briefly at spawn for player orders before autonomous swarm search (spawnFromQueue sets 2.5s)
     e.angle = rng.f(0, 6.28f);
@@ -104,13 +105,13 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
     if (b.role == BR_SUPPLY && std::find(supplyList.begin(), supplyList.end(), i) == supplyList.end()) { supplyList.push_back(i); std::sort(supplyList.begin(), supplyList.end()); }   // (in entity order, as a scan would meet them)
     if (b.role == BR_WAYMAKER || b.role == BR_BRIDGE) return refOf(i);   // a Waymaker is no obstacle: it may stand partly over a structure or water and clears only what is clearable (updateWaymaker); a bridge's deck is the road itself
     g_map.clearForStructure(tx, ty, b.w, b.h);   // trees, bushes and small rocks on the footprint are cleared away
-    g_map.setStructure(tx, ty, b.w, b.h, true);
+    g_map.setStructure(tx, ty, b.w, b.h, true, b.role == BR_WALL ? WM_WALL : b.role == BR_FWALL ? WM_BASTION : WM_NONE);   // (a Phantom Jeep drives over an ordinary wall, never a Bastion Wall)
     // shove units off the foundation
     Ref self = refOf(i);
     forEachNear(e.pos, std::max(b.w, b.h) * TILE, [&](Entity& u) {
         if (!u.isUnit() || u.isAir()) return;
         int ux = tileOf(u.pos.x), uy = tileOf(u.pos.y);
-        if (ux >= tx && ux < tx + b.w && uy >= ty && uy < ty + b.h) u.pos = g_map.nearestFree(u.pos, 8);
+        if (ux >= tx && ux < tx + b.w && uy >= ty && uy < ty + b.h && !walkable(u, ux, uy)) u.pos = freeSpot(u, u.pos, 8);   // (a Phantom stays where it is on a new wall)
     });
     // ... and out of any little pocket the new walls close round them (a unit in a one-tile gap between two structures, sealed in by a wall at
     // each end, could never move again): a bounded flood from each unit beside the footprint, so this costs a few dozen tile tests at most
@@ -131,7 +132,7 @@ Ref Sim::placeBuilding(int type, int owner, int tx, int ty, bool instant) {
         return n;
     };
     forEachNear(e.pos, (std::max(b.w, b.h) * 0.5f + 3.0f) * TILE, [&](Entity& u) {
-        if (!u.isUnit() || u.isAir() || u.carrier.valid() || u.ut().naval) return;
+        if (!u.isUnit() || u.isAir() || u.carrier.valid() || u.ut().naval || climber(u)) return;   // (a Phantom is never walled in: it drives over walls)
         int ux = tileOf(u.pos.x), uy = tileOf(u.pos.y);
         if (pocket(ux, uy, 8) >= 8) return;   // (only a tiny pocket: a compound a player walls in on purpose is left alone)
         for (int r = 1; r <= 6; r++) {   // the nearest free tile with room round it
@@ -242,6 +243,7 @@ void Sim::destroy(Entity& e, bool violent) {
             emit(EV_UNDER_ATTACK, e.owner, SND_ATTACKED, e.pos, "The Chosen has fallen");
             for (int q = 0; q < numPlayers; q++) if (enemies(q, e.owner)) emit(EV_MSG, q, SND_NONE, e.pos, "The enemy's Chosen is dead");
         }
+        if (phantomType(e.type) && e.owner < numPlayers) emit(EV_UNDER_ATTACK, e.owner, SND_ATTACKED, e.pos, "The Phantom Jeep has fallen");
     }
     if (violent && e.owner >= 0 && e.owner < numPlayers && e.kind != EK_RESOURCE && e.district < 0)   // what an army loses shakes its hold on its own people (see updateRiots)
         lossHeat[e.owner] += e.isUnit() ? (float)UNITS[e.type].cost : (float)BUILDS[e.type].cost;
@@ -517,7 +519,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         if (e.ut().role == UR_DOZER) { keepSite(e); e.autoHoldUntil = time + DOZER_MANUAL_HOLD; }   // (it goes back to an unfinished site once there; no mending rounds for a while)
         e.zoneR = 0; e.leashed = false; takeOrder(e); e.forceTarget = NOREF;
         Vec2 dd(clampf(dest.x + offs[i].x, TILE, WORLD_W - TILE), clampf(dest.y + offs[i].y, TILE, WORLD_H - TILE));
-        Vec2 d = e.ut().naval ? g_map.nearestWater(dd, 14, true, g_map.compAt(e.pos)) : g_map.nearestFree(dd, 6);   // ships sail to the nearest open water of their sea
+        Vec2 d = e.ut().naval ? g_map.nearestWater(dd, 14, true, g_map.compAt(e.pos)) : g_map.nearestFree(dd, 6, pathModeOf(e));   // ships sail to the nearest open water of their sea
         if (e.ut().naval && g_map.compAt(d) != g_map.compAt(e.pos)) d = g_map.nearestWater(dd, 90, true, g_map.compAt(e.pos));   // (sent onto the other sea, or far inland: as close as its own sea goes)
         e.order = attackMove && e.weapon() >= 0 ? O_ATTACKMOVE : O_MOVE;
         e.postOrder = O_IDLE;
@@ -525,7 +527,8 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         bool reused = false;
         const bool naval = e.ut().naval;
         const int comp = naval ? g_map.compAt(e.pos) : 0;
-        auto clear = [&](Vec2 a, Vec2 b) { return naval ? g_map.navLineClear(a, b) : g_map.lineClear(a, b); };
+        const bool ownRoute = swimmer(e) || climber(e);   // (an infiltrator's route may cross water, a Phantom's crosses nearly everything: neither joins nor shares a column's route)
+        auto clear = [&](Vec2 a, Vec2 b) { return naval ? g_map.navLineClear(a, b) : g_map.lineClear(a, b, pathModeOf(e)); };
         // a ship of a fleet joins a route another ship has planned: at the nearest point of the route (within 30 tiles) it can sail straight to, which is
         // a waypoint or a point on one of its legs. The fleet sails one route between them instead of a search for each ship (that was most of a late-game
         // spike). Ground units still share only a route that starts beside them.
@@ -544,7 +547,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
             }
             return best;
         };
-        if (!swimmer(e)) for (auto& sh : shared) {
+        if (!ownRoute) for (auto& sh : shared) {
             if (sh.naval != naval || sh.comp != comp) continue;
             if (dist(sh.to, d) > (naval ? 6.0f : 4.0f) * TILE || (!naval && dist(sh.from, e.pos) > 2.5f * TILE)) continue;
             if (!sh.reached) {   // the spot cannot be reached from here: the same closest point
@@ -570,7 +573,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         // can see (and that is not much farther from it than from that unit), so an army spread over a field plans a handful of routes, not dozens
         // (the farther the march, the less the first stretch matters: a wave sent 150 tiles shares routes among units up to 18 tiles apart)
         const float joinR = std::max(9.0f * TILE, std::min(18.0f * TILE, 0.12f * dist(e.pos, d)));
-        if (!reused && !naval && !swimmer(e)) for (auto& sh : shared) {
+        if (!reused && !naval && !ownRoute) for (auto& sh : shared) {
             if (sh.naval || !sh.reached || sh.path.size() < 4 || dist(sh.to, d) > 4.0f * TILE || dist(sh.from, e.pos) > joinR) continue;
             if (!clear(sh.path[sh.path.size() - 2], d)) continue;
             for (size_t k = 0; k < std::min<size_t>(3, sh.path.size() - 2) && !reused; k++) {
@@ -583,7 +586,7 @@ void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
         }
         if (!reused) {
             bool reached = requestPath(e, d);
-            if (!swimmer(e) && shared.size() < 64) shared.push_back({e.pos, d, e.path, reached, naval, comp});   // (an infiltrator's route may cross water)
+            if (!ownRoute && shared.size() < 64) shared.push_back({e.pos, d, e.path, reached, naval, comp});
         }
     }
     for (auto* a : air) {
@@ -612,6 +615,7 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
             if ((t->constructed || t->district >= 0) && spyMayTake(e->owner, *t)) cmdCapture({r}, target); else cmdMove({r}, t->pos, false);
             continue;
         }
+        if (e->isUnit() && climber(*e) && t->isBuilding() && e->tntLeft > 0 && plantable(e->owner, *t)) { cmdPlant({r}, target); continue; }   // a Phantom sent at an enemy structure plants TNT (out of charges, the guns do it)
         bool ff = force && !players[e->owner].isAI && t->owner >= 0 && t->kind != EK_RESOURCE && !enemies(e->owner, t->owner);
         // a player may pour fire on an indestructible structure (an enemy Bastion Wall, an island launcher): it only burns, it never breaks. Nothing
         // ever does that on its own initiative, and the computer armies never order it (see canTarget)
@@ -642,6 +646,20 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
         e->order = O_ATTACK; e->postOrder = e->zoneR > 0 ? O_GUARDAREA : O_IDLE; e->targetEnt = target; e->engaged = NOREF; e->leashed = false;
         e->repathTimer = 0;
     }
+}
+
+// Plant TNT: each selected Phantom Jeep with a charge left drives to the structure and plants one (see plantRun)
+bool Sim::cmdPlant(const std::vector<Ref>& units, Ref site) {
+    const Entity* b = get(site);
+    bool any = false;
+    for (Ref r : units) {
+        Entity* e = get(r);
+        if (!e || !e->isUnit() || !climber(*e) || e->tntLeft == 0 || e->carrier.valid() || !b || !plantable(e->owner, *b)) continue;
+        e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF;
+        e->order = O_PLANT; e->postOrder = O_IDLE; e->targetEnt = site; e->engaged = NOREF; e->path.clear(); e->pathIdx = 0; e->repathTimer = 0; e->actionTimer = 0;
+        any = true;
+    }
+    return any;
 }
 
 void Sim::cmdStop(const std::vector<Ref>& sel) {
@@ -821,6 +839,7 @@ bool Sim::cmdTrain(Ref building, int unitType) {
     if (t.builtBy != b->bt().role || !unitAvailable(b->owner, unitType)) return false;
     if (b->queue.size() >= 9) return false;
     if (chosenType(unitType) && chosenInProduction(b->owner)) { emit(EV_MSG, b->owner, SND_CANT, b->pos, "There is only ever one Chosen"); return false; }
+    if (phantomType(unitType) && phantomInProduction(b->owner)) { emit(EV_MSG, b->owner, SND_CANT, b->pos, "There is only ever one Phantom Jeep"); return false; }
     if (!canAfford(b->owner, t.cost)) { emit(EV_NOFUNDS, b->owner, SND_NOFUNDS, b->pos, "Insufficient funds"); return false; }
     players[b->owner].money -= t.cost;
     players[b->owner].spentOn[unitType] += t.cost;
@@ -1601,7 +1620,7 @@ void Sim::nukeBlast(const Nuke& n) {
         }
         if (e->isUnit() && e->fall <= 0) {   // the shockwave throws everything that survives, friend or foe (not a load still under its parachute)
             Vec2 np = e->pos + away * (90.0f * f * P * (n.super ? 2.0f : n.deep ? 1.6f : 1.0f));
-            if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : g_map.passable(tileOf(np.x), tileOf(np.y))) e->pos = np;
+            if (e->ut().naval ? g_map.navTile(tileOf(np.x), tileOf(np.y)) : walkable(*e, tileOf(np.x), tileOf(np.y))) e->pos = np;
             e->path.clear();
         }
     }
@@ -1859,8 +1878,8 @@ bool Sim::requestSidePath(Entity& e, const Entity& b) {
     e.path.clear(); e.pathIdx = 0;
     e.repathTimer = PATH_INTERVAL;
     // (an infiltrator plans with the water open to it: one search, which still keeps to land wherever that is nearly as short)
-    bool ok = g_map.findPathToRect(e.pos, b.tx, b.ty, b.bt().w, b.bt().h, e.path, MAP_W * MAP_H, swimmer(e));
-    if (e.path.empty()) return requestPath(e, g_map.nearestFree(b.pos + Vec2(0, b.bt().h * TILE * 0.5f + 12), 6));   // (already beside it, or boxed in: the old doorstep)
+    bool ok = g_map.findPathToRect(e.pos, b.tx, b.ty, b.bt().w, b.bt().h, e.path, MAP_W * MAP_H, pathModeOf(e));
+    if (e.path.empty()) return requestPath(e, g_map.nearestFree(b.pos + Vec2(0, b.bt().h * TILE * 0.5f + 12), 6, pathModeOf(e)));   // (already beside it, or boxed in: the old doorstep)
     return ok;
 }
 
@@ -1876,8 +1895,9 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
         if (e.path.empty()) e.path.push_back(g_map.nearestWater(e.pos, 20, true));   // (no way there: it only moves to the open water beside it, never along a straight line across the land)
         return ok;
     }
-    bool ok = g_map.findPath(e.pos, dest, e.path, MAP_W * MAP_H, swimmer(e));   // (an infiltrator may cross water: see SWIM_COST)
-    if (!ok && !swimmer(e)) {   // nowhere it can walk to from here (boxed in, or the goal is across water): no point asking again every PATH_INTERVAL
+    const PathMode pm = pathModeOf(e);
+    bool ok = g_map.findPath(e.pos, dest, e.path, MAP_W * MAP_H, pm);   // (an infiltrator may cross water: see SWIM_COST; a Phantom drives over nearly everything)
+    if (!ok && pm == PM_WALK) {   // nowhere it can walk to from here (boxed in, or the goal is across water): no point asking again every PATH_INTERVAL
         Vec2 at = e.path.empty() ? e.pos : e.path.back();
         if (!g_map.sameGround(at, dest)) {
             e.repathTimer = PATH_INTERVAL * 4.0f;
@@ -1886,11 +1906,12 @@ bool Sim::requestPath(Entity& e, Vec2 dest) {
         }
     }
     if (e.path.empty()) {   // (already next to a blocked spot: stop on the free tile beside it, never bump into it forever)
-        Vec2 fb = g_map.passable(tileOf(dest.x), tileOf(dest.y)) ? dest : g_map.nearestFree(dest, 4);
-        if (!g_map.passable(tileOf(fb.x), tileOf(fb.y))) { fb = g_map.nearestFree(dest, 18); ok = g_map.findPath(e.pos, fb, e.path); }   // (a spot out in the lake: walk to the shore)
+        auto open = [&](Vec2 p) { return g_map.passableFor(pm == PM_CLIMB ? PM_CLIMB : PM_WALK, tileOf(p.x), tileOf(p.y)); };
+        Vec2 fb = open(dest) ? dest : g_map.nearestFree(dest, 4, pm);
+        if (!open(fb)) { fb = g_map.nearestFree(dest, 18, pm); ok = g_map.findPath(e.pos, fb, e.path, MAP_W * MAP_H, pm == PM_CLIMB ? PM_CLIMB : PM_WALK); }   // (a spot out in the lake: walk to the shore)
         // (a far goal it cannot reach at all: stay put, never push against the terrain in a straight line; nor against a wall line for a spot just
         // beyond it - units of a wave used to stand pressed to an enemy wall for minutes, walking at a goal two tiles off on its other side)
-        if (e.path.empty()) e.path.push_back(g_map.passable(tileOf(fb.x), tileOf(fb.y)) && dist(fb, e.pos) <= 3.0f * TILE && (swimmer(e) || g_map.sameGround(e.pos, fb)) ? fb : e.pos);
+        if (e.path.empty()) e.path.push_back(open(fb) && dist(fb, e.pos) <= 3.0f * TILE && (pm != PM_WALK || g_map.sameGround(e.pos, fb)) ? fb : e.pos);
     }
     return ok;
 }
@@ -1915,6 +1936,10 @@ void Sim::moveAlong(Entity& e, float speed) {
         v = e.airspeed;
     }
     if (swimmer(e) && g_map.swimTile(tileOf(e.pos.x), tileOf(e.pos.y))) v *= SWIM_SPEED;   // paddling a raft is slow
+    else if (climber(e)) {   // a Phantom keeps most of its speed on water and over rock and trees
+        const u8 t = g_map.tile(tileOf(e.pos.x), tileOf(e.pos.y));
+        if (t == T_WATER) v *= PHANTOM_SPEED_WATER; else if (t == T_ROCK || t == T_TREE) v *= PHANTOM_SPEED_ROUGH;
+    }
     float step = v * SIM_DT;
     if (len <= stepMax + 0.5f) {
         if (!e.isAir() && !walkable(e, tileOf(wp.x), tileOf(wp.y))) { requestPath(e, e.path.back()); return; }
@@ -1961,7 +1986,7 @@ bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     // a bunker whose hatch is gone and whose body is at the floor can only be hurt by soldiers and vehicles (see applyDamage): aircraft and
     // structures would hover over it or shoot at it for nothing, so they do not pick it
     if (hardened(t) && hardFloor(t.bt().role) > 0 && t.hatch <= 0 && t.hp <= t.maxHp * (hardFloor(t.bt().role) + BUNKER_FLOOR_MARGIN) + 1.0f && !(e.isUnit() && e.ut().kind != UK_AIR)) return false;   // (the margin: a bunker mends a little under fire, and aircraft must not hover over it plinking at that trickle)
-    if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper
+    if (e.isUnit() && e.ut().sniper && !(t.isUnit() && t.ut().kind == UK_INF && !t.ut().sniper)) return false;   // a sniper shoots infantry, never another sniper (and never a Phantom Jeep: see PHANTOM_*)
     if (!enemies(e.owner, t.owner) && !burnOrder) {   // a friendly is only a legal target for the one the human ordered it to hit
         if (t.owner < 0 || !e.forceTarget.valid() || players[e.owner].isAI) return false;
         if (get(e.forceTarget) != &t) return false;
@@ -2135,6 +2160,7 @@ bool Sim::tryFire(Entity& e, Entity& tgt) {
     if (w < 0) return false;
     if (e.isUnit() && subType(e.type) && e.subState != 0) return false;   // (a submarine on its way up, or still under, holds fire: it closes in)
     if (w == W_CONVERT) return chosenAct(e, tgt);   // The Chosen: takes or turns, never shoots
+    if (w == W_PHANTOM_GUN) return phantomVolley(e, tgt);   // the Phantom's rotary gun: one volley over up to three soldiers
     if (w == W_SHADOW) {   // the Shadow Guard: the weapon the target calls for
         float d0 = distToEntity(e.pos, tgt) / TILE;
         w = shadowWeapon(e, tgt, d0);
@@ -2289,6 +2315,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
     if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner) && !hardNuke) real *= players[attackerOwner].damageMul();
     const Entity* attU = get(attacker);
     if (attU && attU->isUnit() && attU->rank > 0) real *= 1.0f + 0.2f * attU->rank;   // veterans and elites hit harder
+    const bool phantomFloor = tgt.isUnit() && phantomType(tgt.type) && phantomHit(tgt, attU, real, w == nullptr && !attacker.valid());   // (a Phantom Jeep: plated against ground fire, stacking damage from aircraft, a warhead never kills it)
     // Underground bunker (and the Underground Nuke silo, its blast doors standing in for the hatch): the surface hatch takes the damage first; what gets
     // past it is stopped by the plating. Only soldiers and vehicles can ever take it below BUNKER_FLOOR of its health: aircraft, structures, shells
     // from the sky and fallout cannot. Nuclear warheads ignore the floor entirely - enough of them destroy even a buried bunker or silo.
@@ -2303,6 +2330,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         real *= BUNKER_PLATING;
     }
     tgt.hp -= real;
+    if (phantomFloor) tgt.hp = std::max(tgt.hp, std::min(hpBefore, tgt.maxHp * PHANTOM_NUKE_FLOOR));
     if (bunker && !nuke && !(attU && attU->isUnit() && attU->ut().kind != UK_AIR)) {
         float floorHp = tgt.maxHp * hardFloor(tgt.bt().role);
         tgt.hp = std::max(tgt.hp, std::min(hpBefore, floorHp));
@@ -3013,7 +3041,7 @@ bool Sim::dodgeDanger(Entity& e) {
 
 bool Sim::autonomy(Entity& e) {
     const UnitType& ut = e.ut();
-    if (e.fall > 0 || e.disabledUntil > time || e.owner < 0) return false;
+    if (e.fall > 0 || e.disabledUntil > time || e.owner < 0 || climber(e)) return false;   // (a Phantom Jeep does only what its player tells it)
     if (!players[e.owner].isAI && dodgeDanger(e)) return true;
     // a hauler at work keeps out of the way of a raider: an enemy gun closing on its pile, with no friendly fighters near enough to see it off,
     // sends it away from the threat (the way it leaves is toward the depot) until the danger has passed; it goes back to the pile afterwards
@@ -3127,17 +3155,18 @@ void Sim::updateUnit(Entity& e) {
             return;
         }
         e.fall = 0; e.pos = e.dropTo;
-        if (!ut.naval && !walkable(e, tileOf(e.pos.x), tileOf(e.pos.y))) e.pos = g_map.nearestFree(e.pos, 8);   // (the spot went while it came down: a bridge fell, a structure went up)
+        if (!ut.naval && !walkable(e, tileOf(e.pos.x), tileOf(e.pos.y))) e.pos = freeSpot(e, e.pos, 8);   // (the spot went while it came down: a bridge fell, a structure went up)
         e.guardPos = e.pos; e.path.clear(); e.pathIdx = 0; e.stuckTimer = 0; e.lastPos = e.pos;
         float r = std::max(10.0f, e.radius() * 1.6f);
         fx.push_back({FX_RING, e.pos, e.pos, 0, 0.5f, rgb(214, 196, 160), r * 1.6f});
         fx.push_back({FX_SMOKE, e.pos, e.pos, 0, 1.4f, rgb(150, 138, 118), r, Vec2(rng.f(-6, 6), -9)});
-        if (e.dropGo) { e.dropGo = false; e.order = ut.weapon >= 0 ? O_ATTACKMOVE : O_MOVE; e.postOrder = O_IDLE; e.target = g_map.nearestFree(e.dropGoal, 6); requestPath(e, e.target); }
+        if (e.dropGo) { e.dropGo = false; e.order = ut.weapon >= 0 ? O_ATTACKMOVE : O_MOVE; e.postOrder = O_IDLE; e.target = freeSpot(e, e.dropGoal, 6); requestPath(e, e.target); }
         return;
     }
     if (e.cooldown > 0) e.cooldown -= SIM_DT;
     if (ut.temp && e.lifeUntil >= 0 && time >= e.lifeUntil) { destroy(e, false); return; }   // a loan whose time is up is withdrawn wherever it is
     if (subType(e.type)) updateSub(e);   // (dives and surfacings go on even while the pulse of a nuke has it stunned)
+    if (climber(e)) updatePhantom(e);   // (it mends and recharges even stunned)
     if (e.disabledUntil > time) return;
     if (ut.naval && !subType(e.type)) updateWarship(e);   // the battleships' cruise-missile cells, every warship's drone swarm
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
@@ -3191,7 +3220,7 @@ void Sim::updateUnit(Entity& e) {
 
     // Ground units standing on a blocked tile (new structure) get nudged off
     if (!e.isAir() && (tick + (u32)(&e - &ents[0])) % 10 == 0 && (ut.naval ? !g_map.navTile(tileOf(e.pos.x), tileOf(e.pos.y)) : !walkable(e, tileOf(e.pos.x), tileOf(e.pos.y))))
-        e.pos = ut.naval ? g_map.nearestWater(e.pos, 14) : g_map.nearestFree(e.pos, 14);
+        e.pos = ut.naval ? g_map.nearestWater(e.pos, 14) : freeSpot(e, e.pos, 14);
 
     // jammed: it has somewhere to go but hardly moved in the last second (two units head-on in a one-tile lane between structures,
     // a soldier standing in a gap): for a couple of seconds it slips past other units instead of shoving against them
@@ -3383,6 +3412,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             }
             break;
         }
+        if (climber(e)) { phantomIdle(e); break; }   // a Phantom holds its post and never goes hunting
         Entity* t = get(e.engaged);
         if (!t || !canTarget(e, *t) || distToEntity(e.pos, *t) > (WEAPONS[ut.weapon].range + 0.3f) * TILE) {
             t = nullptr; e.engaged = NOREF;
@@ -3399,6 +3429,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
         if (t) tryFire(e, *t);
         break;
     }
+    case O_PLANT: plantRun(e); break;
     case O_GUARDPOS: {
         if (inFallout(e.guardPos) && !inFallout(e.pos)) { e.order = O_IDLE; e.guardPos = e.pos; e.path.clear(); break; }   // its post is poisoned: hold here
         if (!e.isAir() && e.pathIdx >= e.path.size()) requestPath(e, e.guardPos);
@@ -3899,6 +3930,7 @@ void Sim::spawnFromQueue(Entity& b) {
     else cmdMove({r}, rally + Vec2(rng.f(-20, 20), rng.f(-10, 10)), false);
     emit(EV_UNIT_READY, owner, SND_UNIT_READY, u.pos, ut.name);
     if (chosenType(type)) emit(EV_MSG, owner, SND_NONE, u.pos, "The Chosen is ready: only helicopters and snipers can see it (C calls its Shadow Guard)");
+    if (phantomType(type)) emit(EV_MSG, owner, SND_NONE, u.pos, "The Phantom Jeep is ready: only aircraft and snipers can see it");
 }
 
 void Sim::updateBuilding(Entity& b) {
@@ -4013,7 +4045,7 @@ void Sim::updateDetection() {
         forEachNearMask(at, range * TILE, enemyMask(d.owner), [&](Entity& t) {
             int cls = stealthOf(t);
             if (!cls || !(mask & (1 << (cls - 1))) || !enemies(d.owner, t.owner) || (sensor && (!t.isUnit() || dist(t.pos, at) > range * TILE))) return;   // (a sensor finds soldiers, not another bunker)
-            float linger = cls == ST_DRONE ? 1.5f : (cls == ST_INFIL ? 2.0f : (cls == ST_CHOSEN ? CHOSEN_LINGER : 3.0f));   // a sniper, drone, infiltrator or Chosen is lost again once no detector is close
+            float linger = cls == ST_DRONE ? 1.5f : (cls == ST_INFIL ? 2.0f : (cls == ST_CHOSEN ? CHOSEN_LINGER : (cls == ST_PHANTOM ? PHANTOM_LINGER : 3.0f)));   // a sniper, drone, infiltrator or Chosen is lost again once no detector is close
             for (int q = 0; q < numPlayers; q++)
                 if (q == d.owner || players[q].team == players[d.owner].team) t.detUntil[q] = std::max(t.detUntil[q], time + linger);
         });
@@ -4052,13 +4084,14 @@ void Sim::updateDetection() {
             // a garrison keeps watch from inside: a sniper (or an infiltrator) in a bunker or a stronghold spots infiltrators creeping up on it
             if (!d.passengers.empty() && (role == BR_BUNKER || role == BR_STRONGHOLD)) {
                 float best = 0; int mask = 0;
-                for (Ref r : d.passengers) { const Entity* u = get(r); if (u && u->ut().detect > best) { best = u->ut().detect; mask |= u->ut().detectMask; } }
+                for (Ref r : d.passengers) { const Entity* u = get(r); if (u && u->ut().detect > best) { best = u->ut().detect; mask |= u->ut().detectMask & ~DET_PHANTOM; } }   // (a bunker never finds a Phantom Jeep, whoever is inside)
                 if (best > 0) sweep(d, d.pos, best + d.radius() / TILE, mask, false);
             }
             continue;
         }
         if (d.carrier.valid() || d.fall > 0) continue;
         if (helicopterType(d.ut())) sweep(d, d.pos, CHOSEN_DETECT, DET_CHOSEN, false);   // a helicopter finds The Chosen and its Shadow Guard...
+        if (d.ut().kind == UK_AIR && (tick / 2 + d.gen) % 3 == 0) sweep(d, d.pos, PHANTOM_DETECT, DET_PHANTOM, false);   // ... and any aircraft a Phantom Jeep close below (the 2.5 s it stays found outlasts the gap between sweeps)
         float range = d.ut().detect;
         if (range <= 0) continue;
         sweep(d, d.pos, range, d.ut().detectMask, false);   // ... and so does a sniper's scope (the only other detector with DET_CHOSEN)
@@ -5115,6 +5148,7 @@ void Sim::step() {
     updateAidDrops();
     updateFleetArrivals();
     updateHunts();
+    updateTnt();
     updateProtect();
     updateFallout();
     separateUnits();
