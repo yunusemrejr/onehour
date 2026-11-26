@@ -94,7 +94,7 @@ void antiNukeLaser(Model& m) {
     using namespace pal;
     const float cx = 32, cy = 34, R = 24;
     m.dirt = 0.0f;
-    m.slab(32, 32, 31, 31, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);                          // the pad
+    footing(m, 32, 32, 31, 31, true, 20);                          // the pad
     m.plan(ngon(cx, cy, R, 6), 0.9f, 5, cWall2).bev(0.6f);                                          // the plinth skirt
     m.plan(ngon(cx, cy, R + 0.5f, 6), 5, 5.5f, cTrim);                                              // cobalt trim ring
     m.plan(ngon(cx, cy, R - 4.5f, 6), 5.5f, 7, cRoof).t(T_PANEL, 5).bev(0.4f);                      // armoured top deck
@@ -120,7 +120,7 @@ M3D_BUILD(B_C_ANTINUKE, cAntiNuke)
 void antiNukeMissiles(Model& m) {
     using namespace pal;
     m.dirt = 0.35f;
-    m.slab(32, 32, 31, 31, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 12).bev(0.4f);                          // the pad
+    footing(m, 32, 32, 31, 31, false, 21);                          // the pad
     blockAt(m, 6, 16, 52, 40, 0.9f, zh(12) - 0.9f, kConc).m(MATTE).t(T_PANEL, 10).bev(0.6f);       // silo block: the launch slab
     m.box(32, 56.2f, 2.5f, 26, 0.5f, 1.2f, kHaz).t(T_HAZARD, 1.6f, kDark).bev(0.1f);                // hazard edge on the south face
     m.box(32, 32, zh(12) + 0.2f, 12, 8, 0.2f, kSteel).m(METAL).bev(0.2f);                            // steel rim of the hatch
@@ -191,7 +191,7 @@ M3D_BUILD(B_K_UNUKE, kUnuke)
 void healCyber(Model& m) {
     using namespace pal;
     m.dirt = 0.0f;
-    m.slab(16, 16, 16, 16, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 8).bev(0.4f);                        // the pad
+    footing(m, 16, 16, 16, 16, true, 23);                        // the pad
     m.plan(ngon(16, 16, 10, 6), 0.9f, 4, cWall2).bev(0.5f);                                          // hex plinth skirt
     m.plan(ngon(16, 16, 9, 6), 4, 5, cRoof).bev(0.4f);                                               // lit top face
     m.plan(ngon(16, 16, 7.2f, 6), 5, 5.4f, cSteel).bev(0.2f);                                        // inset ring
@@ -218,7 +218,7 @@ M3D_BUILD(B_C_HEALANT, cHeal)
 void healClanker(Model& m) {
     using namespace pal;
     m.dirt = 0.4f;
-    m.slab(16, 16, 16, 16, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 8).bev(0.4f);                        // the pad
+    footing(m, 16, 16, 16, 16, false, 24);                        // the pad
     m.slab(16, 22, 13, 7, 0, 2.6f, kWall).t(T_PANEL, 4).bev(0.4f);                                   // the riveted base plate
     m.box(7.2f, 22, 4.4f, 2.4f, 3.4f, 1.8f, kDark).bev(0.3f);                                        // battery box
     m.box(7.2f, 22, 6.3f, 2.0f, 2.4f, 0.2f, kHaz).t(T_HAZARD, 1.2f, kDark).bev(0.05f);

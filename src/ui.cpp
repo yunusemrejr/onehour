@@ -2610,7 +2610,7 @@ void Game::renderWorld() {
         g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
     }
     drawClouds(); rp.mark("flags+clouds");
-    if (!(skipL & 16)) drawWeatherTint();   // the light of the hour over the ground world; what follows (fire, tracers, aircraft) is lit on its own
+    if (!(skipL & 16)) { drawWeatherTint(); g.beginAdd(); drawGroundLights(); g.flushAdd(); }   // the light of the hour over the ground world, then the pools of light the fighting throws on it; what follows (fire, tracers, aircraft) is lit on its own
     rp.mark("tint");
     // projectiles: hot streaks for bullets and rockets, a lobbed shell with a ground shadow
     g.beginAdd();   // (their streaks and glows, the flashes of the effects and the sparks: one additive batch after the smoke and fire)

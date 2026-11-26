@@ -12,7 +12,15 @@ const Color kHull = C(0x6C7144), kHull2 = C(0x474D30), kDark = C(0x2C2B28), kSte
 const Color track = C(0x26262A), rubber = C(0x1D1D20);
 // structures. Cyber: pale ceramic and cool concrete, deep cobalt trim, glass, cyan light. Clanker: olive plate, corrugated khaki roofs, brick, rust, hazard paint, warm light.
 const Color cPave = C(0x414C5A), cWall = C(0xC6D0DB), cWall2 = C(0x98A7B8), cRoof = C(0xE4EAF0), cTrim = C(0x2C5AA0), cSteel = C(0x8E9AA8), cWin = C(0x1B4E66);
+const Color cFoot = C(0x666E78), kFoot = C(0x6F6049);   // the footings structures stand on: mid-value cool concrete and packed earth, close in value to the ground round them
 const Color kPave = C(0x4E4838), kWall = C(0x768040), kWall2 = C(0x545C30), kRoof = C(0xA58E5C), kBrick = C(0x8F5A41), kConc = C(0x8B877C), kHaz = C(0xE6BA3C), kWin = C(0x3A3424), kLit = C(0xFFD678);
+}
+
+// The footing a structure stands on, set into the ground rather than laid on it (see T_PAD / T_EARTH in m3d.h): a weathered apron whose edge frays into
+// the terrain, with a kerb or berm just inside it. 'seed' is the structure's own, so no two aprons carry the same stains, scuffs, cracks, ruts and plates.
+inline void footing(Model& m, float cx, float cy, float hx, float hy, bool cyber, int seed) {
+    if (cyber) m.slab(cx, cy, hx, hy, 0, 0.9f, pal::cFoot).m(MATTE).t(T_PAD, 16).bev(0.4f).seed((float)seed);
+    else m.slab(cx, cy, hx, hy, 0, 0.9f, pal::kFoot).m(MATTE).t(T_EARTH, 16, pal::kSteel).bev(0.4f).seed((float)seed);
 }
 
 // a pair of track units: long sloped-end pods with link texture

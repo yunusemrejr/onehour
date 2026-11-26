@@ -35,7 +35,9 @@ enum Tex : u8 {
     T_GRILLE,    // dark slots (vents, intakes)
     T_STRIPE,    // one band of col2 along the solid at local y = 0 (width texS)
     T_BAND,      // one band of col2 across the solid at local x = 0 (width texS)
-    T_NOISE      // mottled col / col2 (rock, bark, canopy)
+    T_NOISE,     // mottled col / col2 (rock, bark, canopy)
+    T_PAD,       // a concrete apron (footing): slab joints, stains, tyre scuffs, cracks, a kerb that catches the sun, an edge that frays into the ground
+    T_EARTH      // a packed-earth yard (footing): grit, wheel ruts, worn steel plates in col2, a rolled berm, an edge that frays into the ground
 };
 enum Flag : u8 { F_NOSHADOW = 1,   // casts no shadow (thin aerials, lights)
                  F_SHADOWONLY = 2  // not drawn: only shades what is under it (a stand-in for a part that is a separate sprite, like a turret)
@@ -68,6 +70,7 @@ struct Prim {
     Prim& t(Tex tt, float s = 4, Color c2 = Color{ 40, 40, 40, 255 }) { tex = tt; texS = s; col2 = c2; return *this; }
     Prim& bev(float b) { bevel = b; return *this; }
     Prim& f(u8 fl) { flags |= fl; return *this; }
+    Prim& seed(float s) { top = s; return *this; }   // T_PAD / T_EARTH: which weathering this footing gets (a convex solid has no other use for 'top')
     Prim& rz(float deg);    // turn about its own centre: about the model's z (heading), y (pitch) or x (roll)
     Prim& ry(float deg);
     Prim& rx(float deg);

@@ -67,7 +67,7 @@ static void kHQ(Model& m, int) {
     using namespace pal;
     const float W = 4 * BPX, H = 4 * BPX;
     m.dirt = 0.4f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 11);
 
     // ---- fuel tanks across the back, each on a pair of concrete saddles
     for (int i = 0; i < 3; i++) {
@@ -138,7 +138,7 @@ static void kSupply(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 3 * BPX;
     m.dirt = 0.4f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 12);
     // the warehouse: corrugated walls, a ribbed roof with a ridge, rusted sheets
     m.slab(48, 29, 40, 21, 0.9f, 20.0f, kHull2).t(T_PANEL, 9).bev(0.7f);
     m.slab(48, 29, 40.4f, 21.4f, 20.9f, 0.7f, kRoof).t(T_RIBS, 3.0f).bev(0.4f);
@@ -178,7 +178,7 @@ static void kBarracks(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 2 * BPX;
     m.dirt = 0.45f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 13);
     // the hut: plate walls with a lit window row, a pitched roof with the ridge down the middle
     m.slab(48, 26, 42, 18, 0.9f, 12.4f, kHull2).t(T_WINDOWS, 6.4f, kWin).bev(0.6f);
     m.profileX({ { 8, 13.3f }, { 8, 14.0f }, { 26, 19.4f }, { 44, 14.0f }, { 44, 13.3f } }, 6, 90, kRoof).t(T_RIBS, 3.0f).bev(0.4f);
@@ -216,7 +216,7 @@ static void kFactory(Model& m, int) {
     using namespace pal;
     const float W = 4 * BPX, H = 3 * BPX;
     m.dirt = 0.5f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 14);
     // the hall: plate walls, a lit window row over the bay, a sawtooth roof of six teeth (the old plan: x 8..120, y 8..56)
     m.slab(64, 32, 56, 24, 0.9f, 27.7f, kHull2).t(T_PANEL, 10).bev(0.8f);
     m.box(64, 56.4f, 24.6f, 54, 0.5f, 3.4f, kWin).m(GLASS).bev(0.15f);                            // clerestory band
@@ -354,7 +354,7 @@ static void kTech(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 3 * BPX;
     m.dirt = 0.4f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 15);
     // the lab hall (old plan: x 8..58, y 16..74): plate walls with a window row south, a ribbed roof with a louvred vent
     m.slab(33, 45, 25, 29, 0.9f, 20.0f, kHull2).t(T_WINDOWS, 7.0f, kWin).bev(0.7f);
     m.slab(33, 45, 25.4f, 29.4f, 20.9f, 0.8f, kRoof).t(T_RIBS, 3.0f).bev(0.4f);
@@ -456,7 +456,7 @@ static void kRocket(Model& m, int) {
     using namespace pal;
     const float W = 2 * BPX, H = 2 * BPX;
     m.dirt = 0.4f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 12).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 16);
     m.slab(W * 0.5f, H * 0.5f, 24, 22, 0.9f, 0.7f, kConc).m(MATTE).t(T_PANEL, 8).bev(0.35f);        // the firing apron
     m.box(32, 54.0f, 1.75f, 22, 0.8f, 0.25f, kHaz).t(T_HAZARD, 2.4f, kDark).bev(0.1f);              // hazard edge on the south
     for (int i = 0; i < 4; i++) {   // blast arrows painted on the apron
@@ -577,7 +577,7 @@ static void kNuke(Model& m, int state) {
     using namespace pal;
     const float W = 3 * BPX, H = 3 * BPX;
     m.dirt = 0.4f;
-    m.slab(W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W * 0.5f, H * 0.5f, W * 0.5f - 1, H * 0.5f - 1, false, 17);
     m.box(48, 5.6f, 1.25f, 40, 1.6f, 0.35f, kHaz).t(T_HAZARD, 2.4f, kDark).bev(0.1f);               // hazard edges
     m.box(48, 90.4f, 1.25f, 40, 1.6f, 0.35f, kHaz).t(T_HAZARD, 2.4f, kDark).bev(0.1f);
     // the exhaust pit under the west end of the rails

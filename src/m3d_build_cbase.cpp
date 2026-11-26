@@ -62,7 +62,7 @@ static void cHQ(Model& m, int) {
     using namespace pal;
     const float W = 4 * BPX, H = 4 * BPX, zLo = 16 * HT, zUp = zLo + 12 * HT;
     m.dirt = 0.10f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 1);
     // lower floor: thick concrete, a row of blast windows and a heavy door on the south face
     m.slab(64, 87, 56, 31, 0.9f, zLo - 0.9f, cWall).m(PAINT).t(T_PANEL, 14).bev(0.8f);
     m.box(64, 118.4f, zLo * 0.52f, 55, 0.35f, 4.2f, cWall2).t(T_WINDOWS, 8, cWin).bev(0.2f);
@@ -100,7 +100,7 @@ static void cSupply(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 3 * BPX, zWh = 0.9f + 16 * HT, zOf = 0.9f + 12 * HT;
     m.dirt = 0.14f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 2);
     // loading dock apron: a raised concrete deck edged in hazard stripes
     m.slab(37, 58, 35, 5, 0.9f, 1.4f, cConc).m(MATTE).t(T_PANEL, 8).bev(0.3f);
     m.box(37, 62.6f, 2.4f, 35, 0.4f, 0.9f, cPaint).t(T_HAZARD, 2.4f, cDark).bev(0.1f);
@@ -153,7 +153,7 @@ static void cBarracks(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 2 * BPX, zBk = 0.9f + 20 * HT;
     m.dirt = 0.13f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 3);
     // the block: pale walls, two rows of windows over a floor line, a flat ceramic roof
     m.slab(48, 23, 44, 15, 0.9f, zBk - 0.9f, cWall).m(PAINT).t(T_PANEL, 12).bev(0.8f);
     winBand(m, 48, 38.4f, 0.9f + 13 * HT, 80, 4.6f, 8);
@@ -197,7 +197,7 @@ static void cFactory(Model& m, int) {
     using namespace pal;
     const float W = 4 * BPX, H = 3 * BPX, zH = 0.9f + 18 * HT, zA = 0.9f + 9 * HT;
     m.dirt = 0.15f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 4);
     // the hall, x 8..120 and y 6..58, with its south face at y = 58
     m.slab(64, 32, 56, 26, 0.9f, zH - 0.9f, cWall).m(PAINT).t(T_PANEL, 12).bev(0.8f);
     m.box(64, 58.3f, 0.9f + 4.3f, 56, 0.35f, 4.3f, cWall2).m(MATTE).t(T_PANEL, 9).bev(0.2f);      // dark plinth
@@ -263,7 +263,7 @@ static void cAirfield(Model& m, int) {
     const float W = 10 * BPX, H = 7 * BPX, cx0 = W * 0.5f, cy0 = H * 0.5f;
     const float zTw = 0.9f + 24 * HT, zCab = zTw + 9 * HT, zHg = 0.9f + 15 * HT;
     m.dirt = 0.08f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 24).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 5);
     // the pads: dark discs on the apron in the game's 5 x 5 grid, an H stroke painted on each
     for (int row = 0; row < 5; row++) for (int col = 0; col < 5; col++) {
         const float px = cx0 + (col - 2) * 42, py = cy0 + (row - 2) * 34;
@@ -329,7 +329,7 @@ static void cTech(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 3 * BPX, zH = 0.9f + 14 * HT;
     m.dirt = 0.10f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 6);
     // the block, x 8..88 and y 14..62, its south face at y = 62
     m.slab(48, 38, 40, 24, 0.9f, zH - 0.9f, cWall).m(PAINT).t(T_PANEL, 11).bev(0.8f);
     m.box(48, 62.3f, 0.9f + 2.8f, 40, 0.35f, 2.8f, cWall2).m(MATTE).t(T_PANEL, 8).bev(0.2f);   // plinth
@@ -377,7 +377,7 @@ static void cMiner(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 2 * BPX, zC = 0.9f + 12 * HT;
     m.dirt = 0.10f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 7);
     for (int i = 0; i < 3; i++) {
         const float x = 3 + i * 31.0f, cx = x + 15.0f;
         m.slab(cx, 23, 15, 17, 0.9f, zC - 0.9f, cWall).m(PAINT).t(T_RIBS, 3.4f).bev(0.6f);       // the container, ribs along its length
@@ -425,7 +425,7 @@ M3D_BUILD(B_C_MINER, cMiner)
 static void cLaser(Model& m, int) {
     using namespace pal;
     m.dirt = 0.08f;
-    m.slab(16, 16, 15, 15, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 12).bev(0.4f);
+    footing(m, 16, 16, 15, 15, true, 8);
     std::vector<P2> oct;
     for (int i = 0; i < 8; i++) { const float a = 0.3927f + i * 0.7854f; oct.push_back({ 16 + std::cos(a) * 14.6f, 16 + std::sin(a) * 14.6f }); }
     m.plan(oct, 0.9f, 4.8f, cWall2).m(PAINT).t(T_PANEL, 7).bev(0.7f);                     // the armour slab
@@ -469,7 +469,7 @@ static void cPatriot(Model& m, int) {
     using namespace pal;
     const float W = 2 * BPX, H = 2 * BPX, zPl = 0.9f + 7 * HT;
     m.dirt = 0.10f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 9);
     // the plinth, x 10..54 and y 18..54, with a row of cyan windows on its south face
     m.slab(32, 36, 22, 18, 0.9f, zPl - 0.9f, cMid).m(PAINT).t(T_PANEL, 9).bev(0.7f);
     winBand(m, 32, 54.3f, 0.9f + 3.5f, 36, 4.0f, 7);
@@ -528,7 +528,7 @@ static void cNuke(Model& m, int state) {
     using namespace pal;
     const float W = 3 * BPX, H = 3 * BPX, cx = 48, cy = 50, zG = 0.9f + 18 * HT;
     m.dirt = 0.10f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 10);
     m.box(cx, 5.7f, 1.15f, 44, 1.7f, 0.25f, cPaint).t(T_HAZARD, 3.0f, cDark).bev(0.1f);
     m.box(cx, H - 5.7f, 1.15f, 44, 1.7f, 0.25f, cPaint).t(T_HAZARD, 3.0f, cDark).bev(0.1f);
     // the pit: a raised concrete collar, the dark shaft and its guide rings

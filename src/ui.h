@@ -265,6 +265,7 @@ private:
     void drawBuildingDamage(const Entity& e, Vec2 p);
     void drawIndestructible(const Entity& e, Vec2 p);   // island launcher / Bastion Wall: its flames (Entity.heat) and the launcher's live laser cage
     void drawFx();
+    void drawGroundLights();        // fx.cpp: at dusk, night and in storms, blasts, flashes, beams and burning structures light the ground round them
     void drawClouds();
     void drawGroundFx();            // scorch marks, ruins and wrecks: on the ground, under everything that stands or drives
     void drawParticles(int pass);

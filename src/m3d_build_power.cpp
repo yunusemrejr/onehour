@@ -8,7 +8,7 @@ static void kPower(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 2 * BPX;
     m.dirt = 0.35f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, kPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);                 // the yard
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, false, 18);                 // the yard
     // the hall: plate walls with a row of lit windows, a ribbed gable roof
     m.slab(36, 31, 31, 19, 0.9f, 15, kWall2).t(T_WINDOWS, 7.5f, kWin).bev(0.5f);
     m.profileX({ { 10.5f, 15.9f }, { 31, 22.5f }, { 51.5f, 15.9f } }, 3.5f, 68.5f, kRoof).t(T_RIBS, 2.6f).bev(0.5f);
@@ -39,7 +39,7 @@ static void cPower(Model& m, int) {
     using namespace pal;
     const float W = 3 * BPX, H = 2 * BPX;
     m.dirt = 0.12f;
-    m.slab(W / 2, H / 2, W / 2 - 1, H / 2 - 1, 0, 0.9f, cPave).m(MATTE).t(T_PANEL, 16).bev(0.4f);
+    footing(m, W / 2, H / 2, W / 2 - 1, H / 2 - 1, true, 19);
     // cooler blocks at the back: louvred sides, a dark fan well on top
     for (int i = 0; i < 2; i++) {
         const float cx = i ? 49.0f : 18.0f, hw = i ? 11.0f : 14.0f;

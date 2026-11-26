@@ -9,7 +9,7 @@ namespace m3d {
 
 namespace {
 const u32 CACHE_MAGIC = 0x3144334Du;   // "M3D1"
-const u32 RENDER_VERSION = 5;          // (bump when the renderer's output changes: every cached view is then rendered again)
+const u32 RENDER_VERSION = 6;          // (bump when the renderer's output changes: every cached view is then rendered again)
 struct Entry { size_t off; u32 size; };
 std::vector<u8> oldBytes;              // the cache as read
 std::unordered_map<u64, Entry> oldIdx;

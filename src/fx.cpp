@@ -612,6 +612,45 @@ void Game::drawGroundFx() {
     }
 }
 
+// At dusk, at night and under storm cloud the fighting lights the ground round it: a shell bursting, a muzzle flash, the end of a beam, a burning
+// structure. One soft additive blob (Gfx::blobAdd) per source - warm for fire and powder, the weapon's own colour for flashes and beams - scaled by
+// how dark the hour is (nothing at noon, so a bright day costs nothing) and capped per frame. Drawn after the light of the hour is laid over the
+// ground, so the tint does not dim it again (a flame's glow drawn with the structure was multiplied down to almost nothing at night).
+void Game::drawGroundLights() {
+    const float dark = nightLevel();
+    if (dark < 0.08f) return;
+    Gfx& g = g_gfx;
+    const int cap = g.softwareRenderer ? 10 : 24;          // (a big alpha blit per light is what the CPU renderer pays for)
+    const float rMax = g.softwareRenderer ? 84.0f : 180.0f;
+    int n = 0;
+    auto lamp = [&](Vec2 world, float r, Color c, float k) {
+        if (n >= cap || k < 0.04f) return;
+        const Vec2 s = worldToScreen(world);
+        r = std::min(r, rMax);
+        if (s.x < -r || s.y < -r || s.x > SCREEN_W + r || s.y > VIEW_H + r) return;
+        n++;
+        g.glowAdd(s.x, s.y, r, Color{c.r, c.g, c.b, (u8)clampf(255.0f * k * dark, 0.0f, 255.0f)});
+    };
+    for (const Fx& f : g_sim.fx) {
+        if (f.t < 0) continue;
+        const float k = f.t / f.life;
+        switch (f.type) {
+        case FX_EXPLODE: lamp(f.a, f.size * 4.4f * (0.55f + 0.45f * std::sqrt(k)), Color{255, 146, 64, 255}, 0.46f * (1 - k) * (1 - k)); break;
+        case FX_FLASH: lamp(f.a, f.size * 8.0f, f.color, 0.50f * (1 - k)); break;
+        case FX_BEAM: case FX_RAIL: lamp(f.b, 38.0f, f.color, 0.46f * (1 - k)); lamp(f.a, 26.0f, f.color, 0.30f * (1 - k)); break;
+        case FX_ARC: lamp(f.b, 30.0f, f.color, 0.36f * (1 - k)); break;
+        default: break;
+        }
+    }
+    for (const Entity& e : g_sim.ents) {   // burning structures: the hurt ones throw a flickering orange pool
+        if (!e.alive || !e.isBuilding() || !e.constructed || e.hp >= e.maxHp * 0.5f) continue;
+        if (!g_sim.shownToHuman(e) || !g_sim.visibleTo(e, g_sim.humanPlayer)) continue;
+        const BuildType& bt = e.bt();
+        const float f = e.hp / e.maxHp, fl = 0.78f + 0.14f * std::sin(wallTime * 11.0f + (float)e.gen) + 0.08f * std::sin(wallTime * 23.0f + (float)e.gen * 1.7f);
+        lamp(entPos(e), std::max(bt.w, bt.h) * TILE * 0.95f, Color{255, 122, 44, 255}, (0.5f - f) * 1.5f * fl);
+    }
+}
+
 void Game::drawFx() {
     Gfx& g = g_gfx;
     // this frame's white cores and first-light stars, capped: a nuclear exchange has ninety blasts in view, each would add its own big additive draw

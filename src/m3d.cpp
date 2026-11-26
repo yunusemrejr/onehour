@@ -140,7 +140,7 @@ struct VPrim {          // a solid placed for one view
     V3 c;
     float rad;
 };
-struct Hit { float t; V3 n; V3 pl; V3 nl; float edge; };   // distance, world normal, local point, local normal, 0..1 nearness to an edge of the solid
+struct Hit { float t; V3 n; V3 pl; V3 nl; float edge; float foot = 1e9f; };   // distance, world normal, local point, local normal, 0..1 nearness to an edge of the solid, and (footings only) the distance to the footing's edge in model units
 
 inline V3 toLocal(const VPrim& v, V3 w) { return { v.R[0] * w.x + v.R[1] * w.y + v.R[2] * w.z, v.R[3] * w.x + v.R[4] * w.y + v.R[5] * w.z, v.R[6] * w.x + v.R[7] * w.y + v.R[8] * w.z }; }
 inline V3 toWorld(const VPrim& v, V3 l) { return { v.R[0] * l.x + v.R[3] * l.y + v.R[6] * l.z, v.R[1] * l.x + v.R[4] * l.y + v.R[7] * l.z, v.R[2] * l.x + v.R[5] * l.y + v.R[8] * l.z }; }
@@ -289,6 +289,40 @@ inline F3 operator+(F3 a, F3 b) { return { a.r + b.r, a.g + b.g, a.b + b.b }; }
 inline F3 operator*(F3 a, F3 b) { return { a.r * b.r, a.g * b.g, a.b * b.b }; }
 inline F3 mixf(F3 a, F3 b, float t) { return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t }; }
 
+// ---- footings (T_PAD, T_EARTH): the ground a structure stands on is set into the earth, not laid over it. Seen from above, the edge frays into
+// the terrain (stochastic cover, so it reads as grit and dust rather than a line), a kerb or berm rises just inside it and catches the sun, and
+// every structure's weathering is its own (the solid's seed picks the stains, scuffs, cracks, ruts and plates).
+inline bool isFooting(const Prim& p) { return p.tex == T_PAD || p.tex == T_EARTH; }
+// distance from a point of the top face to the nearest side of the footing, and which way that side faces (local x, y)
+float footEdge(const Model& m, const Prim& p, V3 q, V3& out) {
+    float best = 1e9f; out = { 0, 0, 0 };
+    const Plane* pl = &m.planes[p.p0];
+    for (int i = 0; i < p.pn; i++) {
+        if (std::abs(pl[i].nz) > 0.5f) continue;
+        float d = pl[i].d - (pl[i].nx * q.x + pl[i].ny * q.y);
+        if (d < best) { best = d; out = { pl[i].nx, pl[i].ny, 0 }; }
+    }
+    return best;
+}
+// 0: the ground shows through here; 1: the footing covers it. Also lifts the kerb / berm into the normal.
+float footShape(const Model& m, const VPrim& v, Hit& h, V3& N, u32 hsh) {
+    const Prim& p = *v.p;
+    const bool earth = p.tex == T_EARTH;
+    V3 out = { 0, 0, 0 };
+    h.foot = h.nl.z > 0.5f ? footEdge(m, p, h.pl, out) : 0.0f;   // (its thin sides count as the very edge)
+    const float sz = p.top * 5.17f;
+    const float n1 = vnoise(V3{ h.pl.x * 0.30f, h.pl.y * 0.30f, sz });
+    const float fw = earth ? 5.0f : 3.4f;
+    float cov = clampf((h.foot + (n1 - 0.5f) * 3.6f) / fw, 0.0f, 1.0f);
+    cov = cov * cov * (3.0f - 2.0f * cov);
+    if ((hsh >> 8 & 1023) / 1023.0f >= cov) return 0.0f;
+    const float kc = earth ? 5.6f : 4.6f, kw = earth ? 3.6f : 1.6f;   // the lip: its crest, and half its width
+    const float t = (h.foot - kc) / kw;
+    if (h.nl.z > 0.5f && std::abs(t) < 1.0f)
+        N = norm(N + toWorld(v, out) * (-std::sin(t * 3.14159f) * (earth ? 0.45f + 0.5f * n1 : 1.0f)));
+    return 1.0f;
+}
+
 // the surface colour of a solid at a point: its paint, pattern, seams and dirt. 'rough' and 'nudge' (a normal tilt along local axes) come back too.
 F3 surface(const Prim& p, const Hit& h, float zWorld, float dirt, u8& mat, float& gloss) {
     F3 a = lin(p.col), b = lin(p.col2);
@@ -353,6 +387,77 @@ F3 surface(const Prim& p, const Hit& h, float zWorld, float dirt, u8& mat, float
         float f = vnoise(V3{ q.x / s, q.y / s, q.z / s }) * 0.6f + vnoise(V3{ q.x / s * 2.7f + 31, q.y / s * 2.7f, q.z / s * 2.7f }) * 0.4f;
         a = mixf(a, b, clampf((f - 0.3f) * 2.4f, 0, 1));
         break; }
+    case T_PAD: case T_EARTH: {
+        const float sd = p.top, sz = sd * 5.17f;
+        const int si = (int)sd;
+        const float hx = p.h.x, hy = p.h.y, fe = h.foot;
+        const float x = q.x + sd * 13.0f, y = q.y - sd * 7.0f;
+        const F3 dust = p.tex == T_EARTH ? F3{ 0.36f, 0.31f, 0.24f } : F3{ 0.075f, 0.075f, 0.07f };   // (what lies along the edge: wind-blown earth on a yard, dark grit and dirt on concrete)
+        if (p.tex == T_PAD) {
+            // concrete slabs with expansion joints, each its own tone, tilted a little so the light moves across them
+            const float jx = std::floor(x / s), jy = std::floor(y / s), fu = x / s - jx, fv = y / s - jy, jw = 0.6f / s;
+            a = a * (0.95f + 0.09f * rnd3((int)jx, (int)jy, si));
+            a = a * (0.98f + 0.04f * (1.0f - fu) * (1.0f - fv));
+            if (fu < jw || fv < jw) a = a * 0.80f;
+            // mottle at two sizes, then a few faint damp patches and oil stains, scuffs and cracks (all quiet: this is clean, kept concrete)
+            a = a * (0.94f + 0.12f * vnoise(V3{ q.x / 5.5f, q.y / 5.5f, sz })) * (0.97f + 0.06f * vnoise(V3{ q.x * 0.85f, q.y * 0.85f, sz + 3 }));
+            const float damp = clampf((vnoise(V3{ x / 14.0f, y / 14.0f, sz + 9 }) - 0.64f) * 4.0f, 0.0f, 1.0f);
+            a = mixf(a, a * F3{ 0.82f, 0.85f, 0.88f }, damp * 0.6f);
+            const float oil = clampf((vnoise(V3{ x / 5.0f, y / 5.0f, sz + 17 }) - (0.76f + 0.05f * rnd3(si, 1, 2))) * 6.0f, 0.0f, 1.0f);
+            a = mixf(a, a * F3{ 0.62f, 0.60f, 0.60f }, oil * 0.55f);
+            for (int k = 0; k < 2; k++) {   // tyre scuffs: arcs where something turned hard
+                const float cx = (rnd3(si, k, 11) - 0.5f) * hx * 1.7f, cy = (rnd3(si, k, 12) - 0.5f) * hy * 1.7f, R = 9.0f + rnd3(si, k, 13) * 24.0f;
+                const float a0 = rnd3(si, k, 14) * 6.2832f, span = 0.7f + rnd3(si, k, 15) * 0.9f;
+                const float dx = q.x - cx, dy = q.y - cy, r = std::sqrt(dx * dx + dy * dy);
+                float da = std::atan2(dy, dx) - a0; da -= 6.2832f * std::floor(da / 6.2832f);
+                const float w = 1.0f - std::abs(r - R) / 1.5f;
+                if (da < span && w > 0) a = a * (1.0f - 0.15f * w * (0.55f + 0.45f * vnoise(V3{ q.x * 1.3f, q.y * 1.3f, sz + 29 })));
+            }
+            for (int k = 0; k < 2; k++) {   // cracks: thin contour lines of a stretched noise, in patches only
+                const float ang = rnd3(si, k, 21) * 3.14159f, ca = std::cos(ang), sa = std::sin(ang);
+                const float cu = (q.x * ca + q.y * sa) / 15.0f, cv = (-q.x * sa + q.y * ca) / 15.0f;
+                const float f = vnoise(V3{ cu, cv * 0.4f, sz + 23.0f + k }) + (vnoise(V3{ q.x * 0.7f, q.y * 0.7f, sz + 41 }) - 0.5f) * 0.07f;
+                const float gate = clampf((vnoise(V3{ q.x / 26.0f, q.y / 26.0f, sz + 31.0f + k }) - 0.50f) * 6.0f, 0.0f, 1.0f);
+                if (std::abs(f - 0.5f) < 0.022f) a = a * (1.0f - 0.22f * gate);
+            }
+        } else {
+            // packed earth: grit, mottle, wheel ruts, worn steel plates, scorch and dried cracks
+            const float gr = rnd3((int)std::floor(q.x * 1.1f), (int)std::floor(q.y * 1.1f), si + 40);
+            a = a * (0.86f + 0.28f * vnoise(V3{ q.x / 4.5f, q.y / 4.5f, sz })) * (0.92f + 0.16f * vnoise(V3{ x / 17.0f, y / 17.0f, sz + 5 }));
+            if (gr < 0.07f) a = mixf(a, F3{ 0.46f, 0.42f, 0.36f }, 0.42f); else if (gr > 0.94f) a = a * 0.74f;
+            const bool alongX = si & 1;
+            const float u = alongX ? q.y : q.x, w = alongX ? q.x : q.y;
+            for (int k = 0; k < 2; k++) {
+                const float c = (rnd3(si, k, 51) - 0.5f) * (alongX ? hx : hy) * 0.9f + (k ? 6.5f : -6.5f);
+                const float lane = u - c - 5.0f * std::sin(w / 21.0f + k * 2.0f + sd), wt = 1.0f - std::abs(lane) / 2.2f;
+                if (wt > 0) a = a * (1.0f - 0.26f * wt * (fract(w / 1.9f) < 0.5f ? 1.0f : 0.78f));
+            }
+            const float jx = std::floor(x / s), jy = std::floor(y / s);
+            if (rnd3((int)jx, (int)jy, si + 60) < 0.30f && fe > 6.0f) {   // a steel plate laid in the yard
+                const float fu = x / s - jx, fv = y / s - jy, ins = 1.0f / s, ed = std::min(std::min(fu, 1.0f - fu), std::min(fv, 1.0f - fv));
+                if (ed > ins) {
+                    const float wear = vnoise(V3{ q.x * 0.45f, q.y * 0.45f, sz + 71 });
+                    if (wear < 0.70f) {
+                        F3 pc = mixf(b, F3{ 0.30f, 0.14f, 0.07f }, 0.55f * rnd3((int)jx, (int)jy, si + 62));
+                        pc = pc * (0.85f + 0.3f * vnoise(V3{ q.x * 1.5f, q.y * 1.5f, sz + 73 }));
+                        if (ed < ins * 2.2f) pc = pc * 0.6f;
+                        const float rx = std::min(fu, 1.0f - fu) * s - 2.2f, ry = std::min(fv, 1.0f - fv) * s - 2.2f;
+                        if (rx * rx + ry * ry < 1.4f) pc = pc * 1.5f;   // a rivet
+                        a = pc;
+                    }
+                }
+            }
+            const float scorch = clampf((vnoise(V3{ x / 7.5f, y / 7.5f, sz + 17 }) - (0.70f + 0.05f * rnd3(si, 1, 2))) * 7.0f, 0.0f, 1.0f);
+            a = mixf(a, a * 0.32f, scorch * 0.85f);
+            const float crk = vnoise(V3{ x / 13.0f, y / 6.0f, sz + 23 });
+            if (std::abs(crk - 0.5f) < 0.022f && vnoise(V3{ q.x / 24.0f, q.y / 24.0f, sz + 31 }) > 0.52f) a = a * 0.6f;
+        }
+        // the lip catches light, the very edge grows dusty and takes the colour of whatever the wind laid there
+        const float kc = p.tex == T_EARTH ? 5.6f : 4.6f, kw = p.tex == T_EARTH ? 3.6f : 1.6f;
+        if (std::abs(fe - kc) < kw) a = a * (p.tex == T_EARTH ? 1.0f : 1.04f);
+        if (fe < 12.0f) a = a * (0.90f + 0.10f * clampf(fe / 12.0f, 0, 1));
+        a = mixf(a, dust, (1.0f - clampf(fe / (p.tex == T_EARTH ? 6.0f : 4.0f), 0, 1)) * 0.65f);
+        return a; }
     default: break;
     }
     if ((second ? p.col2.a : p.col.a) == 254 && mat != GLASS && mat != EMIT) mat = TEAM;
@@ -428,8 +533,8 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
         }
     }
     // --- shading ---
-    struct Acc { float r, g, b, a, mr, mg, mb, ma, er, eg, eb; };
-    std::vector<Acc> acc((size_t)W * H, Acc{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+    struct Acc { float r, g, b, a, mr, mg, mb, ma, er, eg, eb, pa; };   // (pa: how much of the pixel is a footing)
+    std::vector<Acc> acc((size_t)W * H, Acc{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
     const F3 sunCol = { 1.00f, 0.955f, 0.86f }, skyCol = { 0.60f, 0.72f, 0.95f }, bounce = { 0.50f, 0.44f, 0.30f };
     const float KEY = 1.28f, AMB = 0.52f;
     // a small fixed set of hemisphere directions for the occlusion rays, rotated per sample
@@ -445,9 +550,16 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
     };
     for (int sy = 0; sy < SH; sy++) for (int sx = 0; sx < SW; sx++) {
         const size_t k = (size_t)sy * SW + sx;
-        const int i = owner[k];
+        int i = owner[k];
         Acc& A = acc[(size_t)(sy / ss) * W + sx / ss];
         const u32 hsh = hash3(sx, sy, 17);
+        V3 N = { 0, 0, 1 };
+        bool onFooting = false;
+        if (i >= 0) {
+            intersect(m, vp[i], rayO(sx, sy), D, 0.0f, 1e9f, h, true);
+            N = h.n;
+            if (isFooting(*vp[i].p)) { onFooting = true; if (footShape(m, vp[i], h, N, hsh) <= 0.0f) i = -1; }   // (where the footing frays out, the ground below shows)
+        }
         // jittered sun (a soft-edged shadow) and a turned occlusion set
         const float j1 = ((hsh & 255) / 255.0f - 0.5f), j2 = ((hsh >> 8 & 255) / 255.0f - 0.5f);
         const V3 Lj = norm(V3{ L.x + j1 * 0.16f, L.y + j2 * 0.16f, L.z });
@@ -469,9 +581,7 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
             continue;
         }
         const VPrim& v = vp[i];
-        intersect(m, v, rayO(sx, sy), D, 0.0f, 1e9f, h, true);
         V3 P = rayO(sx, sy) + D * h.t;
-        V3 N = h.n;
         u8 mat; float gloss;
         F3 alb = surface(*v.p, h, P.z, m.dirt, mat, gloss);
         if (mat == TEAM) alb = { 0.78f, 0.78f, 0.78f };
@@ -489,7 +599,7 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
             V3 up = std::abs(N.z) < 0.95f ? V3{ 0, 0, 1 } : V3{ 1, 0, 0 };
             V3 T = norm(V3{ up.y * N.z - up.z * N.y, up.z * N.x - up.x * N.z, up.x * N.y - up.y * N.x });
             V3 Bv = { N.y * T.z - N.z * T.y, N.z * T.x - N.x * T.z, N.x * T.y - N.y * T.x };
-            const int NAO = 4;
+            const int NAO = onFooting ? 6 : 4;   // (a footing is where the contact shadow of every wall lies: sampled more)
             for (int q = 0; q < NAO; q++) {
                 const float* a = AOD[(q + (hsh >> 24 & 3)) % 6];
                 float lx = a[0] * cr - a[1] * sr, ly = a[0] * sr + a[1] * cr;
@@ -497,7 +607,7 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
                 if (m.ground && dir.z < -0.05f) { float tg = -Ps.z / dir.z; if (tg < AO_REACH) { occ++; continue; } }   // the ground itself closes the view
                 if (occluded(Ps, dir, AO_REACH, v.p->kind == 0 ? i : -1)) occ++;
             }
-            float ao = 1.0f - occ / (float)NAO * 0.78f;
+            float ao = 1.0f - occ / (float)NAO * (onFooting ? 0.86f : 0.78f);
             float hemi = 0.5f + 0.5f * N.z;
             F3 amb = mixf(bounce, skyCol, hemi) * (AMB * ao);
             F3 light = sunCol * (KEY * lit) + amb;
@@ -520,6 +630,7 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
         }
         if (mat == TEAM) { A.mr += col.r; A.mg += col.g; A.mb += col.b; A.ma += 1; }
         A.r += col.r; A.g += col.g; A.b += col.b; A.a += 1;
+        if (onFooting) A.pa += 1;
     }
     // --- resolve ---
     out.color = Canvas(W, H); out.mask = Canvas(W, H); out.hasMask = false;
@@ -542,9 +653,9 @@ void render(const Model& m, const RenderOpt& o, Rendered& out) {
     }
     if (o.outline) {   // the contact line: silhouette pixels next to open ground lean dark, and a faint ink sits just outside them
         std::vector<u32> src = out.color.px;
-        auto solid = [&](int x, int y) { return x >= 0 && y >= 0 && x < W && y < H && (src[(size_t)y * W + x] >> 24) >= 200 && acc[(size_t)y * W + x].a * nS > 0.75f && acc[(size_t)y * W + x].r + acc[(size_t)y * W + x].g + acc[(size_t)y * W + x].b > 0.2f * acc[(size_t)y * W + x].a; };
+        auto solid = [&](int x, int y) { return x >= 0 && y >= 0 && x < W && y < H && (src[(size_t)y * W + x] >> 24) >= 200 && acc[(size_t)y * W + x].a * nS > 0.75f && acc[(size_t)y * W + x].pa * nS < 0.5f && acc[(size_t)y * W + x].r + acc[(size_t)y * W + x].g + acc[(size_t)y * W + x].b > 0.2f * acc[(size_t)y * W + x].a; };   // (a footing frays into the ground: it has no outline)
         for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
-            if (solid(x, y)) continue;
+            if (solid(x, y) || acc[(size_t)y * W + x].pa > 0) continue;
             bool near = solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1);
             if (!near) continue;
             Color c = Canvas::unpack(src[(size_t)y * W + x]);
