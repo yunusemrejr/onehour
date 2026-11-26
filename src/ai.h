@@ -342,6 +342,7 @@ struct AiPlayer {
     float nextLanes = 0;
     struct FortFail { int tx, ty, kind; float until; };
     std::vector<FortFail> fortFails;    // spots no structure fitted at, left alone for a minute
+    int fortWallsPending = 0;           // kill-zone wall tiles still to raise (fortWallsOps): the old ring of walls leaves that much of the budget to them
     int lanesFound = 0, fortGuns = 0, fortWalls = 0, fortBastions = 0;   // (statistics: lanes held now, structures ordered for kill zones)
     void planLanes();                   // every 45 s: the routes, their gates, the weight and width
     bool fortGunsOps(bool airSeen);     // one gun of the heaviest lane's kill zone that is still missing (true: a dozer was sent)

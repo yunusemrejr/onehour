@@ -1458,7 +1458,7 @@ void AiPlayer::think() {
                 if (key && bestCover < 2) { built = tryBuild(base + BR_AATURRET, key->pos, 10); if (built) aaTurrets++; }
             }
         }
-        if (!built && turrets < wantTurrets && minutes > 2.5f && fortify && !lanes.empty()) built = fortGunsOps(enemyAir > 0 || enemyAirfields > 0);   // (the kill zones first; the spiral below gets what they do not take)
+        if (!built && turrets < wantTurrets && minutes > 2.5f && fortify && !lanes.empty()) built = fortGunsOps(enemyAir > 0 || enemyAirfields > 0 || (opp && opp->airPeak > 0.2f && S.time > opp->airAt - 90.0f));   // (the kill zones first; the spiral below gets what they do not take)
         if (!built && turrets < wantTurrets && minutes > 2.5f) {
             int kind = (enemyAir > 0 || nextTurretKind % 2 == 1) ? BR_AATURRET : BR_TURRET;
             float baseAng = std::atan2(enemyDir.y, enemyDir.x) + (nextTurretKind * 2.39996f - 1.2f) * 0.55f;
@@ -1538,9 +1538,17 @@ void AiPlayer::think() {
         int mastType = pl.faction == F_CYBER ? B_C_HEALANT : B_K_HEALANT;
         int wantMasts = pl.difficulty >= 3 ? 7 : (pl.difficulty == 2 ? 5 : (pl.difficulty == 1 ? 3 : 1));
         if (!built && masts < wantMasts && tm > 4.0f && pl.money > BUILDS[mastType].cost + 1200 && !threat) {
-            float ang = masts * 2.39996f + 0.9f;   // (golden-angle spiral: they spread evenly over the base)
-            float rad = (3.5f + 1.1f * masts) * TILE;
-            built = tryBuild(mastType, pl.basePos + Vec2(std::cos(ang), std::sin(ang)) * rad, 10);
+            // a mast behind the kill zone mends the walls and guns under fire (the first one, when no mast stands within 7 tiles of the heaviest gate)
+            if (fortify && !lanes.empty() && dist(lanesHome, pl.basePos) <= 3.0f * TILE) {
+                bool near = false;
+                S.forEachNear(lanes[0].gate, 7.0f * TILE, [&](Entity& e) { if (e.isBuilding() && e.owner == player && e.bt().role == BR_HEALANT) near = true; });
+                if (!near) built = fortTry(mastType, lanes[0].gate - lanes[0].dir * (6.0f * TILE), 3) == 1;   // (searched round the spot itself: tryBuild searches rings round the base)
+            }
+            if (!built) {
+                float ang = masts * 2.39996f + 0.9f;   // (golden-angle spiral: they spread evenly over the base)
+                float rad = (3.5f + 1.1f * masts) * TILE;
+                built = tryBuild(mastType, pl.basePos + Vec2(std::cos(ang), std::sin(ang)) * rad, 10);
+            }
         }
         // walls: a thick, unlimited belt around the base. The AI builds one segment per think toward a slowly turning ring, then
         // researches Anti-Rocket so the finished line becomes overlapping point-defence lasers.
@@ -1548,7 +1556,7 @@ void AiPlayer::think() {
         int wantWalls = pl.difficulty >= 3 ? 44 : (pl.difficulty == 2 ? 28 : (pl.difficulty == 1 ? 14 : 0));
         if (tu[TU_WALLS] != 1.0f) wantWalls = (int)(wantWalls * tu[TU_WALLS] + 0.5f);
         if (!built && smart && walls < wantWalls && minutes > 1.5f && pl.money > 650 && !threat && fortify && !lanes.empty()) built = fortWallsOps();   // (the funnels and chokes first)
-        if (!built && smart && walls < wantWalls && minutes > 1.5f && pl.money > 650 && !threat) {
+        if (!built && smart && walls + (fortify && !lanes.empty() ? fortWallsPending : 0) < wantWalls && minutes > 1.5f && pl.money > 650 && !threat) {
             float ang = walls * 0.62f + 0.35f;
             float rad = (7.5f + 0.55f * (walls % 14)) * TILE;
             Vec2 spot = pl.basePos + Vec2(std::cos(ang), std::sin(ang) * 0.85f) * rad;

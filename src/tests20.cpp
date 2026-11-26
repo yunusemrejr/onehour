@@ -122,7 +122,7 @@ bool learnUpdateTest(u64 seed) {
     }
     // ---- the commander readies the answer: told that this opponent fields an air force early, it raises anti-air batteries before any enemy
     // aircraft show; without the model it does not
-    int aaWith = 0, aaWithout = 0; float firstAA = -1;
+    int aaWith = 0, aaWithout = 0; float firstAA = -1;   // (batteries standing before the first enemy aircraft: later ones answer aircraft seen, which both runs do)
     for (int run = 0; run < 2; run++) {
         Brain brains[4];
         for (auto& b : brains) b.learning = false;
@@ -134,13 +134,13 @@ bool learnUpdateTest(u64 seed) {
         P.n = 5; P.airPeak = 0.6f; P.mix[0] = 0.2f; P.mix[1] = 0.3f; P.mix[2] = 0.5f; P.airAt = 260.0f; P.firstHit = 900.0f; P.nukeAt = 1500.0f;
         aiScene20(seed, 2, diff, masks, brains);
         for (auto& ai : g_ai.ais) ai.feat2 &= ~F2_EXPAND;   // (an expansion raises anti-air of its own, which is not what this measures)
-        bool enemyAir = false;
+        bool enemyAir = false; int aa = 0;
         run20(390.0f, [&]() {
             for (auto& e : g_sim.ents) if (e.alive && e.owner == 1 && e.isUnit() && e.isAir() && e.ut().role == UR_COMBAT) enemyAir = true;
             if (run == 0 && firstAA < 0 && !enemyAir) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isBuilding() && e.bt().role == BR_AATURRET) firstAA = g_sim.time;
+            if (!enemyAir) aa = g_sim.countRole(0, BR_AATURRET, false);
             return true;
         });
-        int aa = g_sim.countRole(0, BR_AATURRET, false);
         (run == 0 ? aaWith : aaWithout) = aa;
         VERIFY20(g_ai.ais[0].oppProf == (run == 0 ? &brains[0].prof[doctrineContext(false, F_CLANKER)] : nullptr), "the commander did not consult the opponent model (or did without FEAT_PROFILE)");
     }

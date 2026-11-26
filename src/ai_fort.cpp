@@ -161,7 +161,7 @@ int AiPlayer::fortTry(int buildType, Vec2 want, int tol) {
 
 namespace {
 
-struct Slot { BuildRole role; Vec2 at; int tol; };
+struct Slot { BuildRole role; Vec2 at; int tol; int chain = -1; Vec2 alt; bool hasAlt = false; };   // (chain: the funnel arm a wall belongs to, 0 or 1, -1 none; alt: a corner tile's stand-in)
 
 bool failedRecently(const std::vector<AiPlayer::FortFail>& fails, Vec2 at, BuildRole role, float now) {
     const int tx = tileOf(at.x), ty = tileOf(at.y);
@@ -169,11 +169,35 @@ bool failedRecently(const std::vector<AiPlayer::FortFail>& fails, Vec2 at, Build
     return false;
 }
 
+// The tiles of one funnel arm, from the gate outward: a line starting 2 tiles to the side 's' of the axis and running out at 45 degrees toward the enemy,
+// 'reach' tiles long, sampled in half-tile steps. Where two neighbouring tiles touch only at a corner the tile on the outer side (away from the gap) is
+// added, so the arm is one edge-connected wall that a unit cannot slip through; the inner one is its stand-in ('alt') when the outer one would seal a nook.
+struct ArmTile { Vec2 at, alt; bool hasAlt; };
+std::vector<ArmTile> armTiles(const AiPlayer::Lane& L, int s, float reach) {
+    std::vector<ArmTile> out;
+    const Vec2 a = (L.dir + L.perp * (float)s).norm(), p0 = L.gate + L.perp * (s * 2.0f * TILE);
+    int px = 0, py = 0;
+    for (float u = 0; u <= reach * TILE + 0.01f; u += 0.5f * TILE) {
+        const Vec2 p = p0 + a * u;
+        const int x = clampi(tileOf(p.x), 1, MAP_W - 2), y = clampi(tileOf(p.y), 1, MAP_H - 2);
+        if (!out.empty() && x == px && y == py) continue;
+        if (!out.empty() && std::abs(x - px) == 1 && std::abs(y - py) == 1) {
+            const Vec2 c1 = tileCenter(x, py), c2 = tileCenter(px, y);
+            auto lat = [&](Vec2 c) { return s * ((c.x - L.gate.x) * L.perp.x + (c.y - L.gate.y) * L.perp.y); };
+            const bool firstOuter = lat(c1) >= lat(c2);
+            out.push_back({ firstOuter ? c1 : c2, firstOuter ? c2 : c1, true });
+        }
+        out.push_back({ tileCenter(x, y), Vec2(), false });
+        px = x; py = y;
+    }
+    return out;
+}
+
 }  // namespace
 
 // One missing gun of the lanes' kill zones, the heaviest lane first. The ground guns stand 3 to 4 tiles behind the gate, 3 tiles to either side of the
 // axis, so their fire crosses the gap the enemy is squeezed into; the heaviest lane gets more of them on Hard and Brutal. The anti-air goes 5 to 6 tiles
-// behind: after the first two ground guns once the enemy flies, after all the ground guns on Hard and up.
+// behind, after the first two ground guns, once the enemy flies or the opponent model foretells an air force.
 bool AiPlayer::fortGunsOps(bool airSeen) {
     Sim& S = g_sim;
     const Player& pl = S.players[player];
@@ -188,7 +212,6 @@ bool AiPlayer::fortGunsOps(bool airSeen) {
             slots.push_back({ BR_TURRET, L.gate - L.dir * (back[k] * TILE) + L.perp * (side[k] * TILE), 2 });
             if (k == 1 && airSeen) slots.push_back(aa);
         }
-        if (!airSeen && pl.difficulty >= 2) slots.push_back(aa);
         for (const Slot& s : slots) {
             if (slotHeld(s.role, s.at, s.tol + 0.5f) || failedRecently(fortFails, s.at, s.role, S.time)) continue;
             const int r = fortTry(base + s.role, s.at, s.tol);
@@ -201,21 +224,26 @@ bool AiPlayer::fortGunsOps(bool airSeen) {
 }
 
 // One missing wall of the kill zones. Open field: two arms starting 2 tiles either side of the axis at the gate and running out at 45 degrees toward the
-// enemy (3 segments each, 4 on Hard, 5 on Brutal), so the enemy is squeezed toward the gap between the arms; a Bastion Wall ends each arm when the
-// treasury can spare it. A choke: one wall across it a tile beyond the gate with a two-tile gap on the side of the guns. A segment that cannot go up
+// enemy (4 tiles long, 5 on Hard, 6 on Brutal, built as one edge-connected line from the gap outward), so the enemy is squeezed toward the gap between
+// the arms; a Bastion Wall ends each arm when the treasury can spare it. A choke: one wall across it a tile beyond the gate with a two-tile gap on the side of the guns. A segment that cannot go up
 // (the strict plug test, no room) is skipped, never moved into the gap.
 bool AiPlayer::fortWallsOps() {
     Sim& S = g_sim;
     const Player& pl = S.players[player];
     const int wallType = pl.faction == F_CYBER ? B_C_WALL : B_K_WALL, bastionType = pl.faction == F_CYBER ? B_C_FWALL : B_K_FWALL;
-    const int arm = pl.difficulty >= 3 ? 5 : (pl.difficulty == 2 ? 4 : 3);
+    const float reach = pl.difficulty >= 3 ? 6.0f : (pl.difficulty == 2 ? 5.0f : 4.0f);   // (tiles along the arm)
+    bool ordered = false, done = false;
+    fortWallsPending = 0;
     for (size_t li = 0; li < lanes.size(); li++) {
         const Lane& L = lanes[li];
         std::vector<Slot> slots;
         if (!L.choke) {
-            for (int k = 0; k < arm; k++) for (int s = -1; s <= 1; s += 2) slots.push_back({ BR_WALL, tileSnap(L.gate + L.perp * (s * (2.0f + k) * TILE) + L.dir * (k * (float)TILE)), 0 });
+            std::vector<ArmTile> arms[2], tips[2];   // (tips: the same line run on, whose next tile after the arm's last is where its Bastion Wall stands)
+            for (int i = 0; i < 2; i++) { arms[i] = armTiles(L, i ? 1 : -1, reach); tips[i] = armTiles(L, i ? 1 : -1, reach + 1.5f); }
+            for (size_t k = 0; k < std::max(arms[0].size(), arms[1].size()); k++)   // (both arms grow from the gap outward, side by side)
+                for (int i = 0; i < 2; i++) if (k < arms[i].size()) slots.push_back({ BR_WALL, arms[i][k].at, 0, i, arms[i][k].alt, arms[i][k].hasAlt });
             if (S.buildAvailable(player, bastionType) && pl.money > BUILDS[bastionType].cost + 2500)
-                for (int s = -1; s <= 1; s += 2) slots.push_back({ BR_FWALL, tileSnap(L.gate + L.perp * (s * (2.0f + arm) * TILE) + L.dir * (arm * (float)TILE)), 0 });
+                for (int i = 0; i < 2; i++) if (tips[i].size() > arms[i].size()) slots.push_back({ BR_FWALL, tips[i][arms[i].size()].at, 0, i });
         } else {
             const Vec2 gunPlus = L.gate - L.dir * (3.5f * TILE) + L.perp * (3.0f * TILE), gunMinus = L.gate - L.dir * (3.5f * TILE) - L.perp * (3.0f * TILE);
             const float gapSide = (!slotHeld(BR_TURRET, gunPlus, 2.5f) && slotHeld(BR_TURRET, gunMinus, 2.5f)) ? -1.0f : 1.0f;
@@ -228,19 +256,40 @@ bool AiPlayer::fortWallsOps() {
             }
             if (gapSide < 0) std::reverse(slots.begin(), slots.end());
         }
+        // An arm grows one tile at a time from the gap outward: a tile that cannot go up yet (a unit on it, a dozer busy) halts its arm until it can, so
+        // no piece stands detached; rock, a tree, water or another structure on a tile carries the line on by itself. Every missing tile is counted
+        // in fortWallsPending, which the old ring of walls leaves to the kill zones.
+        bool halted[2] = { false, false };
         for (const Slot& s : slots) {
-            if (slotHeld(s.role, s.at, 0.6f) || failedRecently(fortFails, s.at, s.role, S.time)) continue;
-            const int r = fortTry(s.role == BR_FWALL ? bastionType : wallType, s.at, s.tol);
-            if (r == 0) return false;
+            const int tx = tileOf(s.at.x), ty = tileOf(s.at.y);
+            auto ownOn = [&](Vec2 at) {   // (exactly this tile: a radius test counts the neighbouring wall and would skip every corner tile of an arm)
+                const int x = tileOf(at.x), y = tileOf(at.y); bool held = false;
+                S.forEachNear(at, 1.5f * TILE, [&](Entity& e) {
+                    if (!held && e.isBuilding() && e.owner == player && x >= e.tx && x < e.tx + e.bt().w && y >= e.ty && y < e.ty + e.bt().h) held = true;
+                });
+                return held;
+            };
+            if (ownOn(s.at) || (s.hasAlt && ownOn(s.alt))) continue;
+            if (s.role == BR_WALL && !g_map.passable(tx, ty)) continue;
+            if (s.chain >= 0 && halted[s.chain]) continue;   // (an arm halted short of a tile is not owed the tiles beyond it)
+            fortWallsPending++;
+            if (done) continue;
+            if (failedRecently(fortFails, s.at, s.role, S.time)) { if (s.chain >= 0) halted[s.chain] = true; continue; }
+            int r = fortTry(s.role == BR_FWALL ? bastionType : wallType, s.at, s.tol);
+            if (r == 2 && s.hasAlt && g_map.passable(tileOf(s.alt.x), tileOf(s.alt.y))) r = fortTry(wallType, s.alt, 0);   // (the corner's inner stand-in)
+            if (r == 0) { done = true; continue; }   // (no dozer or money this think: the rest is only counted)
             if (r == 1) {
                 if (s.role == BR_FWALL) fortBastions++; else fortWalls++;
                 if (aiDebugF()) fprintf(stderr, "[ai%d t=%.0f] KILL ZONE %zu: %s ordered at %d,%d\n", player, S.time, li, s.role == BR_FWALL ? "Bastion Wall" : "wall", tileOf(s.at.x), tileOf(s.at.y));
-                return true;
+                fortWallsPending--; ordered = done = true;
+                continue;
             }
             fortFails.push_back({ tileOf(s.at.x), tileOf(s.at.y), (int)s.role, S.time + FAIL_HOLD });
+            if (s.chain >= 0) halted[s.chain] = true;
+            if (aiDebugF()) fprintf(stderr, "[ai%d t=%.0f] KILL ZONE %zu: no room for a %s at %d,%d\n", player, S.time, li, s.role == BR_FWALL ? "Bastion Wall" : "wall", tileOf(s.at.x), tileOf(s.at.y));
         }
     }
-    return false;
+    return ordered;
 }
 
 // The flank bunkers' anchors: 6 to 9 tiles to either side of the heaviest lane's axis, level with the gate or two tiles beyond it (open field), or

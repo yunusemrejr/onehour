@@ -102,6 +102,34 @@ static bool fortAndTrapTest(u64 seed) {
     const Vec2 foe = g_map.nearestFree(g_sim.players[1].basePos, 8), mine = g_map.nearestFree(home, 8);
     CHECKT(g_map.sameGround(foe, mine) && g_map.findPath(foe, mine, route) && !route.empty(), "the kill zone sealed the ground route from the enemy base to home");
     CHECKT(dist(route.back(), mine) < 6.0f * TILE, "the route from the enemy base ends far from home: it was sealed");
+    if (!L.choke) {   // the funnel arms: each one edge-connected wall growing out from the gap
+        for (int s = -1; s <= 1; s += 2) {
+            std::vector<std::pair<int, int>> tiles;
+            for (auto& e : g_sim.ents) {
+                if (!e.alive || !e.isBuilding() || e.owner != 0 || e.bt().role != BR_WALL) continue;
+                const Vec2 d = e.pos - L.gate;
+                const float lat = s * (d.x * L.perp.x + d.y * L.perp.y) / TILE, along = (d.x * L.dir.x + d.y * L.dir.y) / TILE;
+                if (lat >= 1.5f && along >= -0.5f && dist(e.pos, L.gate) <= 9.0f * TILE) tiles.push_back({ e.tx, e.ty });
+            }
+            const Vec2 start = L.gate + L.perp * (s * 2.0f * TILE);
+            const int sx = tileOf(start.x), sy = tileOf(start.y);
+            std::vector<char> seen(tiles.size(), 0);
+            std::vector<size_t> open;
+            for (size_t i = 0; i < tiles.size(); i++) if (std::abs(tiles[i].first - sx) <= 1 && std::abs(tiles[i].second - sy) <= 1) { seen[i] = 1; open.push_back(i); }
+            int chain = 0;
+            while (!open.empty()) {
+                const size_t i = open.back(); open.pop_back(); chain++;
+                for (size_t j = 0; j < tiles.size(); j++)
+                    if (!seen[j] && std::abs(tiles[i].first - tiles[j].first) + std::abs(tiles[i].second - tiles[j].second) == 1) { seen[j] = 1; open.push_back(j); }
+            }
+            fprintf(stderr, "traptest: arm %+d: %d wall tiles in one edge-connected chain from the gap (%d on that side)\n", s, chain, (int)tiles.size());
+            CHECKT(chain >= 4, "a funnel arm is not one edge-connected wall at least 4 tiles long from the gap");
+        }
+    }
+    int masts = 0;
+    for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 0 && e.bt().role == BR_HEALANT && dist(e.pos, L.gate) <= 8.0f * TILE) masts++;
+    fprintf(stderr, "traptest: %d Healing Antenna(s) within 8 tiles of the gate\n", masts);
+    CHECKT(masts >= 1, "no Healing Antenna behind the kill zone");
 
     // the wings
     CHECKT(A.wingsPosted >= 4, "fewer than four fighters in the ambush wings");
