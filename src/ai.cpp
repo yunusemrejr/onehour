@@ -542,32 +542,40 @@ bool AiPlayer::findBunkerSpot(int buildType, int& tx, int& ty) {
             anchors.push_back(e.pos + side * ((rng.range(0, 1) ? 1.0f : -1.0f) * 6.0f * TILE));
     }
     float bestScore = -1e18f; int bx = -1, by = -1;
-    for (size_t ai = 0; ai < anchors.size(); ai++) {
-        int ax = clampi(tileOf(anchors[ai].x), 4, MAP_W - 6), ay = clampi(tileOf(anchors[ai].y), 4, MAP_H - 6);
-        for (int dy = -7; dy <= 7; dy += 2) for (int dx = -7; dx <= 7; dx += 2) {
-            int x = ax + dx, y = ay + dy;
-            if (!g_sim.canPlace(player, buildType, x, y)) continue;
-            bool gapOk = true;
-            for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++)
-                if (!inMap(i, j) || (g_map.blocked[j * MAP_W + i] & 2)) gapOk = false;
-            if (!gapOk) continue;
-            Vec2 c = g_sim.buildingCenter(buildType, x, y);
-            bool clash = false;
-            for (auto& o : g_sim.ents) {
-                if (!o.alive || !o.isBuilding()) continue;
-                // Strictly keep far away from any player's or bot's bunkers (22 tiles from other players' bunkers, 15 tiles from own)
-                if (o.bt().role == BR_BUNKER && dist(c, o.pos) < (o.owner == player ? 15.0f : 22.0f) * TILE) { clash = true; break; }
-                if (o.owner != player && dist(c, o.pos) < 14.0f * TILE) { clash = true; break; }
+    // F2_FORTIFY: on the heaviest lane's flanks first (off its axis, so the bunker never stands in the lane); the old anchors only when none of those fits
+    std::vector<Vec2> flank;
+    if (on2(F2_FORTIFY)) laneAnchors(flank);
+    auto scan = [&](const std::vector<Vec2>& from, bool offAxis) {
+        for (size_t ai = 0; ai < from.size(); ai++) {
+            int ax = clampi(tileOf(from[ai].x), 4, MAP_W - 6), ay = clampi(tileOf(from[ai].y), 4, MAP_H - 6);
+            for (int dy = -7; dy <= 7; dy += 2) for (int dx = -7; dx <= 7; dx += 2) {
+                int x = ax + dx, y = ay + dy;
+                if (!g_sim.canPlace(player, buildType, x, y)) continue;
+                bool gapOk = true;
+                for (int j = y - 1; j <= y + b.h && gapOk; j++) for (int i = x - 1; i <= x + b.w; i++)
+                    if (!inMap(i, j) || (g_map.blocked[j * MAP_W + i] & 2)) gapOk = false;
+                if (!gapOk) continue;
+                Vec2 c = g_sim.buildingCenter(buildType, x, y);
+                if (offAxis) { const Lane& L = lanes[0]; if (std::fabs((c.x - L.gate.x) * L.perp.x + (c.y - L.gate.y) * L.perp.y) < 5.0f * TILE) continue; }
+                bool clash = false;
+                for (auto& o : g_sim.ents) {
+                    if (!o.alive || !o.isBuilding()) continue;
+                    // Strictly keep far away from any player's or bot's bunkers (22 tiles from other players' bunkers, 15 tiles from own)
+                    if (o.bt().role == BR_BUNKER && dist(c, o.pos) < (o.owner == player ? 15.0f : 22.0f) * TILE) { clash = true; break; }
+                    if (o.owner != player && dist(c, o.pos) < 14.0f * TILE) { clash = true; break; }
+                }
+                if (clash) continue;
+                // Reward natural cover (trees/rocks/ridges nearby), flanking angle diversity, and distance from other bunkers
+                int cover = 0;
+                for (int j = y - 3; j <= y + b.h + 2; j++) for (int i = x - 3; i <= x + b.w + 2; i++)
+                    if (inMap(i, j) && (g_map.tile(i, j) == T_TREE || g_map.tile(i, j) == T_ROCK)) cover++;
+                float sc = cover * 18.0f - dist(c, from[ai]) / TILE * 4.0f + rng.f(-25.0f, 25.0f);
+                if (sc > bestScore) { bestScore = sc; bx = x; by = y; }
             }
-            if (clash) continue;
-            // Reward natural cover (trees/rocks/ridges nearby), flanking angle diversity, and distance from other bunkers
-            int cover = 0;
-            for (int j = y - 3; j <= y + b.h + 2; j++) for (int i = x - 3; i <= x + b.w + 2; i++)
-                if (inMap(i, j) && (g_map.tile(i, j) == T_TREE || g_map.tile(i, j) == T_ROCK)) cover++;
-            float sc = cover * 18.0f - dist(c, anchors[ai]) / TILE * 4.0f + rng.f(-25.0f, 25.0f);
-            if (sc > bestScore) { bestScore = sc; bx = x; by = y; }
         }
-    }
+    };
+    if (!flank.empty()) scan(flank, true);
+    if (bx < 0) scan(anchors, false);
     if (bx < 0) return false;
     tx = bx; ty = by; return true;
 }
@@ -1122,7 +1130,7 @@ void AiPlayer::think() {
             else {
                 if (e.carrier.valid() || e.order == O_ENTER) continue;
                 army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e);
-                if (e.order == O_IDLE && !e.carrier.valid()) idleArmy.push_back(S.refOf(e));
+                if (e.order == O_IDLE && !e.carrier.valid() && !(wingsPosted > 0 && inWing(S.refOf(e)))) idleArmy.push_back(S.refOf(e));   // (F2_TRAP: the ambush wings stay where they hide)
                 if (ut.cargoCap > 0 && ut.kind == UK_VEH) { jeeps.push_back(S.refOf(e)); shipsOrJeeps++; }
             }
         } else {
@@ -1406,6 +1414,9 @@ void AiPlayer::think() {
     if (recovering) recoverBase(dozers, hq != nullptr);
     if (on2(F2_EXPAND) && pl.difficulty >= 1)   // the second base (and its guards and the answer to a raid on it): only once the home base runs
         expansionOps(tm, !recovering && hq && hq->constructed && hubs > 0 && powerPlants > 0 && !barracks.empty() && !factories.empty(), threat != nullptr, enemyUnits, idleArmy, harvesters);
+    // F2_FORTIFY: the ground routes the enemy walks to the base, once the core stands (a new home plans them again at once)
+    const bool fortify = on2(F2_FORTIFY) && pl.difficulty >= 1;
+    if (fortify && !recovering && hq && hq->constructed && ((S.time >= 90.0f + player * 7.0f && S.time >= nextLanes) || (!lanes.empty() && dist(lanesHome, pl.basePos) > 3.0f * TILE))) planLanes();
     Entity* dz = idleDozer();
     if (dz) {
         bool built = false;
@@ -1447,6 +1458,7 @@ void AiPlayer::think() {
                 if (key && bestCover < 2) { built = tryBuild(base + BR_AATURRET, key->pos, 10); if (built) aaTurrets++; }
             }
         }
+        if (!built && turrets < wantTurrets && minutes > 2.5f && fortify && !lanes.empty()) built = fortGunsOps(enemyAir > 0 || enemyAirfields > 0);   // (the kill zones first; the spiral below gets what they do not take)
         if (!built && turrets < wantTurrets && minutes > 2.5f) {
             int kind = (enemyAir > 0 || nextTurretKind % 2 == 1) ? BR_AATURRET : BR_TURRET;
             float baseAng = std::atan2(enemyDir.y, enemyDir.x) + (nextTurretKind * 2.39996f - 1.2f) * 0.55f;
@@ -1535,6 +1547,7 @@ void AiPlayer::think() {
         int wallType = pl.faction == F_CYBER ? B_C_WALL : B_K_WALL;
         int wantWalls = pl.difficulty >= 3 ? 44 : (pl.difficulty == 2 ? 28 : (pl.difficulty == 1 ? 14 : 0));
         if (tu[TU_WALLS] != 1.0f) wantWalls = (int)(wantWalls * tu[TU_WALLS] + 0.5f);
+        if (!built && smart && walls < wantWalls && minutes > 1.5f && pl.money > 650 && !threat && fortify && !lanes.empty()) built = fortWallsOps();   // (the funnels and chokes first)
         if (!built && smart && walls < wantWalls && minutes > 1.5f && pl.money > 650 && !threat) {
             float ang = walls * 0.62f + 0.35f;
             float rad = (7.5f + 0.55f * (walls % 14)) * TILE;
@@ -2179,7 +2192,7 @@ void AiPlayer::think() {
                     Entity* e = S.get(r);
                     if (!e || (int)pick.size() >= want - have) break;
                     bool atRally = e->zoneR > 0 && dist(e->zone, rally) < 3 * TILE;
-                    if ((e->order == O_IDLE || atRally) && e->weapon() >= 0) pick.push_back(r);
+                    if ((e->order == O_IDLE || atRally) && e->weapon() >= 0 && !(wingsPosted > 0 && inWing(r))) pick.push_back(r);
                 }
                 if (!pick.empty()) S.cmdGuardArea(pick, m.c, std::max(m.r + 2 * TILE, 6.0f * TILE));
             }
@@ -2309,6 +2322,8 @@ void AiPlayer::think() {
         }
     }
     prof.mark("army_waves");
+    if (on2(F2_TRAP) && pl.difficulty >= 1) trapOps(army, idleArmy, enemyUnits, attacking || helpingAlly);   // F2_TRAP: the ambush wings hide by the lane, spring when the enemy walks in, and Hard and up bait it
+    prof.mark("trap");
     // spy drones coordinate autonomously as an intelligent swarm (updateScoutSwarm in Sim);
     // only pull a badly damaged drone back over a friendly medic if one exists
     for (auto r : scouts) {

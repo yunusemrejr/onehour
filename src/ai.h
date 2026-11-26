@@ -94,8 +94,13 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                                   // a gun, a barracks, power and anti-air first and guards of their own. (Same series: the new side founded 160 expansions in 96
                                   //  games, 81 of them forward bases, of which 34 were finished and 28 lost; the old side 104, 0 forward. 2400 s, 2 against 2 selftests at
                                   //  Hard and Brutal, seeds 1-4: forward bases stood at 3 to 150 degrees round the enemy's home from the nearest base of the team.)
+               F2_FORTIFY = 1048576, // kill zones (ai_fort.cpp, Normal and up): the ground routes from the enemy bases to home are walked, and where one crosses a ring
+                                  // round the base (its gate) the defences are laid out for it: guns behind the gate whose fire crosses the gap, funnel walls (or a
+                                  // partial wall across a choke) that squeeze the enemy into it, anti-air behind, Bastion Walls at the arms' ends, bunkers on the flanks
+               F2_TRAP = 2097152,   // ambush wings (ai_trap.cpp, Normal and up): up to a third of the idle army hides in cover either side of the top lane and springs as a pincer
+                                  // when the enemy walks in; Hard and Brutal also send out a few fast units as bait and pull them back through the gate
                F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM | F2_WARY | F2_SPREAD };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM | F2_WARY | F2_SPREAD | F2_FORTIFY | F2_TRAP };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
                // (Nov 2026, new side with one bit against the defaults, 48 games per seed, wins-losses, seeds 1 and 2 pooled; the null control is the same masks on both sides:
@@ -322,6 +327,36 @@ struct AiPlayer {
     void expansionOps(float tm, bool coreReady, bool threat, const std::vector<Entity*>& enemyUnits, const std::vector<Ref>& idleArmy, int harvesters);
     bool promoteExpansion(float homeDanger, Vec2 dozerAt);   // home is lost: the commander moves to the best expansion standing that the dozer can reach (true if home moved)
     bool buildAt(int buildType, Vec2 site, Vec2 prefer, int maxRing);   // a structure round a site far from home, by the dozer that is free
+    // ---- F2_FORTIFY (ai_fort.cpp): kill zones on the ground routes the enemy walks to the base
+    // A lane is one such route, seen from home: its gate is the first point of the route that lies outside the ring round the base (the ring's radius
+    // reaches past the farthest production structure), dir points from the gate out toward the enemy. The defences for it stand about the gate.
+    struct Lane {
+        int enemy = -1;                 // the player whose base the route comes from
+        Vec2 gate, dir, perp;           // perp: dir turned a quarter circle
+        float weight = 0;               // how much the lane matters: the enemy's strength (the team's focus x1.5) and the scars near the gate
+        float width = 0;                // open ground across the lane at the gate, in tiles (terrain only: our own walls do not narrow it)
+        bool choke = false;             // width of 6 tiles or less: a bridge, a canal crossing, a gap between rock and water
+    };
+    std::vector<Lane> lanes;            // at most three, heaviest first
+    Vec2 lanesHome;                     // the home the lanes were planned for (a new home plans them again)
+    float nextLanes = 0;
+    struct FortFail { int tx, ty, kind; float until; };
+    std::vector<FortFail> fortFails;    // spots no structure fitted at, left alone for a minute
+    int lanesFound = 0, fortGuns = 0, fortWalls = 0, fortBastions = 0;   // (statistics: lanes held now, structures ordered for kill zones)
+    void planLanes();                   // every 45 s: the routes, their gates, the weight and width
+    bool fortGunsOps(bool airSeen);     // one gun of the heaviest lane's kill zone that is still missing (true: a dozer was sent)
+    bool fortWallsOps();                // one funnel wall (or a Bastion Wall at an arm's end) that is still missing
+    void laneAnchors(std::vector<Vec2>& out) const;   // where the flank bunkers want to stand
+    // ---- F2_TRAP (ai_trap.cpp): the ambush wings, the spring and the lure on the heaviest lane
+    std::vector<Ref> wing[2];           // the two wings (fighters of the idle army, hidden in cover either side of the lane)
+    Vec2 wingPost[2];
+    float wingsAt = -1000, nextLure = 0, lureAt = -1000, lastFoeNear = -1000, springAt = -1000;
+    bool sprung = false;                // the wings are out after an enemy that walked into the zone
+    Vec2 trapGate;                      // the gate the wings were posted for
+    std::vector<Ref> bait, baitBack;    // the lure's fast units, and those of them already on their way back
+    int wingsPosted = 0, springs = 0, lures = 0;   // (statistics: fighters in the wings now, springs, lures)
+    bool inWing(Ref r) const { return std::find(wing[0].begin(), wing[0].end(), r) != wing[0].end() || std::find(wing[1].begin(), wing[1].end(), r) != wing[1].end(); }
+    void trapOps(const std::vector<Ref>& army, const std::vector<Ref>& idleArmy, const std::vector<Entity*>& enemyUnits, bool attacking);
     void relicOps();                    // F2_RELIC / F2_SUBS (ai_frontier.cpp): the relic bases, the canal's bridges, the submarines
     void subOps();
     float nextRelic = 0, nextRelicBuild = 0, nextSecretLook = 0, relicSince = 0, relicBadAt = -1000;
@@ -334,6 +369,8 @@ struct AiPlayer {
     bool findBunkerSpot(int buildType, int& tx, int& ty);
 private:
     bool tryBuild(int buildType, Vec2 preferNear, int maxRing = 22);
+    int fortTry(int buildType, Vec2 want, int tol);   // F2_FORTIFY: a structure on the tile nearest to want (within tol tiles) that the usual rules allow: 1 ordered, 0 no dozer or money, 2 no such tile
+    bool slotHeld(BuildRole role, Vec2 at, float tolTiles) const;   // F2_FORTIFY: one of ours (finished or not) of this role stands within tolTiles of at
     int chooseUnit(BuildRole role, int enemyInf, int enemyVeh, int enemyAir);
     Entity* softObjective(const std::vector<Ref>& attackers, const Entity* skip);   // F2_PUSH: the softest economic objective the army outguns (null: none)
     Entity* pickAttackTarget(const Vec2* from = nullptr);   // from: score the distance from there (a wave in the field) instead of from home

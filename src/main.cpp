@@ -27,7 +27,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --phantomtest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --phantomtest, --traptest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -746,6 +746,7 @@ bool sonarTest(u64 seed);         // tests25.cpp: the sonar that finds a compute
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
+bool trapTest(u64 seed);         // tests27.cpp: the kill zones (lanes, guns and walls at the gate, no sealed route), the ambush wings, the spring, the lure, and the feature off
 bool phantomTest(u64 seed);      // tests26.cpp: the Phantom Jeep (stealth, snipers cannot target it, warheads and aircraft damage, self-repair, TNT, climbing, one per army, the AI's)
 bool callsTest(u64 seed);       // tests_calls.cpp: Bastion Walls no computer army takes, bunker Satellite Scans, Gunship Call, Find and Destroy
 bool updateTest(u64 seed);   // tests12.cpp: islands and launchers, fortresses, bastion walls, infiltrator stealth, vegetation, dozer routes, bombers, the Nuclear Bomber
@@ -3107,6 +3108,7 @@ int main(int argc, char** argv) {
         else if (a == "--updatetest") { g_map.generate(); return updateTest(seed) ? 0 : 1; }
         else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
+        else if (a == "--traptest") { g_map.generate(); return trapTest(seed) ? 0 : 1; }
         else if (a == "--phantomtest") { g_map.generate(); return phantomTest(seed) ? 0 : 1; }
         else if (a == "--callstest") { g_map.generate(); return callsTest(seed) ? 0 : 1; }
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
