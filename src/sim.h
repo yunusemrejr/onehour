@@ -333,6 +333,8 @@ struct Riot {
 };
 struct Event { EventType type; int player; Sound sound; Vec2 pos; std::string msg; int other = -1; };   // other: EV_AID, the army that received it (-1 nobody)
 
+struct FireCell { u16 tx, ty; float heat; float fuel; };   // a burning tree tile (sim_fire.cpp): heat 0..1, fuel = seconds of burning left (FIRE_FUEL when it catches)
+
 struct Sim {
     std::vector<Entity> ents;
     std::vector<int> freeList;
@@ -345,6 +347,23 @@ struct Sim {
     float time = 0;
     u32 tick = 0;
     Rng rng;
+    static constexpr int FIRE_CAP = 600;        // forest fires (sim_fire.cpp): most tiles burning at once
+    static constexpr float FIRE_FUEL = 30.0f;   // seconds a tree tile burns
+    std::vector<FireCell> fires;
+    float windAngle = 0, windSpeed = 0;  // radians (0 = east), normalized speed
+    int fireBurnt = 0, fireIgnitions = 0, firePeak = 0;   // statistics of the match (selftest summary)
+    float fireAt(int tx, int ty) const;
+    bool igniteFire(int tx, int ty);
+
+private:
+    std::vector<u16> fireIndex;  // active list slot plus one; zero means absent
+    Rng fireRng;
+    void resetFire(u64 seed);
+    void updateFire();
+    friend bool fireTest(u64 seed);
+    void igniteBlast(Vec2 at, float radiusTiles, float damage, bool ring = false);
+
+public:
     bool gameOver = false;
     int winnerTeam = -1;
     struct Storm { Vec2 pos; float radius; int owner; float t; int shellsLeft; float nextShell; bool force = false; };

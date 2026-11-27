@@ -907,7 +907,7 @@ void Game::drawFx() {
 
 void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under the fire); pass 1: sparks, flames, rings and glows (over it)
     Gfx& g = g_gfx;
-    const Color amb = ambientTint();
+    const Color amb = postLightTint();
     {
         for (auto& p : parts) {
             bool additive = p.kind == PK_SPARK || p.kind == PK_FLAME || p.kind == PK_RING || p.kind == PK_GLOW;
@@ -962,7 +962,7 @@ void Game::drawParticles(int pass) {   // pass 0: smoke, dust and debris (under 
 // Slow cloud shadows drifting across the ground: very faint, a handful of draws, and they give the static map a sense of weather.
 void Game::drawClouds() {
     Gfx& g = g_gfx;
-    if (g.softwareRenderer) return;   // big alpha blends are the one thing a CPU-only renderer pays dearly for
+    if (g.softwareRenderer || lightBufferOn()) return;   // (with the light buffer the cloud shadows are part of it; big alpha blends are what a CPU-only renderer pays dearly for)
     const float span = WORLD_W + 1800.0f;
     for (int i = 0; i < 11; i++) {
         float bx = 311.0f * (i * 7 % 11) + 190.0f * i, by = 270.0f * (i * 5 % 11) + 130.0f * (i % 3) + (WORLD_H - 2560.0f) * (i % 4) * 0.22f;

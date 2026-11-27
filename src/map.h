@@ -46,7 +46,7 @@ struct Map {
     u16 waterComp[MAP_W * MAP_H];   // connected body of water a water tile belongs to (0 = not water), see waterSize
     u8 wallMark[MAP_W * MAP_H];     // WallMark: which tiles hold an ordinary wall segment (a Phantom Jeep drives over) or a Bastion Wall (it cannot); set with setStructure
     u8 clearable[MAP_W * MAP_H];    // vegetation a structure may be built over (it is cleared away): 1 a tree, 2 a small rock outcrop (not a ridge)
-    std::vector<int> cleared;       // footprint tiles of structures placed since the renderer last repainted the baked ground: tile | kind << 24 (1 footprint, 2 quarried rock), each footprint closed by -1
+    std::vector<int> cleared;       // terrain edits since the last repaint: tile | kind << 24 (1 footprint, 2 quarried rock, 3 burnt tree), groups closed by -1
     std::vector<int> waterSize;     // tiles of each body of water, indexed by waterComp (the central lake is by far the biggest)
     int lakeComp = 0;               // waterComp id of the central lake on the main island
     std::vector<StartSpot> starts;   // 4 corner start positions (HQ center tile)
@@ -105,6 +105,7 @@ struct Map {
     }
     bool vegetation(int x, int y) const { return inMap(x, y) && clearable[y * MAP_W + x] != 0 && (tiles[y * MAP_W + x] == T_TREE || tiles[y * MAP_W + x] == T_ROCK); }   // would be cleared by a structure
     void clearForStructure(int x, int y, int w, int h);   // trees / small rocks under a new structure's footprint turn into open ground
+    void burnTree(int x, int y);                           // open ground, logged separately for the renderer
     // Waymaker ground: any land tile away from the map's border cliffs with no water, bridge deck, structure or supply pile on it. Trees, rock and
     // the ridges are all fair game: clearWay turns the whole footprint into a graded earth track (walkable, buildable) and logs it for the renderer.
     bool wayTile(int x, int y) const {

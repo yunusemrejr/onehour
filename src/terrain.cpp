@@ -1643,11 +1643,12 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
     int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
     auto grow = [&](int a, int b, int c, int d) { x0 = std::min(x0, a); y0 = std::min(y0, b); x1 = std::max(x1, c); y1 = std::max(y1, d); };
     bool felled = false;
-    std::vector<int> quarried;
+    std::vector<int> quarried, burnt;
     for (int c : cleared) {
         int k = c & 0xFFFFFF, kind = c >> 24;
         if (k < 0 || k >= MAP_W * MAP_H) continue;
         if (kind == 2) quarried.push_back(k);
+        if (kind == 3) burnt.push_back(k);
         for (int ti = K.tileHead.empty() ? -1 : K.tileHead[k]; ti >= 0; ti = K.tileNext[ti]) {   // the trees and bushes that grew on the footprint go
             Tree& t = K.trees[ti];
             if (t.gone) continue;
@@ -1655,36 +1656,60 @@ bool terrainRepaint(const std::vector<int>& cleared, int& rx, int& ry, int& rw, 
             int a, b, cc, d; treeRect(t, a, b, cc, d); grow(a, b, cc, d);
         }
     }
-    std::sort(quarried.begin(), quarried.end()); quarried.erase(std::unique(quarried.begin(), quarried.end()), quarried.end());
-    // quarried rock becomes bare earth, feathered into what is round it
-    const int FEATHER = 14;
-    bool rock = !quarried.empty();
-    if (rock) {
+    // paint the kept ground under a set of tiles (and 'feather' px round them, fading out) with a colour of its own
+    auto repaintTiles = [&](std::vector<int>& tiles, int feather, float jitter, auto&& colourAt) {
+        std::sort(tiles.begin(), tiles.end()); tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
         int qx0 = 1 << 30, qy0 = 1 << 30, qx1 = -1, qy1 = -1;
-        for (int i : quarried) { int tx = i % MAP_W, ty = i / MAP_W; qx0 = std::min(qx0, tx); qy0 = std::min(qy0, ty); qx1 = std::max(qx1, tx); qy1 = std::max(qy1, ty); }
-        int px0 = std::max(0, qx0 * TILE - FEATHER), py0 = std::max(0, qy0 * TILE - FEATHER);
-        int px1 = std::min(WORLD_W - 1, (qx1 + 1) * TILE + FEATHER), py1 = std::min(WORLD_H - 1, (qy1 + 1) * TILE + FEATHER);
+        for (int i : tiles) { int tx = i % MAP_W, ty = i / MAP_W; qx0 = std::min(qx0, tx); qy0 = std::min(qy0, ty); qx1 = std::max(qx1, tx); qy1 = std::max(qy1, ty); }
+        int px0 = std::max(0, qx0 * TILE - feather), py0 = std::max(0, qy0 * TILE - feather);
+        int px1 = std::min(WORLD_W - 1, (qx1 + 1) * TILE + feather), py1 = std::min(WORLD_H - 1, (qy1 + 1) * TILE + feather);
         grow(px0, py0, px1 + 1, py1 + 1);
         for (int y = py0; y <= py1; y++) for (int x = px0; x <= px1; x++) {
-            float best = 1e9f;   // distance to the nearest quarried tile (px)
-            for (int ty = std::max(0, (y - FEATHER) / TILE); ty <= std::min(MAP_H - 1, (y + FEATHER) / TILE); ty++)
-                for (int tx = std::max(0, (x - FEATHER) / TILE); tx <= std::min(MAP_W - 1, (x + FEATHER) / TILE); tx++) {
-                    if (!std::binary_search(quarried.begin(), quarried.end(), ty * MAP_W + tx)) continue;
+            float best = 1e9f;   // distance to the nearest of the tiles (px)
+            for (int ty = std::max(0, (y - feather) / TILE); ty <= std::min(MAP_H - 1, (y + feather) / TILE); ty++)
+                for (int tx = std::max(0, (x - feather) / TILE); tx <= std::min(MAP_W - 1, (x + feather) / TILE); tx++) {
+                    if (!std::binary_search(tiles.begin(), tiles.end(), ty * MAP_W + tx)) continue;
                     float dx = std::max(0.0f, std::max(tx * TILE - (float)x, x - (tx + 1.0f) * TILE)), dy = std::max(0.0f, std::max(ty * TILE - (float)y, y - (ty + 1.0f) * TILE));
                     best = std::min(best, std::sqrt(dx * dx + dy * dy));
                 }
-            if (best > FEATHER) continue;
+            if (jitter > 0) best = std::max(0.0f, best + jitter * (nz.fbm(x * 0.07f + 13, y * 0.07f + 29) - 0.5f) * 2.0f);   // (an edge that wanders off the tile grid)
+            if (best > feather) continue;
             u16* dp = K.pre(x, y);
-            if (!dp) continue;   // (nothing kept there: no rock to quarry within reach)
-            float w = best <= 2.0f ? 1.0f : sstep((float)FEATHER, 2.0f, best);
-            float macro = nz.fbm(x * 0.012f, y * 0.012f);
-            F3 dirt = groundColor(K_DIRT, (float)x, (float)y, nz, macro, 0);
-            dirt = lerp3(dirt, SCREE, 0.25f * nz.v(x * 0.2f + 4, y * 0.2f + 9));   // rubble left by the quarrying
-            dirt = gradeGround(dirt, (float)x, (float)y, nz);
+            if (!dp) continue;   // (nothing kept there)
+            float w = best <= 2.0f ? 1.0f : sstep((float)feather, 2.0f, best);
             u16& d = *dp;
             Color o = from565(d);
-            d = to565(Color{ (u8)clampf(o.r + (dirt.r - o.r) * w, 0, 255), (u8)clampf(o.g + (dirt.g - o.g) * w, 0, 255), (u8)clampf(o.b + (dirt.b - o.b) * w, 0, 255), 255 }, x, y);
+            F3 c = colourAt(x, y, w);
+            d = to565(Color{ (u8)clampf(o.r + (c.r - o.r) * w, 0, 255), (u8)clampf(o.g + (c.g - o.g) * w, 0, 255), (u8)clampf(o.b + (c.b - o.b) * w, 0, 255), 255 }, x, y);
         }
+    };
+    // quarried rock becomes bare earth, feathered into what is round it
+    bool rock = !quarried.empty();
+    if (rock) repaintTiles(quarried, 14, 0.0f, [&](int x, int y, float&) {
+        float macro = nz.fbm(x * 0.012f, y * 0.012f);
+        F3 dirt = groundColor(K_DIRT, (float)x, (float)y, nz, macro, 0);
+        dirt = lerp3(dirt, SCREE, 0.25f * nz.v(x * 0.2f + 4, y * 0.2f + 9));   // rubble left by the quarrying
+        return gradeGround(dirt, (float)x, (float)y, nz);
+    });
+    // burnt forest: charcoal ground, drifts of pale ash, the black stumps of the trees, scorched grass fading out round a ragged edge
+    if (!burnt.empty()) {
+        rock = true;
+        repaintTiles(burnt, 22, 9.0f, [&](int x, int y, float& w) {
+            const float n1 = nz.fbm(x * 0.05f + 31, y * 0.05f + 7), n2 = nz.v(x * 0.31f + 3, y * 0.31f + 11);
+            F3 ash = lerp3(F3{ 34, 31, 29 }, F3{ 104, 99, 92 }, clampf((n1 - 0.45f) * 2.6f, 0, 1));   // charcoal, then grey ash where it lies thick
+            ash = lerp3(ash, F3{ 26, 23, 21 }, 0.6f * clampf((n2 - 0.70f) * 4.0f, 0, 1));              // cinders
+            const int tx = x / TILE, ty = y / TILE;   // a black stump or two on every tile
+            for (int k = 0; k < (tx * 7 + ty * 3) % 2; k++) {
+                u32 h = (u32)(tx * 73856093) ^ (u32)(ty * 19349663) ^ (u32)(k * 83492791);
+                h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+                float sx = tx * TILE + 6 + (h & 31) * 0.62f, sy = ty * TILE + 6 + (h >> 5 & 31) * 0.62f, r = 1.8f + (h >> 10 & 3) * 0.5f;
+                float dd = std::hypot(x - sx, y - sy);
+                if (dd < r) ash = lerp3(ash, F3{ 20, 17, 15 }, 0.8f * clampf((r - dd) * 0.8f, 0, 1));
+            }
+            if (w < 1.0f) w *= clampf(0.2f + 1.3f * nz.fbm(x * 0.09f + 5, y * 0.09f + 17), 0, 1);   // (the scorched edge is ragged)
+            ash = lerp3(ash, F3{ 92, 70, 40 }, (1.0f - w) * 0.5f);   // (scorched, browned grass where it fades out)
+            return ash;
+        });
     }
     if (!felled && !rock) return false;
     x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(WORLD_W, x1); y1 = std::min(WORLD_H, y1);

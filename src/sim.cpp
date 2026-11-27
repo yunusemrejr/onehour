@@ -17,6 +17,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
     ents.reserve(1024);
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
+    resetFire(seed);
     g_map.generate();
     numPlayers = clampi(nPlayers, 1, MAX_ARMIES);
     // Assign start spots: human gets a random corner, enemies spread to the others
@@ -228,6 +229,12 @@ void Sim::deathFx(Entity& e) {
 void Sim::destroy(Entity& e, bool violent) {
     if (!e.alive) return;
     if (violent) finishUnitExperience(e);
+    if (violent && e.isUnit() && !e.ut().naval) {
+        if (e.isAir()) {
+            Vec2 impact = e.pos + Vec2(std::cos(e.angle), std::sin(e.angle)) * 26.0f + Vec2(0, 20);
+            igniteBlast(impact, 1.4f, 90.0f);
+        } else if (e.ut().kind == UK_VEH) igniteBlast(e.pos, 0.6f, 30.0f);
+    }
     if (violent) deathFx(e);
     if (e.isBuilding()) {
         if (e.bt().role != BR_WAYMAKER && e.bt().role != BR_BRIDGE) g_map.setStructure(e.tx, e.ty, e.bt().w, e.bt().h, false);   // (a Waymaker and a bridge never marked it)
@@ -1529,6 +1536,7 @@ void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
     const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
     const float D = n.super ? ISLAND_NUKE_DAMAGE : (n.sub ? SUB_NUKE_DAMAGE : (n.deep ? UNUKE_DAMAGE : 1.0f));   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius); a Super Nuke harder still
+    igniteBlast(n.pos, R / TILE, 450.0f * P * D, true);
     const bool heavy = n.deep || n.super;   // (the two big warheads flatten large structures in their inner blast and throw things further)
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
@@ -2388,6 +2396,7 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
 }
 
 void Sim::splashDamage(Vec2 at, float radiusTiles, float dmg, int owner, Ref attacker, const Weapon& w, Ref direct, bool forced) {
+    if (w.ground && radiusTiles > 0) igniteBlast(at, radiusTiles, dmg);
     float r = std::max(radiusTiles, 0.05f) * TILE;
     std::vector<Entity*> hits;
     forEachNear(at, r, [&](Entity& t) {
@@ -5155,6 +5164,7 @@ void Sim::step() {
     updateTnt();
     updateProtect();
     updateFallout();
+    updateFire();
     separateUnits();
     updateFx();
     if (tick % 4 == 0) { updateVision(); updateSight(); }

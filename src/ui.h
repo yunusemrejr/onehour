@@ -189,6 +189,15 @@ struct Game {
     float nightLevel() const;                 // 0 by day .. 1 in the dead of night (lights come on)
     const char* weatherLabel() const;         // "Dawn", "Day", "Sunset", "Night" ... with ", rain" / ", storm"
     void drawSeaLife();                       // fins, backs and spouts in the open lake (under the ships)
+    // light.cpp: the light buffer (ambient, cloud shadows and every lamp, multiplied over the ground world once per frame)
+    void drawLighting();
+    void drawWildfire();                      // fx_fire.cpp: flames, charring, smoke and embers of the forest fires
+    void drawLightBuffer();
+    void drawLightEmitters();
+    void collectLamps(float night);
+    bool lightBufferOn() const;
+    Color lightAmbient() const;
+    Color postLightTint() const;              // the light that passes drawn after the buffer (smoke, aircraft) take
     void drawWeatherTint();                   // the light of the hour and the weather over the ground world, then the lights of the night
     void drawRain();                          // streaks, splashes and lightning over everything on the battlefield
     // ---- water.cpp: the living water over the baked sea (surf, wash, storm sea, glitter) and the lightning

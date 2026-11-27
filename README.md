@@ -11,6 +11,26 @@ One map, two armies, you against one to three AI opponents, with an optional com
 Requirements: g++, make, and the SDL2 runtime (`libsdl2-2.0-0`). SDL2 headers are vendored
 under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of the box.
 
+## The Light & Fire update: real light at every hour, and forests that burn
+- **Light.** The world is now lit through a light buffer. Each frame starts from the sky's own light, darker and bluer at night and greyer in a storm. Every light source adds its pool of colour, and the result is multiplied over the ground, so lit ground shows its true colours and the rest falls into shadow instead of being washed blue.
+  - **Night sources:** headlight cones on vehicles, tail lights, lit windows and yard light round every structure (cool white for Cyber, sodium orange for Clanker), lamps along walls, street lamps at town corners, deck lights on ships, a green glow at Healing Antennas, and a torch on each of your own infantry.
+  - **Battle light:** explosions, gun flashes, beams, rockets and shells light the ground round them; a nuke lights half the screen.
+  - **Day:** cloud shadows drift across the field with the wind.
+  - **Storm:** lightning lights the whole field for a moment.
+  - The lamp cores (window panes, headlamps, beacons) glow on top. `ONEHOUR_OLDLIGHT=1` brings back the old look for comparison.
+- **Wildfire.** Bombs, shells, crashing aircraft, burning wrecks and nukes set forests alight.
+  - **Spread:** fire spreads from tree to tree, fastest downwind; embers jump two or three tiles ahead in a strong wind. A tile burns for 30 s and spreads only in its first few seconds, so most fires burn a patch and die out. A strong wind drives a long tongue of fire through a forest, and roads, water, rock and cleared ground stop it.
+  - **Wind:** the wind belongs to the match. It turns slowly and now and then shifts sharply, and rain, clouds, the storm sea and the smoke all blow the same way.
+  - **Damage:** fire hurts what stands in it. Per second at full heat: infantry 16, light vehicles 3, heavy armour 0.8, structures 2. Idle units walk out of the flames by themselves.
+  - **Burnt ground:** a burnt-out tile becomes open ground of ash and stumps that anything can cross, so a forest you burn is a new route into a base. Fire is part of the simulation, seeded with the match, so replays and tests stay exact.
+  - **The look:** flames lick up through the canopy as it chars black, a hot glow sits at the foot, smoke and embers stream downwind, and the fire lights the forest round it at night.
+  - **Limits:** at most 600 tiles burn at once, and the fire updates twice a second. An update with 600 burning tiles takes about 26 µs.
+- **Speed.** On the software renderer the light buffer is drawn at a quarter of the screen's size and smoothed up, and it is skipped in full daylight. Side by side against the build before this update (same scene, same sky), the frame time is the same: 19.4 ms against 19.8 ms at night.
+- **Tests and tools.**
+  - `--firetest` checks that a bomb ignites trees, that wind carries the fire, that the same seed burns the same tiles, that ash opens a path, that fire damages infantry, that idle infantry walk out, and that the 600-tile limit holds.
+  - `ONEHOUR_FIRE=<ticks>` with `--shot` sets a forest alight and frames it.
+  - `--selftest` prints how much forest burnt.
+
 ## The Kill Zone update: commanders that fortify the routes you walk and lay ambushes, bases that stand in the ground, light at night
 - **Kill zones** (computer armies, Normal and up, `F2_FORTIFY`). Every 45 s a commander traces the ground route from each enemy base to its own and marks the spot where it reaches the edge of the base, 9 to 18 tiles out. It keeps up to three routes, the most dangerous first: the enemy its team is fighting, and ground where it has lost structures before. Its turret and wall budget goes there before anywhere else, and what it builds depends on the ground:
   - **Open ground:** two solid wall arms open toward the enemy like a funnel and leave a three-tile gap on the route. Bastion Walls cap the arm ends, where their sensors catch snipers and infiltrators creeping round. Ground guns stand 3 to 5 tiles behind the gap, one each side, so their fire crosses over it: 2 on Normal, 3 on Hard, 4 on Brutal on the main route. Anti-air goes behind them once you have aircraft or an airfield, or earlier when the commander remembers you as a player who brings an air force.

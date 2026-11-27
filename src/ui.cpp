@@ -1965,7 +1965,7 @@ void Game::drawEntity(Entity& e) {
         g.draw(g.shadowLarge, p.x + 5, p.y + 5, 0, 0.9f * cs * (0.6f + 0.4f * fallK), rgb(255, 255, 255), 110);
     }
     Color mod = disabled ? rgb(120, 140, 170) : rgb(255, 255, 255);
-    if (air || fallK > 0) { Color t = ambientTint(); mod = rgb(mod.r * t.r / 255, mod.g * t.g / 255, mod.b * t.b / 255); }   // (aircraft are drawn after the world's light pass: they take the hour's light themselves)
+    if (air || fallK > 0) { Color t = postLightTint(); mod = rgb(mod.r * t.r / 255, mod.g * t.g / 255, mod.b * t.b / 255); }   // (aircraft are drawn after the world's light pass: they take the hour's light themselves)
     const u8 ghost = (u8)((Sim::stealthOf(e) ? 150 : 255) * clampf(e.fade, 0, 1));
     // a submarine: how far up it is (1 surfaced .. 0 dived); its own side sees a shadow under the water while it is down, the enemy nothing at all
     const bool isSub = subType(e.type);
@@ -2610,7 +2610,9 @@ void Game::renderWorld() {
         g.drawFlag(px, py, e.owner, sc, wallTime * 4.2f + (float)e.gen * 0.8f + (float)e.owner);
     }
     drawClouds(); rp.mark("flags+clouds");
-    if (!(skipL & 16)) { drawWeatherTint(); g.beginAdd(); drawGroundLights(); g.flushAdd(); }   // the light of the hour over the ground world, then the pools of light the fighting throws on it; what follows (fire, tracers, aircraft) is lit on its own
+    if (!(skipL & 16)) drawLighting();
+    rp.mark("light");
+    drawWildfire();   // (over the light pass: flames are their own light)   // the light of the hour over the ground world, then the pools of light the fighting throws on it; what follows (fire, tracers, aircraft) is lit on its own
     rp.mark("tint");
     // projectiles: hot streaks for bullets and rockets, a lobbed shell with a ground shadow
     g.beginAdd();   // (their streaks and glows, the flashes of the effects and the sparks: one additive batch after the smoke and fire)

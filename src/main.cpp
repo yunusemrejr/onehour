@@ -27,7 +27,7 @@ static void usage() {
            "  --evalai [N]     current commander vs the previous generation of the AI, N games (uses --d0 as difficulty)\n"
            "  --evaldiff [N]   difficulty ladder check: ONEHOUR_DA vs ONEHOUR_DB (0 easy .. 3 brutal), N games\n"
            "  --seed S         random seed for the game\n"
-           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --phantomtest, --traptest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
+           "  --scenario, --econtest, --areatest, --hqtest, --jettest, --rulestest, --stealthtest, --dozertest, --recoverytest, --civictest, --walltest, --autotest, --bombtest, --supporttest, --droptest, --striketest, --supersonictest, --radtest, --forttest, --updatetest, --lakeupdatetest, --superupdatetest, --civiltest, --oceantest, --fleettest, --bunkertest, --learnupdatetest, --chosentest, --phantomtest, --traptest, --firetest, --relictest, --subtest, --sonartest, --braintest, --uitest   headless gameplay tests\n"
            "  --bench [N]      time N rendered frames of a busy battle (software renderer)\n"
            "  --latebench [M]  a whole four-army match for M minutes, a rendered frame each game second: per-minute tick and frame costs\n"
            "  --micromatrix    the unit behaviours (targeting, focus, kiting) against plain units in mirrored battles and assaults\n"
@@ -187,6 +187,7 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             printf("\n");
         }
     }
+    { int trees = 0; for (int i = 0; i < MAP_W * MAP_H; i++) trees += g_map.tiles[i] == T_TREE; printf("  wildfire: %d tree tiles burnt (%d left standing), %d ignitions, most burning at once %d\n", g_sim.fireBurnt, trees, g_sim.fireIgnitions, g_sim.firePeak); }
     return true;
 }
 
@@ -746,6 +747,7 @@ bool sonarTest(u64 seed);         // tests25.cpp: the sonar that finds a compute
 bool chosenTest(u64 seed);        // tests21.cpp: The Chosen and its Shadow Guard (helicopter-only detection, captures, turning units, the call, the AI)
 bool learnUpdateTest(u64 seed);   // tests20.cpp: the learning update (opponent model, counterattack, trained numbers, reachable rally)      // tests19.cpp: the unit micro update (Player::micro) against plain units, field battles and assaults
 bool superUpdateTest(u64 seed);  // tests14.cpp: the 208 map's four launchers, Super Nukes, ally takeovers by the human, Healing Antennas
+bool fireTest(u64 seed);
 bool trapTest(u64 seed);         // tests27.cpp: the kill zones (lanes, guns and walls at the gate, no sealed route), the ambush wings, the spring, the lure, and the feature off
 bool phantomTest(u64 seed);      // tests26.cpp: the Phantom Jeep (stealth, snipers cannot target it, warheads and aircraft damage, self-repair, TNT, climbing, one per army, the AI's)
 bool callsTest(u64 seed);       // tests_calls.cpp: Bastion Walls no computer army takes, bunker Satellite Scans, Gunship Call, Find and Destroy
@@ -3029,6 +3031,72 @@ struct PerfLog {
 } g_perf;
 }  // namespace
 
+static std::vector<int> shotForest(Vec2 focus, int reach) {
+    int cx = tileOf(focus.x), cy = tileOf(focus.y);
+    int x0 = std::max(0, cx - reach), x1 = std::min(MAP_W - 1, cx + reach);
+    int y0 = std::max(0, cy - reach), y1 = std::min(MAP_H - 1, cy + reach);
+    std::vector<u8> visited(MAP_W * MAP_H, 0);
+    std::vector<int> best, forest;
+    float bestDist = 0;
+    for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x) {
+        int start = y * MAP_W + x;
+        if (visited[start] || g_map.tiles[start] != T_TREE) continue;
+        forest.assign(1, start); visited[start] = 1;
+        float nearest = (tileCenter(x, y) - focus).len2();
+        for (size_t i = 0; i < forest.size(); ++i) {
+            int tx = forest[i] % MAP_W, ty = forest[i] / MAP_W;
+            nearest = std::min(nearest, (tileCenter(tx, ty) - focus).len2());
+            for (int ny = std::max(y0, ty - 1); ny <= std::min(y1, ty + 1); ++ny)
+                for (int nx = std::max(x0, tx - 1); nx <= std::min(x1, tx + 1); ++nx) {
+                    int k = ny * MAP_W + nx;
+                    if (visited[k] || g_map.tiles[k] != T_TREE) continue;
+                    visited[k] = 1; forest.push_back(k);
+                }
+        }
+        if (forest.size() > best.size() || (forest.size() == best.size() && nearest < bestDist)) {
+            best.swap(forest); bestDist = nearest;
+        }
+    }
+    return best;
+}
+
+static bool fireShot(int ticks) {
+    Vec2 focus = g_game.cam + Vec2(SCREEN_W * 0.5f, VIEW_H * 0.5f);
+    auto forest = shotForest(focus, 32);
+    if (forest.empty()) forest = shotForest(focus, std::max(MAP_W, MAP_H));
+    if (forest.empty()) { fputs("ONEHOUR_FIRE: no forest on this map\n", stderr); return false; }
+    auto center = [](int k) { return tileCenter(k % MAP_W, k / MAP_W); };
+    Vec2 mean;
+    for (int k : forest) mean += center(k);
+    mean = mean * (1.0f / forest.size());
+    int seed = *std::min_element(forest.begin(), forest.end(), [&](int a, int b) {
+        return (center(a) - mean).len2() < (center(b) - mean).len2();
+    });
+    focus = center(seed);
+    int lit = 0;
+    for (int k : forest) if ((center(k) - focus).len2() <= 4.0f * TILE * TILE)
+        lit += g_sim.igniteFire(k % MAP_W, k / MAP_W);
+    auto aim = [&]() {   // the camera on the middle of what is burning
+        if (!g_sim.fires.empty()) {
+            focus = Vec2();
+            for (const FireCell& f : g_sim.fires) focus += tileCenter(f.tx, f.ty);
+            focus = focus * (1.0f / g_sim.fires.size());
+        }
+        g_game.cam = Vec2(clampf(focus.x - SCREEN_W * 0.5f, 0, WORLD_W - SCREEN_W), clampf(focus.y - VIEW_H * 0.5f, 0, WORLD_H - VIEW_H));
+    };
+    for (auto& pl : g_sim.players) std::fill(pl.explored.begin(), pl.explored.end(), 1);   // (the map known, not scanned: a scan lights the night up)
+    const int framed = std::min(ticks, 5 * SIM_HZ);   // the last five seconds are drawn frame by frame, so the smoke and embers are in the air
+    for (int t = 0; t < ticks; ++t) {
+        g_sim.step(); g_sim.events.clear(); g_game.wallTime += SIM_DT;
+        if (t == ticks - framed) aim();
+        if (t >= ticks - framed) { g_game.frameDt = SIM_DT; g_game.updateParticles(SIM_DT); g_game.render(); }
+    }
+    aim();
+    printf("fire showcase: %zu trees in selected forest, %d ignited, %zu active after %d ticks\n",
+           forest.size(), lit, g_sim.fires.size(), ticks);
+    return true;
+}
+
 int main(int argc, char** argv) {
     if (const char* as = getenv("ONEHOUR_ARTSHEET")) { writeArtSheet(as); return 0; }   // preview only: no window, no game state
     if (const char* bs = getenv("ONEHOUR_BUNKERSHEET")) { writeBunkerSheet(bs); return 0; }
@@ -3109,6 +3177,7 @@ int main(int argc, char** argv) {
         else if (a == "--lakeupdatetest") { g_map.generate(); return lakeUpdateTest(seed) ? 0 : 1; }
         else if (a == "--superupdatetest") { g_map.generate(); return superUpdateTest(seed) ? 0 : 1; }
         else if (a == "--traptest") { g_map.generate(); return trapTest(seed) ? 0 : 1; }
+        else if (a == "--firetest") return fireTest(seed) ? 0 : 1;
         else if (a == "--phantomtest") { g_map.generate(); return phantomTest(seed) ? 0 : 1; }
         else if (a == "--callstest") { g_map.generate(); return callsTest(seed) ? 0 : 1; }
         else if (a == "--civiltest") { g_map.generate(); return civilTest(seed) ? 0 : 1; }
@@ -3507,7 +3576,17 @@ int main(int argc, char** argv) {
         g_gfx.shutdown(); SDL_Quit(); return 0;
     }
     if (shot) {
-        if (ticks > 0) {
+        int fireTicks = -1;
+        if (const char* fire = getenv("ONEHOUR_FIRE")) {
+            char* end = nullptr;
+            long n = strtol(fire, &end, 10);
+            if (end == fire || *end || n < 0 || n > 600 * SIM_HZ) {
+                fputs("ONEHOUR_FIRE: expected a tick count from 0 to 12000\n", stderr);
+                return 1;
+            }
+            fireTicks = (int)n;
+        }
+        if (ticks > 0 || fireTicks >= 0) {
             g_game.startGame();
             if (allAi) { g_sim.players[0].isAI = true; g_ai.init(seed); }
             const char* upgShow = getenv("ONEHOUR_UPG");   // ONEHOUR_UPG=1: every army starts with all structure upgrades; =raid: enemy aircraft and tanks then hit the viewed base
@@ -4326,6 +4405,7 @@ int main(int argc, char** argv) {
             if (g_game.selection.empty()) for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && e.isUnit() && e.ut().role == UR_DOZER) { g_game.selection.push_back(g_sim.refOf(e)); break; }
         }
         if (getenv("ONEHOUR_BOLT")) { g_game.wallTime += 3.0f; g_game.lightningStrike(); g_game.weather.boltT = g_game.wallTime - (float)atof(getenv("ONEHOUR_BOLT")); g_game.weather.bolt = 0.7f; }   // a lightning strike ONEHOUR_BOLT seconds before the shot
+        if (fireTicks >= 0 && !fireShot(fireTicks)) return 1;
         if (const char* sci = getenv("ONEHOUR_SCIENCE")) {   // ONEHOUR_SCIENCE=fact,clicks,seconds: the Science Break board over the frame
             int fact = 0, clicks = 0; float secs = 0; sscanf(sci, "%d,%d,%f", &fact, &clicks, &secs);
             g_game.openScience(fact); g_game.scienceClicks = clicks; g_game.scienceOpenedAt = g_game.wallTime - secs;

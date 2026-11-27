@@ -522,9 +522,12 @@ void Game::updateWeather() {
         lightningStrike();
         weather.boltT = wallTime;
     }
-    // the wind wanders; a storm blows harder and swings it about more
-    if (r.f() < dt * 0.05f) weather.windTo = weather.wind + r.f(-0.9f, 0.9f) * (0.4f + stormLevel());
-    weather.wind += clampf(weather.windTo - weather.wind, -dt * 0.05f, dt * 0.05f);
+    // the wind is the simulation's (it drives the forest fires: the rain, the clouds, the storm sea and the smoke must blow the same way); a
+    // storm swings it about round that
+    weather.windTo = g_sim.windAngle + 0.5f * stormLevel() * std::sin(wallTime * 0.11f);
+    float dw = std::remainder(weather.windTo - weather.wind, 6.2831853f);
+    weather.wind += clampf(dw, -dt * 0.08f, dt * 0.08f);
+    if (std::fabs(dw) > 2.5f) weather.wind = weather.windTo;   // (a new match: no slow swing round from the last one's wind)
     seaUpdate(dt);   // the creatures swim on whether anybody looks or not
 }
 

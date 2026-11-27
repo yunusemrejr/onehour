@@ -1130,6 +1130,20 @@ void Map::clearForStructure(int x, int y, int w, int h) {
     if (cleared.size() < 200000) cleared.push_back(-1);   // (end of this structure's footprint)
 }
 
+void Map::burnTree(int x, int y) {
+    if (!inMap(x, y) || tile(x, y) != T_TREE) return;
+    int i = y * MAP_W + x;
+    tiles[i] = T_GRASS;
+    blocked[i] &= ~1;
+    clearable[i] = 0;
+    regionDirty = true;
+    noteNavChange(x, y, x, y);
+    if (cleared.size() <= 199998) {
+        cleared.push_back(i | (3 << 24));
+        cleared.push_back(-1);
+    }
+}
+
 int Map::clearWay(int x, int y, int w, int h) {
     int opened = 0;
     for (int j = y; j < y + h; j++) for (int i = x; i < x + w; i++) opened += clearWayTile(i, j);
