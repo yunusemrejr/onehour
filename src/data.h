@@ -142,6 +142,7 @@ enum BuildTypeId {
     B_N_DERRICK,                  // Oil Derrick: pays its holder
     B_N_LIGHTHOUSE,               // Lighthouse: sees far out over land and sea
     B_N_DEPOT,                    // Field Depot: mends the holder's units round it
+    B_C_HELLBUNKER, B_K_HELLBUNKER,   // Bunkers from Hell (see hellBunker)
     B_COUNT
 };
 
@@ -269,6 +270,7 @@ inline bool strongholdRole(BuildRole r) { return r == BR_STRONGHOLD; }
 // A prize landmark: a stronghold with a reward for whoever holds it. Unlike the old castles it changes hands: an enemy's infantry may walk into one
 // that stands empty and take it, so a prize has to be kept garrisoned.
 inline bool prizeType(int t) { return t == B_N_DERRICK || t == B_N_LIGHTHOUSE || t == B_N_DEPOT; }
+inline bool hellBunker(int t) { return t == B_C_HELLBUNKER || t == B_K_HELLBUNKER; }   // the Bunker from Hell (both armies build the same one)
 static const int DERRICK_PAY = 110;            // $ an Oil Derrick pays its holder every DERRICK_PERIOD seconds
 static const float DERRICK_PERIOD = 10.0f;
 static const float DEPOT_RADIUS = 7.0f;        // tiles round a Field Depot in which its holder's (and allies') units are mended
@@ -599,6 +601,19 @@ static const float BUNKER_LASER_NUKE = 0.75f;     // its chance to burn down an 
 static const float BUNKER_LASER_CIWS_RANGE = 7.0f;// tiles: rockets, shells and bombs aimed at it or at anything of its army this close are burned
 static const float BUNKER_LASER_CIWS_CHANCE = 0.70f;
 static const float BUNKER_LASER_CIWS_GAP = 0.12f;
+// Bunker from Hell (hellBunker): its free garrison, its warhead hardening, its own mending and its heavy anti-nuke battery.
+static const int   HELL_GARRISON_INF = 24, HELL_GARRISON_SNIPERS = 6, HELL_GARRISON_COMMANDOS = 3, HELL_GARRISON_DOZERS = 2, HELL_GARRISON_TANKS = 6;
+static const float HELL_NUKE_DAMAGE = 0.08f;      // share of the damage every warhead kind does to it
+static const float HELL_REGEN = 0.015f;           // fraction of max health it mends per second ...
+static const float HELL_REGEN_DELAY = 3.0f;       // ... once left alone this long (and not at all before)
+static const float HELL_ANTINUKE_COVER = 30.0f;   // tiles round it its battery guards against warheads
+static const int   HELL_ANTINUKE_SHOTS = 6;       // interceptors per warhead ...
+static const float HELL_ANTINUKE_CHANCE = 0.90f;  // ... and its chance to bring one down
+static const float HELL_NOSTOPME_FIRST = 300.0f;     // seconds after it is finished before its nostopme warhead is armed ...
+static const float HELL_NOSTOPME_COOLDOWN = 600.0f;  // ... and between two of them
+static const float HELL_NOSTOPME_FLIGHT = 1.5f;      // seconds from launch to impact (NUKE_FLIGHT is 7)
+static const float HELL_NOSTOPME_CUT = 0.2f;         // share of its damage on a side shielded by one of its own Bunkers from Hell
+static const int   W_HELL_ROCKET = 77;               // WEAPONS index: one of its two autonomous ballistic launchers (see updateHellLaunchers)
 static const float BUNKER_MED_RADIUS = 8.0f;      // tiles: field hospital reach
 static const float BUNKER_MED_UNIT = 0.03f;       // share of max health per second it gives units ...
 static const float BUNKER_MED_STRUCT = 0.008f;    // ... and structures (both under fire too)

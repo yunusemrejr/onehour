@@ -83,6 +83,8 @@ const Weapon WEAPONS[] = {
     /* 75 */{ "Phantom Missiles",  150, 9.5f, 0, 1.10f, PJ_ROCKET, 0.5f, true, true,  {0.6f, 1.20f, 1.30f, 0.80f, 1.6f}, 1, 760,  SND_ROCKET,      rgb(190, 210, 255) },
     // ---- the Bastion Wall's sentry laser: a token deterrent (about a tenth of a rifleman's fire), never a defence line on its own
     /* 76 */{ "Bastion Sentry Laser", 6, 5.5f, 0, 1.60f, PJ_LASER, 0, true, true, {1.0f, 0.50f, 0.25f, 0.0f, 0.70f}, 1, 0, SND_LASER,      rgb(150, 220, 255) },
+    // ---- the Bunker from Hell's two autonomous ballistic launchers (see Sim::updateHellLaunchers): long reach, heavy splash, ground and air
+    /* 77 */{ "Hell Rocket", 145, 14.0f, 0, 2.00f, PJ_ROCKET, 2.5f, true, true, {0.50f, 1.30f, 1.40f, 0.90f, 2.00f}, 1, 560, SND_ROCKET, rgb(255, 130, 90) },
 };
 const int WEAPON_COUNT = sizeof(WEAPONS) / sizeof(WEAPONS[0]);
 
@@ -300,6 +302,9 @@ const BuildType BUILDS[B_COUNT] = {
     { "Oil Derrick",        "-", F_CYBER, BR_STRONGHOLD, 6000, 0, 0, 2, 2, 0, 8, -1, -1, "An old oil well that still pumps. Send infantry in to claim it: it pays its holder $110 every 10s. An enemy's infantry can walk in and take it whenever it stands empty, so keep it garrisoned", 6 },
     { "Lighthouse",         "-", F_CYBER, BR_STRONGHOLD, 6500, 0, 0, 2, 2, 0, 26, -1, -1, "A tall lighthouse. Send infantry in to claim it: its holder sees 26 tiles out over land and sea from the lamp room. An enemy's infantry can walk in and take it whenever it stands empty", 6 },
     { "Field Depot",        "-", F_CYBER, BR_STRONGHOLD, 8000, 0, 0, 3, 2, 0, 9, -1, -1, "An abandoned army depot with a working repair shop. Send infantry in to claim it: its holder's units within 7 tiles are mended and healed. An enemy's infantry can walk in and take it whenever it stands empty", 6 },
+    // the Bunkers from Hell: the Deep Bunker's shelter at ten times its health, raised late behind the army's tech structure
+    { "Bunker from Hell",   "J", F_CYBER,   BR_BUNKER, 60000, 45000, 90, 3, 3, 0, 8, -1, B_C_TECH, "A Deep Bunker grown monstrous: ten times the health of an ordinary one, raised late behind a Data Center. The most expensive structure an army can build" },
+    { "Bunker from Hell",   "J", F_CLANKER, BR_BUNKER, 60000, 45000, 90, 3, 3, 0, 8, -1, B_K_TECH, "A Deep Bunker grown monstrous: ten times the health of an ordinary one, raised late behind an Arms Lab. The most expensive structure an army can build" },
 };
 
 // income per payout (every CIVIC_INTERVAL s), seconds between free dozers, townsfolk walking about it (decoration only)

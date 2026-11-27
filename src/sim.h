@@ -166,6 +166,9 @@ struct Entity {
     bool surrounded = false;          // bunker: enemy forces currently surround it (activates overdrive guns and radiation defense)
     float guardHitAt = -100;          // bunker: the last time a friendly structure it watches over was hit (its pod and guns answer that too)
     u8 bunkerUpg = 0;                 // bunker: the upgrades fitted to this bunker alone (bit 1 << BunkerUpg) ...
+    bool hellGarrisoned = false;      // Bunker from Hell: its free garrison and every upgrade were fitted (once, when it was finished)
+    float nostopmeReadyAt = 0;        // ... sim time its nostopme warhead is armed again (see Sim::cmdNostopme)
+    float hellRocketCd[2] = {0, 0};   // ... and its two autonomous rocket launchers (see Sim::updateHellLaunchers)
     int bunkerBusy = -1;              // ... the one being fitted now (-1: none) and how far along it is (0..1)
     float bunkerProgress = 0;
     float paraReady = 0;              // ... sim time its Para Backup can be called again (BU_PARA)
@@ -387,7 +390,7 @@ public:
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; bool sub = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; float dmgMul = 1.0f; };   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; bool sub = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; float dmgMul = 1.0f; bool uninterceptable = false; float flight = 0; bool nostopme = false; };   // uninterceptable: nothing can shoot it down (nostopme)   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
                                           // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
@@ -396,7 +399,7 @@ public:
     std::vector<Nuke> nukes;
     bool anyBunkerLasers = false;   // a bunker's laser battery was fitted this match: only then is every rocket and shell checked against them (bunkerLaserIntercept)
     static constexpr float NUKE_FLIGHT = 7.0f;
-    static float flightOf(const Nuke& n) { return n.super ? ISLAND_NUKE_FLIGHT : (n.rain ? NUKE_FLIGHT * RAIN_NUKE_FLIGHT : (n.swift ? NUKE_FLIGHT * BUNKER_SWIFT_FLIGHT : NUKE_FLIGHT)); }   // seconds from launch to impact (a Super Nuke is much faster)
+    static float flightOf(const Nuke& n) { return n.flight > 0 ? n.flight : (n.super ? ISLAND_NUKE_FLIGHT : (n.rain ? NUKE_FLIGHT * RAIN_NUKE_FLIGHT : (n.swift ? NUKE_FLIGHT * BUNKER_SWIFT_FLIGHT : NUKE_FLIGHT))); }   // seconds from launch to impact (a Super Nuke is much faster; nostopme carries its own 1.5 s)
     // Share of a defence's usual chance to shoot this warhead down: the silver casing halves it, a Super Nuke's is a tenth, a swift bunker missile's 30%
     static float nukeResist(const Nuke& n) { return (n.super ? ISLAND_NUKE_INTERCEPT_RESIST : (n.deep ? UNUKE_INTERCEPT_RESIST : 1.0f)) * (n.swift ? BUNKER_SWIFT_RESIST : 1.0f) * (n.rain ? RAIN_NUKE_RESIST : 1.0f) * (n.hydra ? RELIC_SILO_RESIST : 1.0f); }   // (a rain warhead: RAIN_NUKE_RESIST)
     int nukeSeq = 0;
@@ -672,6 +675,8 @@ public:
     static bool canMend(const Entity& dozer, int buildType);    // civilian dozers mend only the town; the others mend anything
     int civicPeople(const Entity& b) const;   // townsfolk walking about a civilian structure (decoration; 0 for anything else)
     bool cmdMiniNuke(int player, Vec2 pos, bool force = false, Ref from = NOREF);   // fires one ready bunker's small missile at pos (from that bunker if it is ready)
+    bool cmdNostopme(int player, Ref bunker, Vec2 at);          // Bunker from Hell: its one, uninterceptable warhead (sim_hell.cpp)
+    float nostopmeCooldownLeft(const Entity& bunker) const;     // seconds until its nostopme is armed again (0 ready; -1: not a Bunker from Hell)
     // Per-bunker upgrades (BunkerUpg, sim_bunker.cpp): each bunker is fitted with its own, one at a time, paid when the fitting starts
     static bool bunkerHas(const Entity& b, int u) { return (b.bunkerUpg >> u) & 1; }
     bool bunkerUpgAvailable(const Entity& b, int u) const;   // its owner's finished bunker, without it and with nothing else being fitted
@@ -747,6 +752,8 @@ public:
     Vec2 bunkerLaserPos(const Entity& b, int i) const;   // ... and of a laser battery's two roof lasers (BU_LASERS)
     bool bunkerSurrounded(const Entity& b, int* countOut = nullptr);
     void updateBunkerAntiNuke(Entity& b, bool surrounded);
+    void updateHellBunker(Entity& b);        // Bunker from Hell: its free garrison and every upgrade, fitted once (sim_hell.cpp)
+    void updateHellLaunchers(Entity& b);     // ... its two autonomous ballistic rocket launchers (sim_hell.cpp)
     void updateScoutSwarm(Entity& e);
     bool atIncomeLimit(int player, int buildType) const;
     bool atBuildLimit(int player, int buildType) const;   // income structures and Command Cores are capped per player (walls are deliberately unlimited)

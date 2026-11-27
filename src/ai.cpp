@@ -581,6 +581,7 @@ bool AiPlayer::findBunkerSpot(int buildType, int& tx, int& ty) {
 }
 
 bool AiPlayer::tryBuild(int buildType, Vec2 preferNear, int maxRing) {
+    if (hellBunker(buildType)) return false;   // (a later piece adds F2_GHOSTS: computer armies do not raise Bunkers from Hell yet)
     Entity* d = idleDozer();
     if (!d) return false;
     if (!g_sim.buildAvailable(player, buildType)) return false;

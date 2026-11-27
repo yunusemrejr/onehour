@@ -98,6 +98,352 @@ bool distFromBases(Vec2 pos, float tiles) {
 }
 }
 
+// The Bunker from Hell: its build limit, the garrison it comes with, its upgrades, warhead hardening, its own mending and its anti-nuke battery.
+static bool hellTest(u64 seed) {
+    bool ok = true;
+    auto check = [&](bool pass, const char* text) { printf("ghosttest %s: %s\n", pass ? "PASS" : "FAIL", text); ok &= pass; };
+
+    // 1. at most two per army, a construction site counting
+    {
+        setup(seed);
+        const Faction f = g_sim.players[0].faction;
+        const int hell = f == F_CYBER ? B_C_HELLBUNKER : B_K_HELLBUNKER;
+        const int tech = f == F_CYBER ? B_C_TECH : B_K_TECH, barracks = f == F_CYBER ? B_C_BARRACKS : B_K_BARRACKS;
+        check(g_sim.get(placeNear(0, tech, g_sim.players[0].basePos)) && g_sim.get(placeNear(0, barracks, g_sim.players[0].basePos)),
+              "a tech structure and a barracks were placed for the limit check");
+        check(!g_sim.atBuildLimit(0, hell) && g_sim.buildAvailable(0, hell), "with its prerequisites a Bunker from Hell is available");
+        check(g_sim.get(placeNear(0, hell, g_sim.players[0].basePos)) != nullptr, "the first Bunker from Hell was placed");
+        check(g_sim.buildAvailable(0, hell), "one standing Bunker from Hell still leaves room for another");
+        Ref site = NOREF;
+        const int cx = tileOf(g_sim.players[0].basePos.x), cy = tileOf(g_sim.players[0].basePos.y);
+        for (int r = 1; r <= 40 && !g_sim.get(site); ++r)
+            for (int dy = -r; dy <= r && !g_sim.get(site); ++dy) for (int dx = -r; dx <= r; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                if (g_sim.canPlace(0, hell, cx + dx, cy + dy)) { site = g_sim.placeBuilding(hell, 0, cx + dx, cy + dy, false); break; }
+            }
+        check(g_sim.get(site) && !g_sim.get(site)->constructed, "a second Bunker from Hell is under construction");
+        check(g_sim.atBuildLimit(0, hell) && !g_sim.buildAvailable(0, hell),
+              "a site counts: with two the third Bunker from Hell is refused");
+    }
+
+    // 2. the garrison at completion, every upgrade fitted, and no refill after it is let out
+    {
+        setup(seed);
+        const Faction f = g_sim.players[0].faction;
+        const int hell = f == F_CYBER ? B_C_HELLBUNKER : B_K_HELLBUNKER;
+        const int sniper = f == F_CYBER ? U_C_SNIPER : U_K_SNIPER, commando = f == F_CYBER ? U_C_LASERCMD : U_K_LASERCMD;
+        Ref hr = placeNear(0, hell, g_sim.players[0].basePos);
+        check(g_sim.get(hr) != nullptr, "a finished Bunker from Hell was placed");
+        advance(2);
+        Entity* h = g_sim.get(hr);
+        check(h && h->constructed && h->bunkerUpg == (u8)((1 << BU_COUNT) - 1), "it is finished with every bunker upgrade fitted");
+        check(!g_sim.cmdBunkerUpgrade(hr, BU_SHELL), "an upgrade command is refused for it");
+        int inf = 0, snipers = 0, commandos = 0, dozers = 0, tanks = 0;
+        if (h) for (Ref r : h->passengers) {
+            Entity* u = g_sim.get(r);
+            if (!u || u->carrier != hr) continue;
+            if (u->ut().kind == UK_INF) { inf++; if (u->type == sniper) snipers++; if (u->type == commando) commandos++; }
+            else if (u->ut().role == UR_DOZER) dozers++;
+            else if (u->ut().kind == UK_VEH) tanks++;
+        }
+        check(inf == HELL_GARRISON_INF && snipers == HELL_GARRISON_SNIPERS && commandos == HELL_GARRISON_COMMANDOS
+              && dozers == HELL_GARRISON_DOZERS && tanks == HELL_GARRISON_TANKS,
+              "it comes garrisoned: 24 infantry (6 snipers, 3 laser commandos), 2 dozers and 6 tanks");
+        std::vector<Ref> aboard;
+        if (h) aboard = h->passengers;
+        g_sim.cmdUnload(hr, false, Vec2());
+        advance(10 * SIM_HZ);
+        int out = 0;
+        for (Ref r : aboard) { Entity* u = g_sim.get(r); if (u && u->alive && u->isUnit() && !u->carrier.valid()) out++; }
+        check((int)aboard.size() == HELL_GARRISON_INF + HELL_GARRISON_DOZERS + HELL_GARRISON_TANKS && out == (int)aboard.size(),
+              "the existing Unload command lets the whole garrison out as real, alive units");
+        h = g_sim.get(hr);
+        check(h && h->passengers.empty(), "the bunker is left empty");
+        g_sim.cmdUnload(hr, false, Vec2());
+        advance(2 * SIM_HZ);
+        h = g_sim.get(hr);
+        check(h && h->passengers.empty(), "a second Unload does not refill the garrison");
+    }
+
+    // 3. ten times a Deep Bunker's health, a warhead does 0.08x to it, and its own mending rule
+    {
+        setup(seed);
+        const Faction f = g_sim.players[0].faction;
+        const int hell = f == F_CYBER ? B_C_HELLBUNKER : B_K_HELLBUNKER, deep = buildFor(f, BR_BUNKER);
+        Ref hr = placeNear(0, hell, g_sim.players[0].basePos);
+        Ref dr = placeNear(0, deep, g_sim.players[0].basePos + Vec2(40.0f * TILE, 0));
+        check(g_sim.get(hr) && g_sim.get(dr), "a Bunker from Hell and a Deep Bunker were placed for the warhead check");
+        advance(2);
+        Entity* h = g_sim.get(hr);
+        Entity* d = g_sim.get(dr);
+        check(h && d && std::fabs(h->maxHp - 10.0f * d->maxHp) < 1.0f, "it has ten times a Deep Bunker's health");
+        if (h && d) {
+            d->bunkerUpg = h->bunkerUpg;   // the same shell, so only the Hell hardening differs
+            const float hh = h->hp, dh = d->hp;
+            Sim::Nuke nh{}; nh.owner = 1; nh.pos = h->pos; nh.scale = 1.0f;
+            g_sim.nukeBlastPublic(nh);
+            Sim::Nuke nd{}; nd.owner = 1; nd.pos = d->pos; nd.scale = 1.0f;
+            g_sim.nukeBlastPublic(nd);
+            h = g_sim.get(hr); d = g_sim.get(dr);
+            const float hrLoss = h ? (hh - h->hp) / h->maxHp : 0.0f;
+            const float drLoss = d ? (dh - d->hp) / d->maxHp : 0.0f;
+            check(drLoss > 0.05f && std::fabs(hrLoss / drLoss - HELL_NUKE_DAMAGE) < 0.01f,
+                  "a plain warhead takes 0.08x of what it takes from a Deep Bunker");
+            // let the garrison out so no dozer inside mends it, then measure its own rule alone
+            g_sim.cmdUnload(hr, false, Vec2());
+            advance(10 * SIM_HZ);
+            h = g_sim.get(hr);
+            if (h) { h->hp = h->maxHp * 0.5f; h->lastDamaged = g_sim.time; }
+            const float hp0 = h ? h->hp : 0.0f;
+            advance(2 * SIM_HZ);
+            h = g_sim.get(hr);
+            check(h && std::fabs(h->hp - hp0) < 1.0f, "it mends nothing during the first 3 s after a hit");
+            advance(2 * SIM_HZ);
+            h = g_sim.get(hr);
+            const float gain = h ? (h->hp - hp0) / h->maxHp : 0.0f;
+            check(gain > 0.8f * HELL_REGEN && gain < 1.8f * HELL_REGEN, "it then mends 1.5% of its health per second");
+        } else {
+            check(false, "a plain warhead takes 0.08x of what it takes from a Deep Bunker");
+            check(false, "it mends nothing during the first 3 s after a hit");
+            check(false, "it then mends 1.5% of its health per second");
+        }
+    }
+
+    // 4. its anti-nuke battery: 30 tiles, six shots, 90%, big warheads engaged, an uninterceptable one never
+    {
+        setup(seed);
+        const Faction f = g_sim.players[0].faction;
+        const int hell = f == F_CYBER ? B_C_HELLBUNKER : B_K_HELLBUNKER;
+        check(HELL_ANTINUKE_COVER == 30.0f && HELL_ANTINUKE_SHOTS == 6 && std::fabs(HELL_ANTINUKE_CHANCE - 0.90f) < 1e-4f,
+              "the battery's settings are 30 tiles, six shots and 90%");
+        Ref hr = placeNear(0, hell, g_sim.players[0].basePos);
+        advance(2);
+        Entity* h = g_sim.get(hr);
+        check(h != nullptr, "a finished Bunker from Hell was placed for the anti-nuke check");
+        auto launch = [&](int id, Vec2 at, bool deep, bool uninterceptable, float dmgMul) {
+            Sim::Nuke n{}; n.id = id; n.owner = 1; n.pos = at; n.from = at + Vec2(0, -400);
+            n.scale = 1.0f; n.deep = deep; n.sub = deep; n.uninterceptable = uninterceptable; n.dmgMul = dmgMul;
+            n.t = Sim::flightOf(n) - 4.0f; g_sim.nukes.push_back(n);
+        };
+        auto engaged = [&](int id) { for (auto& it : g_sim.interceptors) if (it.nukeId == id) return true; return false; };
+        auto shotsAt = [&](int id) { int n = 0; for (auto& it : g_sim.interceptors) if (it.nukeId == id) n++; return n; };
+        h = g_sim.get(hr);
+        if (h) {
+            const Vec2 near = h->pos + Vec2(20.0f * TILE, 0);
+            h->antiNukeCd = 0;
+            launch(9101, near, true, false, 1.0f);    // a Ghost submarine warhead: deep and sub
+            advance(1);
+            check(shotsAt(9101) == HELL_ANTINUKE_SHOTS, "a warhead 20 tiles out draws six interceptors");
+            g_sim.nukes.clear(); g_sim.interceptors.clear();
+            h = g_sim.get(hr); if (h) h->antiNukeCd = 0;
+            launch(9102, near, false, false, 5.0f);   // a Ghost jet warhead: plain, five times the damage
+            advance(1);
+            check(engaged(9102), "a Ghost warhead aimed inside 30 tiles is engaged");
+            g_sim.nukes.clear(); g_sim.interceptors.clear();
+            h = g_sim.get(hr); if (h) h->antiNukeCd = 0;
+            launch(9103, near, false, true, 1.0f);    // the later nostopme warhead
+            advance(1);
+            check(!engaged(9103), "an uninterceptable warhead is left alone");
+            g_sim.nukes.clear(); g_sim.interceptors.clear();
+            h = g_sim.get(hr); if (h) h->antiNukeCd = 0;
+            launch(9104, h->pos + Vec2(80.0f * TILE, 0), false, false, 1.0f);
+            advance(1);
+            check(!engaged(9104), "a warhead aimed beyond 30 tiles is not engaged");
+            g_sim.nukes.clear(); g_sim.interceptors.clear();
+        } else {
+            check(false, "a warhead 20 tiles out draws six interceptors");
+            check(false, "a Ghost warhead aimed inside 30 tiles is engaged");
+            check(false, "an uninterceptable warhead is left alone");
+            check(false, "a warhead aimed beyond 30 tiles is not engaged");
+        }
+    }
+    return ok;
+}
+
+// nostopme (B14/B15): the Bunker from Hell's one uninterceptable warhead - its clock, its composition, its immunity and the shield of a
+// Bunker from Hell on the target's side.
+static bool nostopmeTest(u64 seed) {
+    bool ok = true;
+    auto check = [&](bool pass, const char* text) { printf("ghosttest %s: %s\n", pass ? "PASS" : "FAIL", text); ok &= pass; };
+    auto hellFor = [](Faction f) { return f == F_CYBER ? B_C_HELLBUNKER : B_K_HELLBUNKER; };
+
+    // 1. armed 300 s after completion, then once every 600 s; what it fires
+    {
+        setup(seed);
+        const Faction f = g_sim.players[0].faction;
+        Ref hr = placeNear(0, hellFor(f), g_sim.players[0].basePos);
+        check(g_sim.get(hr) != nullptr, "a finished Bunker from Hell was placed for the nostopme check");
+        advance(2);
+        Entity* h = g_sim.get(hr);
+        check(h && std::fabs(g_sim.nostopmeCooldownLeft(*h) - HELL_NOSTOPME_FIRST) < 2.0f,
+              "nostopme is armed 300 s after the bunker is finished");
+        const Vec2 at = g_sim.players[1].basePos;
+        check(!g_sim.cmdNostopme(0, hr, at) && g_sim.nukes.empty(), "nostopme is refused right after completion");
+        g_sim.time = h->nostopmeReadyAt - 100.0f;
+        check(!g_sim.cmdNostopme(0, hr, at) && g_sim.nukes.empty(), "nostopme is refused before 300 s");
+        g_sim.time = h->nostopmeReadyAt;
+        check(g_sim.cmdNostopme(0, hr, at), "nostopme is accepted at 300 s");
+        check(g_sim.nukes.size() == 1, "nostopme adds exactly one warhead");
+        if (g_sim.nukes.size() == 1) {
+            const Sim::Nuke& n = g_sim.nukes[0];
+            h = g_sim.get(hr);
+            check(h && n.owner == 0 && n.uninterceptable && n.nostopme && dist(n.from, h->pos) < 1.0f,
+                  "it is the firer's warhead, cannot be intercepted, and leaves the bunker itself");
+            check(std::fabs(Sim::flightOf(n) - HELL_NOSTOPME_FLIGHT) < 1e-4f && HELL_NOSTOPME_FLIGHT == 1.5f,
+                  "it flies 1.5 s instead of NUKE_FLIGHT");
+            check(std::fabs(n.scale - std::max(SUB_NUKE_SCALE * 4.0f, NUKEBOMBER_SCALE * 9.0f)) < 1e-4f,
+                  "its radius is the larger of the two Ghost warheads' (the submarine's)");
+            check(std::fabs(Sim::nukeDamageFactor(n) - (SUB_NUKE_DAMAGE * 2.0f + 5.0f)) < 1e-3f,
+                  "its damage factor is the sum of both Ghost warheads'");
+        }
+        check(!g_sim.cmdNostopme(0, hr, at), "a second nostopme is refused at once");
+        g_sim.time = h->nostopmeReadyAt - 1.0f;
+        check(!g_sim.cmdNostopme(0, hr, at), "nostopme stays refused for 600 s");
+        g_sim.time += 1.0f;
+        check(g_sim.cmdNostopme(0, hr, at) && g_sim.nukes.size() == 2, "nostopme is accepted again 600 s later");
+        h = g_sim.get(hr);
+        check(h && std::fabs(g_sim.nostopmeCooldownLeft(*h) - HELL_NOSTOPME_COOLDOWN) < 1.0f,
+              "the UI reads the full cooldown back after a launch");
+    }
+
+    // 2. nothing intercepts it, while an ordinary warhead at the same spot is engaged and the nostopme still lands
+    {
+        setup(seed);
+        const Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction;
+        Ref hr = placeNear(0, hellFor(f0), g_sim.players[0].basePos);
+        check(g_sim.get(hr) != nullptr, "a Bunker from Hell was placed to launch the nostopme");
+        advance(2);
+        Ref hq = NOREF;
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1 && e.bt().role == BR_HQ) { hq = g_sim.refOf(e); break; }
+        check(g_sim.get(hq) != nullptr, "the target army's Command Core stands for the launch");
+        const Vec2 at = g_sim.get(hq) ? g_sim.get(hq)->pos : g_sim.players[1].basePos;
+        const int hell1 = hellFor(f1), anuke = buildFor(f1, BR_ANTINUKE);
+        check(g_sim.get(placeNear(1, hell1, at)) != nullptr && g_sim.get(placeNear(1, anuke, at)) != nullptr,
+              "an enemy Bunker from Hell and an Anti-Nuke Laser guard the target");
+        Entity* h = g_sim.get(hr);
+        g_sim.time = h->nostopmeReadyAt;
+        check(g_sim.cmdNostopme(0, hr, at), "nostopme launches at the guarded target");
+        Sim::Nuke ord{}; ord.id = 9001; ord.owner = 0; ord.pos = at; ord.from = g_sim.players[0].basePos;
+        ord.scale = 1.0f; ord.t = Sim::NUKE_FLIGHT - 4.0f;
+        g_sim.nukes.push_back(ord);
+        g_sim.step(); g_sim.events.clear();
+        int nid = 0;
+        for (auto& n : g_sim.nukes) if (n.nostopme) nid = n.id;
+        bool ordEngaged = false;
+        for (auto& it : g_sim.interceptors) if (it.nukeId == 9001) ordEngaged = true;
+        check(nid != 0 && ordEngaged, "an ordinary warhead at the same spot is engaged");
+        bool interfered = false, landed = false;
+        for (int i = 0; i < 2 * SIM_HZ && !landed; i++) {
+            g_sim.step(); g_sim.events.clear();
+            for (auto& it : g_sim.interceptors) if (it.nukeId == nid) interfered = true;
+            landed = true;
+            for (auto& n : g_sim.nukes) if (n.nostopme) landed = false;
+        }
+        check(!interfered, "no defence fires at the nostopme warhead");
+        check(landed, "the nostopme warhead still lands 1.5 s after launch");
+    }
+
+    // 3. B15: an enemy Bunker from Hell in the blast cuts the warhead to a fifth; an ally's (here the firer's own) does not
+    auto lossOnEnemyCore = [&](bool enemyHell, bool ownHell) -> float {
+        setup(seed);
+        Ref hq = NOREF;
+        for (auto& e : g_sim.ents) if (e.alive && e.isBuilding() && e.owner == 1 && e.bt().role == BR_HQ) { hq = g_sim.refOf(e); break; }
+        if (!g_sim.get(hq)) return -1.0f;
+        const Vec2 at = g_sim.get(hq)->pos;
+        if (enemyHell && !g_sim.get(placeNear(1, hellFor(g_sim.players[1].faction), at))) return -1.0f;
+        if (ownHell && !g_sim.get(placeNear(0, hellFor(g_sim.players[0].faction), at))) return -1.0f;
+        Entity* h = g_sim.get(hq);
+        const float hp0 = h->hp;
+        Sim::Nuke n{}; n.owner = 0; n.pos = h->pos; n.nostopme = true; n.uninterceptable = true;
+        n.scale = std::max(SUB_NUKE_SCALE * 4.0f, NUKEBOMBER_SCALE * 9.0f); n.dmgMul = SUB_NUKE_DAMAGE * 2.0f + 5.0f;
+        n.flight = HELL_NOSTOPME_FLIGHT;
+        g_sim.nukeBlastPublic(n);
+        h = g_sim.get(hq);
+        return h ? hp0 - h->hp : hp0;
+    };
+    const float l0 = lossOnEnemyCore(false, false), l1 = lossOnEnemyCore(true, false), l2 = lossOnEnemyCore(false, true);
+    check(l0 > 0 && l1 > 0 && std::fabs(l1 / l0 - HELL_NOSTOPME_CUT) < 0.02f,
+          "an enemy Bunker from Hell in the blast cuts the damage to 20%");
+    check(l0 > 0 && l2 > 0 && std::fabs(l2 / l0 - 1.0f) < 0.02f,
+          "the firer's own Bunker from Hell in the blast leaves the damage at 100%");
+    return ok;
+}
+
+// B13: the Bunker from Hell's two autonomous ballistic launchers - what they hit, what they leave alone, and their cadence.
+static bool launcherTest(u64 seed) {
+    bool ok = true;
+    auto check = [&](bool pass, const char* text) { printf("ghosttest %s: %s\n", pass ? "PASS" : "FAIL", text); ok &= pass; };
+    auto hellFor = [](Faction f) { return f == F_CYBER ? B_C_HELLBUNKER : B_K_HELLBUNKER; };
+    auto hostile = [&](int type, Vec2 at) {
+        Ref r = g_sim.spawnUnit(type, 1, at);
+        Entity* u = g_sim.get(r);
+        if (u) { u->disabledUntil = 1e9f; u->order = O_IDLE; }
+        return r;
+    };
+    auto liveRockets = [&]() { int n = 0; for (auto& p : g_sim.projs) if (p.alive && p.weapon == W_HELL_ROCKET) n++; return n; };
+
+    // 1. a tank and an aircraft within 12 tiles are destroyed; a unit beyond 16 tiles and an unsighted Ghost jet are untouched
+    {
+        setup(seed);
+        const Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction;
+        Ref hr = placeNear(0, hellFor(f0), g_sim.players[0].basePos);
+        check(g_sim.get(hr) != nullptr, "a finished Bunker from Hell was placed for the launcher check");
+        advance(2);
+        Entity* h = g_sim.get(hr);
+        if (!h) {
+            check(false, "a tank and an aircraft within 12 tiles are destroyed within 15 s");
+            check(false, "a unit beyond 16 tiles is not hit");
+            check(false, "an unsighted Ghost jet within range is not damaged");
+        } else {
+            h->hatch = 0; h->bunkerUpg = 0;   // (only its launchers fire here: no hatch guns and no laser battery)
+            const Vec2 c = h->pos;
+            const int tankType = f1 == F_CYBER ? U_C_TANK : U_K_TANK;
+            const int airType = f1 == F_CYBER ? U_C_HELI : U_K_AIR;
+            const int jetType = f1 == F_CYBER ? U_C_GHOSTJET : U_K_GHOSTJET;
+            Ref tank = hostile(tankType, c + Vec2(10.0f * TILE, 0));
+            Ref air = hostile(airType, c + Vec2(-10.0f * TILE, 0));
+            Ref far = hostile(tankType, c + Vec2(0, 18.0f * TILE));
+            Ref ghost = hostile(jetType, c + Vec2(6.0f * TILE, 6.0f * TILE));
+            Entity* farU = g_sim.get(far); Entity* ghostU = g_sim.get(ghost);
+            const float farHp = farU ? farU->hp : 0.0f, ghostHp = ghostU ? ghostU->hp : 0.0f;
+            advance(15 * SIM_HZ);
+            Entity* t = g_sim.get(tank); Entity* a = g_sim.get(air);
+            farU = g_sim.get(far); ghostU = g_sim.get(ghost);
+            check((!t || t->hp < t->maxHp * 0.5f) && (!a || a->hp < a->maxHp * 0.5f),
+                  "a tank and an aircraft within 12 tiles are destroyed within 15 s");
+            check(farU && std::fabs(farU->hp - farHp) < 1.0f, "a unit beyond 16 tiles is not hit");
+            check(ghostU && std::fabs(ghostU->hp - ghostHp) < 1.0f, "an unsighted Ghost jet within range is not damaged");
+        }
+    }
+
+    // 2. the cadence: two launchers, about 2 s each, so about ten rockets in ten seconds
+    {
+        setup(seed);
+        const Faction f0 = g_sim.players[0].faction, f1 = g_sim.players[1].faction;
+        Ref hr = placeNear(0, hellFor(f0), g_sim.players[0].basePos);
+        advance(2);
+        Entity* h = g_sim.get(hr);
+        check(h != nullptr, "a second Bunker from Hell was placed for the cadence check");
+        if (h) {
+            h->hatch = 0; h->bunkerUpg = 0;
+            Ref dummy = hostile(f1 == F_CYBER ? U_C_TANK : U_K_TANK, h->pos + Vec2(11.0f * TILE, 0));
+            Entity* d = g_sim.get(dummy);
+            if (d) { d->maxHp = d->hp = 1e9f; }   // (a target that cannot die, so both launchers keep firing for the whole window)
+            int prev = 0, fired = 0;
+            for (int i = 0; i < 10 * SIM_HZ; i++) {
+                g_sim.step(); g_sim.events.clear();
+                const int cur = liveRockets();
+                if (cur > prev) fired += cur - prev;
+                prev = cur;
+            }
+            check(d != nullptr && fired >= 8 && fired <= 12, "two launchers fire about ten rockets in ten seconds (8..12)");
+        } else {
+            check(false, "two launchers fire about ten rockets in ten seconds (8..12)");
+        }
+    }
+    return ok;
+}
+
 bool ghostTest(u64 seed) {
     bool ok = true;
     auto check = [&](bool pass, const char* text) { printf("ghosttest %s: %s\n", pass ? "PASS" : "FAIL", text); ok &= pass; };
@@ -407,5 +753,21 @@ bool ghostTest(u64 seed) {
         }
     }
 
+    // 11. the Ghosts alone do not keep an army in the match: checkVictory and the surrender rule both discount the pair
+    {
+        Pair p = makePair(seed);
+        check(p.ok, "the pair exists for the victory check");
+        for (auto& e : g_sim.ents) if (e.alive && e.owner == 0 && !(e.isUnit() && ghostType(e.type))) g_sim.destroy(e, false);
+        check(g_sim.get(p.sub) && g_sim.get(p.jet), "nothing of the army is left but the Ghost pair");
+        check(g_sim.armyBeaten(0), "the surrender rule does not count the Ghost pair as an army");
+        advance(25);
+        check(!g_sim.players[0].alive, "an army left with only its Ghost pair is beaten");
+        check(!g_sim.get(p.sub) && !g_sim.get(p.jet), "the orphaned pair goes with the defeated army");
+        check(g_sim.gameOver && g_sim.winnerTeam == g_sim.players[1].team, "the match ends with the other army the winner");
+    }
+
+    ok &= hellTest(seed);   // the Bunker from Hell's rules live here too (piece B)
+    ok &= nostopmeTest(seed);
+    ok &= launcherTest(seed);
     return ok;
 }

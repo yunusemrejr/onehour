@@ -353,6 +353,7 @@ bool Sim::buildAvailable(int player, int buildType) const {
     if (neutralRole(b.role)) return false;   // map landmarks and island launchers: never raised by a dozer or sold
     if (b.relic) return relicBuildable(player) && !atBuildLimit(player, buildType);   // a relic structure: any army that holds a Relic Command
     if (b.faction != players[player].faction) return false;
+    if (hellBunker(buildType) && !hasBuilding(player, b.faction == F_CYBER ? B_C_BARRACKS : B_K_BARRACKS)) return false;   // the Bunker from Hell needs the Deep Bunker's Barracks as well as its tech structure
     if (atBuildLimit(player, buildType)) return false;
     return prereqMet(player, b.requires_);
 }
@@ -362,6 +363,7 @@ bool Sim::atIncomeLimit(int player, int buildType) const {
 // a dozer may found or rebuild a Command Core / Post any time it can pay for one; up to HQ_MAX stand (or rise) at once
 bool Sim::atBuildLimit(int player, int buildType) const {
     if (atIncomeLimit(player, buildType)) return true;
+    if (hellBunker(buildType)) return countBuildings(player, B_C_HELLBUNKER) + countBuildings(player, B_K_HELLBUNKER) >= 2;   // at most two Bunkers from Hell per army, construction sites included
     BuildRole r = BUILDS[buildType].role;
     if (r == BR_NAVAL) return countRole(player, BR_NAVAL, false) >= 3;
     if (buildType == B_R_COMMAND) return countBuildings(player, B_R_COMMAND) >= RELIC_COMMAND_MAX;
@@ -1554,7 +1556,11 @@ void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
     const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
     const float D = nukeDamageFactor(n);
-    igniteBlast(n.pos, R / TILE, 450.0f * P * D, true);
+    // B15: an enemy Bunker from Hell standing inside the blast shields its whole side from a nostopme warhead (only that kind: n.nostopme)
+    float hellCut = 1.0f;
+    if (n.nostopme) for (auto& hb : ents)
+        if (hb.alive && hb.isBuilding() && hb.constructed && hellBunker(hb.type) && enemies(n.owner, hb.owner) && dist(hb.pos, n.pos) <= R) { hellCut = HELL_NOSTOPME_CUT; break; }
+    igniteBlast(n.pos, R / TILE, 450.0f * P * D * hellCut, true);
     const bool heavy = n.deep || n.super;   // (the two big warheads flatten large structures in their inner blast and throw things further)
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
@@ -1564,7 +1570,7 @@ void Sim::nukeBlast(const Nuke& n) {
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (bridgeEnt(*e)) {   // a bridge anywhere in the blast: the span is thrown down
             float bd = std::max(0.0f, distToEntity(n.pos, *e));
-            if (e->constructed && bd <= R) applyDamage(*e, e->maxHp * 2.5f * (bd < R * 0.6f ? 1.0f : 0.5f), n.owner, NOREF, nullptr, -1.0f, true);
+            if (e->constructed && bd <= R) applyDamage(*e, e->maxHp * 2.5f * (bd < R * 0.6f ? 1.0f : 0.5f) * hellCut, n.owner, NOREF, nullptr, -1.0f, true);
             continue;
         }
         if (d > R) continue;
@@ -1578,7 +1584,7 @@ void Sim::nukeBlast(const Nuke& n) {
             fx.push_back({FX_EXPLODE, e->pos, e->pos, 0, 0.9f, rgb(255, 214, 140), 50.0f});
             fx.push_back({FX_SMOKE, e->pos, e->pos, 0, 3.2f, rgb(40, 38, 36), 26.0f, Vec2(rng.f(-14, 14), -26)});
             for (int k = 0; k < 6; k++) fx.push_back({FX_DEBRIS, e->pos, e->pos, 0, rng.f(0.7f, 1.4f), rgb(84, 84, 86), rng.f(2, 4), Vec2(rng.f(-170, 170), rng.f(-190, -40))});
-            applyDamage(*e, lessen(e->maxHp * 2.0f * D, *e), n.owner, NOREF, nullptr);
+            applyDamage(*e, lessen(e->maxHp * 2.0f * D * hellCut, *e), n.owner, NOREF, nullptr);
             continue;
         }
         Vec2 away = (e->pos - n.pos); float l = away.len(); away = l > 1 ? away * (1.0f / l) : Vec2(1, 0);
@@ -1589,7 +1595,7 @@ void Sim::nukeBlast(const Nuke& n) {
         }
         if (foe) {
             if (e->isBuilding() && e->constructed && e->bt().role == BR_BUNKER) {   // nuclear-hardened: a warhead only scrapes it (BUNKER_NUKE_*; the big ones count up to twice)
-                bunkerNuked(*e, f * P * (1.0f + 0.5f * (D - 1.0f)), n.owner);
+                bunkerNuked(*e, f * P * (1.0f + 0.5f * (D - 1.0f)) * hellCut, n.owner);
                 e = get(r); if (!e) continue;
                 e->disabledUntil = std::max(e->disabledUntil, time + BUNKER_NUKE_STUN * f * P);
                 continue;
@@ -1618,7 +1624,7 @@ void Sim::nukeBlast(const Nuke& n) {
                     dmg = e->maxHp * 0.80f * f * rng.f(0.9f, 1.1f) * D;                      // a large structure is left holding on: 80% lost at ground zero, a fifth at the rim
                     if (!heavy) dmg = std::min(dmg, std::max(0.0f, e->hp - e->maxHp * 0.06f));   // never lethal (an Underground Nuke's triple blast flattens the inner half)
                 }
-                if (dmg > 0) applyDamage(*e, lessen(dmg, *e), n.owner, NOREF, nullptr, cap > 0 ? lessen(cap, *e) : -1.0f, true);
+                if (dmg > 0) applyDamage(*e, lessen(dmg * hellCut, *e), n.owner, NOREF, nullptr, cap > 0 ? lessen(cap, *e) * hellCut : -1.0f, true);
                 e = get(r); if (!e) continue;
                 e->disabledUntil = std::max(e->disabledUntil, time + 12.0f * f * P * (rugged ? 0.5f : 1.0f) * (heavy ? 1.5f : 1.0f));   // the pulse knocks survivors offline for a while
                 if (e->hp < e->maxHp * 0.5f) {                                                 // wrecked but standing: fire and smoke pour out of it
@@ -1633,6 +1639,7 @@ void Sim::nukeBlast(const Nuke& n) {
                 if (e->ut().naval) dmg = std::max(dmg, e->maxHp * 1.6f);   // a warship is no match for a warhead anywhere in the blast: it goes down
                 if (subType(e->type)) dmg = std::min(dmg, e->maxHp * SUB_NUKE_CAP);   // ... but a submarine's pressure hull takes a third at most (it is very hard to sink)
                 else if (battleshipType(e->type)) dmg = std::min(dmg, e->maxHp * 0.55f);   // ... and a battleship's armoured citadel a little over half
+                dmg *= hellCut;   // (B15: a shielded side takes a fifth of what this warhead would do)
                 if (!e->passengers.empty() && lessen(dmg, *e) >= e->hp) {   // a vehicle the blast destroys takes its crew with it (nobody climbs out of this one)
                     std::vector<Ref> crew = e->passengers;
                     for (Ref pr : crew) if (Entity* pu = get(pr)) { pu->carrier = NOREF; pu->pos = e->pos; destroy(*pu, true); }
@@ -1717,10 +1724,10 @@ void Sim::nukeBlast(const Nuke& n) {
         fx.push_back({FX_SMOKE, p, p, -rng.f(0, 3.5f), 6.0f, sv ? rgb(120, 124, 130) : rgb(60, 54, 50), rng.f(28, 56), Vec2(rng.f(-12, 12), rng.f(-44, -18))});
     }
     for (int k = 0; k < 40; k++) fx.push_back({FX_DEBRIS, n.pos, n.pos, -rng.f(0, 0.6f), rng.f(0.9f, 2.0f), rgb(70, 66, 62), rng.f(2, 6), Vec2(rng.f(-420, 420), rng.f(-520, -120))});
-    const float life = FALLOUT_LIFE * (sv ? UNUKE_FALLOUT : 1.0f);
+    const float life = FALLOUT_LIFE * (sv ? UNUKE_FALLOUT : 1.0f) * hellCut;
     fx.push_back({FX_FALLOUT, n.pos, n.pos, 0, life, sv ? UNUKE_GLOW : hy ? RELIC_GLOW : rgb(120, 255, 90), R * 0.95f});
     fx.back().tag = ++fxTagSeq;
-    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, sv ? UNUKE_FALLOUT : 1.0f, -1, false, life, fxTagSeq});
+    fallouts.push_back({n.pos, R * 0.95f, 0.0f, 0.0f, (sv ? UNUKE_FALLOUT : 1.0f) * hellCut, -1, false, life, fxTagSeq});
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
     emit(EV_SOUND, -1, SND_EXPLODE_L, n.pos);
@@ -4012,7 +4019,7 @@ void Sim::updateBuilding(Entity& b) {
     if (bt.role == BR_CIVIC) { updateCivic(b); return; }
     if (bt.role == BR_HEALANT) { updateHealAntenna(b); return; }   // (no guns, no queue: it mends what stands round it)   // the town has no roof guns, no queue: it pays and sends out dozers (may spawn a unit: b is done with)
     if (pl.upg[UPG_GUNS] && bt.role != BR_BUNKER) updateRoofGun(b, powered);
-    if (bt.role == BR_BUNKER) { updateBunkerSelf(b); updateBunkerUpgrades(b); updateBunkerWard(b); updateBunker(b); }
+    if (bt.role == BR_BUNKER) { if (hellBunker(b.type)) { updateHellBunker(b); updateHellLaunchers(b); } updateBunkerSelf(b); updateBunkerUpgrades(b); updateBunkerWard(b); updateBunker(b); }
     if (bt.role == BR_UNUKE) updateSilo(b);
     if (bt.role == BR_INCOME) {
         b.actionTimer += SIM_DT * (powered ? 1.0f : 0.5f);
@@ -4335,22 +4342,23 @@ bool Sim::bunkerSurrounded(const Entity& b, int* countOut) {
 void Sim::updateBunkerAntiNuke(Entity& b, bool surrounded) {
     if (time < b.antiNukeCd || b.disabledUntil > time) return;
     bool cy = b.bt().faction == F_CYBER;
-    const bool lz = bunkerHas(b, BU_LASERS);   // a laser battery: wider cover, near-certain against an ordinary warhead, and it tries the big ones too (their resist applies)
+    const bool hell = hellBunker(b.type);   // the Bunker from Hell's battery: 30 tiles, six shots, 90% each, big warheads too
+    const bool lz = hell || bunkerHas(b, BU_LASERS);   // a laser battery: wider cover, near-certain against an ordinary warhead, and it tries the big ones too (their resist applies)
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
-        if (n.broken || n.killT >= 0 || (!lz && (n.deep || n.super)) || !enemies(n.owner, b.owner)) continue;   // (without lasers an Underground Nuke's or a Super Nuke's warhead is too much for it)
-        float cover = (lz ? BUNKER_LASER_COVER : BUNKER_ANTINUKE_COVER) * TILE + nukeRadius(n);
+        if (n.uninterceptable || n.broken || n.killT >= 0 || (!lz && (n.deep || n.super)) || !enemies(n.owner, b.owner)) continue;   // (without lasers an Underground Nuke's or a Super Nuke's warhead is too much for it; an uninterceptable one is beyond every defence)
+        float cover = (hell ? HELL_ANTINUKE_COVER : lz ? BUNKER_LASER_COVER : BUNKER_ANTINUKE_COVER) * TILE + nukeRadius(n);
         if (dist(n.pos, b.pos) > cover) continue;
         float left = flightOf(n) - n.t;
         const float flight = cy || lz ? 0.28f : 0.45f, gap = 0.22f;
         if (left > BUNKER_ANTINUKE_WINDOW || left < flight + 0.25f) continue;
         if (std::find(n.engagedBy.begin(), n.engagedBy.end(), self) != n.engagedBy.end()) continue;
         n.engagedBy.push_back(self);
-        int shots = surrounded ? 4 : 3;
+        int shots = hell ? HELL_ANTINUKE_SHOTS : (surrounded ? 4 : 3);
         while (shots > 1 && (shots - 1) * gap + flight > left - 0.2f) shots--;
-        float chance = (lz ? BUNKER_LASER_NUKE : (surrounded ? 1.0f : BUNKER_ANTINUKE_CHANCE)) * nukeResist(n);
+        float chance = (hell ? HELL_ANTINUKE_CHANCE : lz ? BUNKER_LASER_NUKE : (surrounded ? 1.0f : BUNKER_ANTINUKE_CHANCE)) * nukeResist(n);
         int winner = rng.f() < chance ? rng.range(0, shots - 1) : -1;
-        b.antiNukeCd = time + (lz ? 1.0f : (surrounded ? 1.2f : 3.5f));
+        b.antiNukeCd = time + (hell || lz ? 1.0f : (surrounded ? 1.2f : 3.5f));
         for (int k = 0; k < shots; k++) {
             Vec2 muzzle = lz ? bunkerLaserPos(b, k & 1) : bunkerOverdrivePos(b, k & 1);
             Interceptor it;
@@ -5131,11 +5139,11 @@ void Sim::checkVictory() {
             else if (time - beatenSince[p] >= SURRENDER_GRACE) surrender(p);
         } else beatenSince[p] = 0;
         bool any = false;
-        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type))) && !invulnerable(e) && e.district < 0 && !(e.isBuilding() && prizeType(e.type))) { any = true; break; }   // (nor is a prize landmark it holds: its garrison counts, the landmark does not)   // (a town it holds is not its army either)   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
+        for (auto& e : ents) if (e.alive && e.owner == p && e.kind != EK_RESOURCE && !(e.isUnit() && (e.ut().temp || civicDozerType(e.type) || ghostType(e.type))) && !invulnerable(e) && e.district < 0 && !(e.isBuilding() && prizeType(e.type))) { any = true; break; }   // (nor is a prize landmark it holds: its garrison counts, the landmark does not)   // (a town it holds is not its army either)   // (a Hotline Strike fighter on loan is no army, nor is an indestructible launcher or wall it holds)
         if (!any) {
             pl.alive = false; anyDied = true; emit(EV_PLAYER_DEAD, p, SND_NONE, pl.basePos, FACTION_NAME[pl.faction]);
             if (getenv("ONEHOUR_BENCHDBG")) fprintf(stderr, "[victory] t=%.0f player %d is out (surrendered %d)\n", time, p, (int)(beatenSince[p] > 0));
-            for (auto& e : ents) if (e.alive && e.owner == p && e.isUnit() && civicDozerType(e.type)) destroy(e, false);   // its civilian dozers leave the war behind
+            for (auto& e : ents) if (e.alive && e.owner == p && e.isUnit() && (civicDozerType(e.type) || ghostType(e.type))) destroy(e, false);   // its civilian dozers, and an orphaned Ghost pair, leave the war behind
             for (auto& e : ents) if (e.alive && e.owner == p && (invulnerable(e) || (e.isBuilding() && prizeType(e.type)))) { e.owner = -1; e.attacker = NOREF; for (int q = 0; q < MAX_PLAYERS; q++) e.detUntil[q] = 0; }   // its island launchers and Bastion Walls fall to nobody (any spy may take them)
             for (int d = 0; d < (int)districts.size(); d++) if (districts[d].owner == p) captureDistrict(d, -1);   // and its towns are free again
         }

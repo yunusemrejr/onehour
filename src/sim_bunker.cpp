@@ -10,6 +10,7 @@ bool Sim::bunkerUpgAvailable(const Entity& b, int u) const {
 bool Sim::cmdBunkerUpgrade(Ref bunker, int u) {
     Entity* b = get(bunker);
     if (!b || !bunkerUpgAvailable(*b, u)) return false;
+    if (hellBunker(b->type)) return false;   // a Bunker from Hell comes with every fitting already done
     int p = b->owner;
     const BunkerUpgType& ug = BUNKER_UPGS[u];
     if (!canAfford(p, ug.cost)) { emit(EV_NOFUNDS, p, SND_NOFUNDS, b->pos, "Insufficient funds"); return false; }
@@ -183,6 +184,7 @@ void Sim::toxicCloud(Vec2 at, int owner) {
 // pieces): the hatch takes BUNKER_NUKE_HATCH of its plate and the buried body BUNKER_NUKE_SHARE of its health (see applyDamage: a warhead on a
 // bunker is taken as it is, with no plating, armour or floor in between).
 void Sim::bunkerNuked(Entity& b, float k, int attackerOwner) {
+    if (hellBunker(b.type)) k *= HELL_NUKE_DAMAGE;   // the Bunker from Hell shrugs off every warhead kind
     if (b.hatch > 0) {
         b.hatch -= b.hatchMax * BUNKER_NUKE_HATCH * k * (bunkerHas(b, BU_SHELL) ? BUNKER_SHELL_NUKE : 1.0f);
         if (b.hatch <= 0) { b.hatch = 0; hatchBlown(b); }
@@ -194,10 +196,11 @@ void Sim::bunkerNuked(Entity& b, float k, int attackerOwner) {
 // The bunker mends itself without any upgrade, fast once it is left alone and a little even under fire (the army's Repair Crews only make it
 // faster). A blown hatch is refitted after BUNKER_HATCH_REFIT seconds of quiet. It goes on while a pulse has knocked the bunker offline.
 void Sim::bunkerMend(Entity& b) {
-    const bool calm = time - b.lastDamaged >= BUNKER_REGEN_DELAY;
+    const bool hell = hellBunker(b.type);
+    const bool calm = time - b.lastDamaged >= (hell ? HELL_REGEN_DELAY : BUNKER_REGEN_DELAY);
     const float up = hasUpgrade(b.owner, UPG_REPAIR) ? BUNKER_REGEN_UPG : 1.0f, k = (calm ? 1.0f : BUNKER_HATCH_HOT) * up;
     if (b.hp < b.maxHp) {
-        b.hp = std::min(b.maxHp, b.hp + (calm ? b.maxHp * BUNKER_REGEN : BUNKER_REGEN_HOT) * up * SIM_DT);
+        b.hp = std::min(b.maxHp, b.hp + (calm ? b.maxHp * (hell ? HELL_REGEN : BUNKER_REGEN) : (hell ? 0.0f : BUNKER_REGEN_HOT)) * up * SIM_DT);
         if ((tick + b.gen) % 24 == 0) fx.push_back({FX_SPARK, b.pos + Vec2(rng.f(-34, 34), rng.f(-30, 30)), Vec2(), 0, 0.35f, players[b.owner].faction == F_CYBER ? rgb(120, 236, 255) : rgb(255, 214, 120), 3});
     }
     if (b.hatchMax > 0 && b.hatch < b.hatchMax) {

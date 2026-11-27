@@ -116,7 +116,7 @@ bool Sim::cmdHeliCall(int player, Vec2 pos) {
 // ------------------------------------------------------------ bunker garrison and drop escorts
 // A bunker is finished with its own garrison already in the shaft: snipers (each multiplies an infiltrator's work, see captureTime) and riflemen.
 void Sim::bunkerStartGarrison(Entity& b) {
-    if (b.owner < 0 || b.owner >= numPlayers || !b.isBuilding() || b.bt().role != BR_BUNKER) return;
+    if (b.owner < 0 || b.owner >= numPlayers || !b.isBuilding() || b.bt().role != BR_BUNKER || hellBunker(b.type)) return;   // a Bunker from Hell gets its own, larger garrison (sim_hell.cpp)
     const bool cyber = players[b.owner].faction == F_CYBER;
     const Ref bunker = refOf(b);
     for (int k = 0; k < BUNKER_START_SNIPERS + BUNKER_START_RIFLES; k++) {

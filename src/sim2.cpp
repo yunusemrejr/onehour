@@ -395,7 +395,7 @@ void Sim::updateAntiNuke(Entity& b) {
     bool cy = isAntiRocketWall(b) || b.bt().faction == F_CYBER;
     const int self = (int)(&b - &ents[0]);
     for (auto& n : nukes) {
-        if (n.broken || n.killT >= 0 || !nukeHurts(n, b.owner) || dist(n.pos, b.pos) > antiNukeCover(b, n.scale)) continue;
+        if (n.uninterceptable || n.broken || n.killT >= 0 || !nukeHurts(n, b.owner) || dist(n.pos, b.pos) > antiNukeCover(b, n.scale)) continue;
         if ((n.deep || n.super) && !cy) continue;     // an Underground Nuke's or a Super Nuke's warhead outruns interceptor missiles: only the lasers can burn it down
         if (time < b.siloTimer) break;   // (a laser that just fired at one warhead is still recharging)
         float left = flightOf(n) - n.t;

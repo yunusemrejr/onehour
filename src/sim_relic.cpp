@@ -175,6 +175,7 @@ bool Sim::armyBeaten(int p) const {
         if (e.isBuilding()) { if (e.district >= 0 || invulnerable(e) || prizeType(e.type)) continue; return false; }   // (a prize landmark it holds is no base: it cannot build or repair anything)
         const UnitType& ut = e.ut();
         if (ut.temp || civicDozerType(e.type)) continue;
+        if (ghostType(e.type)) continue;   // (the Ghosts alone are no army either: they cannot build, and a pair left behind does not hold a match)
         if (subType(e.type)) continue;   // (a submarine alone does not keep an army in the fight: see above)
         if (ut.role == UR_DOZER || chosenType(e.type)) return false;
         if (ut.naval && e.type != U_C_PATROL && e.type != U_K_PATROL) return false;
