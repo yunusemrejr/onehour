@@ -48,8 +48,9 @@ enum StealthClass { ST_NONE = 0, ST_SPOTTER = 1,    // snipers: only a spy drone
                     ST_CHOSEN = 4,                   // The Chosen and its Shadow Guard: only helicopters (gunships and lifters, see helicopterType and
                                                      // CHOSEN_DETECT) and snipers (their scope, DET_CHOSEN in detectMask) find them - not drones, planes,
                                                      // turrets, bunkers or scans - firing or not
-                    ST_PHANTOM = 5 };                // The Phantom Jeep: only aircraft (every UK_AIR unit, see PHANTOM_DETECT) and snipers (DET_PHANTOM in detectMask) find it
-static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4, DET_CHOSEN = 8, DET_PHANTOM = 16;
+                    ST_PHANTOM = 5,                 // The Phantom Jeep: aircraft and snipers find it
+                    ST_GHOST = 6 };                  // The Ghosts: Ghost2 sightings only
+static const int DET_SPOTTER = 1, DET_DRONE = 2, DET_INFIL = 4, DET_CHOSEN = 8, DET_PHANTOM = 16, DET_GHOST = 32;
 static const float INFIL_DETECT = 5.0f;   // tiles: how close an ordinary infiltrator-spotter (infantry, jeep, aircraft) has to be to find one
 // Infiltrators swim: one sent somewhere it cannot walk to (an island launcher out in the lake, the far bank of a river with no crossing near)
 // paddles across on a small inflatable raft. Land is preferred: a water tile costs SWIM_COST in the route search, and the raft is slow.
@@ -88,8 +89,15 @@ enum UnitTypeId {
     U_C_BATTLESHIP, U_K_BATTLESHIP, // battleships (Naval Yard + tech structure): three heavy gun turrets, vertical-launch cruise missiles and a drone swarm (BATTLESHIP_*)
     U_R_JUGGERNAUT, U_R_STRIDER, U_R_THUNDERHAWK,   // the relic army's war machines: built only at relic factories an army captured or raised (UnitType.relic)
     U_C_PHANTOM, U_K_PHANTOM,       // the Phantom Jeep: one per army at a time (factory + tech structure), hand-driven, seen only by aircraft and snipers (see PHANTOM_*)
+    U_C_GHOSTSUB, U_K_GHOSTSUB, U_C_GHOSTJET, U_K_GHOSTJET, U_C_GHOST2, U_K_GHOST2,
     U_COUNT
 };
+
+inline bool ghostSubType(int t) { return t == U_C_GHOSTSUB || t == U_K_GHOSTSUB; }
+inline bool ghostJetType(int t) { return t == U_C_GHOSTJET || t == U_K_GHOSTJET; }
+inline bool ghostType(int t) { return ghostSubType(t) || ghostJetType(t); }
+inline bool ghost2Type(int t) { return t == U_C_GHOST2 || t == U_K_GHOST2; }
+static constexpr float GHOST_DETECT = 9.0f, GHOST_SIGHT_TIME = 10.0f, GHOST_FIRST_STRIKE = 120.0f, GHOST_STRIKE_COOLDOWN = 900.0f;
 
 enum BuildRole { BR_HQ = 0, BR_POWER, BR_SUPPLY, BR_BARRACKS, BR_FACTORY, BR_AIRFIELD, BR_TECH, BR_TURRET, BR_AATURRET, BR_INCOME, BR_NUKE, BR_BUNKER,
                  BR_NAVAL,       // Naval Yard: on the shore of the lake, builds the ships

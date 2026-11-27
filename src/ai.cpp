@@ -692,6 +692,7 @@ float AiPlayer::enemyStrengthNear(Vec2 p, float radiusTiles) {
     float v = 0;
     const float R = radiusTiles * TILE, R2 = R * R;
     forNear(p, R, [&](Entity& e) {
+        if (!g_sim.visibleTo(e, player)) return;
         if (e.kind == EK_RESOURCE || !g_sim.enemies(player, e.owner) || dist2(e.pos, p) > R2) return;
         float hpf = e.hp / e.maxHp;
         if (e.isUnit()) { if (e.ut().role == UR_COMBAT) v += UNITS[e.type].cost * hpf; }
@@ -1117,6 +1118,7 @@ void AiPlayer::think() {
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
             else if (chosenType(e.type) && on2(F2_CHOSEN)) chosen = S.refOf(e);
             else if (shadowType(e.type) && on2(F2_CHOSEN)) shadowNow.push_back(S.refOf(e));
+            else if (ghostType(e.type)) {}   // (the Ghosts keep to themselves: neither army, fleet nor air force)
             else if (phantomType(e.type)) { if (on2(F2_PHANTOM)) phantomRef = S.refOf(e); }   // (never in the army, a wave, a group or a defence: ai_phantom.cpp drives it)
             else if (S.time < feintUntil && std::find(feint.begin(), feint.end(), S.refOf(e)) != feint.end()) {}   // (a feint is on its own errand for a while)
             else if (expanding && xGuard(e)) {}   // (an expansion's guards stay at it: no wave, no reserve)
@@ -1861,7 +1863,7 @@ void AiPlayer::think() {
         for (auto& e : S.ents) {
             if (!e.alive || !e.isBuilding() || !S.enemies(player, e.owner) || !(S.explored(player, clampi(tileOf(e.pos.x), 0, MAP_W - 1), clampi(tileOf(e.pos.y), 0, MAP_H - 1)) && S.visibleTo(e, player))) continue;
             float score = 0;
-            for (auto& o : S.ents) if (o.alive && S.enemies(player, o.owner) && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 0.8f) score += o.isUnit() ? UNITS[o.type].cost : BUILDS[o.type].cost * 0.6f;
+            for (auto& o : S.ents) if (o.alive && S.enemies(player, o.owner) && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 0.8f && S.visibleTo(o, player)) score += o.isUnit() ? UNITS[o.type].cost : BUILDS[o.type].cost * 0.6f;
             for (auto& o : S.ents) if (o.alive && o.owner == player && o.kind != EK_RESOURCE && dist(e.pos, o.pos) < NUKE_RADIUS * TILE * 1.1f) score -= 4000;   // never nuke our own people
             if (score > bestScore) { bestScore = score; bestPos = e.pos; }
         }
@@ -1970,6 +1972,7 @@ void AiPlayer::think() {
             if (!S.visibleTo(*e, player)) continue;
             float score = 0;
             forNear(e->pos, R, [&](Entity& o) {   // (the grid round the spot, not the whole map for every enemy unit)
+                if (!S.visibleTo(o, player)) return;
                 if (o.kind == EK_RESOURCE || !S.enemies(player, o.owner) || o.isAir()) return;
                 if (o.isBuilding() && (BUILDS[o.type].role == BR_BUNKER || BUILDS[o.type].role == BR_UNUKE)) return;   // aircraft can never take a bunker (or a silo) below its floor: not a strike target
                 if (dist2(e->pos, o.pos) > R * R) return;

@@ -196,7 +196,7 @@ void Sim::surrender(int p) {
         for (size_t i = 0; i < ents.size(); i++) {
             Entity& e = ents[i];
             if (!e.alive || e.owner != p || e.kind == EK_RESOURCE || e.isBuilding()) continue;   // (only a Bastion Wall or a town can be left: checkVictory hands them back to nobody)
-            fx.push_back({FX_RING, e.pos, e.pos, 0, 0.9f, rgb(250, 250, 250), 16.0f});
+            if (!ghostType(e.type)) fx.push_back({FX_RING, e.pos, e.pos, 0, 0.9f, rgb(250, 250, 250), 16.0f});
             destroy(e, false);
             left = true;
         }

@@ -69,6 +69,7 @@ struct Entity {
     Order resumeOrder = O_IDLE;   // what a unit that ducked out of a nuke's circle goes back to once the danger has passed
     Order resumePost = O_IDLE;
     Vec2 resumeTarget;
+    Ref partner;            // other half of a Ghosts pair
     Ref targetEnt;          // attack / harvest / build target
     Ref engaged;            // current auto-acquired enemy
     float dropTimer = 0;    // tech structure: sim time its next paradrop is ready (each Data Center / Arms Lab drops once per cooldown)
@@ -369,6 +370,15 @@ private:
     void igniteBlast(Vec2 at, float radiusTiles, float damage, bool ring = false);
 
 public:
+    // One state per owner. A sighting belongs to the first detecting team and never refreshes.
+    // All times are absolute sim seconds. `at` tracks the contact while the sighting is live.
+    struct GhostSighting { int team = -1; float until = 0; Vec2 at; };
+    struct GhostPair { Ref sub, jet; float strikeReadyAt = 0, cloakUntil = 0; GhostSighting sighting; };
+    GhostPair ghosts[MAX_PLAYERS] = {};
+    bool ghostsInProduction(int player) const;
+    const char* ghostTrainBlockReason(int player) const;  // nullptr when both buildings are ready and no pair exists
+    bool cmdGhostStrike(int player, Vec2 at);
+
     bool gameOver = false;
     int winnerTeam = -1;
     struct Storm { Vec2 pos; float radius; int owner; float t; int shellsLeft; float nextShell; bool force = false; };
@@ -377,11 +387,12 @@ public:
     // power: what is left of the warhead's effect (1 = whole; a warhead an anti-nuke defence shot down comes down in pieces with ANTINUKE_FALLOFF);
     // killT: flight time at which a defence's shot gets it (-1 = none), after which only its pieces fall on 'pos'; id ties the defences' shots to it
     struct Nuke { Vec2 from, pos; int owner; float t; bool force = false; float scale = 1.0f; float power = 1.0f; float killT = -1; bool broken = false; int id = 0; std::vector<int> engagedBy;
-                  bool deep = false; bool sub = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; };   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
+                  bool deep = false; bool sub = false; Ref source; bool super = false; bool swift = false; bool rain = false; bool hydra = false; float dmgMul = 1.0f; };   // hydra: one of a Hydra Silo's warheads (RELIC_SILO_*)   // swift: a bunker missile with BU_SWIFT (BUNKER_SWIFT_*: faster, harder to shoot down)   // force: the human chose to hit friendly ground too; scale: share of a full warhead's blast area (a bunker's missile is MINI_NUKE_SCALE);
                                           // deep: the silver warhead of an Underground Nuke (UNUKE_SCALE, UNUKE_DAMAGE, UNUKE_FALLOUT; only an Anti-Nuke Laser can stop it)
                                           // source: the Supersonic Bomber that dropped it; the one aircraft its own compact bomb does not bring down (see nukeBlast)
                                           // super: an island launcher's Super Nuke (ISLAND_NUKE_*: twice an Underground Nuke's radius, ISLAND_NUKE_FLIGHT, only lasers and barely)
     static float nukeRadius(const Nuke& n) { return NUKE_RADIUS * TILE * std::sqrt(n.scale); }   // px
+    static float nukeDamageFactor(const Nuke& n) { return (n.super ? ISLAND_NUKE_DAMAGE : (n.sub ? SUB_NUKE_DAMAGE : (n.deep ? UNUKE_DAMAGE : 1.0f))) * n.dmgMul; }
     std::vector<Nuke> nukes;
     bool anyBunkerLasers = false;   // a bunker's laser battery was fitted this match: only then is every rocket and shell checked against them (bunkerLaserIntercept)
     static constexpr float NUKE_FLIGHT = 7.0f;
@@ -471,7 +482,7 @@ public:
     void updateRelic(Entity& b);               // a relic structure an army holds: the Command's stipend, the silo's clock
     void updateDiscovery();                    // who has found the secret islands' structures (from their own sight, never a scan)
     // ---- submarines, battleships, drone swarms (sim_navy.cpp)
-    static bool submerged(const Entity& e) { return e.isUnit() && e.subState == 2 && subType(e.type); }
+    static bool submerged(const Entity& e) { return e.isUnit() && e.subState == 2 && (subType(e.type) || ghostSubType(e.type)); }
     bool sonarContact(const Entity& sub, int player) const;     // a computer army's dived submarine that this human player's sonar has found (SONAR_*, updateDetection)
     bool hiddenSub(const Entity& t, int attackerOwner) const;   // dived, and not a sonar contact of the attacker's army: nothing reaches it (the attacker's owner, -1 for none)
     void cmdDive(const std::vector<Ref>& sel, bool dive);   // submarines dive out of sight (or come up again)
@@ -838,6 +849,13 @@ private:
     void updatePower();
     void updateVision();
     void updateUnit(Entity& e);
+    void spawnGhostPair(int owner, int subTypeId, Vec2 airfield);
+    bool ghostSightedBy(const Entity& e, int player) const;
+    Entity* ghostOrderLeader(Entity* e);
+    void moveGhostSub(Entity& e, Vec2 dest, bool attackMove);
+    void huntGhost2(Entity& e);
+    void updateGhosts();
+    void detectGhosts();
     void updateBuilding(Entity& e);
     void updateProjectiles();
     void updateFx();

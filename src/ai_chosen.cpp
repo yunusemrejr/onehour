@@ -129,7 +129,7 @@ void AiPlayer::shadowOps(Ref chosen, Entity* threat, float threatValue, const st
     if (c && S.shadowWait(player) == 0.0f && !c->carrier.valid()) {
         bool hot = false;
         if (Entity* g = S.get(chosenGoal)) hot = dist(c->pos, g->pos) < 14.0f * TILE;
-        if (!hot) S.forEachNearMask(c->pos, 9.0f * TILE, S.enemyMask(player), [&](Entity& e) { if (e.isUnit() && e.ut().role == UR_COMBAT && S.enemies(player, e.owner)) hot = true; });
+        if (!hot) S.forEachNearMask(c->pos, 9.0f * TILE, S.enemyMask(player), [&](Entity& e) { if (e.isUnit() && e.ut().role == UR_COMBAT && S.enemies(player, e.owner) && S.visibleTo(e, player)) hot = true; });
         if (threat && dist(c->pos, threat->pos) < 14.0f * TILE) hot = true;
         if (hot || S.time - pl.shadowReady > 45.0f) {
             if (S.cmdShadowCall(player, chosen) && aiDebugCh()) fprintf(stderr, "[ai%d t=%.0f] the Chosen calls its Shadow Guard\n", player, S.time);

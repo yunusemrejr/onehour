@@ -36,6 +36,7 @@ void Game::drawSonar() {
             sonarHpBar(g, p.x - 18, p.y - e.radius() - 7, 36, e.hp / e.maxHp);
             continue;
         }
+        if (ghostSubType(e.type)) continue;   // (a Ghost sub is never a sonar contact: only a Ghost2 sighting shows it, and the world pass draws it then)
         // no contact: a dived boat that moves over sea the human sees gives its position away now and then, as a faint feather of surface water
         if (!inSightAny || (e.pos - e.prevPos).len2() <= 0.01f) continue;   // (moving, and on a tile the human sees right now: not merely explored)
         const int tx = clampi(tileOf(e.pos.x), 0, MAP_W - 1), ty = clampi(tileOf(e.pos.y), 0, MAP_H - 1);

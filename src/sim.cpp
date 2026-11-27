@@ -18,6 +18,7 @@ void Sim::init(int nPlayers, const Faction* factions, const bool* isAI, const in
     time = 0; tick = 0; gameOver = false; winnerTeam = -1;
     rng = Rng(seed);
     resetFire(seed);
+    for (auto& pair : ghosts) pair = {};
     g_map.generate();
     numPlayers = clampi(nPlayers, 1, MAX_ARMIES);
     // Assign start spots: human gets a random corner, enemies spread to the others
@@ -72,6 +73,7 @@ Ref Sim::spawnUnit(int type, int owner, Vec2 pos) {
     e.hp = e.maxHp = t.hp;
     e.ammo = t.ammo;
     if (phantomType(type)) e.tntLeft = PHANTOM_TNT_MAX;
+    if (ghostSubType(type)) e.subState = 2;
     e.guardPos = e.pos;
     if (t.role == UR_SCOUT) e.autoHoldUntil = time + 18.0f;   // wait briefly at spawn for player orders before autonomous swarm search (spawnFromQueue sets 2.5s)
     e.angle = rng.f(0, 6.28f);
@@ -336,7 +338,9 @@ bool Sim::hasRole(int player, BuildRole role) const {
     return false;
 }
 bool Sim::unitAvailable(int player, int unitType) const {
+    if (player < 0 || player >= numPlayers || unitType < 0 || unitType >= U_COUNT) return false;
     const UnitType& t = UNITS[unitType];
+    if (ghostType(unitType)) return ghostSubType(unitType) && t.faction == players[player].faction && !ghostTrainBlockReason(player);
     if (t.relic) return !t.temp && prereqMet(player, t.requires_);   // a relic war machine: any army that holds the relic factory that builds it
     if (t.faction != players[player].faction) return false;
     if (subType(unitType) && subsOf(player) >= SUB_MAX) return false;   // (no more than SUB_MAX submarines, the ones in the yards' queues included)
@@ -502,7 +506,17 @@ static void navalFormation(const std::vector<Entity*>& ships, Vec2 dest, std::ve
 
 void Sim::cmdMove(const std::vector<Ref>& sel, Vec2 dest, bool attackMove) {
     std::vector<Entity*> ground, air;
-    for (auto r : sel) { Entity* e = get(r); if (e && e->isUnit() && !e->carrier.valid() && !e->ut().temp) (e->isAir() ? air : ground).push_back(e); }   // (a Hotline Strike fighter takes no orders)
+    Ref ghostOrders[MAX_PLAYERS];
+    for (auto r : sel) {
+        Entity* e = ghostOrderLeader(get(r));
+        if (!e || !e->isUnit() || e->carrier.valid() || e->ut().temp) continue;
+        if (ghostSubType(e->type)) {
+            if (e->owner >= 0 && e->owner < numPlayers && ghostOrders[e->owner] != refOf(*e)) {
+                ghostOrders[e->owner] = refOf(*e);
+                moveGhostSub(*e, dest, attackMove);
+            }
+        } else (e->isAir() ? air : ground).push_back(e);
+    }
     std::vector<Vec2> offs;
     {   // land units in a block; ships of the order in their own squadron formation
         std::vector<Entity*> land, ships;
@@ -611,7 +625,8 @@ void Sim::cmdAttack(const std::vector<Ref>& sel, Ref target, bool force) {
     Entity* t = get(target);
     if (!t) return;
     for (auto r : sel) {
-        Entity* e = get(r);
+        Entity* e = ghostOrderLeader(get(r));   // (an order to a Ghost jet is an order to its submarine: a land target becomes a move to the nearest reachable water)
+        if (e) r = refOf(*e);
         if (!e || e == t || e->carrier.valid() || (e->isUnit() && e->ut().temp)) continue;
         if (!force && relicClaimable(*e, *t)) { cmdCapture({r}, target); continue; }   // infantry sent at a relic structure nobody holds walk in and claim it
         if (e->isUnit() && e->ut().role == UR_SPY) {   // a spy takes an enemy structure; against anything else it just walks over
@@ -671,7 +686,7 @@ bool Sim::cmdPlant(const std::vector<Ref>& units, Ref site) {
 
 void Sim::cmdStop(const std::vector<Ref>& sel) {
     for (auto r : sel) {
-        Entity* e = get(r);
+        Entity* e = ghostOrderLeader(get(r));
         if (!e || !e->isUnit() || e->carrier.valid() || e->ut().temp) continue;
         e->zoneR = 0; e->leashed = false; takeOrder(*e); e->forceTarget = NOREF; e->loiterUntil = -1;
         if (e->ut().role == UR_DOZER) { e->siteQueue.clear(); e->autoHoldUntil = time + DOZER_MANUAL_HOLD; }   // stop means stop: the kept sites are dropped too
@@ -840,8 +855,11 @@ void Sim::cmdAssist(const std::vector<Ref>& sel, Ref building) {
 
 bool Sim::cmdTrain(Ref building, int unitType) {
     Entity* b = get(building);
-    if (!b || !b->isBuilding() || !b->constructed || b->owner < 0) return false;
+    if (!b || !b->isBuilding() || !b->constructed || b->owner < 0 || unitType < 0 || unitType >= U_COUNT) return false;
     const UnitType& t = UNITS[unitType];
+    if (ghostSubType(unitType) && t.builtBy == b->bt().role) {
+        if (const char* why = ghostTrainBlockReason(b->owner)) { emit(EV_MSG, b->owner, SND_CANT, b->pos, why); return false; }
+    }
     if (subType(unitType) && subsOf(b->owner) >= SUB_MAX) { emit(EV_MSG, b->owner, SND_CANT, b->pos, "No more than 20 submarines"); return false; }
     if (t.builtBy != b->bt().role || !unitAvailable(b->owner, unitType)) return false;
     if (b->queue.size() >= 9) return false;
@@ -891,7 +909,7 @@ bool Sim::cmdPower(int player, Vec2 pos, bool force) {
     if (pl.faction == F_CYBER) {
         forEachNear(pos, pw.radius * TILE, [&](Entity& e) {
             if (e.kind == EK_RESOURCE || !(enemies(player, e.owner) || (force && e.owner >= 0))) return;
-            if (e.isUnit() && e.ut().kind == UK_INF) return;
+            if (e.isUnit() && (e.ut().kind == UK_INF || (ghostType(e.type) && !ghostSightedBy(e, player)))) return;   // (an unsighted Ghost is out of reach of everything)
             e.disabledUntil = time + EMP_DURATION;
             if (e.isAir()) { e.hp = 0; applyDamage(e, 1, player, NOREF, nullptr); }
         });
@@ -1421,7 +1439,7 @@ int Sim::aidCandidates(int sender, Vec2 at, int* out) const {
     float best[MAX_PLAYERS];
     for (int p = 0; p < MAX_PLAYERS; p++) best[p] = -1;
     for (auto& e : ents) {
-        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || e.owner >= numPlayers || e.owner == sender || !players[e.owner].alive || e.district >= 0) continue;   // (a town it holds is not the army)
+        if (!e.alive || e.kind == EK_RESOURCE || e.owner < 0 || e.owner >= numPlayers || e.owner == sender || !players[e.owner].alive || e.district >= 0 || !visibleTo(e, sender)) continue;   // (a town it holds is not the army)
         float d = distToEntity(at, e);
         if (best[e.owner] < 0 || d < best[e.owner]) best[e.owner] = d;
     }
@@ -1535,14 +1553,14 @@ void Sim::updateNukes() {
 void Sim::nukeBlast(const Nuke& n) {
     float R = nukeRadius(n);
     const float P = n.power;   // 1 for a whole warhead; ANTINUKE_FALLOFF for the pieces of one an anti-nuke defence shot down
-    const float D = n.super ? ISLAND_NUKE_DAMAGE : (n.sub ? SUB_NUKE_DAMAGE : (n.deep ? UNUKE_DAMAGE : 1.0f));   // an Underground Nuke hits three times as hard (and three times as wide: see nukeRadius); a Super Nuke harder still
+    const float D = nukeDamageFactor(n);
     igniteBlast(n.pos, R / TILE, 450.0f * P * D, true);
     const bool heavy = n.deep || n.super;   // (the two big warheads flatten large structures in their inner blast and throw things further)
     std::vector<Ref> hit;
     forEachNear(n.pos, R + 80, [&](Entity& e) { if (e.kind != EK_RESOURCE) hit.push_back(refOf(e)); });
     for (auto r : hit) {
         Entity* e = get(r); if (!e) continue;
-        if (hiddenSub(*e, n.owner)) continue;   // (a dived submarine rides it out deep under the surface, unless a sonar has it)
+        if (hiddenSub(*e, n.owner) || (e->isUnit() && ghostJetType(e->type) && !ghostSightedBy(*e, n.owner))) continue;
         float d = std::max(0.0f, dist(e->pos, n.pos) - e->radius() * 0.5f);
         if (bridgeEnt(*e)) {   // a bridge anywhere in the blast: the span is thrown down
             float bd = std::max(0.0f, distToEntity(n.pos, *e));
@@ -1978,6 +1996,7 @@ void Sim::moveAlong(Entity& e, float speed) {
 // ------------------------------------------------------------ combat
 bool Sim::canTarget(const Entity& e, const Entity& t, int wpn) const {
     if (!t.alive || t.kind == EK_RESOURCE) return false;
+    if (t.isUnit() && ghostType(t.type) && !ghostSightedBy(t, e.owner)) return false;
     if (t.fall > 0) return false;   // still under the parachute
     if (t.fade < 0.5f && t.isUnit() && t.ut().naval) return false;   // a called ship still mostly haze at the map border
     // an island launcher or a Bastion Wall: shooting it does nothing but set it burning (only a spy takes it), so only a player's own order aims at it
@@ -2288,7 +2307,7 @@ void Sim::finishUnitExperience(Entity& e) {
 
 void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, const Weapon* w, float cap, bool nuke) {
     if (!tgt.alive || tgt.kind == EK_RESOURCE || tgt.fall > 0 || tgt.carrier.valid()) return;
-    if (hiddenSub(tgt, attackerOwner)) return;   // a dived submarine: nothing reaches it (a sonar contact of the attacker's army can be hit)
+    if (hiddenSub(tgt, attackerOwner) || (tgt.isUnit() && ghostJetType(tgt.type) && !ghostSightedBy(tgt, attackerOwner))) return;
     if (bridgeEnt(tgt) && !tgt.constructed) return;   // (a broken bridge is a wreck in the water until a dozer raises it)
     if (w && tgt.isUnit() && tgt.ut().evade > 0 && rng.f() < tgt.ut().evade) {   // a Hotline Strike fighter: most of what is thrown at it misses (a flash of flares)
         if (tick % 3 == 0) { fx.push_back({FX_SPARK, tgt.pos, tgt.pos, 0, 0.3f, rgb(255, 236, 190), 5}); fx.push_back({FX_RING, tgt.pos, tgt.pos, 0, 0.25f, rgb(255, 255, 255), 16.0f}); }
@@ -2319,7 +2338,8 @@ void Sim::applyDamage(Entity& tgt, float dmg, int attackerOwner, Ref attacker, c
         tgt.dmgLoad += real;
         if (cap > 0) real = std::min(real, cap);   // a warhead's hard ceiling (absolute HP), applied after every multiplier
     }
-    if (tgt.isUnit() && subType(tgt.type) && !nuke) real *= SUB_ARMOR;   // a submarine's pressure hull
+    if (tgt.isUnit() && (subType(tgt.type) || ghostSubType(tgt.type)) && !nuke) real *= SUB_ARMOR;
+    if (tgt.isUnit() && ghostJetType(tgt.type)) real *= 0.3f;
     if (attackerOwner >= 0 && enemies(attackerOwner, tgt.owner) && !hardNuke) real *= players[attackerOwner].damageMul();
     const Entity* attU = get(attacker);
     if (attU && attU->isUnit() && attU->rank > 0) real *= 1.0f + 0.2f * attU->rank;   // veterans and elites hit harder
@@ -3154,6 +3174,7 @@ bool Sim::autonomy(Entity& e) {
 
 // ------------------------------------------------------------ unit update
 void Sim::updateUnit(Entity& e) {
+    if (ghostJetType(e.type)) return;  // the sub sets its position after movement
     const UnitType& ut = e.ut();
     if (ut.naval && e.fade < 1.0f) e.fade = std::min(1.0f, e.fade + SIM_DT / FLEET_FADE);   // a Fleet Call ship coming out of the sea haze at the border
     if (e.fall > 0) {   // parachute descent: glide from the plane to the landing spot, easing out as the canopy flares
@@ -3177,7 +3198,8 @@ void Sim::updateUnit(Entity& e) {
     if (subType(e.type)) updateSub(e);   // (dives and surfacings go on even while the pulse of a nuke has it stunned)
     if (climber(e)) updatePhantom(e);   // (it mends and recharges even stunned)
     if (e.disabledUntil > time) return;
-    if (ut.naval && !subType(e.type)) updateWarship(e);   // the battleships' cruise-missile cells, every warship's drone swarm
+    if (ghost2Type(e.type) && e.order == O_IDLE && time >= e.autoHoldUntil) huntGhost2(e);   // (a player's order wins; it hunts again once idle)
+    if (ut.naval && !subType(e.type) && !ghostSubType(e.type)) updateWarship(e);
     if (e.repathTimer > 0) e.repathTimer -= SIM_DT;
     if (ut.cargoCap > 0 && ut.kind == UK_VEH) updateJeep(e);   // the crew of a jeep mends, climbs out and fires from the seats
 
@@ -3382,7 +3404,7 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
             if ((tick + e.gen) % 20 == 0) dozerFindWork(e);
             break;
         }
-        if (ut.role == UR_SCOUT) {    // ghost/recon drones wait briefly when spawned or called, then autonomously hunt hidden enemies as a coordinated swarm
+        if (ut.role == UR_SCOUT && !ghost2Type(e.type)) {    // ghost/recon drones wait briefly when spawned or called, then autonomously hunt hidden enemies as a coordinated swarm
             updateScoutSwarm(e);
             break;
         }
@@ -3500,9 +3522,9 @@ void Sim::runOrder(Entity& e, const UnitType& ut) {
     case O_MOVE: case O_ATTACKMOVE: {
         if (ut.role == UR_DOZER && !e.autoTask) e.autoHoldUntil = std::max(e.autoHoldUntil, time + DOZER_MANUAL_HOLD);   // the hold runs from its arrival
         if (ut.role == UR_SCOUT && !e.autoTask) e.autoHoldUntil = std::max(e.autoHoldUntil, time + SCOUT_MANUAL_HOLD);
-        if (ut.role == UR_SCOUT && e.autoTask && (tick + e.gen) % 6 == 0) {
+        if (ut.role == UR_SCOUT && !ghost2Type(e.type) && e.autoTask && (tick + e.gen) % 6 == 0) {
             bool found = false;
-            forEachNear(e.pos, (ut.detect - 1.5f) * TILE, [&](Entity& t) { if (stealthOf(t) && enemies(e.owner, t.owner) && !t.carrier.valid()) found = true; });
+            forEachNear(e.pos, (ut.detect - 1.5f) * TILE, [&](Entity& t) { if (stealthOf(t) && !ghostType(t.type) && enemies(e.owner, t.owner) && !t.carrier.valid()) found = true; });
             if (found) { e.order = O_IDLE; e.autoTask = false; updateScoutSwarm(e); break; }
         }
         if (e.isAir()) {
@@ -3916,6 +3938,7 @@ void Sim::spawnFromQueue(Entity& b) {
     int type = b.queue.front();
     b.queue.erase(b.queue.begin());
     b.queueProgress = 0;
+    if (ghostSubType(type)) { spawnGhostPair(b.owner, type, b.pos); return; }
     const UnitType& ut = UNITS[type];
     Vec2 at = ut.kind == UK_AIR ? b.pos : (ut.naval ? navalExit(b) : unitExit(b));
     Ref bref = refOf(b);
@@ -4031,6 +4054,7 @@ bool Sim::sonarContact(const Entity& sub, int player) const {
 }
 
 bool Sim::hiddenSub(const Entity& t, int attackerOwner) const {
+    if (t.isUnit() && ghostSubType(t.type)) return !ghostSightedBy(t, attackerOwner);
     return submerged(t) && !(attackerOwner >= 0 && sonarContact(t, attackerOwner));
 }
 
@@ -4044,6 +4068,7 @@ bool Sim::visibleTo(const Entity& e, int player) const {
         if (e.subState == 2) return sonarContact(e, player);   // (dived: only a human's sonar finds a computer army's boat, see updateDetection)
         return e.detUntil[player] > time;
     }
+    if (e.isUnit() && ghostType(e.type)) return e.owner == player || (e.owner >= 0 && !enemies(e.owner, player)) || ghostSightedBy(e, player);
     if (!stealthOf(e)) return true;
     if (e.owner < 0 || e.owner == player || players[e.owner].team == players[player].team) return true;
     return e.detUntil[player] > time;
@@ -4053,10 +4078,11 @@ bool Sim::visibleTo(const Entity& e, int player) const {
 static const float TURRET_INFIL_DETECT = 7.0f;
 
 void Sim::updateDetection() {
+    detectGhosts();
     auto sweep = [&](const Entity& d, Vec2 at, float range, int mask, bool sensor) {
         forEachNearMask(at, range * TILE, enemyMask(d.owner), [&](Entity& t) {
             int cls = stealthOf(t);
-            if (!cls || !(mask & (1 << (cls - 1))) || !enemies(d.owner, t.owner) || (sensor && (!t.isUnit() || dist(t.pos, at) > range * TILE))) return;   // (a sensor finds soldiers, not another bunker)
+            if (!cls || cls == ST_GHOST || !(mask & (1 << (cls - 1))) || !enemies(d.owner, t.owner) || (sensor && (!t.isUnit() || dist(t.pos, at) > range * TILE))) return;   // (a sensor finds soldiers, not another bunker)
             float linger = cls == ST_DRONE ? 1.5f : (cls == ST_INFIL ? 2.0f : (cls == ST_CHOSEN ? CHOSEN_LINGER : (cls == ST_PHANTOM ? PHANTOM_LINGER : 3.0f)));   // a sniper, drone, infiltrator or Chosen is lost again once no detector is close
             for (int q = 0; q < numPlayers; q++)
                 if (q == d.owner || players[q].team == players[d.owner].team) t.detUntil[q] = std::max(t.detUntil[q], time + linger);
@@ -4104,7 +4130,7 @@ void Sim::updateDetection() {
         }
         if (d.carrier.valid() || d.fall > 0) continue;
         if (helicopterType(d.ut())) sweep(d, d.pos, CHOSEN_DETECT, DET_CHOSEN, false);   // a helicopter finds The Chosen and its Shadow Guard...
-        if (d.ut().kind == UK_AIR && (tick / 2 + d.gen) % 3 == 0) sweep(d, d.pos, PHANTOM_DETECT, DET_PHANTOM, false);   // ... and any aircraft a Phantom Jeep close below (the 2.5 s it stays found outlasts the gap between sweeps)
+        if (d.ut().kind == UK_AIR && !ghostJetType(d.type) && (tick / 2 + d.gen) % 3 == 0) sweep(d, d.pos, PHANTOM_DETECT, DET_PHANTOM, false);   // ... and any aircraft a Phantom Jeep close below (the 2.5 s it stays found outlasts the gap between sweeps)
         float range = d.ut().detect;
         if (range <= 0) continue;
         sweep(d, d.pos, range, d.ut().detectMask, false);   // ... and so does a sniper's scope (the only other detector with DET_CHOSEN)
@@ -4161,7 +4187,7 @@ void Sim::cmdEnter(const std::vector<Ref>& sel, Ref carrier) {
     if (!c) return;
     for (auto r : sel) {
         Entity* e = get(r);
-        if (!e || e == c || !canBoard(*e, *c)) continue;
+        if (!e || e == c || (e->isUnit() && ghostType(e->type)) || !canBoard(*e, *c)) continue;   // (a Ghost never boards anything)
         e->zoneR = 0; e->leashed = false; keepSite(*e); takeOrder(*e); e->forceTarget = NOREF;
         e->order = O_ENTER; e->postOrder = O_IDLE; e->targetEnt = carrier; e->engaged = NOREF; e->path.clear(); e->pathIdx = 0; e->repathTimer = 0; e->actionTimer = 0;
     }
@@ -4356,14 +4382,14 @@ void Sim::updateScoutSwarm(Entity& e) {
     // If already revealing a hidden enemy element right here and no other friendly scout is closer, hold/orbit to keep it pinned!
     Entity* pinned = nullptr; float pinDist = (ut.detect - 1.0f) * TILE;
     forEachNear(e.pos, pinDist, [&](Entity& t) {
-        if (!stealthOf(t) || !enemies(e.owner, t.owner) || t.carrier.valid()) return;
+        if (!stealthOf(t) || ghostType(t.type) || !enemies(e.owner, t.owner) || t.carrier.valid()) return;   // (a Ghost is only ever found by a sighting, never by a spy drone's sweep)
         float d = dist(e.pos, t.pos);
         if (d < pinDist) { pinDist = d; pinned = &t; }
     });
     if (pinned) {
         bool closerFriend = false;
         for (auto& o : ents) {
-            if (!o.alive || &o == &e || !o.isUnit() || o.owner != e.owner || o.ut().role != UR_SCOUT) continue;
+            if (!o.alive || &o == &e || !o.isUnit() || o.owner != e.owner || o.ut().role != UR_SCOUT || ghost2Type(o.type)) continue;
             if (dist(o.pos, pinned->pos) + 12.0f < dist(e.pos, pinned->pos)) { closerFriend = true; break; }
         }
         if (!closerFriend) {
@@ -4381,7 +4407,7 @@ void Sim::updateScoutSwarm(Entity& e) {
     std::vector<const Entity*> swarm;
     int myIdx = 0;
     for (auto& o : ents) {
-        if (!o.alive || !o.isUnit() || o.owner != e.owner || o.ut().role != UR_SCOUT || o.fall > 0) continue;
+        if (!o.alive || !o.isUnit() || o.owner != e.owner || o.ut().role != UR_SCOUT || ghost2Type(o.type) || o.fall > 0) continue;
         if (&o == &e) myIdx = (int)swarm.size();
         swarm.push_back(&o);
     }
@@ -4409,7 +4435,7 @@ void Sim::updateScoutSwarm(Entity& e) {
             const Entity* att = get(u.attacker);
             if (att && stealthOf(*att)) evalCandidate(att->pos, 260.0f);
             else evalCandidate(u.pos, 140.0f);
-        } else if (enemies(e.owner, u.owner) && stealthOf(u)) {
+        } else if (enemies(e.owner, u.owner) && stealthOf(u) && !ghostType(u.type)) {
             // Swarm intelligence: search around hidden enemy elements (snipers, stealth drones)
             // If already spotted recently, lock on; otherwise sweep suspect sectors around enemy presence
             bool known = visibleTo(u, e.owner);
@@ -4999,7 +5025,7 @@ void Sim::separateUnits() {
     used.clear(); keys.clear();
     for (int i = 0; i < (int)ents.size(); i++) {
         Entity& e = ents[i];
-        if (!e.alive || !e.isUnit() || e.fall > 0 || e.carrier.valid()) continue;
+        if (!e.alive || !e.isUnit() || e.fall > 0 || e.carrier.valid() || ghostJetType(e.type)) continue;
         e.pos.x = clampf(e.pos.x, 8, WORLD_W - 8); e.pos.y = clampf(e.pos.y, 8, WORLD_H - 8);   // (every unit stays inside the world every tick, whichever half is pushed)
         if (submerged(e)) continue;   // (a dived submarine passes under every hull)
         int cx = clampi((int)(e.pos.x / GRID_CELL), 0, GRID_W - 1), cy = clampi((int)(e.pos.y / GRID_CELL), 0, GRID_H - 1);
@@ -5035,7 +5061,7 @@ void Sim::separateUnits() {
     const int parity = (int)(tick & 1);
     for (int i = parity; i < (int)ents.size(); i += 2) {
         Entity& a = ents[i];
-        if (!a.alive || !a.isUnit() || a.fall > 0 || a.carrier.valid() || submerged(a)) continue;
+        if (!a.alive || !a.isUnit() || a.fall > 0 || a.carrier.valid() || submerged(a) || ghostJetType(a.type)) continue;
         const int si = slotOf[i];
         const u8 fa = sp[si].f;
         bool air = (fa & 2) != 0;
@@ -5166,6 +5192,7 @@ void Sim::step() {
     updateFallout();
     updateFire();
     separateUnits();
+    updateGhosts();
     updateFx();
     if (tick % 4 == 0) { updateVision(); updateSight(); }
     if (tick % 10 == 0) updatePower();

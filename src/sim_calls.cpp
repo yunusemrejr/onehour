@@ -168,7 +168,7 @@ void Sim::updateHunts() {
             const Entity& t = ents[i];
             if (!t.alive || t.kind == EK_RESOURCE || t.owner < 0 || !enemies(p, t.owner) || t.carrier.valid()) continue;
             if (invulnerable(t) || t.district >= 0 || (t.isBuilding() && prizeType(t.type))) continue;   // (what the defeat rule does not count as an army either)
-            if (phantomType(t.type) && !visibleTo(t, p)) continue;   // (a Phantom Jeep is found only by aircraft and snipers, never by a hunt's sight)
+            if ((phantomType(t.type) || ghostType(t.type)) && !visibleTo(t, p)) continue;   // (a Phantom Jeep is found only by aircraft and snipers, a Ghost only by a Ghost2 sighting: never by a hunt's sight)
             Prey q; q.idx = i; q.air = t.isAir(); q.naval = t.isUnit() && t.ut().naval;
             q.land = g_map.landNear(t.pos, 2);
             q.sea = q.naval ? g_map.compAt(t.pos) : g_map.compAt(g_map.nearestWater(t.pos, 6));
@@ -266,6 +266,7 @@ bool Sim::huntNukeSpot(int p, float R, Vec2& out) const {
                 if (t.isBuilding() || ++own > HUNT_NUKE_OWN) { spare = false; break; }
                 continue;
             }
+            if (t.isUnit() && !visibleTo(t, p)) continue;
             if (invulnerable(t) || t.district >= 0) continue;
             score += t.isBuilding() ? (t.bt().role == BR_HQ ? 12.0f : 3.0f) : 1.0f;
         }

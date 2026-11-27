@@ -72,6 +72,9 @@ static int unitLocal(int type) {
     if (chosenType(type)) return 33;                                    // The Chosen (art_chosen.cpp)
     if (shadowType(type)) return 34;                                    // its Shadow Guard (art_chosen.cpp)
     if (phantomType(type)) return 18;                                   // the Phantom Jeep: the jeep's art and scale when its 3D model is missing (ONEHOUR_OLDART)
+    if (ghostSubType(type)) return 35;                                  // the Ghost submarine: the attack submarine's art and scale
+    if (ghostJetType(type)) return 25;                                  // the Ghost jet: the plain fighter's art and scale
+    if (ghost2Type(type)) return 16;                                    // the Ghost2 drone: the Ghost Drone / Recon Drone (spy drone) art
     if (type >= U_C_SPY) return 15 + (type - U_C_SPY) / 2;
     return type >= U_C_SNIPER ? 13 : type >= U_C_MEDIC ? 12 : type - firstUnitOf(UNITS[type].faction);
 }

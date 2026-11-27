@@ -200,6 +200,12 @@ const UnitType UNITS[U_COUNT] = {
     // plants TNT on structures, drives over rock, trees, water and ordinary walls
     { "Phantom Jeep", "P", F_CYBER,   UK_VEH, UR_COMBAT, AR_HEAVY, 6000, 118, 7500, 45, 10, 13, W_PHANTOM_GUN, 0, BR_FACTORY, B_C_TECH, PHANTOM_DESC, 0, 0, 0, 0, 0, ST_PHANTOM, 10.0f, DET_SPOTTER | DET_INFIL | DET_CHOSEN, 0, 0, 0.0f, 0, 0, 0, 0.0f, 0 },
     { "Phantom Jeep", "P", F_CLANKER, UK_VEH, UR_COMBAT, AR_HEAVY, 6000, 118, 7500, 45, 10, 13, W_PHANTOM_GUN, 0, BR_FACTORY, B_K_TECH, PHANTOM_DESC, 0, 0, 0, 0, 0, ST_PHANTOM, 10.0f, DET_SPOTTER | DET_INFIL | DET_CHOSEN, 0, 0, 0.0f, 0, 0, 0, 0.0f, 0 },
+    { "Ghost Submarine", "-", F_CYBER, UK_VEH, UR_COMBAT, AR_HEAVY, 2600, 74, 15000, 60, 9, 20, -1, 0, BR_AIRFIELD, -1, "The Ghosts: a submerged submarine and high-altitude jet with a joint nuclear strike. Requires a finished Naval Yard.", 0, 0, 0, 0, 0, ST_GHOST, 0, 0, 0, 1 },
+    { "Ghost Submarine", "-", F_CLANKER, UK_VEH, UR_COMBAT, AR_HEAVY, 2600, 70, 15000, 60, 9, 20, -1, 0, BR_AIRFIELD, -1, "The Ghosts: a submerged submarine and high-altitude jet with a joint nuclear strike. Requires a finished Naval Yard.", 0, 0, 0, 0, 0, ST_GHOST, 0, 0, 0, 1 },
+    { "Ghost Jet", "-", F_CYBER, UK_AIR, UR_COMBAT, AR_AIR, 1800, 610, 0, 0, 9, 10, -1, 0, BR_NONE, -1, "High-altitude partner of the Ghost Submarine.", 0, 0, 0, 0, 0, ST_GHOST },
+    { "Ghost Jet", "-", F_CLANKER, UK_AIR, UR_COMBAT, AR_AIR, 1800, 590, 0, 0, 9, 10, -1, 0, BR_NONE, -1, "High-altitude partner of the Ghost Submarine.", 0, 0, 0, 0, 0, ST_GHOST },
+    { "Ghost2 Drone", "-", F_CYBER, UK_AIR, UR_SCOUT, AR_AIR, 190, 190, 900, 12, 9, 9, -1, 0, BR_AIRFIELD, -1, "Unarmed drone that patrols the sea for enemy Ghosts.", 0, 0, 0, 0, 0, ST_NONE, GHOST_DETECT, DET_GHOST },
+    { "Ghost2 Drone", "-", F_CLANKER, UK_AIR, UR_SCOUT, AR_AIR, 190, 190, 900, 12, 9, 9, -1, 0, BR_AIRFIELD, -1, "Unarmed drone that patrols the sea for enemy Ghosts.", 0, 0, 0, 0, 0, ST_NONE, GHOST_DETECT, DET_GHOST },
 };
 
 const BuildType BUILDS[B_COUNT] = {
