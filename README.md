@@ -25,9 +25,14 @@ under `third_party/`, so no `-dev` package is needed. Ubuntu 24.04+ works out of
   - **Burnt ground:** a burnt-out tile becomes open ground of ash and stumps that anything can cross, so a forest you burn is a new route into a base. Fire is part of the simulation, seeded with the match, so replays and tests stay exact.
   - **The look:** flames lick up through the canopy as it chars black, a hot glow sits at the foot, smoke and embers stream downwind, and the fire lights the forest round it at night.
   - **Limits:** at most 600 tiles burn at once, and the fire updates twice a second. An update with 600 burning tiles takes about 26 µs.
+- **Units and fire.** Ground next to a fire costs more to cross, so columns route round a blaze when there is a way round. Units on the move take a new route as soon as the flames reach them. Units fighting, building or harvesting next to a fire step out of it, then pick their work up again.
+- **Rain.** Rain is now part of the game's rules: dry spells, showers and storms take turns through the match, and the sky shows the same rain. Heavy rain puts a fire out within seconds and leaves the trees standing; a light shower only slows it. Wet trees hardly catch, and no one can set a forest alight in a downpour.
+- **Computer armies and fire** (Normal and up, `F2_FIRE`).
+  - **Firebreaks:** when the wind drives a fire within 8 tiles of one of its structures, a commander drops Waymakers on the trees in the fire's path, three a minute at most, so the blaze runs out of forest before it arrives.
+  - **The torch:** in a dry wind, two cheap infantry from home walk to the upwind edge of a forest that runs into enemy structures or troops within 70 tiles of their base, and set it alight. They only go where no armed enemy stands within 8 tiles of the spot.
 - **Speed.** On the software renderer the light buffer is drawn at a quarter of the screen's size and smoothed up, and it is skipped in full daylight. Side by side against the build before this update (same scene, same sky), the frame time is the same: 19.4 ms against 19.8 ms at night.
 - **Tests and tools.**
-  - `--firetest` checks that a bomb ignites trees, that wind carries the fire, that the same seed burns the same tiles, that ash opens a path, that fire damages infantry, that idle infantry walk out, and that the 600-tile limit holds.
+  - `--firetest` checks that a bomb ignites trees, that wind carries the fire, that the same seed burns the same tiles, that ash opens a path, that fire damages infantry, that idle infantry walk out, that a downpour puts a fire out, that routes go round a blaze, that a fighting unit steps out and keeps its target, who can set a tree alight, and that the 600-tile limit holds.
   - `ONEHOUR_FIRE=<ticks>` with `--shot` sets a forest alight and frames it.
   - `--selftest` prints how much forest burnt.
 

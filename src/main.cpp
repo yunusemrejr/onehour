@@ -187,7 +187,8 @@ static bool selfTest(int seconds, u64 seed, int players, int d0, bool swap) {
             printf("\n");
         }
     }
-    { int trees = 0; for (int i = 0; i < MAP_W * MAP_H; i++) trees += g_map.tiles[i] == T_TREE; printf("  wildfire: %d tree tiles burnt (%d left standing), %d ignitions, most burning at once %d\n", g_sim.fireBurnt, trees, g_sim.fireIgnitions, g_sim.firePeak); }
+    { int trees = 0; for (int i = 0; i < MAP_W * MAP_H; i++) trees += g_map.tiles[i] == T_TREE; int torches = 0, breaks = 0; for (int p = 0; p < g_sim.numPlayers; p++) { torches += g_ai.ais[p].torches; breaks += g_ai.ais[p].firebreaks; }
+      printf("  wildfire: %d tree tiles burnt (%d left standing), %d ignitions, most burning at once %d; %d put out by rain; commanders lit %d forests, dropped %d firebreak Waymakers\n", g_sim.fireBurnt, trees, g_sim.fireIgnitions, g_sim.firePeak, g_sim.fireDoused, torches, breaks); }
     return true;
 }
 

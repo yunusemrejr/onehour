@@ -99,8 +99,10 @@ enum AiFeat2 { F2_CHOSEN = 1,     // The Chosen (ai_chosen.cpp): trained once a 
                                   // partial wall across a choke) that squeeze the enemy into it, anti-air behind, Bastion Walls at the arms' ends, bunkers on the flanks
                F2_TRAP = 2097152,   // ambush wings (ai_trap.cpp, Normal and up): up to a third of the idle army hides in cover either side of the top lane and springs as a pincer
                                   // when the enemy walks in; Hard and Brutal also send out a few fast units as bait and pull them back through the gate
+               F2_FIRE = 4194304,   // forest fires (ai_fire.cpp, Normal and up): Waymaker firebreaks ahead of a fire the wind drives at the base, and
+                                  // two cheap infantry set alight a forest that runs downwind into the enemy
                F2_ALL = 7 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 | 4096,
-               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM | F2_WARY | F2_SPREAD | F2_FORTIFY | F2_TRAP };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
+               F2_DEFAULT = F2_CHOSEN | F2_HELIHUNT | F2_SHARP | F2_VARY | F2_RELIC | F2_SUBS | F2_GAMBIT | F2_COMMAND | F2_EXPAND | F2_SPLIT | F2_PUSH | F2_PHANTOM | F2_WARY | F2_SPREAD | F2_FORTIFY | F2_TRAP | F2_FIRE };   // (feints are not on: Hard 42-51 with them, 51-40 without, against a 50-42 baseline; no gain on Brutal)
                // (Nov 2026, Hard, 48 games each against the defaults: null control 21-26, F2_GAMBIT 21-23 (on: no loss of strength, more variety between
                // matches), F2_PINCER 22-25 (off: most flanks time out at 45 s and lose units on the way round), F2_SOFTSPOT 19-27 (off))
                // (Nov 2026, new side with one bit against the defaults, 48 games per seed, wins-losses, seeds 1 and 2 pooled; the null control is the same masks on both sides:
@@ -358,6 +360,15 @@ struct AiPlayer {
     int wingsPosted = 0, springs = 0, lures = 0;   // (statistics: fighters in the wings now, springs, lures)
     bool inWing(Ref r) const { return std::find(wing[0].begin(), wing[0].end(), r) != wing[0].end() || std::find(wing[1].begin(), wing[1].end(), r) != wing[1].end(); }
     void trapOps(const std::vector<Ref>& army, const std::vector<Ref>& idleArmy, const std::vector<Entity*>& enemyUnits, bool attacking);
+    // ---- F2_FIRE (ai_fire.cpp): firebreaks and the torch
+    std::vector<Ref> torchers;          // the infantry sent to set a forest alight
+    int torchX = -1, torchY = -1;       // the tree tile they are to light (-1: none out)
+    Vec2 torchStand;                    // where they stand to light it
+    bool isTorcher(Ref r) const { return torchX >= 0 && std::find(torchers.begin(), torchers.end(), r) != torchers.end(); }
+    float torchUntil = 0, nextTorch = 0, nextBreak = 0, breakWindowEnd = 0;
+    int breakWindow = 0;                // Waymakers dropped as firebreaks in the current minute
+    int torches = 0, firebreaks = 0;    // (statistics: forests set alight, Waymakers dropped as firebreaks)
+    void fireOps(const std::vector<Ref>& army, const std::vector<Entity*>& enemyUnits);
     void relicOps();                    // F2_RELIC / F2_SUBS (ai_frontier.cpp): the relic bases, the canal's bridges, the submarines
     void subOps();
     float nextRelic = 0, nextRelicBuild = 0, nextSecretLook = 0, relicSince = 0, relicBadAt = -1000;

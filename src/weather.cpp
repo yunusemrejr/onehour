@@ -1,4 +1,4 @@
-// One Hour - the day, the weather and the lake's wildlife. All of it is cosmetic: the simulation never sees the hour or the rain.
+// One Hour - the day, the weather and the lake's wildlife. Cosmetic except the rain, which the simulation rolls (it puts out forest fires: sim_fire.cpp) and the sky shows; the hour is never seen by the simulation.
 //  * The day runs a 12 minute cycle (dawn, morning, day, sunset, dusk, night) from a random starting point, and its light tints the world: one
 //    multiply pass over the battlefield, skipped entirely in plain daylight, so a bright afternoon costs nothing at all.
 //  * Rain comes and goes in spells of a few minutes; a downpour darkens the sky and brings lightning. Streaks and splashes are a few hundred
@@ -420,8 +420,7 @@ void Game::initWeather() {
     weather.rng = Rng(s ? s : 1);
     Rng& r = weather.rng;
     weather.phase0 = START_POINTS[r.range(0, 4)] * DAY_LEN;
-    if (r.f() < 0.25f) { weather.rain = weather.rainTo = r.f(0.45f, 1.0f); weather.nextRoll = r.f(60, 150); }
-    else weather.nextRoll = r.f(40, 120);
+    weather.rain = weather.rainTo = g_sim.rain;   // (the rain is the simulation's: it puts out forest fires, so the sky shows what the game rolled)
     weather.nextBolt = r.f(8, 20);
     if (const char* w = getenv("ONEHOUR_WEATHER")) {   // screenshots: dawn | morning | day | sunset | night [,rain | ,storm]
         std::string ws = w;
@@ -508,11 +507,7 @@ void Game::updateWeather() {
     weather.lastT = now;
     if (dt <= 0) return;
     Rng& r = weather.rng;
-    if (!weather.forced && now >= weather.nextRoll) {
-        if (weather.rainTo > 0) { weather.rainTo = 0; weather.nextRoll = now + r.f(150, 320); }        // the rain stops: a dry spell
-        else if (r.f() < 0.45f) { weather.rainTo = r.f(0.45f, 1.0f); weather.nextRoll = now + r.f(80, 210); }   // a shower or a storm rolls in
-        else weather.nextRoll = now + r.f(60, 130);
-    }
+    if (!weather.forced) weather.rainTo = g_sim.rainTo;   // showers and storms are rolled by the simulation (sim_fire.cpp)
     float step = dt / 18.0f;   // the sky turns over about 18 s
     weather.rain += clampf(weather.rainTo - weather.rain, -step, step);
     weather.bolt *= std::exp(-dt * 7.0f);

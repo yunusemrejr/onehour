@@ -45,6 +45,7 @@ struct Map {
     u8 bridge[MAP_W * MAP_H];       // road laid over a river (drawn as a timber deck)
     u16 waterComp[MAP_W * MAP_H];   // connected body of water a water tile belongs to (0 = not water), see waterSize
     u8 wallMark[MAP_W * MAP_H];     // WallMark: which tiles hold an ordinary wall segment (a Phantom Jeep drives over) or a Bastion Wall (it cannot); set with setStructure
+    u8 hazard[MAP_W * MAP_H];       // extra ground path cost in quarter tiles per step: tiles next to a forest fire (written by Sim::updateFire)
     u8 clearable[MAP_W * MAP_H];    // vegetation a structure may be built over (it is cleared away): 1 a tree, 2 a small rock outcrop (not a ridge)
     std::vector<int> cleared;       // terrain edits since the last repaint: tile | kind << 24 (1 footprint, 2 quarried rock, 3 burnt tree), groups closed by -1
     std::vector<int> waterSize;     // tiles of each body of water, indexed by waterComp (the central lake is by far the biggest)
@@ -142,7 +143,7 @@ struct Map {
     }
     void buildRegions() const;
     bool closestInRegion(u16 rg, int gx, int gy, int& bx, int& by) const;   // the tile of region rg nearest to (gx, gy) (octile distance)
-    float moveCost(int x, int y) const { return tiles[y * MAP_W + x] == T_ROAD ? 0.8f : 1.0f; }
+    float moveCost(int x, int y) const { const int i = y * MAP_W + x; return (tiles[i] == T_ROAD ? 0.8f : 1.0f) + 0.25f * hazard[i]; }
 
     // Pathfinding: fills out with tile centers (excluding start tile), returns false if unreachable.
     // If the goal is blocked, the nearest reachable tile is used.

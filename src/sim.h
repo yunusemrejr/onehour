@@ -354,9 +354,14 @@ struct Sim {
     int fireBurnt = 0, fireIgnitions = 0, firePeak = 0;   // statistics of the match (selftest summary)
     float fireAt(int tx, int ty) const;
     bool igniteFire(int tx, int ty);
+    float nextRainRoll = 0;              // sim time of the next roll for rain (tests set it far off for a dry sky)
+    float rain = 0, rainTo = 0;          // the sky's rain (0 dry .. 1 downpour), rolled by the simulation: it slows and puts out fires; the drawn rain follows it
+    int fireDoused = 0, fireTorched = 0; // statistics: fires the rain put out, trees set alight by hand
+    bool torchTree(Entity& u, int tx, int ty);   // infantry standing next to a tree tile set it alight (not in heavy rain)
 
 private:
     std::vector<u16> fireIndex;  // active list slot plus one; zero means absent
+    std::vector<int> hazardTiles; // tiles whose g_map.hazard the fires set last update (cleared before the next)
     Rng fireRng;
     void resetFire(u64 seed);
     void updateFire();

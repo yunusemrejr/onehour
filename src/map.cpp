@@ -1,5 +1,6 @@
 #include "map.h"
 #include <queue>
+#include <cstring>
 
 Map g_map;
 
@@ -93,6 +94,7 @@ static float secretIslandInland(int x, int y) {
 void Map::generate() {
     const u32 SEED = 1979;
     regionDirty = true; navGen++; navAllDirty = true; navStaticGen++;
+    std::memset(hazard, 0, sizeof hazard);
     // The arena's routes scale with the main island (the old map, ISLE_W tiles square, centred in the sea); structures, road widths and unit
     // silhouettes stay at their original readable size. Mirrors and rotations about the map centre are mirrors about the island's centre too.
     const float G = ISLE_W / 104.0f;

@@ -1128,7 +1128,7 @@ void AiPlayer::think() {
             else if (subType(e.type)) {}   // (the submarines keep to themselves: subOps)
             else if (ut.naval) { fleet.push_back(S.refOf(e)); fleetValue += unitValue(e); shipsOrJeeps++; }   // (the fleet is handled apart from the land army)
             else {
-                if (e.carrier.valid() || e.order == O_ENTER) continue;
+                if (e.carrier.valid() || e.order == O_ENTER || isTorcher(S.refOf(e))) continue;   // (F2_FIRE: the torch-bearers are on their own errand)
                 army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e);
                 if (e.order == O_IDLE && !e.carrier.valid() && !(wingsPosted > 0 && inWing(S.refOf(e)))) idleArmy.push_back(S.refOf(e));   // (F2_TRAP: the ambush wings stay where they hide)
                 if (ut.cargoCap > 0 && ut.kind == UK_VEH) { jeeps.push_back(S.refOf(e)); shipsOrJeeps++; }
@@ -2332,6 +2332,8 @@ void AiPlayer::think() {
     prof.mark("army_waves");
     if (on2(F2_TRAP) && pl.difficulty >= 1) trapOps(army, idleArmy, enemyUnits, attacking || helpingAlly);   // F2_TRAP: the ambush wings hide by the lane, spring when the enemy walks in, and Hard and up bait it
     prof.mark("trap");
+    if (on2(F2_FIRE) && pl.difficulty >= 1) fireOps(army, enemyUnits);   // F2_FIRE: firebreaks ahead of a fire coming at the base, and the torch
+    prof.mark("fire");
     // spy drones coordinate autonomously as an intelligent swarm (updateScoutSwarm in Sim);
     // only pull a badly damaged drone back over a friendly medic if one exists
     for (auto r : scouts) {

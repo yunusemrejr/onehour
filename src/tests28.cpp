@@ -12,6 +12,21 @@ void setup(u64 seed) {
     g_sim.init(2, factions, ai, difficulty, teams, seed);
     flattenArena(tileCenter(X, Y), 32, 24);
     g_map.cleared.clear();
+    g_sim.rain = g_sim.rainTo = 0; g_sim.nextRainRoll = 1e9f;   // (a dry sky unless a check brings the rain)
+}
+
+// every tile along the path's segments, sampled at half-tile steps, is free of fire hazard
+bool clearOfFire(Vec2 from, const std::vector<Vec2>& path) {
+    Vec2 a = from;
+    for (const Vec2& b : path) {
+        const float l = dist(a, b);
+        for (float t = 0; t <= l; t += TILE * 0.5f) {
+            const Vec2 p = a + (b - a) * (l > 0 ? t / l : 0.0f);
+            if (g_map.hazard[tileOf(p.y) * MAP_W + tileOf(p.x)]) return false;
+        }
+        a = b;
+    }
+    return true;
 }
 
 void tree(int x, int y) {
@@ -101,6 +116,59 @@ bool fireTest(u64 seed) {
     advance(3 * SIM_HZ);
     const Entity* safe = g_sim.get(idle);
     check(safe && (std::abs(tileOf(safe->pos.x) - X) > 1 || std::abs(tileOf(safe->pos.y) - Y) > 1), "idle infantry walk to safety");
+
+    // rain puts fires out: the trees stand, the ground beside them is safe again
+    setup(seed);
+    for (int y = Y - 5; y <= Y + 5; ++y) for (int x = X - 5; x <= X + 5; ++x) tree(x, y);
+    g_map.touch();
+    g_sim.windSpeed = 0.5f;
+    for (int y = Y - 2; y <= Y + 2; y += 2) g_sim.igniteFire(X, y);
+    advance(3 * SIM_HZ);
+    const bool burning = !g_sim.fires.empty() && g_map.hazard[Y * MAP_W + X + 1] > 0;
+    g_sim.rain = g_sim.rainTo = 1.0f;
+    advance(12 * SIM_HZ);
+    printf("firetest rain: %d fires put out, %zu still burning after 12 s of downpour\n", g_sim.fireDoused, g_sim.fires.size());
+    check(burning && g_sim.fires.empty() && g_sim.fireDoused > 0 && g_map.tile(X, Y) == T_TREE && g_map.hazard[Y * MAP_W + X + 1] == 0,
+          "a downpour puts the fire out, leaves the trees standing and clears the danger round them");
+
+    // a route goes round a blaze: a copse with a way past it on either side; its north edge burns, so the path takes the south
+    setup(seed);
+    for (int y = Y - 1; y <= Y + 1; ++y) for (int x = X - 2; x <= X + 2; ++x) tree(x, y);
+    g_map.touch();
+    for (int x = X - 2; x <= X + 2; ++x) g_sim.igniteFire(x, Y - 1);
+    advance(SIM_HZ);
+    std::vector<Vec2> around;
+    const Vec2 from = tileCenter(X - 7, Y - 2), to = tileCenter(X + 7, Y - 2);
+    const bool found = g_map.findPath(from, to, around);
+    check(found && clearOfFire(from, around), "a route goes round the ground next to a fire when there is a way round");
+
+    // a unit busy fighting steps out of the flames, then takes its fight up again
+    setup(seed);
+    tree(X, Y); g_map.touch();
+    Ref fighter = g_sim.spawnUnit(U_C_INF1, 0, tileCenter(X + 1, Y));
+    Ref dummy = g_sim.spawnUnit(U_K_INF1, 1, tileCenter(X + 4, Y));
+    { Entity* d = g_sim.get(dummy); d->hp = d->maxHp = 1e6f; d->disabledUntil = 1e9f; }
+    g_sim.cmdAttack({fighter}, dummy);
+    advance(SIM_HZ / 2);
+    g_sim.igniteFire(X, Y);
+    g_sim.fires.back().heat = 1.0f;
+    advance(3 * SIM_HZ);
+    const Entity* fe = g_sim.get(fighter);
+    if (fe) printf("firetest fighter: tile (%d,%d) order %d resume %d\n", tileOf(fe->pos.x), tileOf(fe->pos.y), (int)fe->order, (int)fe->resumeOrder);
+    check(fe && (std::abs(tileOf(fe->pos.x) - X) > 1 || std::abs(tileOf(fe->pos.y) - Y) > 1) && (fe->order == O_ATTACK || fe->resumeOrder == O_ATTACK),
+          "a unit fighting next to a fire steps out of it and keeps its target");
+
+    // the torch: infantry beside a tree set it alight; a tank cannot, nor can anyone from afar or in a downpour
+    setup(seed);
+    tree(X, Y); tree(X + 6, Y); g_map.touch();
+    Ref nearInf = g_sim.spawnUnit(U_C_INF1, 0, tileCenter(X + 1, Y)), farInf = g_sim.spawnUnit(U_C_INF1, 0, tileCenter(X + 4, Y));
+    Ref tank = g_sim.spawnUnit(U_C_TANK, 0, tileCenter(X + 7, Y));
+    const bool tankNo = !g_sim.torchTree(*g_sim.get(tank), X + 6, Y), farNo = !g_sim.torchTree(*g_sim.get(farInf), X, Y);
+    g_sim.rain = 0.8f;
+    const bool wetNo = !g_sim.torchTree(*g_sim.get(nearInf), X, Y);
+    g_sim.rain = 0;
+    const bool lit = g_sim.torchTree(*g_sim.get(nearInf), X, Y) && g_sim.fireAt(X, Y) > 0;
+    check(tankNo && farNo && wetNo && lit, "infantry beside a tree can set it alight; not a tank, not from afar, not in a downpour");
 
     setup(seed);
     bool capOk = true;

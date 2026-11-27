@@ -149,7 +149,6 @@ struct Game {
     struct Weather {
         float phase0 = 0;                    // seconds into the day cycle when the match started (a random start: dawn, morning, day, sunset or night)
         float rain = 0, rainTo = 0;          // rain now and where it is heading (0 dry .. 1 downpour)
-        float nextRoll = 0;                  // sim time when the sky next decides whether to start or stop raining
         float bolt = 0, nextBolt = 0;        // lightning: flash level, and the sim time of the next strike in a downpour
         float lastT = -1;                    // sim time of the last update
         bool forced = false;                 // ONEHOUR_WEATHER fixed the sky (screenshots): it never changes
