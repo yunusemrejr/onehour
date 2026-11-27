@@ -59,7 +59,7 @@ bool Sim::cmdNostopme(int player, Ref bunker, Vec2 at) {
     if (player < 0 || player >= numPlayers || !std::isfinite(at.x) || !std::isfinite(at.y)
         || at.x < 0 || at.y < 0 || at.x >= WORLD_W || at.y >= WORLD_H) return false;
     Entity* b = get(bunker);
-    if (!b || !b->alive || !b->isBuilding() || !b->constructed || b->owner != player || !hellBunker(b->type) || b->disabledUntil > time) return false;
+    if (!b || !b->alive || !b->isBuilding() || !b->constructed || !b->hellGarrisoned || b->owner != player || !hellBunker(b->type) || b->disabledUntil > time) return false;   // (garrisoned = its first deadline is set)
     if (time < b->nostopmeReadyAt) { emit(EV_MSG, player, SND_CANT, b->pos, "nostopme is not ready"); return false; }
     b->nostopmeReadyAt = time + HELL_NOSTOPME_COOLDOWN;
     Nuke n;
@@ -82,5 +82,6 @@ bool Sim::cmdNostopme(int player, Ref bunker, Vec2 at) {
 // What the UI reads for the nostopme button: seconds left, 0 when armed, -1 for anything but a Bunker from Hell.
 float Sim::nostopmeCooldownLeft(const Entity& bunker) const {
     if (!bunker.alive || !bunker.isBuilding() || !hellBunker(bunker.type)) return -1.0f;
+    if (!bunker.hellGarrisoned) return HELL_NOSTOPME_FIRST;   // (finished this tick: its deadline is set on the next update)
     return std::max(0.0f, bunker.nostopmeReadyAt - time);
 }

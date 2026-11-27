@@ -329,12 +329,16 @@ void AiPlayer::init(int p, u64 seed) {
 
 // A dozer free for a new structure: an idle one first, then one on the move, then one mending a finished structure or helping on a site on its own
 // (it goes back to that site afterwards). A dozer aboard a bunker is not free: it cannot drive to a site from there.
+static int dozerBuildRank(const Entity& e, int player, bool civic) {
+    if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || e.carrier.valid() || civicDozerType(e.type) != civic) return 99;
+    const Entity* t = e.order == O_BUILD ? g_sim.get(e.targetEnt) : nullptr;
+    return e.order == O_IDLE ? 0 : e.order == O_MOVE ? 1 : (e.order == O_BUILD && t && t->constructed) ? 2 : (e.order == O_BUILD && e.autoTask) ? 3 : 99;
+}
+
 Entity* AiPlayer::idleDozer(bool civic) {
     Entity* best = nullptr; int bestRank = 99;
     for (auto& e : g_sim.ents) {
-        if (!e.alive || !e.isUnit() || e.owner != player || e.ut().role != UR_DOZER || e.carrier.valid() || civicDozerType(e.type) != civic) continue;
-        const Entity* t = e.order == O_BUILD ? g_sim.get(e.targetEnt) : nullptr;
-        int rank = e.order == O_IDLE ? 0 : e.order == O_MOVE ? 1 : (e.order == O_BUILD && t && t->constructed) ? 2 : (e.order == O_BUILD && e.autoTask) ? 3 : 99;
+        int rank = dozerBuildRank(e, player, civic);
         if (rank < bestRank) { bestRank = rank; best = &e; if (rank == 0) break; }
     }
     return best;
@@ -459,7 +463,7 @@ bool AiPlayer::relocateBase() {
 
 bool AiPlayer::findSpot(int buildType, Vec2 preferNear, int maxRing, int& tx, int& ty) {
     const BuildType& b = BUILDS[buildType];
-    if (b.role == BR_BUNKER) return findBunkerSpot(buildType, tx, ty);
+    if (b.role == BR_BUNKER && !hellBunker(buildType)) return findBunkerSpot(buildType, tx, ty);
     Vec2 base = g_sim.players[player].basePos;
     int cx = tileOf(base.x) - b.w / 2, cy = tileOf(base.y) - b.h / 2;
     float bestScore = 1e18f; int bx = -1, by = -1;
@@ -581,17 +585,32 @@ bool AiPlayer::findBunkerSpot(int buildType, int& tx, int& ty) {
 }
 
 bool AiPlayer::tryBuild(int buildType, Vec2 preferNear, int maxRing) {
-    if (hellBunker(buildType)) return false;   // (a later piece adds F2_GHOSTS: computer armies do not raise Bunkers from Hell yet)
+    if (hellBunker(buildType) && !(on2(F2_GHOSTS) && g_sim.players[player].difficulty >= 1)) return false;
     Entity* d = idleDozer();
     if (!d) return false;
     if (!g_sim.buildAvailable(player, buildType)) return false;
     if (!g_sim.canAfford(player, BUILDS[buildType].cost)) return false;
-    int tx, ty;
-    groundFrom = d->pos; groundCheck = true;   // (only where this dozer can drive: a dozer on an island builds on the island)
-    bool found = findSpot(buildType, preferNear, maxRing, tx, ty);
-    groundCheck = false;
-    if (!found) return false;
-    return g_sim.cmdBuild(g_sim.refOf(*d), buildType, tx, ty);
+    const bool hell = hellBunker(buildType);
+    std::vector<Vec2> checkedGround;
+    auto place = [&](Entity& builder) {
+        groundFrom = builder.pos;
+        if (hell) {
+            // A dozer by a footprint edge may be on a tile not in the ground regions.
+            groundFrom = g_map.nearestFree(groundFrom, 2);
+            for (Vec2 p : checkedGround) if (g_map.sameGround(p, groundFrom)) return false;
+            checkedGround.push_back(groundFrom);
+        }
+        int tx, ty;
+        groundCheck = true;
+        const bool found = findSpot(buildType, preferNear, maxRing, tx, ty);
+        groundCheck = false;
+        return found && g_sim.cmdBuild(g_sim.refOf(builder), buildType, tx, ty);
+    };
+    if (place(*d)) return true;
+    // Late bases may span disconnected ground. An idle dozer elsewhere must not veto the purchase.
+    if (hell) for (auto& other : g_sim.ents)
+        if (&other != d && dozerBuildRank(other, player, false) < 99 && place(other)) return true;
+    return false;
 }
 
 static const float GAMBIT_SPAN = 720.0f;   // F2_GAMBIT: the emphasis lasts the first 12 minutes of the match
@@ -914,7 +933,7 @@ void AiPlayer::garrisonStrongholds() {
     std::vector<Vec2> path;
     for (auto& e : S.ents) {
         if ((int)pick.size() >= want) break;
-        if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0) continue;
+        if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0 || isHellGuard(S.refOf(e))) continue;
         if (e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) continue;
         if (dist(e.pos, best->pos) > (prizeType(best->type) ? 46 : 25) * TILE || !S.canBoard(e, *best)) continue;
         Vec2 entry = g_map.nearestFree(best->pos + (e.pos - best->pos).norm() * (best->radius() + TILE), 6);
@@ -947,7 +966,7 @@ void AiPlayer::prizeRush() {
     if (want <= 0) return;
     std::vector<std::pair<float, Entity*>> cand;
     for (auto& e : S.ents) {
-        if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0) continue;
+        if (!e.alive || e.owner != player || !e.isUnit() || e.ut().kind != UK_INF || e.ut().role != UR_COMBAT || e.carrier.valid() || e.fall > 0 || isHellGuard(S.refOf(e))) continue;
         if ((e.order != O_IDLE && e.order != O_GUARDAREA && e.order != O_GUARDPOS) || !S.canBoard(e, *best)) continue;
         cand.push_back({ dist(e.pos, best->pos), &e });
     }
@@ -1119,7 +1138,7 @@ void AiPlayer::think() {
             else if (ut.role == UR_SPY) spies.push_back(S.refOf(e));         // spies capture structures: never part of a wave
             else if (chosenType(e.type) && on2(F2_CHOSEN)) chosen = S.refOf(e);
             else if (shadowType(e.type) && on2(F2_CHOSEN)) shadowNow.push_back(S.refOf(e));
-            else if (ghostType(e.type)) {}   // (the Ghosts keep to themselves: neither army, fleet nor air force)
+            else if (ghostType(e.type) || ghost2Type(e.type)) {}   // (the Ghosts keep to themselves; Ghost2 patrols autonomously)
             else if (phantomType(e.type)) { if (on2(F2_PHANTOM)) phantomRef = S.refOf(e); }   // (never in the army, a wave, a group or a defence: ai_phantom.cpp drives it)
             else if (S.time < feintUntil && std::find(feint.begin(), feint.end(), S.refOf(e)) != feint.end()) {}   // (a feint is on its own errand for a while)
             else if (expanding && xGuard(e)) {}   // (an expansion's guards stay at it: no wave, no reserve)
@@ -1131,7 +1150,7 @@ void AiPlayer::think() {
             else if (subType(e.type)) {}   // (the submarines keep to themselves: subOps)
             else if (ut.naval) { fleet.push_back(S.refOf(e)); fleetValue += unitValue(e); shipsOrJeeps++; }   // (the fleet is handled apart from the land army)
             else {
-                if (e.carrier.valid() || e.order == O_ENTER || isTorcher(S.refOf(e))) continue;   // (F2_FIRE: the torch-bearers are on their own errand)
+                if (e.carrier.valid() || e.order == O_ENTER || isTorcher(S.refOf(e)) || isHellGuard(S.refOf(e))) continue;
                 army.push_back(S.refOf(e)); armyCount++; armyValue += unitValue(e);
                 if (e.order == O_IDLE && !e.carrier.valid() && !(wingsPosted > 0 && inWing(S.refOf(e)))) idleArmy.push_back(S.refOf(e));   // (F2_TRAP: the ambush wings stay where they hide)
                 if (ut.cargoCap > 0 && ut.kind == UK_VEH) { jeeps.push_back(S.refOf(e)); shipsOrJeeps++; }
@@ -1387,6 +1406,23 @@ void AiPlayer::think() {
     if (recovering) wantDozers = std::max(wantDozers, 3);
     if (hq && hq->constructed && dozers + queuedDozer < wantDozers && hq->queue.size() < 2 && (dozers == 0 || pl.money > 2200 || (recovering && pl.money >= UNITS[ubase].cost))) S.cmdTrain(S.refOf(*hq), ubase + 0);
 
+    const bool hellEnabled = on2(F2_GHOSTS) && pl.difficulty >= 1;
+    const bool hellBlocked = threat || recovering;
+    const int hellTarget = hellEnabled ? updateHellReserve(hellBlocked) : 0;
+    // This think is synchronous. Expose only spendable cash to ordinary orders, including
+    // helpers that issue Sim commands directly; return the held cash before this think exits.
+    struct SpendingBudget {
+        int& money;
+        int held = 0;
+        void hold(int target) {
+            money += held;
+            held = std::min(money, target);
+            money -= held;
+        }
+        ~SpendingBudget() { money += held; }
+    } budget{pl.money};
+    budget.hold(hellTarget);
+
     prof.mark("recovery");
     // ---------- supply areas: every hub gets a gather circle around the piles near it; haulers are spread across them
     struct Mine { Vec2 c; float r; int workers; };
@@ -1630,6 +1666,17 @@ void AiPlayer::think() {
     if (techs > 0 && ramps < (pl.difficulty >= 3 ? 2 : 1) && pl.difficulty >= 1 && tm > (pl.difficulty >= 3 ? 6.5f : (pl.difficulty == 2 ? 8.0f : 12.0f)) && !threat) reserve = std::max(reserve, 5300);
     // a smart commander banks the price of the next income structure before spending on units
     if (smart && !threat && incomes < style.incomes && minutes > style.incomeFrom && powerPlants > 0 && !barracks.empty() && !factories.empty() && dz) reserve = std::max(reserve, BUILDS[base + BR_INCOME].cost + 250);
+    if (hellEnabled) {
+        if (hellTarget) {
+            budget.hold(0);
+            hellConstruction(reserve, hellBlocked);
+            if (hellSaveUntil) budget.hold(hellTarget);
+            ghostProduction(reserve);
+        } else {
+            ghostProduction(reserve);
+            hellConstruction(reserve, hellBlocked);
+        }
+    }
     // early game: economy and structures first, a modest guard force, then ramp
     float rampStart = pl.difficulty >= 3 ? 1.0f : (pl.difficulty == 2 ? 2.0f : (pl.difficulty == 1 ? 3.0f : 4.0f));
     int armyCap;
@@ -2436,6 +2483,10 @@ void AiPlayer::think() {
                 for (auto r : fleet) {
                     Entity* e = S.get(r);
                     if (!e) continue;
+                    if (on2(F2_GHOSTS) && pl.difficulty >= 1 && e->order == O_ATTACK) {
+                        const Entity* t = S.get(e->targetEnt);
+                        if (t && t->isUnit() && ghostType(t->type) && S.visibleTo(*t, player)) continue;
+                    }
                     if (on(FEAT_FLEET2) && (e->type == U_C_CARRIER || e->type == U_K_CARRIER)) {
                         float dg = dist(e->pos, goal);
                         if (dg > 8.0f * TILE && dg < 17.0f * TILE) continue;
@@ -2570,4 +2621,6 @@ void AiPlayer::think() {
     prof.mark("riots");
     if (on(FEAT_FRONTIER)) frontier();
     relicOps();
+    if (on2(F2_GHOSTS) && pl.difficulty >= 1) ghostOps(threat);
+    prof.mark("ghosts");
 }

@@ -163,6 +163,61 @@ static bool hellTest(u64 seed) {
         advance(2 * SIM_HZ);
         h = g_sim.get(hr);
         check(h && h->passengers.empty(), "a second Unload does not refill the garrison");
+
+        // reload: an unloaded tank climbs back into the Bunker from Hell, a Deep Bunker stays closed to it
+        Ref tank = NOREF, jet = NOREF;
+        for (Ref r : aboard) { Entity* u = g_sim.get(r); if (u && u->alive && u->ut().kind == UK_VEH && u->ut().role != UR_DOZER) { tank = r; break; } }
+        const Faction ef = g_sim.players[0].faction;
+        check(h && g_sim.get(tank) && g_sim.canBoard(*g_sim.get(tank), *h), "an unloaded tank may board the Bunker from Hell again");
+        std::vector<Ref> riders = {tank};
+        g_sim.cmdEnter(riders, hr);
+        advance(30 * SIM_HZ);
+        Entity* t = g_sim.get(tank);
+        check(t && t->carrier == hr, "the tank drives in and is carried by the bunker");
+        int bay = 0;
+        for (Ref r : aboard) { Entity* u = g_sim.get(r); if (u && u->alive && u->ut().kind == UK_VEH && u->ut().role != UR_DOZER) { riders.assign(1, r); g_sim.cmdEnter(riders, hr); } }
+        advance(60 * SIM_HZ);
+        h = g_sim.get(hr);
+        if (h) for (Ref r : h->passengers) { Entity* u = g_sim.get(r); if (u && u->ut().kind == UK_VEH && u->ut().role != UR_DOZER) bay++; }
+        check(bay == HELL_GARRISON_TANKS, "the whole tank bay can be loaded again, and no more");
+        jet = g_sim.spawnUnit(ef == F_CYBER ? U_C_GHOST2 : U_K_GHOST2, 0, g_sim.players[0].basePos);
+        h = g_sim.get(hr);
+        check(h && g_sim.get(jet) && !g_sim.canBoard(*g_sim.get(jet), *h), "an aircraft cannot board it");
+        Ref deep = placeNear(0, buildFor(ef, BR_BUNKER), g_sim.players[0].basePos);
+        Ref extra = g_sim.spawnUnit(ef == F_CYBER ? U_C_TANK : U_K_TANK, 0, g_sim.players[0].basePos);
+        check(g_sim.get(deep) && g_sim.get(extra) && !g_sim.canBoard(*g_sim.get(extra), *g_sim.get(deep)), "a tank cannot board a Deep Bunker");
+        h = g_sim.get(hr);
+        check(g_sim.get(extra) && h && !g_sim.canBoard(*g_sim.get(extra), *h), "a full Bunker from Hell takes no seventh tank");
+
+        g_sim.cmdUnload(hr, false, Vec2());
+        advance(10 * SIM_HZ);
+        h = g_sim.get(hr);
+        check(h && h->passengers.empty(), "the tank bay starts empty for simultaneous boarding");
+        riders.clear();
+        for (Ref r : aboard) {
+            const Entity* u = g_sim.get(r);
+            if (u && u->ut().kind == UK_VEH && u->ut().role != UR_DOZER) riders.push_back(r);
+        }
+        riders.push_back(extra);
+        std::vector<float> hp;
+        for (Ref r : riders) { const Entity* u = g_sim.get(r); hp.push_back(u ? u->hp : 0.0f); }
+        g_sim.cmdEnter(riders, hr);
+        int ordered = 0;
+        for (Ref r : riders) { const Entity* u = g_sim.get(r); if (u && u->order == O_ENTER && u->targetEnt == hr) ordered++; }
+        check(ordered == HELL_GARRISON_TANKS + 1, "all seven tanks receive enter orders before any board");
+        advance(60 * SIM_HZ);
+        h = g_sim.get(hr);
+        int boarded = 0, outside = 0, unharmed = 0;
+        for (size_t i = 0; i < riders.size(); i++) {
+            const Entity* u = g_sim.get(riders[i]);
+            if (!u) continue;
+            if (u->hp == hp[i]) unharmed++;
+            if (u->carrier == hr) boarded++;
+            else if (!u->carrier.valid() && u->order != O_ENTER && h && g_sim.distToEntity(u->pos, *h) > 0) outside++;
+        }
+        check(h && h->passengers.size() == HELL_GARRISON_TANKS && boarded == HELL_GARRISON_TANKS,
+              "simultaneous arrivals load exactly six tanks");
+        check(outside == 1 && unharmed == HELL_GARRISON_TANKS + 1, "the seventh tank stays outside and all seven survive unharmed");
     }
 
     // 3. ten times a Deep Bunker's health, a warhead does 0.08x to it, and its own mending rule

@@ -4179,6 +4179,11 @@ bool Sim::canBoard(const Entity& u, const Entity& c) const {
         if (c.bt().role != BR_BUNKER || !c.constructed) return false;
         if (u.ut().kind == UK_INF) return garrisonInfantry(c) < BUNKER_INF_CAP;
         if (u.ut().role == UR_DOZER) return !civicDozerType(u.type) && garrisonDozers(c) < BUNKER_DOZER_CAP;   // (a civilian dozer cannot patch a hatch)
+        if (hellBunker(c.type) && u.ut().kind == UK_VEH && !u.ut().naval && !u.ut().temp && u.passengers.empty()) {   // the Bunker from Hell has a bay: ground vehicles go back in, up to what it was garrisoned with
+            int inside = 0;
+            for (Ref r : c.passengers) { const Entity* p = get(r); if (p && p->ut().kind == UK_VEH && p->ut().role != UR_DOZER) inside++; }
+            return inside < HELL_GARRISON_TANKS;
+        }
         return false;
     }
     if (u.owner != c.owner) return false;

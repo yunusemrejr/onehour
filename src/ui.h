@@ -60,6 +60,9 @@ struct Game {
     bool nukeDeep = false;          // ... for an Underground Nuke silo's silver warhead
     bool nukeRelic = false;         // ... for a Hydra Silo's missile (five warheads)
     bool nukeSub = false;           // ... for a submarine's missile
+    bool nukeGhost = false;         // ... for the Ghost Strike (both Ghost warheads at one spot)
+    Ref nostopmeBunker;             // nukeMode for this Bunker from Hell's nostopme warhead
+    float ghostStrikeWait() const;  // seconds until the human's Ghost Strike is ready (0 ready, -1 no pair)
     bool relicPage = false;         // the dozer bar shows the relic structures (an army holding a Relic Command)
     bool launchNuke(Vec2 at);       // fires the missile (a selected ready bunker's, else any ready one); false if none could go
     bool dropMode = false;          // picking a paradrop zone
@@ -235,6 +238,8 @@ private:
     void drawStrikeMarks();
     void drawFleetCall();          // ui2.cpp: the Fleet Call target (where the fleet would come in) and the lanes of fleets still coming in
     void drawCoverRing(Vec2 sp, float radiusPx, Color col, bool powered, const char* label);
+    bool hideGhostNukeLaunch(const Sim::Nuke& n) const;
+    static Vec2 nukeDrawPos(const Sim::Nuke& n, float t, bool hideLaunch);
     void drawInterceptors();
     void drawDock(const Entity& e, Vec2 p);                       // a Naval Yard's pier into the lake
     void drawAirlifts();

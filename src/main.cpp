@@ -3745,6 +3745,76 @@ int main(int argc, char** argv) {
                 if (const char* pt = getenv("ONEHOUR_PHANTOMT")) g_game.wallTime += (float)atof(pt);
                 g_game.selection.clear(); if (!spotted) g_game.selection.push_back(pj);
             }
+            if (const char* gs = getenv("ONEHOUR_GHOSTS")) {   // pair | alarm | hell | airfield: Ghosts and Hell bunker HUD captures
+                const std::string mode = gs;
+                const int human = g_sim.humanPlayer;
+                const bool cyber = g_sim.players[human].faction == F_CYBER;
+                Vec2 focus;
+                if (mode == "hell" || mode == "airfield") {
+                    const bool hell = mode == "hell";
+                    const int type = hell ? (cyber ? B_C_HELLBUNKER : B_K_HELLBUNKER) : (cyber ? B_C_AIRFIELD : B_K_AIRFIELD);
+                    const Vec2 base = g_sim.players[human].basePos;
+                    const int bx = tileOf(base.x), by = tileOf(base.y);
+                    if (!hell) for (int y = by - 24; y <= by + 24; y++) for (int x = bx - 24; x <= bx + 24; x++) {
+                        if (inMap(x, y)) g_sim.players[human].explored[y * MAP_W + x] = 1;
+                    }
+                    Ref site;
+                    for (int r = 5; r <= 20 && !site.valid(); r++) {
+                        for (int dy = -r; dy <= r && !site.valid(); dy++) for (int dx = -r; dx <= r; dx++) {
+                            if (std::max(std::abs(dx), std::abs(dy)) != r || !g_sim.canPlace(human, type, bx + dx, by + dy)) continue;
+                            site = g_sim.placeBuilding(type, human, bx + dx, by + dy, true);
+                            if (site.valid()) break;
+                        }
+                    }
+                    if (!site.valid()) { fprintf(stderr, "ONEHOUR_GHOSTS=%s: no site near the base\n", gs); return 1; }
+                    focus = g_sim.get(site)->pos;
+                    g_game.selection = {site};
+                    for (int t = 0; t < 4; t++) { g_sim.step(); g_sim.events.clear(); }
+                } else if (mode == "pair" || mode == "alarm") {
+                    const bool alarm = mode == "alarm";
+                    int owner = human;
+                    if (alarm) {
+                        for (int p = 0; p < g_sim.numPlayers; p++) if (g_sim.enemies(human, p)) { owner = p; break; }
+                        if (owner == human) { fprintf(stderr, "ONEHOUR_GHOSTS=alarm: no enemy army\n"); return 1; }
+                    }
+                    const Vec2 coast(WORLD_W * 0.14f, WORLD_H * 0.35f);
+                    const Vec2 sea = g_map.nearestWater(coast, 40, true, g_map.oceanComp);
+                    if (!g_map.openSea(tileOf(sea.x), tileOf(sea.y)) || !g_map.navOpen(tileOf(sea.x), tileOf(sea.y))) {
+                        fprintf(stderr, "ONEHOUR_GHOSTS: no open sea in showcase area\n"); return 1;
+                    }
+                    const bool cy = g_sim.players[owner].faction == F_CYBER;
+                    const Ref sub = g_sim.spawnUnit(cy ? U_C_GHOSTSUB : U_K_GHOSTSUB, owner, sea);
+                    const Ref jet = g_sim.spawnUnit(cy ? U_C_GHOSTJET : U_K_GHOSTJET, owner, sea);
+                    Entity* s = g_sim.get(sub);
+                    Entity* j = g_sim.get(jet);
+                    if (!s || !j) { fprintf(stderr, "ONEHOUR_GHOSTS=%s: could not spawn the Ghost %s\n", gs, !s ? "submarine" : "jet"); return 1; }
+                    s->partner = jet;
+                    j->partner = sub;
+                    s->angle = j->angle = -0.48f;
+                    g_sim.ghosts[owner] = {sub, jet, g_sim.time + GHOST_FIRST_STRIKE, 0, {}};
+                    if (alarm) {
+                        const Ref drone = g_sim.spawnUnit(cyber ? U_C_GHOST2 : U_K_GHOST2, human, sea + Vec2(-5 * TILE, -2 * TILE));
+                        Entity* d = g_sim.get(drone);
+                        if (!d) { fprintf(stderr, "ONEHOUR_GHOSTS=alarm: could not spawn Ghost2\n"); return 1; }
+                        d->alt = 1.0f;
+                        g_sim.cmdGuardArea({drone}, d->pos, 2 * TILE);
+                        for (int t = 0; t < 25; t++) g_game.update(SIM_DT);
+                        const auto& sighting = g_sim.ghosts[owner].sighting;
+                        if (sighting.team != g_sim.players[human].team || sighting.until <= g_sim.time) {
+                            fprintf(stderr, "ONEHOUR_GHOSTS=alarm: Ghost2 did not sight the pair\n"); return 1;
+                        }
+                        g_game.selection = {drone};
+                    } else {
+                        for (int t = 0; t < 4; t++) { g_sim.step(); g_sim.events.clear(); }
+                        g_game.selection = {sub, jet};
+                    }
+                    focus = sea + Vec2(0, -32);
+                } else {
+                    fprintf(stderr, "ONEHOUR_GHOSTS: expected pair, alarm, hell, or airfield\n"); return 1;
+                }
+                stealthCam = Vec2(clampf(focus.x - SCREEN_W / 2, 0, WORLD_W - SCREEN_W), clampf(focus.y - VIEW_H / 2, 0, WORLD_H - VIEW_H));
+                haveStealthCam = true;
+            }
             if (const char* hs = getenv("ONEHOUR_HELI")) {   // ONEHOUR_HELI=N: N helicopters of the viewed army hover over its base, a few more parked at an airfield
                 int vp = std::min(viewPlayer, g_sim.numPlayers - 1), ht = g_sim.players[vp].faction == F_CYBER ? (int)U_C_HELI : (int)U_K_AIR, n = std::max(1, atoi(hs));
                 std::vector<Ref> hs2;

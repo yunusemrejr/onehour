@@ -155,6 +155,20 @@ void Game::drawCoverRing(Vec2 sp, float radiusPx, Color col, bool powered, const
     if (label) g.text((int)clampf(sp.x - g.textW(label) / 2, 4, SCREEN_W - g.textW(label) - 4), (int)clampf(sp.y - radiusPx - 12, 24, VIEW_H - 14), label, powered ? col : rgb(150, 150, 160));
 }
 
+bool Game::hideGhostNukeLaunch(const Sim::Nuke& n) const {
+    const bool ghostStrike = (n.sub && n.dmgMul == 2 && n.scale == SUB_NUKE_SCALE * 4)
+                          || (!n.sub && n.dmgMul == 5 && n.scale == NUKEBOMBER_SCALE * 9);
+    if (!ghostStrike || n.owner < 0 || n.owner >= g_sim.numPlayers || n.owner == g_sim.humanPlayer) return false;
+    const Entity* sub = g_sim.get(g_sim.ghosts[n.owner].sub);
+    return !sub || !g_sim.visibleTo(*sub, g_sim.humanPlayer);
+}
+
+Vec2 Game::nukeDrawPos(const Sim::Nuke& n, float t, bool hideLaunch) {
+    if (!hideLaunch) return Sim::nukeAirPos(n, t);
+    const float k = clampf(t / Sim::flightOf(n), 0, 1);
+    return n.pos + Vec2(0, -400 * (1 - k) - 100 * std::sin(k * 3.14159f));
+}
+
 // The shots in the air: laser beams and interceptor rockets rising to meet a warhead, and the burning pieces of one that was hit
 void Game::drawInterceptors() {
     Gfx& g = g_gfx;
@@ -163,7 +177,15 @@ void Game::drawInterceptors() {
         float tt = now - it.launchT;
         if (tt < 0) continue;
         Color col = it.laser ? rgb(130, 240, 255) : rgb(255, 214, 140);
-        Vec2 a = worldToScreen(it.from), b = worldToScreen(it.aim);
+        Vec2 aim = it.aim;
+        for (const auto& n : g_sim.nukes) if (n.id == it.nukeId) {
+            if (hideGhostNukeLaunch(n)) {
+                const float meet = n.t + it.launchT + it.dur - g_sim.time;
+                aim += nukeDrawPos(n, meet, true) - Sim::nukeAirPos(n, meet);
+            }
+            break;
+        }
+        Vec2 a = worldToScreen(it.from), b = worldToScreen(aim);
         if (it.laser) {
             if (tt > it.dur + 0.25f) continue;
             float al = tt < it.dur ? 1.0f : clampf(1.0f - (tt - it.dur) / 0.25f, 0, 1);
@@ -194,9 +216,9 @@ void Game::drawInterceptors() {
         if (!n.broken) continue;
         float k = clampf(n.t / Sim::flightOf(n), 0, 1), k0 = clampf(n.killT / Sim::flightOf(n), 0, 1);
         float since = std::max(0.0f, (n.t - n.killT) / Sim::flightOf(n));
+        const Vec2 w = nukeDrawPos(n, n.t, hideGhostNukeLaunch(n));
         for (int i = 0; i < 9; i++) {
             float h1 = hash01((u32)(n.id * 31 + i * 7 + 1)), h2 = hash01((u32)(n.id * 17 + i * 13 + 5)), h3 = hash01((u32)(n.id * 5 + i * 3 + 9));
-            Vec2 w = Sim::nukeAirPos(n, n.t);
             float spread = (30.0f + 120.0f * since * 3.0f) * (0.4f + h1);
             Vec2 off(std::cos(h2 * 6.283f) * spread, std::sin(h2 * 6.283f) * spread * 0.6f + since * 80.0f * h3);
             Vec2 sp = worldToScreen(w + off);
